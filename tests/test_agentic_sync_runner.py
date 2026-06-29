@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -20,6 +21,8 @@ from pdd.agentic_sync_runner import (
     GITHUB_COMMENT_BODY_LIMIT,
     MAX_WORKERS,
     STATE_FILE_PATH,
+    STDOUT_CAPTURE_BYTE_LIMIT,
+    STDOUT_CAPTURE_LINE_LIMIT,
     AsyncSyncRunner,
     ModuleState,
     _BOX_CHARS_RE,
@@ -3638,3 +3641,1022 @@ class TestSyncOneModuleE2E:
         )
         assert success
         assert error == ""
+
+
+# ============================================================================
+# Tests for Issue #1565 — PDD_SYNC_MAX_WORKERS env var and bounded output
+# ============================================================================
+
+
+class TestPddSyncMaxWorkersEnvVar:
+    """Tests for Bug 1: PDD_SYNC_MAX_WORKERS environment variable is silently
+    ignored.
+
+    ``agentic_sync_runner.py`` line 43 declares ``MAX_WORKERS = 4`` as a
+    hard-coded constant.  Line 1011 assigns ``self.max_workers`` from that
+    constant with no ``os.environ.get("PDD_SYNC_MAX_WORKERS", ...)`` call
+    anywhere, so setting ``PDD_SYNC_MAX_WORKERS=2`` has zero effect; the
+    runner always launches up to 4 concurrent module syncs.
+    """
+
+    def test_max_workers_constant_reads_pdd_sync_max_workers_env_var(self):
+        """PDD_SYNC_MAX_WORKERS=2 must produce MAX_WORKERS==2 on a fresh import.
+
+        A subprocess sets the env var *before* the module is imported so the
+        module-level constant is evaluated with the env var present.
+        Fails on buggy code where MAX_WORKERS is unconditionally 4.
+        """
+        _project_root = str(Path(__file__).resolve().parent.parent)
+        _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os; os.environ['PDD_SYNC_MAX_WORKERS'] = '2'; "
+                    "from pdd.agentic_sync_runner import MAX_WORKERS; "
+                    "print(MAX_WORKERS)"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": _pythonpath},
+        )
+        assert result.returncode == 0, (
+            f"Import subprocess failed; stderr={result.stderr!r}"
+        )
+        assert result.stdout.strip() == "2", (
+            f"Expected MAX_WORKERS==2 when PDD_SYNC_MAX_WORKERS=2; "
+            f"got {result.stdout.strip()!r}. "
+            "Bug: MAX_WORKERS is hardcoded to 4 and the env var is never read."
+        )
+
+    def test_total_budget_forces_single_worker_overriding_max_workers(
+        self, monkeypatch
+    ):
+        """total_budget must force max_workers=1 even when MAX_WORKERS > 1.
+
+        After the env-var fix, the budget override in __init__ must still win
+        and enforce serial execution.
+        """
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "3")
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={"total_budget": 5.0},
+            github_info=None,
+            quiet=True,
+        )
+        assert runner.max_workers == 1, (
+            f"total_budget must force max_workers=1; got {runner.max_workers}"
+        )
+
+    def test_runner_reads_pdd_sync_max_workers_when_constructed(
+        self, monkeypatch
+    ):
+        """Runner construction must see env changes made after module import."""
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        assert runner.max_workers == 2
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_peak_concurrency_bounded_by_max_workers_value(
+        self, mock_comment, mock_sync, monkeypatch
+    ):
+        """At most max_workers module syncs may execute concurrently.
+
+        With MAX_WORKERS=2 and 4 independent modules the runner must submit
+        at most 2 tasks at the same time.  Reproduces the #1565 Cloud Run
+        symptom where PDD_SYNC_MAX_WORKERS=2 was set but 4 modules still
+        ran concurrently because the env var was ignored.
+        """
+        import threading as _threading
+
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+
+        peak = [0]
+        running = [0]
+        count_lock = _threading.Lock()
+
+        def counting_sync(basename):
+            with count_lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.05)
+            with count_lock:
+                running[0] -= 1
+            return (True, 0.0, "")
+
+        mock_sync.side_effect = counting_sync
+
+        runner = AsyncSyncRunner(
+            basenames=["a", "b", "c", "d"],
+            dep_graph={"a": [], "b": [], "c": [], "d": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        success, msg, cost = runner.run()
+
+        assert success, f"Expected success; msg={msg!r}"
+        assert peak[0] <= 2, (
+            f"Peak concurrency {peak[0]} exceeded MAX_WORKERS=2. "
+            "The runner must not submit more tasks than max_workers allows."
+        )
+
+
+class TestBoundedSubprocessOutputCapture:
+    """Tests for Bug 2: stdout_lines / stderr_lines are unbounded in memory.
+
+    ``_run_attempt`` accumulates all child output in plain ``List[str]``
+    buffers with no capacity limit (``agentic_sync_runner.py`` lines
+    2342-2343, 2353).  With 4 concurrent workers and a verbose/retrying
+    child, these buffers can grow to tens of MB, causing heap spikes that
+    lead to SIGKILL on Cloud Run.
+    """
+
+    def _make_runner(self) -> AsyncSyncRunner:
+        return AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_stdout_capture_bounded_under_large_child_output(
+        self, mock_popen, _mock_exe
+    ):
+        """Captured stdout must be bounded when the child emits many lines.
+
+        Sends 10,000 stdout lines through the mock child process.
+        On buggy code all 10,000 lines are captured (stdout_lines is an
+        unbounded list).  After the fix, the deque cap limits capture to at
+        most STDOUT_CAPTURE_LINE_LIMIT lines, so the assertion < 10_000 passes.
+        """
+        large_stdout = "".join(f"line {i}\n" for i in range(10_000))
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=large_stdout,
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert success, f"Expected success for exit_code=0; error={error!r}"
+        captured_lines = len(stdout.splitlines())
+        assert captured_lines < 10_000, (
+            f"Captured {captured_lines} lines — stdout_lines buffer is "
+            "unbounded. Fix: replace List[str] with "
+            "collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)."
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_conformance_failure_details_survive_output_truncation(
+        self, mock_popen, _mock_exe
+    ):
+        """Conformance errors near the end of a long child output must still
+        be detectable after the bounded-capture fix is applied.
+
+        Guards against a regression where the tail buffer is too short to
+        retain the conformance-error marker line, preventing repair retries.
+        """
+        # Conformance-error line matching _MISSING_DECLARED_MARKER
+        error_line = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. Expected: ['Foo', 'Foo.run']. Found: ['Foo'].\n"
+        )
+        # 5,100 padding lines then the conformance error on the last line.
+        # Any reasonable tail buffer (>= 200 lines) will retain the error.
+        padding = "".join(f"padding {i}\n" for i in range(5_100))
+        first_proc = _make_mock_popen(
+            stdout_text=padding + error_line,
+            stderr_text="",
+            exit_code=1,
+        )
+        second_proc = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            stderr_text="",
+            exit_code=0,
+        )
+        mock_popen.side_effect = [first_proc, second_proc]
+
+        runner = self._make_runner()
+        success, cost, error = runner._sync_one_module("foo")
+
+        # A second Popen call proves the conformance error was detected from
+        # the tail and a repair retry was triggered.
+        assert mock_popen.call_count == 2, (
+            f"Expected 2 Popen calls (first attempt + conformance repair "
+            f"retry); got {mock_popen.call_count}. The bounded tail buffer "
+            "must still contain the conformance-error marker line."
+        )
+        assert success, (
+            f"Expected success after conformance repair; error={error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_failed_child_stdout_capture_is_bounded(
+        self, mock_popen, _mock_exe
+    ):
+        """Even on a failed child exit, captured stdout must be bounded.
+
+        Sends 10,001 lines through a child that exits with code 1.  On buggy
+        code all 10,001 lines accumulate in memory (the unbounded list path
+        at lines 2538-2539 is hit on normal exit).  After the fix, captured
+        stdout is shorter than the input, confirming truncation occurred.
+        """
+        line_count_in = 10_001
+        large_stdout = "".join(f"logline {i}\n" for i in range(line_count_in))
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=large_stdout,
+            stderr_text="fatal error\n",
+            exit_code=1,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert not success, "Expected failure for exit_code=1"
+        captured_lines = len(stdout.splitlines())
+        assert captured_lines < line_count_in, (
+            f"Captured all {captured_lines} lines from the failed child — "
+            "stdout_lines buffer is unbounded on the normal-exit failure path. "
+            "Fix: the deque cap must apply to both the timeout path (lines "
+            "2519-2520) and the normal-exit path (lines 2538-2539)."
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_single_long_line_capture_is_byte_bounded(
+        self, mock_popen, _mock_exe
+    ):
+        """A single newline-free output record must not bypass the line cap."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="x" * (STDOUT_CAPTURE_BYTE_LIMIT * 2),
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert success, f"Expected success for exit_code=0; error={error!r}"
+        assert len(stdout.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_quiet_failure_summary_reports_truncated_capture(
+        self, mock_popen, _mock_exe
+    ):
+        """Quiet runs must still surface truncation in the failure summary."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="x" * (STDOUT_CAPTURE_BYTE_LIMIT * 2),
+            stderr_text="fatal error\n",
+            exit_code=1,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert not success
+        assert "bounded child output capture dropped" in error
+        assert "bounded child output capture dropped" not in stdout
+        assert "bounded child output capture dropped" not in stderr
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_overall_failed_verdict_survives_tail_eviction(
+        self, mock_popen, _mock_exe
+    ):
+        """A clean-exit child whose 'Overall status: Failed' marker scrolls out
+        of the bounded tail must still be classified as failed.
+
+        Failure detection cannot depend on the marker surviving in the retained
+        tail: if the child exits 0, prints the failure marker, then floods more
+        than STDOUT_CAPTURE_LINE_LIMIT lines, a tail-only scan would miss the
+        marker and report success. The verdict must be captured as stdout
+        streams in, so the failed status and its reason both survive eviction.
+        """
+        marker = "Overall status: Failed\n"
+        flood = "".join(
+            f"trailing {i}\n" for i in range(STDOUT_CAPTURE_LINE_LIMIT + 200)
+        )
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=marker + flood,
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        # Precondition: the marker really was evicted from the retained tail,
+        # otherwise a tail-only scan would pass and the test would prove nothing.
+        assert "Overall status:" not in stdout, (
+            "Test precondition failed: marker still in retained tail; raise flood"
+        )
+        assert not success, (
+            "Child reported 'Overall status: Failed' but the runner returned "
+            "success: the verdict was read from the bounded tail, which had "
+            "evicted the marker. Capture the failure marker as stdout streams in."
+        )
+        assert "Overall status: Failed" in error, (
+            "Failure reason must preserve the streamed 'Overall status: Failed' "
+            "marker even after it is evicted from the bounded tail."
+        )
+
+
+# ============================================================================
+# Issue #1565 — Real-subprocess (not mocked Popen) coverage of the new
+# binary/chunked reader and the worker cap under real process I/O.
+#
+# The tests above mock ``subprocess.Popen`` with ``io.StringIO`` streams, which
+# never exercises the production read path: real pipes, ``os.read(fileno())``
+# returning *bytes*, and incremental UTF-8 decoding (``text=False``,
+# ``bufsize=0``). The tests below spawn a real child process via the unmodified
+# ``subprocess.Popen`` call in ``_run_attempt`` — only the *command string* is
+# stubbed (``_build_command``) so the child is a controllable Python script
+# instead of a real ``pdd sync``. Everything downstream of ``Popen`` (the
+# reader threads, the bounded capture, the sticky failure-marker detection, the
+# ThreadPoolExecutor worker cap) runs unmocked.
+# ============================================================================
+
+
+# A self-contained fake ``pdd`` child. It imports nothing from ``pdd`` and is
+# driven entirely by argv so a single script serves every real-subprocess test.
+_FAKE_PDD_CHILD_SOURCE = r'''
+import os
+import sys
+import time
+import uuid
+
+
+def _concurrency(presence_dir, result_path, hold_s, sample_s):
+    """Record peak number of co-running siblings, then report it.
+
+    Each child drops a unique presence token, repeatedly samples how many
+    tokens exist (its own + concurrent siblings) for ``hold_s`` seconds, and
+    writes the peak it observed. The max peak across children is the true
+    global concurrency, because during any overlap window every co-running
+    child has a live token and at least one of them samples during that window.
+    """
+    os.makedirs(presence_dir, exist_ok=True)
+    token = os.path.join(presence_dir, "%d-%s" % (os.getpid(), uuid.uuid4().hex))
+    open(token, "w").close()
+    peak = 0
+    deadline = time.time() + hold_s
+    try:
+        while time.time() < deadline:
+            try:
+                peak = max(peak, len(os.listdir(presence_dir)))
+            except OSError:
+                pass
+            time.sleep(sample_s)
+    finally:
+        try:
+            os.remove(token)
+        except OSError:
+            pass
+    with open(result_path, "w") as handle:
+        handle.write(str(peak))
+    return 0
+
+
+def _flood(n_stdout, n_stderr, pad):
+    """Interleave large output on BOTH streams.
+
+    Writing well past the OS pipe buffer (~64 KiB) on both stdout and stderr
+    would deadlock a reader that drains only one pipe at a time, so a clean
+    return proves both pipes are drained concurrently.
+    """
+    filler = "x" * pad
+    for i in range(max(n_stdout, n_stderr)):
+        if i < n_stdout:
+            sys.stdout.write("out %d %s\n" % (i, filler))
+        if i < n_stderr:
+            sys.stderr.write("err %d %s\n" % (i, filler))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return 0
+
+
+def _fail_then_flood(n_flood):
+    """Print the failure verdict first, then bury it under trailing output.
+
+    Exits 0 on purpose: the failed verdict must come from the streamed
+    'Overall status: Failed' marker, not from the exit code.
+    """
+    sys.stdout.write("Overall status: Failed\n")
+    sys.stdout.flush()
+    for i in range(n_flood):
+        sys.stdout.write("trailing line %d\n" % i)
+    sys.stdout.flush()
+    return 0
+
+
+_MODE = sys.argv[1]
+if _MODE == "concurrency":
+    _RC = _concurrency(sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]))
+elif _MODE == "flood":
+    _RC = _flood(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]))
+elif _MODE == "fail_then_flood":
+    _RC = _fail_then_flood(int(sys.argv[2]))
+else:
+    sys.stderr.write("unknown mode %r\n" % _MODE)
+    _RC = 2
+sys.exit(_RC)
+'''
+
+
+def _write_fake_pdd_child(tmp_path: Path) -> Path:
+    """Write the fake ``pdd`` child script and return its path."""
+    script = tmp_path / "fake_pdd_child.py"
+    script.write_text(_FAKE_PDD_CHILD_SOURCE, encoding="utf-8")
+    return script
+
+
+class TestRealSubprocessWorkerCap:
+    """Greg review item 1: PDD_SYNC_MAX_WORKERS must limit concurrent module
+    syncs in real (issue/global) sync mode, validated with real subprocesses.
+    """
+
+    def test_real_subprocess_max_workers_limits_concurrency(
+        self, tmp_path, monkeypatch
+    ):
+        """With real child processes, PDD_SYNC_MAX_WORKERS=2 caps concurrency.
+
+        Four independent modules are synced through real ``subprocess.Popen``
+        children. The cap run must never exceed 2 concurrent children; the
+        uncapped positive-control run must reach >=3, proving the assertion is
+        not vacuous (i.e. that the cap is what limits concurrency, not some
+        unrelated serialization).
+        """
+        child = _write_fake_pdd_child(tmp_path)
+        basenames = ["a", "b", "c", "d"]
+
+        def _peak_for_cap(cap: str) -> int:
+            presence = tmp_path / f"presence_{cap}"
+            results = tmp_path / f"results_{cap}"
+            presence.mkdir()
+            results.mkdir()
+            monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", cap)
+
+            def _fake_build_command(self, basename, in_flight_cost=0.0):
+                return [
+                    sys.executable,
+                    str(child),
+                    "concurrency",
+                    str(presence),
+                    str(results / basename),
+                    "0.6",
+                    "0.01",
+                ]
+
+            runner = AsyncSyncRunner(
+                basenames=basenames,
+                dep_graph={b: [] for b in basenames},
+                sync_options={},
+                github_info=None,
+                quiet=True,
+            )
+            assert runner.max_workers == int(cap)
+            with patch.object(
+                AsyncSyncRunner, "_build_command", _fake_build_command
+            ), patch.object(
+                AsyncSyncRunner, "_update_github_comment", lambda self: None
+            ):
+                success, msg, _cost = runner.run()
+            assert success, f"real-subprocess run failed: {msg!r}"
+            peaks = [
+                int((results / b).read_text())
+                for b in basenames
+                if (results / b).exists()
+            ]
+            assert peaks, "no child reported a peak — children never ran"
+            return max(peaks)
+
+        capped_peak = _peak_for_cap("2")
+        assert capped_peak <= 2, (
+            f"PDD_SYNC_MAX_WORKERS=2 did not limit concurrency: real children "
+            f"observed a peak of {capped_peak} simultaneous syncs (expected <= 2)"
+        )
+
+        uncapped_peak = _peak_for_cap("4")
+        assert uncapped_peak >= 3, (
+            f"Positive control failed: with PDD_SYNC_MAX_WORKERS=4 the four "
+            f"independent modules should run >=3 at once, but the peak was "
+            f"{uncapped_peak}. Without this the cap assertion would be vacuous."
+        )
+
+
+class TestRealSubprocessOutputCapture:
+    """Greg review items 2 & 3: the bounded reader and sticky failure verdict
+    under real child process I/O (real pipes, bytes, incremental decode).
+    """
+
+    def _make_runner(self) -> AsyncSyncRunner:
+        return AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+    def test_real_subprocess_verbose_child_bounded_without_deadlock(
+        self, tmp_path, monkeypatch
+    ):
+        """A verbose real child completes (no deadlock) and is not retained.
+
+        The child writes ~1.26 MiB across BOTH stdout and stderr — past the OS
+        pipe buffer and past both capture caps. A reader that drained only one
+        pipe would deadlock once the other filled; completing within the guard
+        timeout proves both are drained concurrently. The retained capture must
+        stay within the line and byte caps and hold far less than was emitted.
+        """
+        import threading
+
+        child = _write_fake_pdd_child(tmp_path)
+        n_lines = STDOUT_CAPTURE_LINE_LIMIT + 1000
+        pad = 200
+
+        def _fake_build_command(self, basename, in_flight_cost=0.0):
+            return [
+                sys.executable,
+                str(child),
+                "flood",
+                str(n_lines),
+                str(n_lines),
+                str(pad),
+            ]
+
+        # Reap a hypothetically deadlocked child quickly instead of waiting the
+        # full per-module timeout (read at call time in _run_attempt).
+        monkeypatch.setattr("pdd.agentic_sync_runner.MODULE_TIMEOUT", 30)
+
+        runner = self._make_runner()
+        holder: Dict[str, Any] = {}
+
+        def _go() -> None:
+            holder["result"] = runner._run_attempt("foo")
+
+        with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+            worker = threading.Thread(target=_go, daemon=True)
+            worker.start()
+            worker.join(timeout=45)
+
+        assert not worker.is_alive(), (
+            "verbose real child did not complete within 45s — the reader "
+            "likely deadlocked because a pipe buffer filled and was not "
+            "drained concurrently"
+        )
+
+        success, _cost, error, stdout, stderr = holder["result"]
+        assert success, (
+            f"expected a clean exit-0 completion, not a timeout; error={error!r}"
+        )
+        # Bounded in memory: neither stream retains the full emitted volume.
+        assert len(stdout.splitlines()) <= STDOUT_CAPTURE_LINE_LIMIT
+        assert len(stdout.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+        assert len(stderr.splitlines()) <= STDOUT_CAPTURE_LINE_LIMIT
+        assert len(stderr.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+        assert len(stdout.splitlines()) < n_lines, (
+            "captured the full child output — the bounded tail did not truncate"
+        )
+
+    def test_real_subprocess_failed_verdict_survives_tail_eviction(
+        self, tmp_path
+    ):
+        """A real child whose 'Overall status: Failed' marker scrolls out of
+        the bounded tail must still be classified as failed, with the marker
+        preserved in the failure reason.
+        """
+        child = _write_fake_pdd_child(tmp_path)
+        n_flood = STDOUT_CAPTURE_LINE_LIMIT + 500
+
+        def _fake_build_command(self, basename, in_flight_cost=0.0):
+            return [sys.executable, str(child), "fail_then_flood", str(n_flood)]
+
+        runner = self._make_runner()
+        with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+            success, _cost, error, stdout, _stderr = runner._run_attempt("foo")
+
+        # Precondition: the marker really was evicted from the retained tail,
+        # otherwise a tail-only scan would pass and prove nothing.
+        assert "Overall status:" not in stdout, (
+            "precondition failed: marker still in retained tail; raise n_flood"
+        )
+        assert not success, (
+            "child printed 'Overall status: Failed' then exited 0; the runner "
+            "must still classify it as failed even though the marker scrolled "
+            "out of the bounded tail (verdict captured as stdout streamed in)"
+        )
+        assert "Overall status: Failed" in error, (
+            "failure reason must preserve the streamed marker after eviction"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Per-module --context resolution (issue #1675)
+# ---------------------------------------------------------------------------
+
+_ROOT_PDDRC = '''version: "1.0"
+contexts:
+  extensions-github_pdd_app:
+    paths: ["extensions/github_pdd_app/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+_NESTED_PDDRC = '''version: "1.0"
+contexts:
+  pdd_executor_pkg:
+    paths: ["pdd_codex*", "src/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+_NESTED_PDDRC_NOMATCH = '''version: "1.0"
+contexts:
+  other_pkg:
+    paths: ["unrelated/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+
+def _write_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _context_arg(cmd: List[str]):
+    """Return the value passed after --context, or None if absent."""
+    return cmd[cmd.index("--context") + 1] if "--context" in cmd else None
+
+
+def _ctx_error_type():
+    """Resolve the resolver-error type lazily so collection never breaks pre-fix."""
+    import pdd.agentic_sync_runner as _asr
+
+    return getattr(_asr, "SyncContextResolutionError", RuntimeError)
+
+
+class TestPerModuleContextResolution:
+    """Child `pdd sync` must use a --context valid for the module's own cwd.
+
+    Root cause (issue #1675): `_build_command` forwarded a single global
+    `sync_options["context"]` while `_run_attempt` ran each child in a
+    per-module cwd. A root context could be paired with a nested cwd whose
+    `.pddrc` does not define it, killing the child with "Unknown context".
+    """
+
+    def _runner(self, tmp_path, *, basenames, module_cwds, context,
+                module_targets=None):
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph={b: [] for b in basenames},
+            sync_options={"context": context} if context else {},
+            github_info=None,
+            quiet=True,
+            module_cwds=module_cwds,
+            module_targets=module_targets or {},
+        )
+        runner.project_root = tmp_path
+        return runner
+
+    def test_root_context_not_leaked_into_nested_cwd(self, tmp_path):
+        # Criterion 1: root .pddrc defines extensions-github_pdd_app; nested
+        # .pddrc does not. Agentic sync for a nested module must not pass the
+        # root context into the nested cwd.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        cmd = runner._build_command("pdd_codex")
+        assert "extensions-github_pdd_app" not in cmd
+        assert _context_arg(cmd) == "pdd_executor_pkg"
+
+    def test_root_context_forwarded_from_root_cwd(self, tmp_path):
+        # Criterion 3: root context still works from repo root and is not
+        # forced into a nested cwd.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["extensions/github_pdd_app/foo"],
+            module_cwds={"extensions/github_pdd_app/foo": tmp_path},
+            context="extensions-github_pdd_app",
+        )
+        cmd = runner._build_command("extensions/github_pdd_app/foo")
+        assert _context_arg(cmd) == "extensions-github_pdd_app"
+
+    def test_nested_context_forwarded_when_valid(self, tmp_path):
+        # Criterion 2: a nested context resolves from the nested cwd and is not
+        # forced back to repo root.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="pdd_executor_pkg",
+        )
+        cmd = runner._build_command("pdd_codex")
+        assert _context_arg(cmd) == "pdd_executor_pkg"
+
+    def test_invalid_unresolvable_context_raises(self, tmp_path):
+        # Acceptance: when an explicit context is invalid for the cwd and no
+        # per-module context resolves, fail early with a resolver error rather
+        # than emitting a doomed child command.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC_NOMATCH)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        with pytest.raises(_ctx_error_type()):
+            runner._build_command("pdd_codex")
+
+    def test_no_pddrc_forwards_requested_context(self, tmp_path):
+        # Regression guard: a repo with no governing .pddrc keeps legacy
+        # behavior and forwards the requested context unchanged.
+        sub = tmp_path / "proj"
+        sub.mkdir(parents=True, exist_ok=True)
+        runner = self._runner(
+            tmp_path,
+            basenames=["mod"],
+            module_cwds={"mod": sub},
+            context="whatever",
+        )
+        cmd = runner._build_command("mod")
+        assert _context_arg(cmd) == "whatever"
+
+    def test_directly_constructed_runner_forwards_context(self, tmp_path):
+        # Regression guard: a runner constructed without per-module cwds keeps
+        # legacy forwarding (cwd-aware validation applies only to modules the
+        # orchestrator placed in a specific cwd).
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"context": "some_ctx"},
+            github_info=None,
+            quiet=True,
+        )
+        cmd = runner._build_command("foo")
+        assert _context_arg(cmd) == "some_ctx"
+
+    def test_duplicate_basename_context_follows_cwd(self, tmp_path):
+        # Criterion 5: two projects share a basename but each owns a different
+        # context. The context must follow the module's resolved cwd, not the
+        # global flag.
+        proj_a = tmp_path / "a"
+        proj_b = tmp_path / "b"
+        _write_file(proj_a / ".pddrc", _NESTED_PDDRC)  # defines pdd_executor_pkg
+        _write_file(proj_b / ".pddrc", _NESTED_PDDRC.replace(
+            "pdd_executor_pkg", "ctx_b"))
+        runner = self._runner(
+            tmp_path,
+            basenames=["a/pdd_codex", "b/pdd_codex"],
+            module_cwds={"a/pdd_codex": proj_a, "b/pdd_codex": proj_b},
+            module_targets={"a/pdd_codex": "pdd_codex", "b/pdd_codex": "pdd_codex"},
+            context="pdd_executor_pkg",
+        )
+        cmd_a = runner._build_command("a/pdd_codex")
+        cmd_b = runner._build_command("b/pdd_codex")
+        assert _context_arg(cmd_a) == "pdd_executor_pkg"
+        assert _context_arg(cmd_b) == "ctx_b"
+
+    def test_reproduce_command_includes_cwd_and_context(self, tmp_path):
+        # Acceptance: reproduce-local output includes both cwd and command.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        block = runner._build_conformance_hard_failure(
+            "pdd_codex",
+            "Architecture conformance error for pdd_codex",
+            "", "",
+        )
+        assert "cd extensions/github_pdd_app" in block
+        assert "--context pdd_executor_pkg" in block
+        assert "sync pdd_codex" in block
+
+    def test_sync_one_module_surfaces_resolver_error_without_running_child(
+        self, tmp_path
+    ):
+        # End-to-end: a context-resolution failure must surface as a clean
+        # module failure before any child process is spawned.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC_NOMATCH)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        with patch("pdd.agentic_sync_runner.subprocess.Popen") as mock_popen:
+            success, _cost, error = runner._sync_one_module("pdd_codex")
+        assert not success
+        assert not mock_popen.called
+        assert "extensions-github_pdd_app" in error
+
+    def test_threaded_module_context_takes_precedence_over_lazy(self, tmp_path):
+        # The deterministic module_contexts map (built during analysis) is
+        # consulted for substitution, not only lazy re-resolution. The nested
+        # .pddrc defines both the target's context and an unrelated one; the
+        # threaded map selects the unrelated (but valid) one to prove the map,
+        # not lazy target-matching, drove the decision.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        two = (
+            'version: "1.0"\n'
+            "contexts:\n"
+            "  pdd_executor_pkg:\n"
+            '    paths: ["pdd_codex*"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+            "  alt_ctx:\n"
+            '    paths: ["zzz/**"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+        )
+        _write_file(nested / ".pddrc", two)
+        runner = AsyncSyncRunner(
+            basenames=["pdd_codex"],
+            dep_graph={"pdd_codex": []},
+            sync_options={"context": "extensions-github_pdd_app"},
+            github_info=None,
+            quiet=True,
+            module_cwds={"pdd_codex": nested},
+            module_targets={"pdd_codex": "pdd_codex"},
+            module_contexts={"pdd_codex": "alt_ctx"},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("pdd_codex")
+        assert _context_arg(cmd) == "alt_ctx"
+
+    def test_same_named_context_resolves_against_nested_cwd(self, tmp_path):
+        # Criterion 4: a context name shared by root and nested .pddrc resolves
+        # against the nested cwd, and reproduce-local points at that project.
+        shared = (
+            'version: "1.0"\n'
+            "contexts:\n"
+            "  shared:\n"
+            '    paths: ["**"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+        )
+        _write_file(tmp_path / ".pddrc", shared)
+        nested = tmp_path / "backend" / "functions"
+        _write_file(nested / ".pddrc", shared)
+        runner = self._runner(
+            tmp_path,
+            basenames=["worker_app"],
+            module_cwds={"worker_app": nested},
+            context="shared",
+        )
+        cmd = runner._build_command("worker_app")
+        assert _context_arg(cmd) == "shared"
+        assert "cd backend/functions" in runner._reproduce_command("worker_app")
+
+
+# ---------------------------------------------------------------------------
+# Canonical ResolvedSyncUnit consumption (issue #1675 follow-up)
+# ---------------------------------------------------------------------------
+
+from pdd.resolved_sync_unit import ResolvedSyncUnit  # noqa: E402
+
+
+class TestRunnerConsumesResolvedUnit:
+    """When a ResolvedSyncUnit exists for a key it is the source of truth for
+    cwd / target / context, overriding the legacy dicts."""
+
+    def _unit(self, tmp_path, *, context, target="report", cwd_name="backend"):
+        cwd = tmp_path / cwd_name
+        cwd.mkdir(parents=True, exist_ok=True)
+        return ResolvedSyncUnit(
+            key="proj/report",
+            target_basename=target,
+            cwd=cwd,
+            pddrc_path=cwd / ".pddrc",
+            context=context,
+            prompts_dir=cwd / "prompts",
+        )
+
+    def test_build_command_uses_unit_target_and_context(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},  # invalid downstream; unit wins
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"
+        assert "root_ctx" not in cmd
+
+    def test_unit_default_only_omits_context_without_failing(self, tmp_path):
+        # Req 3: a unit resolved to no context (default-only nested) omits
+        # --context and never raises, even with a global context requested.
+        unit = self._unit(tmp_path, context=None)
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")  # must not raise
+        assert "--context" not in cmd
+        assert cmd[-1] == "report"
+
+    def test_unit_overrides_conflicting_legacy_dicts(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx", target="report")
+        other = tmp_path / "other"
+        other.mkdir()
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_cwds={"proj/report": other},
+            module_targets={"proj/report": "WRONG"},
+            module_contexts={"proj/report": "wrong_ctx"},
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        assert runner._module_cwd_path("proj/report") == unit.cwd
+        assert runner._module_target("proj/report") == "report"
+        cmd = runner._build_command("proj/report")
+        assert _context_arg(cmd) == "report_ctx"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_run_attempt_runs_child_in_unit_cwd(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path
+    ):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n", exit_code=0
+        )
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        runner._sync_one_module("proj/report")
+        assert mock_popen.call_args.kwargs["cwd"] == str(unit.cwd)
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
+import errno
 import hashlib
+import importlib.resources
 import logging
 import os
 import signal
 import sys
 import json
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -17,20 +21,255 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
+from enum import Enum
 
 from rich.console import Console
+
+from pdd.routing_policy import (
+    RoutingConfig,
+    RoutingPolicy,
+    RoutingRecord,
+    emit_routing_record,
+    escalate,
+    resolve_model_for_tier,
+    select_config,
+)
 
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+UsageSource = str
+_HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
+TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+
+
+class EffortCapability(str, Enum):
+    FULL = "full"
+    CLAMPED = "clamped"
+    CONFIG_ONLY = "config_only"
+    INTERACTIVE_ONLY = "interactive_only"
+    UNSUPPORTED = "unsupported"
+
+
+_EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
+    "openai": EffortCapability.FULL,
+    "anthropic": EffortCapability.CLAMPED,
+    "google": EffortCapability.UNSUPPORTED,
+    "opencode": EffortCapability.UNSUPPORTED,
+}
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
     """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def _normalize_token_buckets(provider: str, raw_usage: Any) -> Dict[str, int]:
+    """Normalize provider-specific token usage into common buckets."""
+    buckets = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    if not isinstance(raw_usage, dict):
+        return buckets
+
+    # AgenticTaskResult.usage wraps Claude transcript rows as {"claude": [ {...}, ... ]}.
+    # Collapse that shape into a single summed dict before bucket mapping so the
+    # normalized buckets are non-zero for the structured Claude result.
+    claude_rows = raw_usage.get("claude")
+    if isinstance(claude_rows, list):
+        summed: Dict[str, int] = {}
+        for row in claude_rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                summed[key] = summed.get(key, 0) + int(value)
+        raw_usage = summed
+
+    def _int_value(*keys: str) -> int:
+        cur: Any = raw_usage
+        for key in keys:
+            if not isinstance(cur, dict):
+                return 0
+            cur = cur.get(key)
+        try:
+            return int(cur or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    provider = provider.lower()
+    if provider == "anthropic":
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        # Raw provider envelopes use cache_read_input_tokens; the structured
+        # Claude transcript rows use cached_input_tokens — accept either.
+        buckets["cache_read_tokens"] = _int_value("cache_read_input_tokens") or _int_value("cached_input_tokens")
+        buckets["cache_write_tokens"] = _int_value("cache_creation_input_tokens")
+    elif provider == "openai":
+        usage = raw_usage.get("total_token_usage") if isinstance(raw_usage.get("total_token_usage"), dict) else raw_usage
+        raw_usage = usage
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cached_input_tokens")
+        buckets["reasoning_tokens"] = _int_value("reasoning_tokens")
+    elif provider == "google":
+        tokens = raw_usage.get("tokens") if isinstance(raw_usage.get("tokens"), dict) else raw_usage
+        raw_usage = tokens
+        buckets["input_tokens"] = _int_value("prompt")
+        buckets["output_tokens"] = _int_value("candidates")
+        buckets["cache_read_tokens"] = _int_value("cached")
+        buckets["reasoning_tokens"] = _int_value("thoughts")
+    elif provider == "opencode":
+        buckets["input_tokens"] = _int_value("input")
+        buckets["output_tokens"] = _int_value("output")
+        buckets["cache_read_tokens"] = _int_value("cache", "read")
+        buckets["cache_write_tokens"] = _int_value("cache", "write")
+    return buckets
+
+
+def _meets_usage_contract(result: "AgenticTaskResult") -> bool:
+    """Return True when a result has comparable cost for routing."""
+    return (
+        getattr(result, "usage_source", "") != "unavailable"
+        and getattr(result, "cost_usd", 0.0) > 0.0
+    )
+
+
+def _load_harness_capabilities() -> Dict[str, Any]:
+    """Load static agentic harness capability metadata."""
+    global _HARNESS_CAPABILITIES_CACHE
+    if _HARNESS_CAPABILITIES_CACHE is not None:
+        return _HARNESS_CAPABILITIES_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "agentic_harness_capabilities.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "agentic_harness_capabilities.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "agentic_harness_capabilities.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("agentic_harness_capabilities.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    if isinstance(data, dict) and isinstance(data.get("harnesses"), dict):
+        _HARNESS_CAPABILITIES_CACHE = data["harnesses"]
+    else:
+        _HARNESS_CAPABILITIES_CACHE = {}
+    return _HARNESS_CAPABILITIES_CACHE
+
+
+def _provider_harness_id(provider: str) -> str:
+    if provider == "anthropic":
+        return "claude_code"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return "agy" if _get_google_cli_name() == "agy" else "gemini_cli"
+        except Exception:
+            return "gemini_cli"
+    return provider
+
+
+_PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+
+
+def _provider_cli_binary_name(provider: str) -> Optional[str]:
+    """Map an agentic provider to the CLI binary name used to probe its version."""
+    if provider == "anthropic":
+        return "claude"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return _get_google_cli_name()
+        except Exception:
+            return None
+    return None
+
+
+def _get_provider_cli_version(provider: str) -> str:
+    """Best-effort CLI version string for a provider (cached).
+
+    Pins the harness CLI version into every run record (issue #1593). Resolves
+    the provider's binary via the shared discovery helper and reads the first
+    line of ``<bin> --version``. Returns "" when the CLI is absent or the probe
+    fails, so callers can record an empty (not fabricated) version.
+    """
+    if provider in _PROVIDER_CLI_VERSION_CACHE:
+        return _PROVIDER_CLI_VERSION_CACHE[provider]
+    version = ""
+    name = _provider_cli_binary_name(provider)
+    binary = _find_cli_binary(name) if name else None
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if line:
+                    version = line
+                    break
+        except (subprocess.SubprocessError, OSError):
+            version = ""
+    _PROVIDER_CLI_VERSION_CACHE[provider] = version
+    return version
+
+
+def _publish_agentic_model_provenance(
+    *,
+    resolved_model: str,
+    model_selection_outcome: str,
+) -> None:
+    """Best-effort: publish agentic model provenance for track_cost."""
+    try:
+        import click
+        ctx = click.get_current_context(silent=True)
+    except Exception:
+        ctx = None
+    if ctx is None:
+        return
+    try:
+        if ctx.obj is None:
+            ctx.obj = {}
+        if isinstance(ctx.obj, dict):
+            ctx.obj["resolved_model"] = resolved_model
+            ctx.obj["model_selection_outcome"] = model_selection_outcome
+    except Exception:
+        pass
 
 
 def get_agentic_capabilities() -> Dict[str, Any]:
@@ -232,7 +471,7 @@ def _record_resolution_error(
     """Record or re-raise path resolution failures."""
     if errors is None:
         raise exc
-    if isinstance(exc, RuntimeError):
+    if isinstance(exc, RuntimeError) or getattr(exc, "errno", None) == errno.ELOOP:
         errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
     else:
         errors.append(f"{path}: {exc}")
@@ -262,7 +501,19 @@ def _resolve_policy_path(
         path = cwd / path
     try:
         if path.name in ("", os.pardir):
+            try:
+                path.resolve(strict=True)
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.ELOOP:
+                    _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+                    return None
             return path.resolve(strict=False)
+        try:
+            path.parent.resolve(strict=True)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                _record_resolution_error(errors, path.parent, f"policy root {raw_path}", exc)
+                return None
         return path.parent.resolve(strict=False) / path.name
     except (RuntimeError, OSError) as exc:
         _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
@@ -357,6 +608,15 @@ def _resolve_symlink_target_path(
     target_path = Path(raw_target)
     if not target_path.is_absolute():
         target_path = link_path.parent / target_path
+    try:
+        target_path.resolve(strict=True)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+            return None
     try:
         return target_path.resolve(strict=False)
     except RuntimeError as exc:
@@ -900,12 +1160,22 @@ class AgenticTaskResult(tuple):
         usage: AgenticUsage = None,
         *,
         changed_files: Optional[List[str]] = None,
+        usage_source: str = "unavailable",
+        estimate_method: str = "unavailable",
+        cli_version: str = "",
+        model_id: Optional[str] = None,
+        cumulative_cost_usd: Optional[float] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
         result._changed_files = list(changed_files or [])
+        result._usage_source = usage_source
+        result._estimate_method = estimate_method
+        result._cli_version = cli_version
+        result._model_id = model_id
+        result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
         return result
 
     def __iter__(self):
@@ -935,6 +1205,30 @@ class AgenticTaskResult(tuple):
     def changed_files(self) -> List[str]:
         return list(getattr(self, "_changed_files", []))
 
+    @property
+    def usage_source(self) -> str:
+        return str(getattr(self, "_usage_source", "unavailable"))
+
+    @property
+    def estimate_method(self) -> str:
+        return str(getattr(self, "_estimate_method", "unavailable"))
+
+    @property
+    def cli_version(self) -> str:
+        return str(getattr(self, "_cli_version", ""))
+
+    @property
+    def model_id(self) -> Optional[str]:
+        return getattr(self, "_model_id", None)
+
+    @property
+    def cumulative_cost_usd(self) -> float:
+        return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
+    def meets_usage_contract(self) -> bool:
+        """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
+        return _meets_usage_contract(self)
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -944,6 +1238,13 @@ class AgenticTaskResult(tuple):
             "provider": self.provider,
             "usage": self.usage,
             "changed_files": self.changed_files,
+            "usage_source": self.usage_source,
+            "estimate_method": self.estimate_method,
+            "cli_version": self.cli_version,
+            "model_id": self.model_id,
+            "cumulative_cost_usd": self.cumulative_cost_usd,
+            "usage_comparable": self.meets_usage_contract(),
+            "token_buckets": _normalize_token_buckets(self.provider, self.usage),
         }
 
 
@@ -957,8 +1258,10 @@ class _ProviderRunResult(tuple):
         cost_usd: float,
         model: Optional[str],
         usage: AgenticUsage = None,
+        requested_effort: Optional[str] = None,
+        effective_effort: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -966,6 +1269,14 @@ class _ProviderRunResult(tuple):
     @property
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
+
+    @property
+    def requested_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 5)
+
+    @property
+    def effective_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 6)
 
 
 @dataclass
@@ -1252,6 +1563,77 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
 
+def branch_checked_out_worktree(git_root: Path, branch_name: str) -> Optional[str]:
+    """Return the path of a LIVE worktree that currently has ``branch_name``
+    checked out, or ``None``. Parses ``git worktree list --porcelain`` so the
+    check does not depend on locale-specific ``git branch -D`` stderr text.
+
+    Only a worktree that genuinely holds the branch should trigger the issue
+    #1596 fallback. A stanza marked ``prunable`` (stale registration) or whose
+    path no longer exists on disk MUST NOT count — pruning + retrying the
+    delete clears those, so treating them as a lock would force a needless
+    fallback branch."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    target = f"refs/heads/{branch_name}"
+    # Stanzas are separated by blank lines; the final stanza may have no
+    # trailing blank line. Append one so the flush logic is uniform.
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    prunable = False
+    for line in result.stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            branch = line[len("branch "):].strip()
+        elif line == "prunable" or line.startswith("prunable "):
+            prunable = True
+        elif line == "":
+            # End of a stanza — evaluate it.
+            if (
+                path is not None
+                and branch == target
+                and not prunable
+                and Path(path).exists()
+            ):
+                return path
+            path = None
+            branch = None
+            prunable = False
+    return None
+
+
+def clean_restart_fallback_branch(branch_name: str) -> str:
+    """Unique fallback branch name for a clean restart when ``branch_name`` is
+    locked by another worktree (issue #1596). Prefers the executor job id
+    (``JOB_ID`` / ``PDD_JOB_ID`` env) so the name — and therefore the PR — is
+    stable across retries of the same job; otherwise a random token."""
+    raw = os.environ.get("JOB_ID") or os.environ.get("PDD_JOB_ID") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "", raw)[:8]
+    if not slug:
+        slug = secrets.token_hex(4)  # 8 hex chars
+    return f"{branch_name}-job-{slug}"
+
+
+def current_worktree_branch(cwd: Path) -> Optional[str]:
+    """Return the current branch name of the git worktree at ``cwd``, or
+    ``None`` if detached/unresolvable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
@@ -1310,6 +1692,45 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+TASK_CLASS_SINGLE_FILE: str = "single_file"
+TASK_CLASS_MULTI_FILE: str = "multi_file"
+TASK_CLASS_REPO_SCALE: str = "repo_scale"
+TASK_CLASS_HIGH_ISOLATION: str = "high_isolation"
+
+
+def select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]:
+    """Return candidates reordered for a coarse agentic task class."""
+    if task_class == TASK_CLASS_SINGLE_FILE:
+        return list(candidates)
+
+    if task_class == TASK_CLASS_MULTI_FILE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_REPO_SCALE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_HIGH_ISOLATION:
+        preferred = ("opencode", "anthropic")
+    else:
+        return list(candidates)
+
+    ordered = [provider for provider in preferred if provider in candidates]
+    if task_class == TASK_CLASS_REPO_SCALE:
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered and provider not in {"google", "openai"}
+        )
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered
+        )
+        return ordered
+
+    ordered.extend(provider for provider in candidates if provider not in ordered)
+    return ordered
+
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -1374,6 +1795,13 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
 MAX_PDDRC_SEARCH_DEPTH: int = 10
 
 DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time for complex verify tasks
+# Issue #1714: shared explicit hard timeout for the standalone agentic helpers
+# (fix / crash / verify / update / test_generate). Bounded under
+# DEFAULT_TIMEOUT_SECONDS so a stalled step fails before the full 600s budget,
+# but kept close to it because these steps run real tools (test suites) that
+# legitimately need time and get no stall watchdog — a deeper cut would risk
+# killing healthy long runs.
+AGENTIC_STEP_TIMEOUT_SECONDS: float = 540.0
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
@@ -1391,6 +1819,31 @@ CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
 # synthetic auth row); the interval throttles those checks inside the PTY loop.
 INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS: float = 2.0
 INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS: float = 1.0
+# Issue #1714: no-progress (stall) watchdog. A parked interactive TUI keeps the
+# PTY busy with spinner frames even after the model has stalled, so PTY byte
+# flow is NOT a progress signal — only growth of the session transcript (new
+# turns / tool calls) reflects real work. When a per-call ``stall_timeout`` is
+# supplied, ``_run_interactive_pty_until_reply`` aborts once the transcript has
+# stayed quiescent for that many seconds, well before the hard step timeout,
+# instead of burning the full budget on a spinner (~$2.22/hang in the report).
+# Opt-in (default ``None`` = off) so steps that legitimately idle on long
+# tool runs (verify/fix test suites) are unaffected; enable it only for
+# reasoning/discovery steps that should never sit quiescent.
+def _stall_watchdog_triggered(
+    last_progress_time: float,
+    now: float,
+    stall_timeout: Optional[float],
+) -> bool:
+    """Return True when the no-progress watchdog should abort the run.
+
+    ``stall_timeout`` is the maximum number of seconds the session transcript may
+    stay quiescent (no growth = no real progress) before the run is declared a
+    stall (issue #1714). ``None`` or a non-positive value disables the watchdog,
+    preserving the original "rely on the hard timeout only" behaviour.
+    """
+    if stall_timeout is None or stall_timeout <= 0:
+        return False
+    return (now - last_progress_time) > stall_timeout
 # The model name Claude Code stamps on a turn it generated locally for a failed
 # API call (auth failure, usage cap, transient error) rather than from a model.
 CLAUDE_SYNTHETIC_MODEL: str = "<synthetic>"
@@ -1677,6 +2130,11 @@ _RESET_TIME_RE = re.compile(
 _RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
 # Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
 _TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+# Some minimal tzdata installs omit IANA backward-link aliases even when the
+# canonical zone exists.
+_RESET_TZ_ALIASES: Dict[str, str] = {
+    "us/pacific": "America/Los_Angeles",
+}
 
 
 def _format_utc(dt: datetime) -> str:
@@ -1698,6 +2156,7 @@ def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
     if not name:
         return timezone.utc
     cleaned = name.strip()
+    cleaned = _RESET_TZ_ALIASES.get(cleaned.lower(), cleaned)
     if cleaned.upper() in ("UTC", "GMT", "Z", "UT"):
         return timezone.utc
     offset = _TZ_OFFSET_RE.match(cleaned)
@@ -2033,6 +2492,16 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
     """Extract the most useful error message from Codex JSON/JSONL stdout."""
     if not stdout:
         return ""
+    return _extract_codex_jsonl_error_from_lines(stdout.splitlines() or [stdout])
+
+
+def _extract_codex_jsonl_error_from_lines(lines) -> str:
+    """Extract the most useful Codex error message from a line iterator.
+
+    Issue #1646: line-based variant so spooled stdout can be scanned without
+    materializing the whole transcript. Preserves the terminal-vs-last
+    precedence and ``MAX_ERROR_SNIPPET_LENGTH`` cap of the string version.
+    """
 
     def _message_from_value(value: Any) -> str:
         if isinstance(value, str):
@@ -2071,7 +2540,7 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
 
     terminal_error = ""
     last_error = ""
-    for raw_line in stdout.splitlines() or [stdout]:
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or not line.startswith("{"):
             continue
@@ -2086,6 +2555,77 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
             if event_type in {"turn.failed", "task.failed", "session.failed"}:
                 terminal_error = msg
     return (terminal_error or last_error)[:MAX_ERROR_SNIPPET_LENGTH]
+
+
+def _parse_codex_jsonl(lines) -> Dict[str, Any]:
+    """Parse Codex ``exec --json`` NDJSON into the event dict callers expect.
+
+    Issue #1646: takes a line iterator and does NOT materialize all lines or
+    ``.strip()`` the whole transcript, so spooled stdout can be scanned with a
+    flat memory profile. Selection rules (unchanged from the previous inline
+    logic in ``_run_with_provider``):
+
+    - First ``type == "result"`` event wins outright (legacy single-event
+      format) and short-circuits the scan.
+    - Otherwise track the last ``item.completed`` whose item is an
+      ``agent_message`` (modern Codex text) and the last ``session.end`` /
+      ``turn.completed`` (usage + model).
+    - Fall back to the last line that parsed as valid JSON (``last_json``).
+
+    After the scan: result > agent_message (merging ``usage``/``model`` from
+    session_end when present, preserving Issue #1376) > session_end >
+    last-valid-json > ``{}``.
+
+    The ``last_json`` fallback is intentional and improves on the prior
+    ``json.loads(lines[-1])`` behavior: the old code gave up (empty dict) when
+    the very last physical line was non-JSON, whereas this keeps the last line
+    that actually parsed.
+    """
+    agent_message_data: Optional[Dict[str, Any]] = None
+    session_end: Optional[Dict[str, Any]] = None
+    last_json: Optional[Dict[str, Any]] = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        last_json = item
+        # Legacy Codex format: single event contains both text and usage.
+        if item.get("type") == "result":
+            return item
+        # Modern Codex CLI (0.104.0+): text in item.completed agent_message.
+        if (item.get("type") == "item.completed"
+                and isinstance(item.get("item"), dict)
+                and item["item"].get("type") == "agent_message"):
+            agent_message_data = item
+        # usage/cost stats are in session.end or turn.completed
+        # (Codex CLI 0.105.0+ uses turn.completed instead of session.end).
+        if item.get("type") in ("session.end", "turn.completed"):
+            session_end = item
+
+    if agent_message_data is not None:
+        if session_end is not None:
+            # Merge usage AND model from session.end so cost calculation works
+            # AND the audit log captures the actual model name (Issue #1376
+            # codex round 3: previously only `usage` was carried over, so
+            # default-model Codex runs logged `model: null`).
+            merged: Dict[str, Any] = {**agent_message_data}
+            if "usage" in session_end:
+                merged["usage"] = session_end.get("usage", {})
+            if "model" in session_end:
+                merged["model"] = session_end.get("model")
+            return merged
+        return agent_message_data
+    if session_end is not None:
+        return session_end
+    if last_json is not None:
+        return last_json
+    return {}
 
 
 def _is_codex_stdin_notice(text: str) -> bool:
@@ -2211,6 +2751,201 @@ def _get_provider_model(provider: str) -> Optional[str]:
     return value.strip() or None
 
 
+def _routing_effort_to_reasoning_time(effort: str) -> float:
+    """Map routing effort labels to the existing reasoning_time scale."""
+    if effort == "high":
+        return 0.85
+    if effort == "medium":
+        return 0.5
+    return 0.15
+
+
+def _apply_routing_model_env(
+    provider: str,
+    config: Optional[RoutingConfig],
+    originals: Dict[str, Optional[str]],
+) -> None:
+    """Temporarily set the provider model env var for a routed config."""
+    if config is None:
+        return
+    env_var = _PROVIDER_MODEL_ENV.get(provider)
+    if not env_var:
+        return
+    if env_var not in originals:
+        originals[env_var] = os.environ.get(env_var)
+    model = resolve_model_for_tier(config.model_tier)
+    if model:
+        os.environ[env_var] = model
+
+
+def _restore_routing_model_env(originals: Dict[str, Optional[str]]) -> None:
+    """Restore model env vars changed for routing."""
+    for key, value in originals.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _emit_routing_outcome(
+    record: Optional[RoutingRecord],
+    *,
+    cwd: Path,
+    success: bool,
+    cost_usd: float,
+    latency_seconds: float,
+) -> None:
+    """Update and emit one routing record, ignoring no-policy calls."""
+    if record is None:
+        return
+    record.cost_usd = cost_usd
+    record.latency_seconds = latency_seconds
+    record.verifier_result = "pass" if success else "fail"
+    emit_routing_record(record, log_dir=cwd / ".pdd" / "agentic-logs")
+
+
+def _run_agentic_task_with_routing_config(
+    *,
+    config: RoutingConfig,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> AgenticTaskResult:
+    """Run one routed escalation config without re-entering policy selection."""
+    originals: Dict[str, Optional[str]] = {"PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")}
+    os.environ["PDD_AGENTIC_PROVIDER"] = config.harness
+    _apply_routing_model_env(config.harness, config, originals)
+    try:
+        return run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            max_retries=max(1, int(config.repeat_runs)),
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            reasoning_time=_routing_effort_to_reasoning_time(str(config.thinking_effort)),
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+
+def _run_feasible_routing_fallback(
+    *,
+    attempted_harnesses: set[str],
+    base_record: RoutingRecord,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> Optional[AgenticTaskResult]:
+    """Run the standard provider cascade over still-untried feasible providers.
+
+    Issue #1431: when routing escalation only ever pinned harnesses that are
+    not installed/authenticated, installed providers may never have been
+    tried. This runs the normal provider cascade (``routing_policy=None``)
+    restricted to the available providers we have not attempted yet, so a
+    feasible provider still gets a chance instead of the task failing with
+    "No agent providers are available". Returns ``None`` when there is no
+    untried feasible provider to fall back to.
+    """
+    available = get_available_agents()
+    untried = [
+        provider
+        for provider in get_agent_provider_preference()
+        if provider in available and provider not in attempted_harnesses
+    ]
+    if not untried:
+        return None
+
+    fallback_record = dataclasses.replace(
+        base_record,
+        fallback_reason=f"cascade_fallback_to_feasible_provider:{','.join(untried)}",
+        cost_usd=0.0,
+        latency_seconds=0.0,
+        verifier_result=None,
+    )
+
+    originals: Dict[str, Optional[str]] = {
+        "PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")
+    }
+    os.environ["PDD_AGENTIC_PROVIDER"] = ",".join(untried)
+    fallback_start = time.time()
+    try:
+        result = run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+    fallback_record.cost_usd = result.cost_usd
+    fallback_record.latency_seconds = time.time() - fallback_start
+    fallback_record.verifier_result = "pass" if result.success else "fail"
+    emit_routing_record(fallback_record, log_dir=cwd / ".pdd" / "agentic-logs")
+    return result
+
+
+def _resolve_effort_for_provider_log(
+    provider: str,
+    reasoning_time: Optional[float],
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return (requested_effort, effective_effort) for audit logging."""
+    env = env or os.environ
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        requested = time_to_effort_level(reasoning_time)
+    else:
+        requested = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if requested not in {"low", "medium", "high"}:
+            requested = None
+    if provider == "openai":
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            return requested, codex_effort
+        return requested, requested
+    if provider == "anthropic":
+        claude_effort = (env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip().lower()
+        if claude_effort in {"low", "medium", "high", "xhigh", "max"}:
+            return requested or claude_effort, claude_effort
+        return requested, requested
+    return requested, None
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -2224,6 +2959,8 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
+    requested_effort: Optional[str] = None,
+    effective_effort: Optional[str] = None,
 ) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
@@ -2283,6 +3020,8 @@ def _log_agentic_interaction(
             "duration_seconds": round(duration, 2),
             "prompt_length": len(prompt),
             "response_length": len(response),
+            "requested_effort": requested_effort,
+            "effective_effort": effective_effort,
         }
         if include_bodies:
             entry["prompt"] = prompt
@@ -3603,43 +4342,161 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     Tries modelUsage per-model costUSD first, then falls back to token-based
     estimation from the usage field.
     """
-    # Try 1: Sum costUSD from modelUsage (most accurate)
-    model_usage = data.get("modelUsage", {})
-    if model_usage:
-        total = sum(
-            float(info.get("costUSD", 0.0))
-            for info in model_usage.values()
-            if isinstance(info, dict)
-        )
-        if total > 0:
-            return total
+    raw_model_usage = data.get("modelUsage", {})
+    model_usage = raw_model_usage if isinstance(raw_model_usage, dict) else {}
 
-    # Try 2: Token-based estimation from usage field
+    # Try 1: Per-model modelUsage costUSD/token estimates.
     usage = data.get("usage", {})
-    if not usage:
-        return 0.0
+    aggregate_usage = usage if isinstance(usage, dict) else None
+    model_usage_cost = _calculate_anthropic_model_usage_token_cost(
+        model_usage,
+        aggregate_usage=aggregate_usage,
+    )
+    if model_usage_cost is not None:
+        return model_usage_cost
 
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    # Try 3: Token-based estimation from aggregate usage field.
+    if isinstance(usage, dict) and usage:
+        family = _anthropic_pricing_family_for_aggregate(data, model_usage)
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is not None:
+            return cost
 
-    # Determine pricing family from modelUsage keys or default to sonnet
-    family = "sonnet"  # default
+    return 0.0
+
+
+_INPUT_TOKEN_KEYS: Tuple[str, ...] = ("input_tokens", "inputTokens")
+_OUTPUT_TOKEN_KEYS: Tuple[str, ...] = ("output_tokens", "outputTokens")
+_CACHE_READ_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheReadInputTokens",
+    "cachedInputTokens",
+)
+_CACHE_CREATION_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+)
+
+
+def _validated_token_counter(
+    usage: Dict[str, Any],
+    aliases: Tuple[str, ...],
+    *,
+    required: bool,
+) -> Optional[int]:
+    """Return a non-negative token count, or None for missing/invalid required data."""
+    value = None
+    found = False
+    for key in aliases:
+        if key in usage:
+            value = usage[key]
+            found = True
+            break
+
+    if not found:
+        return None if required else 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _validated_anthropic_token_counts(
+    usage: Dict[str, Any],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Return validated Anthropic token counters in canonical order."""
+    input_tokens = _validated_token_counter(
+        usage,
+        _INPUT_TOKEN_KEYS,
+        required=True,
+    )
+    output_tokens = _validated_token_counter(
+        usage,
+        _OUTPUT_TOKEN_KEYS,
+        required=True,
+    )
+    cache_read = _validated_token_counter(
+        usage,
+        _CACHE_READ_TOKEN_KEYS,
+        required=False,
+    )
+    cache_creation = _validated_token_counter(
+        usage,
+        _CACHE_CREATION_TOKEN_KEYS,
+        required=False,
+    )
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or cache_read is None
+        or cache_creation is None
+    ):
+        return None
+    return input_tokens, output_tokens, cache_read, cache_creation
+
+
+def _positive_model_usage_cost_usd(usage: Dict[str, Any]) -> Optional[float]:
+    """Return a positive provider-reported model cost, or None."""
+    if "costUSD" not in usage:
+        return None
+    try:
+        cost = float(usage["costUSD"])
+    except (TypeError, ValueError):
+        return None
+    if cost <= 0:
+        return None
+    return cost
+
+
+def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Optional[str]:
+    """Return the Anthropic pricing family implied by an observed model name."""
+    if not isinstance(model_name, str) or not model_name:
+        return None
+    name_lower = model_name.lower()
+    if "opus" in name_lower:
+        return "opus"
+    if "haiku" in name_lower:
+        return "haiku"
+    if "sonnet" in name_lower:
+        return "sonnet"
+    return None
+
+
+def _anthropic_pricing_family_from_model_usage(
+    model_usage: Dict[str, Any],
+) -> Optional[str]:
+    """Infer aggregate pricing family from modelUsage keys."""
+    selected = None
     for model_name in model_usage.keys():
-        name_lower = model_name.lower()
-        if "opus" in name_lower:
-            family = "opus"
-            break
-        elif "haiku" in name_lower:
-            family = "haiku"
-            break
+        family = _anthropic_pricing_family_from_model_name(str(model_name))
+        if family == "opus":
+            return "opus"
+        if family == "haiku" and selected is None:
+            selected = "haiku"
+        elif family == "sonnet" and selected is None:
+            selected = "sonnet"
+    return selected
 
-    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
 
-    # new_input = total input minus cached reads and cache creation (those tokens are billed separately)
-    new_input = max(0, input_tokens - cache_read - cache_creation)
-    input_cost = (new_input / 1_000_000) * pricing.input_per_million
+def _calculate_anthropic_usage_cost(
+    usage: Dict[str, Any],
+    family: Optional[str],
+) -> Optional[float]:
+    """Calculate Anthropic token cost from validated usage counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cache_read, cache_creation = counts
+
+    pricing_family = family or "sonnet"
+    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(
+        pricing_family,
+        ANTHROPIC_PRICING_BY_FAMILY["sonnet"],
+    )
+
+    input_cost = (input_tokens / 1_000_000) * pricing.input_per_million
     cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
     cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
@@ -3647,93 +4504,250 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     return input_cost + cache_read_cost + cache_write_cost + output_cost
 
 
-def run_agentic_task(
-    instruction: str,
-    cwd: Path,
+def _calculate_anthropic_model_usage_token_cost(
+    model_usage: Dict[str, Any],
     *,
-    verbose: bool = False,
-    quiet: bool = False,
-    label: str = "",
-    timeout: Optional[float] = None,
-    max_retries: int = 1,
-    retry_delay: float = DEFAULT_RETRY_DELAY,
-    deadline: Optional[float] = None,
-    use_playwright: bool = False,
-    reasoning_time: Optional[float] = None,
-    steers: Optional[List[SteerEntry]] = None,
-    claude_policy: Optional[ClaudePolicy] = None,
-) -> AgenticTaskResult:
-    """
-    Runs an agentic task using available providers in preference order.
+    aggregate_usage: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Estimate cost from per-model costUSD or validated token counters."""
+    if not model_usage:
+        return None
 
-    Args:
-        instruction: The task instruction
-        cwd: Working directory
-        verbose: Show detailed output
-        quiet: Suppress all non-error output
-        label: Task label for logging
-        timeout: Optional timeout override
-        max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
-        retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
-        deadline: Optional Unix timestamp for job-level time budgeting
-        use_playwright: Enable constrained tool access mode for browser-based testing
-        reasoning_time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
-            top-level ``pdd --time`` flag. When provided, overrides the
-            ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
-            means "fall back to env" so unplumbed call sites keep working.
-        steers: Optional list of mid-run steering entries to inject into the instruction.
-        claude_policy: Optional validated Claude CLI policy contract. When
-            present, Anthropic runs must enforce these tool/session/output
-            semantics instead of PDD's broad default permission mode.
-
-    Returns:
-        AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
-        Four-value unpacking remains supported for legacy callers; structured
-        consumers can read ``result.usage`` or ``result[4]``.
-    """
-    normalized_claude_policy = (
-        validate_claude_policy(
-            claude_policy,
-            interactive=_claude_code_interactive_enabled(os.environ),
+    if not any(
+        isinstance(usage, dict)
+        and (
+            _positive_model_usage_cost_usd(usage) is not None
+            or _has_token_counter_key(usage)
         )
-        if claude_policy is not None
-        else None
+        for usage in model_usage.values()
+    ):
+        return None
+
+    aggregate_has_nonzero_cache = (
+        isinstance(aggregate_usage, dict)
+        and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+    )
+    total = 0.0
+    for model_name, usage in model_usage.items():
+        if not isinstance(usage, dict):
+            continue
+        direct_cost = _positive_model_usage_cost_usd(usage)
+        if direct_cost is not None:
+            total += direct_cost
+            continue
+        if not _has_token_counter_key(usage):
+            continue
+        if aggregate_has_nonzero_cache and not _has_complete_cache_counters(usage):
+            return None
+        family = (
+            _anthropic_pricing_family_from_model_name(str(model_name))
+            or "sonnet"
+        )
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is None:
+            return None
+        total += cost
+
+    return total
+
+
+def _build_claude_usage_record(
+    model_name: str,
+    usage: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Build one JSON-serializable Claude usage record from validated counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cached_input_tokens, cache_creation_input_tokens = counts
+
+    return {
+        "model": model_name,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+
+
+def _has_token_counter_key(usage: Dict[str, Any]) -> bool:
+    """Return True when a usage object contains any known token counter key."""
+    aliases = (
+        _INPUT_TOKEN_KEYS
+        + _OUTPUT_TOKEN_KEYS
+        + _CACHE_READ_TOKEN_KEYS
+        + _CACHE_CREATION_TOKEN_KEYS
+    )
+    return any(key in usage for key in aliases)
+
+
+def _has_counter_alias(usage: Dict[str, Any], aliases: Tuple[str, ...]) -> bool:
+    """Return True when any alias in a counter family is present."""
+    return any(key in usage for key in aliases)
+
+
+def _has_complete_cache_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when both cache-read and cache-creation counters are explicit."""
+    return (
+        _has_counter_alias(usage, _CACHE_READ_TOKEN_KEYS)
+        and _has_counter_alias(usage, _CACHE_CREATION_TOKEN_KEYS)
     )
 
-    # get_agent_provider_preference() must be called first: for
-    # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
-    # effect, which get_available_agents() then reads to evaluate auth correctly.
-    provider_pref = get_agent_provider_preference()
-    agents = get_available_agents()
 
-    # Filter agents based on preference order
-    candidates = [p for p in provider_pref if p in agents]
-    if normalized_claude_policy is not None:
-        if "anthropic" not in candidates:
-            raise AgenticUnsupportedSemanticsError(
-                "claude_policy requires Anthropic/Claude execution; no Anthropic "
-                "agent is available to enforce the requested policy"
+def _has_required_token_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when required input/output counters are explicit and valid."""
+    return (
+        _validated_token_counter(usage, _INPUT_TOKEN_KEYS, required=True) is not None
+        and _validated_token_counter(usage, _OUTPUT_TOKEN_KEYS, required=True) is not None
+    )
+
+
+def _has_nonzero_or_invalid_cache_counter(usage: Dict[str, Any]) -> bool:
+    """Return True when aggregate cache counters should not be silently dropped."""
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        value = _validated_token_counter(usage, aliases, required=False)
+        if value is None or value > 0:
+            return True
+    return False
+
+
+def _merge_missing_cache_counters(
+    per_model_usage: Dict[str, Any],
+    aggregate_usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill absent per-model cache counters from aggregate Claude usage."""
+    merged = dict(per_model_usage)
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        if any(key in merged for key in aliases):
+            continue
+        for key in aliases:
+            if key in aggregate_usage:
+                merged[key] = aggregate_usage[key]
+                break
+    return merged
+
+
+def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str]:
+    """Extract a concrete Claude model from known JSON envelope locations."""
+    model = data.get("model")
+    if isinstance(model, str) and model:
+        return model
+
+    for key in ("message", "response", "result", "advisor"):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def _anthropic_pricing_family_for_aggregate(
+    data: Dict[str, Any],
+    model_usage: Dict[str, Any],
+) -> str:
+    """Pick a pricing family for aggregate Claude usage from observed models."""
+    return (
+        _anthropic_pricing_family_from_model_usage(model_usage)
+        or _anthropic_pricing_family_from_model_name(
+            _extract_anthropic_model_from_envelope(data)
+        )
+        or "sonnet"
+    )
+
+
+def _extract_anthropic_standard_usage(
+    data: Any,
+    *,
+    actual_model: Optional[str],
+) -> AgenticUsage:
+    """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    if not isinstance(data, dict):
+        return None
+
+    model_usage = data.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        records: List[Dict[str, Any]] = []
+        names = sorted(str(name) for name in model_usage if name)
+        aggregate_usage = data.get("usage")
+        aggregate_has_nonzero_cache = (
+            isinstance(aggregate_usage, dict)
+            and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+        )
+        for model_name in names:
+            per_model_usage = model_usage.get(model_name)
+            has_per_model_counters = (
+                isinstance(per_model_usage, dict)
+                and _has_token_counter_key(per_model_usage)
             )
-        candidates = ["anthropic"]
+            if (
+                len(names) > 1
+                and aggregate_has_nonzero_cache
+                and has_per_model_counters
+                and not _has_complete_cache_counters(per_model_usage)
+            ):
+                return None
+            record_usage = per_model_usage
+            if (
+                len(names) == 1
+                and isinstance(record_usage, dict)
+                and isinstance(aggregate_usage, dict)
+            ):
+                if (
+                    not _has_complete_cache_counters(record_usage)
+                    and _has_required_token_counters(aggregate_usage)
+                ):
+                    record_usage = aggregate_usage
+                else:
+                    record_usage = _merge_missing_cache_counters(
+                        record_usage,
+                        aggregate_usage,
+                    )
+            record = (
+                _build_claude_usage_record(model_name, record_usage)
+                if isinstance(record_usage, dict)
+                else None
+            )
+            if (
+                record is None
+                and len(names) == 1
+                and isinstance(aggregate_usage, dict)
+            ):
+                record = _build_claude_usage_record(model_name, aggregate_usage)
+            if record is None:
+                return None
+            records.append(record)
+        if records:
+            return {"claude": records}
 
-    if not candidates:
-        msg = "No agent providers are available (check CLI installation and API keys)"
-        if not quiet:
-            console.print(f"[bold red]{msg}[/bold red]")
-        return AgenticTaskResult(False, msg, 0.0, "", None)
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
 
-    effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
-    effective_deadline = deadline if deadline is not None else get_job_deadline()
-    task_start_time = time.time()
-    # Issue #902: Cap total time across all providers to prevent 150min burn
-    aggregate_deadline = task_start_time + (2 * effective_timeout)
+    model_name = (
+        _extract_anthropic_model_from_envelope(data)
+        or actual_model
+    )
+    if not model_name:
+        return None
 
-    # Create a unique temp file for the prompt
-    prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
-    prompt_path = cwd / prompt_filename
+    record = _build_claude_usage_record(model_name, usage)
+    if record is None:
+        return None
+    return {"claude": [record]}
 
-    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
-    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+
+def build_agentic_task_instruction(
+    instruction: str,
+    *,
+    user_feedback: Optional[str] = None,
+    steers: Optional[List[SteerEntry]] = None,
+) -> str:
+    """Return the exact instruction text written for provider execution."""
+    if user_feedback is None:
+        user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+
     feedback_section = ""
     if user_feedback:
         feedback_section = (
@@ -3755,10 +4769,150 @@ def run_agentic_task(
                 f"{_steer_body_for_llm(steer.body)}\n"
             )
 
-    full_instruction = (
+    return (
         f"{instruction}{feedback_section}{steering_section}\n\n"
         "You have full file access to explore and modify files as needed."
     )
+
+
+def run_agentic_task(
+    instruction: str,
+    cwd: Path,
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    label: str = "",
+    timeout: Optional[float] = None,
+    stall_timeout: Optional[float] = None,
+    max_retries: int = 1,
+    retry_delay: float = DEFAULT_RETRY_DELAY,
+    deadline: Optional[float] = None,
+    use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
+    steers: Optional[List[SteerEntry]] = None,
+    claude_policy: Optional[ClaudePolicy] = None,
+    routing_policy: Optional[RoutingPolicy] = None,
+    task_class: Optional[str] = None,
+) -> AgenticTaskResult:
+    """
+    Runs an agentic task using available providers in preference order.
+
+    Args:
+        instruction: The task instruction
+        cwd: Working directory
+        verbose: Show detailed output
+        quiet: Suppress all non-error output
+        label: Task label for logging
+        timeout: Optional timeout override
+        stall_timeout: Optional no-progress watchdog window (issue #1714). When
+            set, an interactive run is aborted if its session transcript stays
+            quiescent for this many seconds — catching a parked/spinner-only
+            stall well before ``timeout``. ``None`` (default) disables it, so
+            steps that legitimately idle on long tool runs are unaffected.
+        max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
+        retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
+        deadline: Optional Unix timestamp for job-level time budgeting
+        use_playwright: Enable constrained tool access mode for browser-based testing
+        reasoning_time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
+            top-level ``pdd --time`` flag. When provided, overrides the
+            ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
+            means "fall back to env" so unplumbed call sites keep working.
+        steers: Optional list of mid-run steering entries to inject into the instruction.
+        claude_policy: Optional validated Claude CLI policy contract. When
+            present, Anthropic runs must enforce these tool/session/output
+            semantics instead of PDD's broad default permission mode.
+        routing_policy: Optional static routing policy. When supplied, PDD
+            selects an initial agentic config by task class and may escalate
+            bounded configs after verifier/provider failure.
+        task_class: Optional coarse task class. Reorders already-available
+            providers (harness selection) and, when ``routing_policy`` is
+            supplied, also keys the routing-policy lookup. ``None`` preserves
+            the existing provider cascade.
+
+    Returns:
+        AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
+        Four-value unpacking remains supported for legacy callers; structured
+        consumers can read ``result.usage`` or ``result[4]``.
+    """
+    normalized_claude_policy = (
+        validate_claude_policy(
+            claude_policy,
+            interactive=_claude_code_interactive_enabled(os.environ),
+        )
+        if claude_policy is not None
+        else None
+    )
+
+    routing_model_env_originals: Dict[str, Optional[str]] = {}
+    routing_record: Optional[RoutingRecord] = None
+    routing_config: Optional[RoutingConfig] = None
+
+    # get_agent_provider_preference() must be called first: for
+    # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
+    # effect, which get_available_agents() then reads to evaluate auth correctly.
+    provider_pref = get_agent_provider_preference()
+    agents = get_available_agents()
+
+    # Filter agents based on preference order
+    candidates = [p for p in provider_pref if p in agents]
+    if normalized_claude_policy is not None:
+        if "anthropic" not in candidates:
+            raise AgenticUnsupportedSemanticsError(
+                "claude_policy requires Anthropic/Claude execution; no Anthropic "
+                "agent is available to enforce the requested policy"
+            )
+        candidates = ["anthropic"]
+    elif task_class is not None:
+        candidates = select_harness_for_task(task_class, candidates)
+
+    if routing_policy is not None:
+        routing_config, routing_record = select_config(
+            routing_policy,
+            task_class,
+            budget_remaining=None,
+            deadline=deadline,
+        )
+        if routing_config is not None:
+            if routing_config.harness in candidates:
+                candidates = [routing_config.harness]
+                max_retries = max(1, int(routing_config.repeat_runs))
+                reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
+                _apply_routing_model_env(
+                    routing_config.harness,
+                    routing_config,
+                    routing_model_env_originals,
+                )
+            elif routing_record is not None:
+                routing_record.fallback_reason = (
+                    f"selected_harness_unavailable:{routing_config.harness}"
+                )
+
+    if not candidates:
+        msg = "No agent providers are available (check CLI installation and API keys)"
+        if not quiet:
+            console.print(f"[bold red]{msg}[/bold red]")
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=0.0,
+            latency_seconds=0.0,
+        )
+        _restore_routing_model_env(routing_model_env_originals)
+        return AgenticTaskResult(False, msg, 0.0, "", None)
+
+    effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
+    effective_deadline = deadline if deadline is not None else get_job_deadline()
+    task_start_time = time.time()
+    cumulative_cost_usd = 0.0
+    # Issue #902: Cap total time across all providers to prevent 150min burn
+    aggregate_deadline = task_start_time + (2 * effective_timeout)
+
+    # Create a unique temp file for the prompt
+    prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
+    prompt_path = cwd / prompt_filename
+
+    full_instruction = build_agentic_task_instruction(instruction, steers=steers)
 
     try:
         # Write prompt to file
@@ -3784,6 +4938,8 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        harness_capabilities = _load_harness_capabilities()
+        total_cost = 0.0
 
         for provider in candidates:
             if verbose:
@@ -3840,10 +4996,13 @@ def run_agentic_task(
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
                     claude_policy=normalized_claude_policy,
+                    stall_timeout=stall_timeout,
                 )
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
+                cumulative_cost_usd += cost
+                total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
@@ -3851,6 +5010,32 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                harness_id = _provider_harness_id(provider)
+                capability = harness_capabilities.get(harness_id, {})
+                identity_observable = bool(capability.get("identity_observable", True))
+                model_id = str(effective_model or "") if identity_observable else ""
+                cli_version = _get_provider_cli_version(provider)
+                if usage:
+                    usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
+                    estimate_method = "provider_usage"
+                elif cost > 0:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_estimation"
+                else:
+                    usage_source = "unavailable"
+                    estimate_method = "unavailable"
+                if capability.get("routing_class") == "opaque":
+                    model_selection_outcome = "unconfirmed"
+                elif provider == "anthropic" and not os.environ.get("CLAUDE_MODEL"):
+                    model_selection_outcome = "fixed_by_config"
+                elif provider != candidates[0]:
+                    model_selection_outcome = "fallback"
+                else:
+                    model_selection_outcome = "direct"
+                requested_effort, effective_effort = _resolve_effort_for_provider_log(
+                    provider,
+                    reasoning_time,
+                )
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -3912,6 +5097,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             ),
                             pdd_owned_log_signatures,
                             filesystem_snapshot,
@@ -3977,6 +5164,15 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 include_bodies=verbose,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
+                            )
+                            _emit_routing_outcome(
+                                routing_record,
+                                cwd=cwd,
+                                success=False,
+                                cost_usd=total_cost,
+                                latency_seconds=time.time() - task_start_time,
                             )
                             return AgenticTaskResult(
                                 False,
@@ -3985,6 +5181,11 @@ def run_agentic_task(
                                 provider,
                                 usage,
                                 changed_files=changed_files,
+                                usage_source=usage_source,
+                                estimate_method=estimate_method,
+                                model_id=model_id,
+                                cli_version=cli_version,
+                                cumulative_cost_usd=cumulative_cost_usd,
                             )
 
                         # Issue #1376: always emit a summary record so the audit
@@ -4003,6 +5204,19 @@ def run_agentic_task(
                             cwd=cwd,
                             model=effective_model,
                             include_bodies=verbose,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
+                        )
+                        _emit_routing_outcome(
+                            routing_record,
+                            cwd=cwd,
+                            success=True,
+                            cost_usd=total_cost,
+                            latency_seconds=time.time() - task_start_time,
+                        )
+                        _publish_agentic_model_provenance(
+                            resolved_model=model_id,
+                            model_selection_outcome=model_selection_outcome,
                         )
                         return AgenticTaskResult(
                             True,
@@ -4011,6 +5225,11 @@ def run_agentic_task(
                             provider,
                             usage,
                             changed_files=changed_files,
+                            usage_source=usage_source,
+                            estimate_method=estimate_method,
+                            model_id=model_id,
+                            cli_version=cli_version,
+                            cumulative_cost_usd=cumulative_cost_usd,
                         )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
@@ -4031,6 +5250,8 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         ),
                         pdd_owned_log_signatures,
                         filesystem_snapshot,
@@ -4117,20 +5338,123 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    requested_effort=requested_effort if 'requested_effort' in locals() else None,
+                    effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return AgenticTaskResult(
+        failure_cost = total_cost if routing_policy is not None else 0.0
+        failure_result = AgenticTaskResult(
             False,
             f"All agent providers failed: {'; '.join(provider_errors)}",
-            0.0,
+            failure_cost,
             "",
             None,
+            cumulative_cost_usd=cumulative_cost_usd,
         )
 
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=total_cost,
+            latency_seconds=time.time() - task_start_time,
+        )
+
+        if routing_policy is not None and routing_record is not None:
+            current_record = routing_record
+            last_result = failure_result
+            # Providers already exercised by this task (the initial routed/
+            # cascade attempt above). Used so the feasibility fallback only
+            # tries providers that have not had a chance yet.
+            attempted_harnesses: set[str] = set(candidates)
+            while True:
+                next_config, next_record = escalate(
+                    routing_policy,
+                    current_record,
+                    verifier_result="fail",
+                    budget_remaining=None,
+                    deadline=effective_deadline,
+                )
+                if (
+                    next_config is None
+                    or next_record.fallback_reason is not None
+                    or next_record.escalation_step <= current_record.escalation_step
+                ):
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    break
+
+                # Issue #1431: routing escalation must stay feasibility-aware.
+                # Pinning PDD_AGENTIC_PROVIDER to a harness that is not
+                # installed/authenticated collapses the nested provider cascade
+                # to "No agent providers are available", so the ladder would
+                # keep emitting infeasible configs and never try a provider
+                # that could actually succeed. Skip the infeasible config,
+                # record it with an explicit fallback reason (not a failed
+                # provider attempt), and keep climbing the ladder.
+                if next_config.harness not in get_available_agents():
+                    next_record.fallback_reason = (
+                        f"infeasible_harness_unavailable:{next_config.harness}"
+                    )
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    current_record = next_record
+                    continue
+
+                escalated_start = time.time()
+                last_result = _run_agentic_task_with_routing_config(
+                    config=next_config,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                attempted_harnesses.add(next_config.harness)
+                next_record.cost_usd = last_result.cost_usd
+                next_record.latency_seconds = time.time() - escalated_start
+                next_record.verifier_result = "pass" if last_result.success else "fail"
+                emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                if last_result.success:
+                    return last_result
+                current_record = next_record
+
+            # Issue #1431: the ladder is exhausted (or only ever offered
+            # infeasible harnesses) and we still do not have a success. If
+            # installed providers were never tried because routing only pinned
+            # unavailable harnesses, fall back to the standard provider cascade
+            # over those untried providers so a feasible one still gets a shot.
+            if not last_result.success:
+                fallback_result = _run_feasible_routing_fallback(
+                    attempted_harnesses=attempted_harnesses,
+                    base_record=current_record,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                if fallback_result is not None:
+                    last_result = fallback_result
+            return last_result
+
+        return failure_result
+
     finally:
+        _restore_routing_model_env(routing_model_env_originals)
         # Cleanup prompt file
         if prompt_path.exists():
             try:
@@ -4463,6 +5787,267 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
 
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
     return result
+
+
+# Issue #1646: Codex `exec --json` can emit tens-to-hundreds of MiB of NDJSON.
+# Capturing it via PIPE + communicate() + text=True holds the full decoded str
+# in RAM, and the openai parse path then makes more copies (.strip(),
+# .splitlines()), so peak parent heap reached ~3-4x the transcript and crossed
+# RSS limits -> SIGKILL surfaced as OOM. `_subprocess_run_spooled` streams
+# stdout/stderr to temp files so the parent only ever materializes bounded
+# snippets, cutting peak heap from ~3-4N to ~1N.
+_AGENT_STDIO_SNIPPET_BYTES: int = 64 * 1024  # HEAD/TAIL diagnostic snippet size
+# Issue #1646: a single pathological NDJSON line (e.g. a multi-MB tool_output
+# blob) must never be read whole, decoded, and json.loads'd — that would spike
+# the parent heap even with the spool. ``_iter_spooled_lines`` reads each line
+# with a bounded ``readline(cap)`` so the parent never materializes more than
+# ~cap bytes at a time. A line that exceeds this cap is classified by its event
+# TYPE (see ``_AGENT_RETAINED_TYPE_RE``): a giant tool-output blob is dropped
+# without ever being decoded, while a retained-type line is still read (so we
+# never silently drop a real answer/usage/error) up to the larger ceiling below.
+_AGENT_MAX_JSONL_LINE_BYTES: int = 16 * 1024 * 1024
+# A retained-type line (an answer/usage/error event) is, in pathological cases,
+# allowed to exceed the per-line cap so it is never silently dropped — but only
+# up to this generous hard ceiling, beyond which even a retained-type line is
+# dropped rather than risk OOM. Real Codex retained events are KiB-to-low-MiB,
+# so this ceiling is never reached in practice; it is purely a safety bound.
+_AGENT_MAX_RETAINED_LINE_BYTES: int = 64 * 1024 * 1024
+# The Codex event ``type`` discriminator sits at the START of each NDJSON line,
+# so we classify an oversize line by probing only its first few KiB — never its
+# multi-MiB payload (which would reintroduce the heap spike). Matched
+# case-insensitively, mirroring the error scanner which lowercases event types.
+_AGENT_TYPE_PROBE_BYTES: int = 8 * 1024
+_AGENT_RETAINED_TYPE_RE = re.compile(
+    rb'"type"\s*:\s*"(?:result|agent_message|session\.end|turn\.completed'
+    rb'|[^"]*(?:error|failed)[^"]*)"',
+    re.IGNORECASE,
+)
+
+
+_AGENT_SPOOL_DIR_WARNED = False
+
+
+def _agent_spool_dir() -> Optional[str]:
+    """Directory for agent stdio spool files, or None for the system default.
+
+    Operators can set ``PDD_AGENT_SPOOL_DIR`` to a disk-backed path. The system
+    temp dir may be tmpfs/RAM-backed in some containers (Cloud Run/GKE), so
+    pointing this at real disk also relieves cgroup memory pressure. Even on
+    tmpfs the spool still cuts peak heap from ~3-4N to ~1N.
+
+    Issue #1646: when the env var is SET but unusable (missing / not a directory
+    / not writable) we warn ONCE rather than silently falling back, so operators
+    don't believe disk-backed spooling is active when it isn't.
+    """
+    spool = os.environ.get("PDD_AGENT_SPOOL_DIR")
+    if not spool:
+        return None
+    if os.path.isdir(spool) and os.access(spool, os.W_OK):
+        return spool
+    global _AGENT_SPOOL_DIR_WARNED
+    if not _AGENT_SPOOL_DIR_WARNED:
+        _AGENT_SPOOL_DIR_WARNED = True
+        console.print(
+            f"[yellow]PDD_AGENT_SPOOL_DIR={spool!r} is not a writable directory; "
+            "falling back to the system temp dir for agent output spooling.[/yellow]"
+        )
+    return None
+
+
+@dataclass
+class _SpooledCompletedProcess:
+    """Result of ``_subprocess_run_spooled`` with stdio spooled to temp files.
+
+    ``stdout_file``/``stderr_file`` are open binary temp files positioned at
+    offset 0; callers stream them (e.g. via ``_iter_spooled_lines``) instead of
+    reading the whole transcript into RAM. ``*_head``/``*_tail`` are bounded
+    decoded snippets for diagnostics. Always call ``close()`` (the files are
+    unlinked-on-create on POSIX, so closing deletes them).
+    """
+
+    args: Any
+    returncode: int
+    stdout_file: Any
+    stderr_file: Any
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_head: str
+    stdout_tail: str
+    stderr_head: str
+    stderr_tail: str
+
+    def close(self) -> None:
+        for handle in (self.stdout_file, self.stderr_file):
+            try:
+                handle.close()
+            except Exception:
+                pass
+
+
+def _read_spool_snippets(spool_file: Any, total_bytes: int) -> Tuple[str, str]:
+    """Return bounded (head, tail) decoded snippets from a binary spool file."""
+    snippet = _AGENT_STDIO_SNIPPET_BYTES
+    spool_file.seek(0)
+    head = spool_file.read(snippet).decode("utf-8", errors="replace")
+    if total_bytes <= snippet:
+        # Whole file already in head; avoid duplicating it as the tail.
+        return head, ""
+    spool_file.seek(max(0, total_bytes - snippet))
+    tail = spool_file.read(snippet).decode("utf-8", errors="replace")
+    return head, tail
+
+
+def _bounded_head_tail(head: str, tail: str, limit: int) -> str:
+    """Combine head/tail diagnostic snippets within ``limit`` chars.
+
+    Issue #1646: ``(head + tail)[:limit]`` silently drops the
+    tail because ``head`` alone can be up to ``_AGENT_STDIO_SNIPPET_BYTES``.
+    When both ends are present and don't fit, split the budget so a truncated /
+    garbled transcript shows both where it started and where it ended.
+    """
+    if limit <= 0:
+        return ""
+    if not tail or len(head) + len(tail) <= limit:
+        return (head + tail)[:limit]
+    if limit < 3:
+        # Too small to show both ends with a separator; prefer the head.
+        return head[:limit]
+    head_budget = max(1, (limit - 1) // 2)
+    tail_budget = limit - 1 - head_budget  # >= 1 for limit >= 3
+    return head[:head_budget] + "…" + tail[-tail_budget:]
+
+
+def _subprocess_run_spooled(
+    cmd,
+    *,
+    cwd=None,
+    env=None,
+    input=None,
+    text=True,
+    timeout=None,
+    start_new_session=False,
+):
+    """Like ``_subprocess_run`` but spools stdout/stderr to temp files.
+
+    Issue #1646: keeps the parent from holding a large agent transcript in RAM.
+    ``text`` is accepted for signature parity but ignored — the spool files are
+    always binary and decoded lazily by the caller.
+
+    Test note: the openai/Codex provider in ``_run_with_provider`` routes through
+    THIS function, not ``_subprocess_run``. A test that mocks ``_subprocess_run``
+    for an openai ``_run_with_provider`` / ``run_agentic_task`` path must ALSO
+    mock ``_subprocess_run_spooled`` (share the mock, e.g.
+    ``spooled_mock.side_effect = run_mock``). The shared ``mock_subprocess`` /
+    ``mock_subprocess_run`` fixtures already do this.
+    """
+    spool_dir = _agent_spool_dir()
+    # Issue #1646: ownership of the temp files only transfers to the returned
+    # _SpooledCompletedProcess on success. If anything below raises (opening the
+    # 2nd file, Popen, communicate, or the snippet reads), close whatever we
+    # already opened before re-raising so the caller — which catches the
+    # exception and never sees a result to close() — can't leak fds.
+    stdout_file = tempfile.TemporaryFile(mode="w+b", dir=spool_dir)
+    stderr_file = None
+    try:
+        stderr_file = tempfile.TemporaryFile(mode="w+b", dir=spool_dir)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.PIPE if input is not None else None,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=start_new_session,
+        )
+        stdin_data = input.encode("utf-8") if isinstance(input, str) else input
+        try:
+            proc.communicate(input=stdin_data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if start_new_session:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+            proc.kill()
+            proc.wait(timeout=5)
+            raise
+
+        stdout_bytes = stdout_file.seek(0, os.SEEK_END)
+        stderr_bytes = stderr_file.seek(0, os.SEEK_END)
+        stdout_head, stdout_tail = _read_spool_snippets(stdout_file, stdout_bytes)
+        stderr_head, stderr_tail = _read_spool_snippets(stderr_file, stderr_bytes)
+        return _SpooledCompletedProcess(
+            args=cmd,
+            returncode=proc.returncode,
+            stdout_file=stdout_file,
+            stderr_file=stderr_file,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            stdout_head=stdout_head,
+            stdout_tail=stdout_tail,
+            stderr_head=stderr_head,
+            stderr_tail=stderr_tail,
+        )
+    except BaseException:
+        for handle in (stdout_file, stderr_file):
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+        raise
+
+
+def _iter_spooled_lines(file_obj: Any):
+    """Yield decoded NDJSON lines from a spool file with a bounded per-line read.
+
+    Issue #1646: each line is read with a bounded ``readline(cap)``
+    (``cap == _AGENT_MAX_JSONL_LINE_BYTES``) so the parent never materializes
+    more than ~cap bytes at a time. A line longer than the cap is classified by
+    its event TYPE in the already-read prefix (probing only the first few KiB,
+    never the payload):
+
+    * a giant tool-output blob (no retained type) is drained and dropped without
+      ever being decoded — the common oversize case, and what bounds the heap;
+    * a retained-type line (result / agent_message / session.end /
+      turn.completed / any error/failed event) is read in full and yielded — so
+      a pathologically large real answer/usage/error is never silently lost —
+      but only up to ``_AGENT_MAX_RETAINED_LINE_BYTES``, beyond which it too is
+      dropped rather than risk OOM.
+
+    This bounded reader lives only here (the spooled/production path); the in-RAM
+    string path is unaffected.
+    """
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    ceiling = _AGENT_MAX_RETAINED_LINE_BYTES
+    file_obj.flush()
+    file_obj.seek(0)
+    while True:
+        line = file_obj.readline(cap)
+        if not line:
+            return
+        if line.endswith(b"\n") or len(line) < cap:
+            # Whole line fits within the cap — safe to decode and parse.
+            yield line.decode("utf-8", errors="replace")
+            continue
+        # Oversize line: ``line`` holds only its first ``cap`` bytes. Classify by
+        # the event type in that prefix — keep retained-type lines (bounded by
+        # the ceiling), drop tool-output blobs.
+        keep = bool(_AGENT_RETAINED_TYPE_RE.search(line[:_AGENT_TYPE_PROBE_BYTES]))
+        buffered = [line] if keep else None
+        total = len(line)
+        while not line.endswith(b"\n"):
+            line = file_obj.readline(cap)
+            if not line:
+                break  # EOF mid-line
+            total += len(line)
+            if keep and total > ceiling:
+                keep = False        # too big even for a retained line -> drop it
+                buffered = None     # release what we accumulated
+            elif keep:
+                buffered.append(line)
+        if buffered is not None:
+            yield b"".join(buffered).decode("utf-8", errors="replace")
 
 
 def _claude_code_interactive_enabled(env: Optional[Dict[str, str]] = None) -> bool:
@@ -5056,6 +6641,21 @@ def _terminate_process_group(proc: subprocess.Popen, sig: int) -> None:
             pass
 
 
+def _terminate_pty_proc_graceful(proc: subprocess.Popen) -> None:
+    """SIGTERM the process group, then SIGKILL if it doesn't exit within 5 s.
+
+    Shared teardown for the interactive PTY loop's three early-exit paths
+    (reply received, auth fast-fail, no-progress stall) so the graceful-then-
+    forced kill stays consistent in one place.
+    """
+    _terminate_process_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc, signal.SIGKILL)
+        proc.wait(timeout=5)
+
+
 def _parse_claude_interactive_reply(
     reply_path: Path,
     job_id: str,
@@ -5106,8 +6706,15 @@ def _run_interactive_pty_until_reply(
     reply_path: Path,
     job_id: str,
     session_id: Optional[str] = None,
+    stall_timeout: Optional[float] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
     """Run an interactive CLI under a PTY until the MCP reply file appears.
+
+    When ``stall_timeout`` is set, a no-progress watchdog (issue #1714) aborts
+    the run if the session transcript stops growing for that many seconds — a
+    parked TUI keeps the PTY busy with spinner frames, so only transcript growth
+    counts as real progress. ``None`` (default) leaves the run bounded solely by
+    the hard ``timeout``.
 
     When ``session_id`` is provided, the loop also fast-fails on a post-launch
     authentication failure (Issue #1365): a revoked or logged-out interactive
@@ -5152,16 +6759,20 @@ def _run_interactive_pty_until_reply(
         auth_buffer = b""  # carried incomplete trailing transcript line
         auth_state: Optional[str] = None  # running terminal-auth message
         auth_last_size = -1  # transcript size at previous poll (quiescence gate)
+        # Issue #1714 no-progress watchdog state. ``last_progress_time`` is the
+        # last wall-clock time the transcript grew (real work). Seeded to
+        # ``start`` so a session that never makes any progress is still caught
+        # after ``stall_timeout``. ``stall_last_size`` baselines the transcript
+        # size so an empty transcript merely *appearing* is not counted as
+        # progress.
+        last_progress_time = start
+        stall_last_size = 0
+        stall_armed = False  # Issue #1714: armed only once the transcript is located
 
         while True:
             if reply_path.exists():
                 parsed = _parse_claude_interactive_reply(reply_path, job_id)
-                _terminate_process_group(proc, signal.SIGTERM)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process_group(proc, signal.SIGKILL)
-                    proc.wait(timeout=5)
+                _terminate_pty_proc_graceful(proc)
                 return parsed
 
             if proc.poll() is not None:
@@ -5182,6 +6793,21 @@ def _run_interactive_pty_until_reply(
                     # poll. (auth_last_size < 0 is the first observation.)
                     quiescent = auth_last_size >= 0 and current_size == auth_last_size
                     auth_last_size = current_size
+                    # Issue #1714 no-progress watchdog: the session transcript is
+                    # the only real-work signal (PTY spinner bytes are not). Arm
+                    # the watchdog the first time the transcript can actually be
+                    # read — baselining its current size so pre-existing content on
+                    # a resumed session is not mistaken for growth, and starting the
+                    # stall clock from this moment. If the transcript can never be
+                    # located the watchdog stays disarmed and the run falls back to
+                    # the hard timeout (never a spurious kill of a healthy run).
+                    if not stall_armed:
+                        stall_armed = True
+                        stall_last_size = current_size
+                        last_progress_time = now
+                    elif current_size > stall_last_size:
+                        stall_last_size = current_size
+                        last_progress_time = now
                     auth_state, auth_offset, auth_buffer = _advance_interactive_auth_scan(
                         auth_session_file, auth_offset, auth_buffer, auth_state
                     )
@@ -5194,14 +6820,25 @@ def _run_interactive_pty_until_reply(
                     # the next poll so a recovering session is never killed on a
                     # stale/partial trailing line.
                     if auth_failure is not None and quiescent:
-                        _terminate_process_group(proc, signal.SIGTERM)
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            _terminate_process_group(proc, signal.SIGKILL)
-                            proc.wait(timeout=5)
+                        _terminate_pty_proc_graceful(proc)
                         return False, auth_failure, 0.0, None
                 next_auth_check = now + INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS
+
+            # Issue #1714 no-progress watchdog: abort a stalled run (transcript
+            # quiescent past ``stall_timeout``) long before the hard timeout so a
+            # spinner-only hang fails fast and cheaply instead of burning the
+            # full step budget. Off unless the caller opts in via ``stall_timeout``.
+            if stall_armed and _stall_watchdog_triggered(last_progress_time, now, stall_timeout):
+                _terminate_pty_proc_graceful(proc)
+                tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                return (
+                    False,
+                    f"Claude interactive mode stalled: no transcript progress for "
+                    f"{stall_timeout:.0f}s (issue #1714 no-progress watchdog). "
+                    f"Output tail: {tail}",
+                    0.0,
+                    None,
+                )
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -5271,6 +6908,7 @@ def _run_claude_interactive_with_mcp(
     env: Dict[str, str],
     use_playwright: bool = False,
     claude_policy: Optional[ClaudePolicy] = None,
+    stall_timeout: Optional[float] = None,
 ) -> _ProviderRunResult:
     """Run Claude Code interactively and collect its result through MCP."""
     if os.name != "posix":
@@ -5314,6 +6952,7 @@ def _run_claude_interactive_with_mcp(
             reply_path=reply_path,
             job_id=job_id,
             session_id=session_id,
+            stall_timeout=stall_timeout,
         )
         session_cost, session_model, usage = _estimate_claude_interactive_session_cost(
             session_id,
@@ -5342,10 +6981,13 @@ def _run_with_provider(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
-) -> Tuple[bool, str, float, Optional[str]]:
+    stall_timeout: Optional[float] = None,
+) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost, actual_model).
+    Returns a provider result whose iteration yields
+    (success, output_or_error, cost, actual_model). Claude paths may expose
+    structured usage at index 4 while preserving four-value unpacking.
 
     Issue #1376: ``actual_model`` is the model name extracted from the
     provider's JSON response (e.g. ``claude-sonnet-4-6``,
@@ -5433,12 +7075,9 @@ def _run_with_provider(
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         if _claude_code_interactive_enabled(env):
-            if reasoning_effort and not quiet:
-                console.print(
-                    f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but PDD's "
-                    "Claude Code interactive bridge does not map it to a CLI flag; "
-                    "applies to llm_invoke steps only, not this subprocess.[/dim]"
-                )
+            if reasoning_effort:
+                env = dict(env)
+                env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
             return _run_claude_interactive_with_mcp(
                 cli_path=cli_path,
                 prompt_path=prompt_path,
@@ -5447,6 +7086,7 @@ def _run_with_provider(
                 env=env,
                 use_playwright=use_playwright,
                 claude_policy=claude_policy,
+                stall_timeout=stall_timeout,
             )
 
         # Use -p - to pipe prompt as direct user message via stdin.
@@ -5477,17 +7117,8 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
-        if reasoning_effort and not quiet:
-            # Always surface outside --quiet mode — silently dropping the user's
-            # reasoning signal is a support-ticket generator. The Claude Code CLI
-            # has no --reasoning-effort flag today, so clarify that the effort
-            # applies to LiteLLM-invoked steps (analysis/verification) but not
-            # to this code-writing subprocess.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
+        if reasoning_effort:
+            cmd.extend(["--effort", reasoning_effort])
     elif provider == "google":
         resolved_bin = _get_google_cli_name(env)
         if resolved_bin == "agy":
@@ -5615,6 +7246,12 @@ def _run_with_provider(
         variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
         if variant_name:
             cmd.extend(["--variant", variant_name])
+        elif reasoning_effort and not quiet:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode "
+                "does not expose a generic CLI effort flag; configure an "
+                "OPENCODE_VARIANT for provider-specific reasoning settings.[/dim]"
+            )
         # The OpenCode CLI requires a positional ``message`` argument for
         # ``opencode run`` (https://opencode.ai/docs/cli/) — earlier revisions
         # passed only ``--`` and piped the prompt body on stdin, which the CLI
@@ -5639,185 +7276,191 @@ def _run_with_provider(
         or (provider == "google" and _get_google_cli_name(env) == "agy")
     ) else None
 
+    # Issue #1646: Codex (openai) NDJSON transcripts can be huge, so spool the
+    # CLI's stdout/stderr to disk instead of holding the decoded string in the
+    # parent heap. Routed UNCONDITIONALLY for openai (no os.path.exists gate);
+    # all other providers keep the in-RAM ``_subprocess_run``. When tests mock
+    # ``_subprocess_run_spooled`` to return a plain CompletedProcess,
+    # ``result_is_spooled`` is False and the in-RAM code paths below still work.
+    runner = _subprocess_run_spooled if provider == "openai" else _subprocess_run
+    runner_kwargs: Dict[str, Any] = dict(
+        cwd=cwd,
+        env=env,
+        input=stdin_content,
+        text=True,
+        timeout=timeout,
+        start_new_session=True,
+    )
+    if provider != "openai":
+        runner_kwargs["capture_output"] = True
     try:
-        result = _subprocess_run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            start_new_session=True,
-        )
+        result = runner(cmd, **runner_kwargs)
     except subprocess.TimeoutExpired:
         return False, "Timeout expired", 0.0, None
     except Exception as e:
         return False, str(e), 0.0, None
 
-    if result.returncode != 0:
-        if provider == "openai":
-            stdout_error = _extract_codex_jsonl_error(result.stdout or "")
-            combined_error = "\n".join(
-                part for part in [
-                    result.stderr or "",
-                    (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH],
-                ]
-                if part
-            )
-            codex_auth_message = _codex_auth_failure_message(combined_error)
-            if codex_auth_message:
-                return False, codex_auth_message, 0.0, None
-            if stdout_error:
-                return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
-            if result.stderr and not _is_codex_stdin_notice(result.stderr):
-                error_detail = result.stderr
-            else:
-                error_detail = (result.stdout or result.stderr or "")[:MAX_ERROR_SNIPPET_LENGTH]
-            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
-        error_detail = result.stderr or result.stdout[:500]
-        return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
-
-    # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
-    # different event schema than Codex/Claude (step_start, text, step_finish,
-    # error...) and routes cost via ``step_finish.part.cost``, so it doesn't
-    # belong in the shared single-JSON / Codex-NDJSON path below.
-    if provider == "opencode":
-        parsed = _parse_opencode_jsonl(result.stdout)
-        actual_model = parsed.get("model") or None
-        err = parsed.get("error") or ""
-        # Cost: prefer JSONL-reported cost; fall back to CSV pricing when
-        # OpenCode did not surface a cost field (some backends/sessions omit
-        # ``step_finish.part.cost``). Returning $0.00 for a successful run
-        # silently breaks cost-accounting acceptance.
-        if parsed.get("cost_reported"):
-            cost = float(parsed.get("cost") or 0.0)
-        else:
-            tokens = parsed.get("tokens") or {}
-            csv_model_id = actual_model or _resolve_opencode_model_for_run(env, cwd=cwd)
-            cost = _opencode_csv_cost(csv_model_id, tokens)
-        if err:
-            # An error event with returncode==0 still represents a routing /
-            # provider failure inside OpenCode (e.g., "provider not
-            # configured"). Surface as failure, but keep cost and any
-            # captured model so callers can audit partial spend.
-            return False, str(err), cost, actual_model
-        return (
-            True,
-            str(parsed.get("text") or ""),
-            cost,
-            actual_model,
-        )
-
-    # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
-    # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
-    # with a blank provider error and no log trail. Stderr tail + prompt size
-    # + auth-key presence is usually enough to tell apart auth failures, rate
-    # limits, and genuine empty responses.
-    if not result.stdout.strip():
-        auth_keys_present = sorted(
-            k for k in env
-            if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
-        )
-        stderr_tail = (result.stderr or "")[-500:]
-        console.print(
-            f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
-        )
-        console.print(
-            f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
-            f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
-        )
-
-    # Antigravity (`agy`): the CLI emits plain text on stdout (no
-    # --output-format flag is supported as of agy 1.0.1, see cmd-build
-    # comment above). agy ALSO exits 0 in two failure modes that we must
-    # surface as failures instead of treating as a successful response:
-    #   - timeout: stdout is exactly `Error: timed out waiting for response`
-    #   - missing/expired OAuth in headless mode: stdout starts with
-    #     `Authentication required.` followed by the device-code URL.
-    # Anything else with exit 0 is treated as the response body. Cost and
-    # model are unknown — the audit log will show `cost=0, model=null`
-    # until Google ships a structured-output mode.
-    if provider == "google" and _get_google_cli_name(env) == "agy":
-        text = result.stdout.strip()
-        if (
-            text.startswith("Error:")
-            or text.startswith("Authentication required.")
-        ):
-            return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
-        return True, text, 0.0, None
-
-    # Parse JSON Output
+    result_is_spooled = isinstance(result, _SpooledCompletedProcess)
     try:
-        # Handle JSONL output (Codex sometimes streams)
-        output_str = result.stdout.strip()
-        data = {}
-        
-        if provider == "openai" and "\n" in output_str:
-            # Parse NDJSON, collecting both the agent response and usage stats
-            lines = output_str.splitlines()
-            agent_message_data = None
-            session_end = None
-            for line in lines:
-                try:
-                    item = json.loads(line)
-                    # Legacy Codex format: single event contains both text and usage
-                    if item.get("type") == "result":
-                        data = item
-                        break
-                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
-                    if (item.get("type") == "item.completed"
-                            and isinstance(item.get("item"), dict)
-                            and item["item"].get("type") == "agent_message"):
-                        agent_message_data = item
-                    # usage/cost stats are in session.end or turn.completed
-                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
-                    if item.get("type") in ("session.end", "turn.completed"):
-                        session_end = item
-                except json.JSONDecodeError:
-                    continue
-            if not data:
-                if agent_message_data is not None:
-                    # Merge usage AND model from session.end so cost calculation
-                    # works AND the audit log captures the actual model name
-                    # (Issue #1376 codex round 3: previously only `usage` was
-                    # carried over, so default-model Codex runs logged
-                    # `model: null` because session.end.model was discarded).
-                    if session_end is not None:
-                        merged: Dict[str, Any] = {**agent_message_data}
-                        if "usage" in session_end:
-                            merged["usage"] = session_end.get("usage", {})
-                        if "model" in session_end:
-                            merged["model"] = session_end.get("model")
-                        data = merged
-                    else:
-                        data = agent_message_data
-                elif session_end is not None:
-                    data = session_end
-                elif lines:
-                    try:
-                        data = json.loads(lines[-1])
-                    except:
-                        pass
-        else:
-            # Claude Code may emit non-JSON text to stdout (npm warnings,
-            # upgrade prompts) alongside the JSON result.  Try parsing as
-            # single JSON first, then fall back to line-by-line extraction.
-            try:
-                data = json.loads(output_str)
-            except json.JSONDecodeError:
-                data = _extract_json_from_output(output_str)
+        if result.returncode != 0:
+            if provider == "openai":
+                if result_is_spooled:
+                    stdout_error = _extract_codex_jsonl_error_from_lines(
+                        _iter_spooled_lines(result.stdout_file)
+                    )
+                    stderr_snippet = result.stderr_head + result.stderr_tail
+                    stdout_snippet = result.stdout_head + result.stdout_tail
+                else:
+                    stdout_error = _extract_codex_jsonl_error(result.stdout or "")
+                    stderr_snippet = result.stderr or ""
+                    stdout_snippet = (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH]
+                combined_error = "\n".join(
+                    part for part in [stderr_snippet, stdout_snippet] if part
+                )
+                codex_auth_message = _codex_auth_failure_message(combined_error)
+                if codex_auth_message:
+                    return False, codex_auth_message, 0.0, None
+                if stdout_error:
+                    return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
+                if stderr_snippet and not _is_codex_stdin_notice(stderr_snippet):
+                    error_detail = stderr_snippet
+                else:
+                    error_detail = (stdout_snippet or stderr_snippet)[:MAX_ERROR_SNIPPET_LENGTH]
+                return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
+            error_detail = result.stderr or result.stdout[:500]
+            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
-        success, text, cost, actual_model = _parse_provider_json(provider, data)
-        if cost == 0.0 and verbose and isinstance(data, dict):
-            console.print(
-                f"[dim]Warning: {provider} returned $0 cost. "
-                f"JSON keys: {sorted(data.keys())}[/dim]"
+        # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
+        # different event schema than Codex/Claude (step_start, text, step_finish,
+        # error...) and routes cost via ``step_finish.part.cost``, so it doesn't
+        # belong in the shared single-JSON / Codex-NDJSON path below.
+        if provider == "opencode":
+            parsed = _parse_opencode_jsonl(result.stdout)
+            actual_model = parsed.get("model") or None
+            err = parsed.get("error") or ""
+            # Cost: prefer JSONL-reported cost; fall back to CSV pricing when
+            # OpenCode did not surface a cost field (some backends/sessions omit
+            # ``step_finish.part.cost``). Returning $0.00 for a successful run
+            # silently breaks cost-accounting acceptance.
+            if parsed.get("cost_reported"):
+                cost = float(parsed.get("cost") or 0.0)
+            else:
+                tokens = parsed.get("tokens") or {}
+                csv_model_id = actual_model or _resolve_opencode_model_for_run(env, cwd=cwd)
+                cost = _opencode_csv_cost(csv_model_id, tokens)
+            if err:
+                # An error event with returncode==0 still represents a routing /
+                # provider failure inside OpenCode (e.g., "provider not
+                # configured"). Surface as failure, but keep cost and any
+                # captured model so callers can audit partial spend.
+                return False, str(err), cost, actual_model
+            return (
+                True,
+                str(parsed.get("text") or ""),
+                cost,
+                actual_model,
             )
-        return success, text, cost, actual_model
-    except json.JSONDecodeError:
-        # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0, None
+
+        # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
+        # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
+        # with a blank provider error and no log trail. Stderr tail + prompt size
+        # + auth-key presence is usually enough to tell apart auth failures, rate
+        # limits, and genuine empty responses.
+        stdout_is_blank = (
+            result.stdout_bytes == 0 if result_is_spooled else not result.stdout.strip()
+        )
+        if stdout_is_blank:
+            auth_keys_present = sorted(
+                k for k in env
+                if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
+            )
+            stderr_tail = (
+                result.stderr_tail[-500:] if result_is_spooled else (result.stderr or "")[-500:]
+            )
+            console.print(
+                f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
+            )
+            console.print(
+                f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
+                f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
+            )
+
+        # Antigravity (`agy`): the CLI emits plain text on stdout (no
+        # --output-format flag is supported as of agy 1.0.1, see cmd-build
+        # comment above). agy ALSO exits 0 in two failure modes that we must
+        # surface as failures instead of treating as a successful response:
+        #   - timeout: stdout is exactly `Error: timed out waiting for response`
+        #   - missing/expired OAuth in headless mode: stdout starts with
+        #     `Authentication required.` followed by the device-code URL.
+        # Anything else with exit 0 is treated as the response body. Cost and
+        # model are unknown — the audit log will show `cost=0, model=null`
+        # until Google ships a structured-output mode. (agy is never spooled.)
+        if provider == "google" and _get_google_cli_name(env) == "agy":
+            text = result.stdout.strip()
+            if (
+                text.startswith("Error:")
+                or text.startswith("Authentication required.")
+            ):
+                return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
+            return True, text, 0.0, None
+
+        # Parse JSON Output
+        try:
+            # Handle JSONL output (Codex sometimes streams). For spooled openai
+            # results we scan the temp file line-by-line; otherwise we work on
+            # the in-RAM string.
+            output_str = "" if result_is_spooled else result.stdout.strip()
+            data: Dict[str, Any] = {}
+
+            if provider == "openai" and result_is_spooled:
+                data = _parse_codex_jsonl(_iter_spooled_lines(result.stdout_file))
+                if not data:
+                    raise json.JSONDecodeError("No JSON", result.stdout_tail[:200], 0)
+            elif provider == "openai" and "\n" in output_str:
+                data = _parse_codex_jsonl(output_str.splitlines())
+            else:
+                # Claude Code may emit non-JSON text to stdout (npm warnings,
+                # upgrade prompts) alongside the JSON result.  Try parsing as
+                # single JSON first, then fall back to line-by-line extraction.
+                try:
+                    data = json.loads(output_str)
+                except json.JSONDecodeError:
+                    data = _extract_json_from_output(output_str)
+
+            success, text, cost, actual_model = _parse_provider_json(provider, data)
+            if cost == 0.0 and verbose and isinstance(data, dict):
+                console.print(
+                    f"[dim]Warning: {provider} returned $0 cost. "
+                    f"JSON keys: {sorted(data.keys())}[/dim]"
+                )
+            if provider == "anthropic":
+                return _ProviderRunResult(
+                    success,
+                    text,
+                    cost,
+                    actual_model,
+                    _extract_anthropic_standard_usage(
+                        data,
+                        actual_model=actual_model,
+                    ),
+                )
+            return success, text, cost, actual_model
+        except json.JSONDecodeError:
+            # Fallback if CLI didn't output valid JSON (sometimes happens on
+            # crash). Use HEAD+TAIL for spooled results: _read_spool_snippets
+            # returns tail="" for files <=64KiB, so short invalid output would
+            # otherwise yield an empty diagnostic.
+            snippet = (
+                _bounded_head_tail(
+                    result.stdout_head, result.stdout_tail, MAX_ERROR_SNIPPET_LENGTH
+                )
+                if result_is_spooled
+                else result.stdout[:MAX_ERROR_SNIPPET_LENGTH]
+            )
+            return False, f"Invalid JSON output: {snippet}...", 0.0, None
+    finally:
+        if result_is_spooled:
+            result.close()
 
 
 def _extract_json_from_output(output_str: str) -> dict:
@@ -5901,6 +7544,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
                 names = [str(k) for k in usage.keys() if k]
                 if names:
                     return "+".join(sorted(names)) if len(names) > 1 else names[0]
+            model = _extract_anthropic_model_from_envelope(data)
+            if model:
+                return model
         elif provider == "google":
             models = (data.get("stats") or {}).get("models")
             if isinstance(models, dict) and models:
@@ -6945,8 +8591,14 @@ def _extract_step_report(text: Optional[str]) -> Optional[str]:
     return matches[-1].strip()
 
 
-# Public alias for orchestrator callers; same semantics as ``_extract_step_report``.
-extract_step_report = _extract_step_report
+def extract_step_report(text: Optional[str]) -> Optional[str]:
+    """Public wrapper for orchestrator callers; same semantics as ``_extract_step_report``.
+
+    A real ``def`` (not an ``extract_step_report = _extract_step_report`` alias) so
+    the ``<pdd-interface>`` / architecture.json conformance verifier — which resolves
+    declared symbols only via ``FunctionDef`` nodes — sees the declared public symbol.
+    """
+    return _extract_step_report(text)
 
 
 def normalize_step_comments_state(raw: Any) -> Set[int]:
@@ -7109,16 +8761,18 @@ def post_step_comment(
     output: str,
     cwd: Path,
     body: Optional[str] = None,
+    failure_mode: Optional[str] = None,
+    failure_detail: Optional[str] = None,
 ) -> bool:
     """Post a per-step GitHub issue comment.
 
     Two modes:
 
-    1. ``body is None`` (legacy / fallback path): used by orchestrators when
-       the LLM agent itself failed and therefore could not produce a report.
-       The body is the historical FAILED template, kept verbatim for backwards
-       compatibility with existing callers (e.g. ``agentic_change_orchestrator``
-       hard-stop paths).
+    1. ``body is None`` (fallback path): used by orchestrators when the LLM
+       agent itself failed and therefore could not produce a report. Explicit
+       ``failure_mode`` values render recoverable degraded or fatal aborting
+       statuses; missing/unknown values keep the historical FAILED template for
+       compatibility with existing callers.
     2. ``body is not None``: the orchestrator extracted a ``<step_report>``
        block from a successful run. The body is sanitized + truncated by the
        orchestrator's pipeline; here we additionally strip any leading
@@ -7136,6 +8790,8 @@ def post_step_comment(
         cwd: Working directory for the ``gh`` subprocess.
         body: Optional pre-extracted, model-supplied report body. When set,
             takes precedence over the FAILED template.
+        failure_mode: Optional fallback mode: ``recoverable`` or ``fatal``.
+        failure_detail: Optional fallback detail appended below error context.
 
     Returns:
         True if the comment posted successfully, False otherwise (including
@@ -7147,15 +8803,31 @@ def post_step_comment(
         return False
 
     if body is None:
-        # Backwards-compatible fallback for agent-execution failures.
+        # Backwards-compatible fallback for agent-execution failures. Explicit
+        # modes distinguish recoverable degraded steps from terminal aborts.
         error_detail = _sanitize_comment_body(output or "", max_chars=1000)
+        extra_detail = _sanitize_comment_body(failure_detail or "", max_chars=1000)
+        if failure_mode == "recoverable":
+            status = "DEGRADED - workflow continuing"
+            footer = "Automated degraded fallback comment - workflow is continuing."
+        elif failure_mode == "fatal":
+            status = "FAILED - workflow aborting"
+            footer = "Automated fatal fallback comment - workflow is aborting."
+        else:
+            status = "FAILED"
+            footer = "Automated fallback comment - agent did not execute for this step."
+
+        detail_section = ""
+        if extra_detail:
+            detail_section = f"\n\n### Recovery Detail\n{extra_detail}\n"
         final_body = (
             f"## Step {step_num}/{total_steps}: {description}\n\n"
-            f"**Status:** FAILED\n\n"
+            f"**Status:** {status}\n\n"
             f"### Error Details\n"
-            f"```\n{error_detail}\n```\n\n"
+            f"```\n{error_detail}\n```"
+            f"{detail_section}\n\n"
             f"---\n"
-            f"*Automated fallback comment — agent did not execute for this step.*"
+            f"*{footer}*"
         )
     else:
         # Strip a single leading duplicate "## Step <N>..." line so the

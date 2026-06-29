@@ -1,11 +1,11 @@
-<pdd-reason>Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.</pdd-reason>
+<pdd-reason>Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None)", "returns": "Dict[str, Any]"},
+      {"name": "llm_invoke", "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)", "returns": "Dict[str, Any]"},
       {"name": "setup_file_logging", "signature": "(log_file_path=None)", "returns": "None"},
       {"name": "set_verbose_logging", "signature": "(verbose=False)", "returns": "None"},
       {"name": "set_quiet_logging", "signature": "()", "returns": "None"}
@@ -39,7 +39,7 @@
     <include>pdd/core/path_resolver.py</include>
 </pdd.core.path_resolver>
 <pdd.server.token_counter>
-    <include select="def:get_context_limit">pdd/server/token_counter.py</include>
+    <include select="def:count_tokens_for_messages,def:get_context_limit,class:CompletionCostEstimate,def:estimate_completion_cost">pdd/server/token_counter.py</include>
 </pdd.server.token_counter>
 <pdd.core.provider_manager>
     <include>pdd/core/provider_manager.py</include>
@@ -83,6 +83,11 @@
         language: Optional[str] = None,
         use_cloud: Optional[bool] = None,
         grounding_overrides: Optional[Dict[str, List[str]]] = None,
+        source_prompt: Optional[str] = None,
+        estimate_only: Optional[bool] = None,
+        shots: int = 1,
+        verifier: Optional[Callable[[str], bool]] = None,
+        task_class: Optional[str] = None,
     ) -> Dict[str, Any]
 
 % Inputs:
@@ -99,6 +104,10 @@
     - 'language': Language hint (e.g., "python", "javascript"). Skip Python-specific validation when not "python" or None.
     - 'use_cloud': None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
     - 'grounding_overrides': Optional dict carrying `<pin>` / `<exclude>` slugs that the caller (typically the preprocessor) extracted from the source prompt text BEFORE preprocessing stripped the tags. Shape: `{"pinned": List[str], "excluded": List[str]}`. Both keys are optional; missing keys default to `[]`. `llm_invoke` MUST NOT attempt to re-parse `<pin>` / `<exclude>` from the (already-preprocessed) `prompt` string — the tags are gone by the time the prompt reaches this function. This kwarg is the only audit channel for pin/exclude provenance on the call boundary.
+    - 'estimate_only': Optional explicit dry-run cost mode. `None` means auto-detect from the active Click context (`ctx.obj["estimate"]`) or `PDD_ESTIMATE=1`; `True` forces estimate mode; `False` disables estimate mode for library callers.
+    - 'shots': Number of candidate generations to produce (default 1). When `shots > 1` and `PDD_ENABLE_TASK_ROUTING=1`, the multi-shot loop runs up to `min(shots, 5)` generations. Mutually exclusive with `use_batch_mode=True` (raises `ValueError` if both are active). Has no effect when `PDD_ENABLE_TASK_ROUTING` is unset.
+    - 'verifier': Optional callable `(str) -> bool` applied to each candidate result. The first candidate for which `verifier` returns `True` is returned immediately; when no candidate passes, the mode (most frequent) result is returned (self-consistency fallback). When `verifier` is None, mode selection is used directly.
+    - 'task_class': Optional PDD command name (`"generate"`, `"fix"`, `"optimize"`, `"explain"`) used by the per-task config router to look up the best `(model, temperature, effort, shots)` row from `pdd/data/task_routing.csv`. Only active when `PDD_ENABLE_TASK_ROUTING=1`. When None, the router is skipped and the existing strength-interpolation cascade applies.
 
 % Output (dictionary):
     - 'result': String or Pydantic object (or list if batch mode).
@@ -108,6 +117,7 @@
     - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
     - 'grounding': Optional dict describing grounding provenance for this call (see "Grounding Provenance" below). Always present when cloud execution was attempted; may be `{"mode": "unavailable", ...}` on local-only paths.
     - 'attempted_models': Chronological list[str] of every model name that was attempted during this `llm_invoke` call, in the order attempted, ending with the successful model. Includes (1) any cloud attempt that recoverably failed via `CloudFallbackError` / `CloudInvocationError` and fell back to local, recorded as the cloud-routed model name (e.g. `"cloud:<base_model>"` or the cloud-reported model when known), and (2) every local candidate model that was tried, whether it succeeded or was skipped due to context-window overflow, schema validation failure, or other fallback-eligible errors. For a single-attempt successful call this is a one-element list containing the successful model. The successful model is always the LAST entry and equals `model_name`. Never empty on success; always present in the return dict.
+    - Estimate-only mode is a single-`llm_invoke` primitive. It raises `EstimateOnlyResult(payload)` before any provider/cloud/API-key operation for the one invocation whose messages are available. The payload includes `estimate: true`, `model`, `input_tokens`, `predicted_output_tokens`, `input_rate_per_million`, `output_rate_per_million`, `estimated_cost` (or None), `unknown_cost`, `currency`, `context_limit`, `context_usage_percent`, `command`, and `attempted_models`. It does not include prompt text, messages, API keys, or provider secrets.
 
 % Model Selection:
     - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
@@ -119,6 +129,17 @@
     - strength > 0.5: Interpolate by `model_rank_score` from base up to highest. `model_rank_score` is DeepSWE-first; raw `coding_arena_elo` is metadata/fallback only.
     - strength = 0.5: Use base model, fallback to candidates with rank score closest to base on failure — sort remaining candidates ascending by `abs(model_rank_score - base_rank)`. This is the continuity limit of the `> 0.5` branch: as strength → 0.5 from above, the interpolated target rank collapses to `base_rank`, so the correct ordering at exactly 0.5 is closest-rank-to-base, not highest rank.
     - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
+    - **DeepSWE Manifest Loading**: Add a `_load_deepswe_manifest()` helper in this section. It loads `pdd/data/deepswe_manifest.json` using the same path-resolution priority chain as `llm_model.csv`. Returns a `Dict[str, Any]` keyed by both `model` name and each entry in `aliases`, mapping to the full manifest entry dict (which includes `raw_model_name`, `retrieved_at`, `rating_lower`, `rating_upper`, `solve_rate`). Returns `{}` on any read/parse error (graceful degradation — treat as if no manifest data is available). Cache the result at module level with the same lazy-load pattern used for model data.
+    - **`_select_model_candidates` signature**: Accept an optional parameter `manifest_by_model: Optional[Dict[str, Any]] = None` (the lookup dict from `_load_deepswe_manifest()`). At the `llm_invoke` call site, load the manifest and pass it. Callers that omit it continue to work unchanged; manifest-derived enrichments are gracefully skipped when `manifest_by_model` is None or empty.
+    - **CI-bound tiebreaking**: Applied in `_select_model_candidates` after the primary sort, before returning `candidates`. For each pair of adjacent candidates where `manifest_by_model` contains entries for both: check whether the higher-ranked candidate's `rating_lower` ≤ the lower-ranked candidate's `rating_upper` (overlapping confidence intervals). Within such overlap groups, secondary-sort by average cost ascending, reusing the `avg_cost` value already present on each candidate dict (computed in `_load_model_data` as the mean of the `input` and `output` columns from `llm_model.csv`); prefer cheaper when models are statistically tied. Skip silently for candidates not in the manifest. This tiebreaking never changes the primary ranking for non-overlapping confidence intervals.
+    - **`target_effort_level` field**: Add to each candidate dict. Extract the effort qualifier from the manifest's `raw_model_name` for that model by splitting on whitespace and taking the last token (e.g. `"gpt-5.5 xhigh"` → `"xhigh"`; `"claude-opus-4.7 max"` → `"max"`). Set to `None` when the model has no manifest entry or `raw_model_name` has no whitespace.
+    - **`deepswe_manifest_date` field**: Add to each candidate dict. Set to the manifest entry's `retrieved_at` string for that model, or `''` if not in the manifest.
+    - **Staleness guard**: After sorting candidates, if the first candidate has a `deepswe_manifest_date` that parses to a date older than `PDD_DEEPSWE_MAX_AGE_DAYS` days (default 30, configurable via env var), overwrite that candidate's `model_rank_source` value with `f"deepswe:stale:{retrieved_at}"` and emit a WARNING-level log message. This is advisory-only and does not change the candidate ranking.
+    - **Provenance publishing to `ctx.obj`**: After a candidate succeeds in the local retry loop, publish the following keys using the same best-effort try/except pattern used for `attempted_models` (never raise from the publication step):
+      - `requested_model`: snapshot of the first candidate's model name from `_select_model_candidates` output, taken once before the retry loop begins.
+      - `model_selection_outcome`: `"direct"` if the first candidate succeeded; `"fallback"` if a subsequent candidate was used; `"unconfirmed"` for the cloud execution path (when cloud response's `modelName` differs from the base model or is unavailable).
+      - `strength_used`: `str(strength)` (the strength parameter value for this call).
+      - `deepswe_manifest_date`: `deepswe_manifest_date` field from the successfully selected candidate dict.
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
@@ -136,7 +157,7 @@
     - CSV columns: reasoning_type ('budget', 'effort', 'adaptive', 'none'), max_reasoning_tokens.
     - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
     - 'effort': Map time to "low"/"medium"/"high". OpenAI gpt-5*: pass reasoning={effort, summary:"auto"} for Responses API. Other models: pass reasoning_effort.
-    - 'adaptive': Anthropic Claude Opus 4.7+ only. Map time to effort and send thinking={type:"adaptive", display:"summarized"} plus reasoning_effort; compatibility wrappers must ensure output_config.effort is present for Opus 4.7+ when LiteLLM drops it. Legacy thinking.type="enabled" 400s on these models.
+    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+. Normalize provider labels by stripping/lowercasing and treating underscores as spaces, so both bundled `Azure AI` and custom/project `azure_ai` rows trigger the Azure branch. Map time to effort. Anthropic rows send top-level thinking={type:"adaptive", display:"summarized"} plus reasoning_effort so LiteLLM maps effort into output_config.effort. Azure AI rows must send extra_body={thinking:{type:"adaptive", display:"summarized"}, output_config:{effort}} because AzureAIStudioConfig's OpenAI-style optional-param filtering drops top-level thinking/reasoning_effort before transform_request; LiteLLM preserves extra_body and forwards that wire payload. Legacy thinking.type="enabled" 400s on these models.
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
@@ -167,6 +188,20 @@
     - If prompt tokens exceed the context limit, skip to the next candidate model (consistent with
       existing fallback pattern). Log a warning with: token count, model context limit, usage percentage,
       and model name.
+
+% Estimate-Only Invocation:
+    - Define a lightweight `EstimateOnlyResult(Exception)` carrying public `estimate` and `payload` attributes that both reference the same `Dict[str, Any]`. Command wrappers catch this exception and return the payload before output files or evidence manifests are written.
+    - Estimate-only mode estimates exactly one concrete `llm_invoke` call and the CLI exposes it only for the standard `pdd generate` path in this first version. It is NOT a planner for helper stacks that need real output from one LLM call to assemble later LLM calls (for example continuation checks, postprocess/extraction calls, fix extraction, conflict extraction, update extraction, sync, or external agentic workflows). Non-generate CLI commands MUST reject estimate mode before dispatch. The human/JSON output must make clear that no provider call, command output write, or cost row occurred.
+    - Determine estimate mode at the top of `llm_invoke`: explicit `estimate_only` wins; otherwise read the active Click context if available (`ctx.obj["estimate"]`) and fall back to `PDD_ESTIMATE=1`. `PDD_ESTIMATE_JSON` affects rendering in the CLI layer only.
+    - Estimate mode MUST assemble the exact single-call messages that would be sent for the selected prompt/input/messages. Batch mode and list-of-message batches are outside this issue; raise a clear `RuntimeError` or `click.UsageError` before provider calls if a batch estimate is requested.
+    - Select the same first model candidate the normal local route would attempt, based on CSV/model/strength/time inputs, but do not call cloud, do not call provider APIs, do not call LiteLLM completion/responses/batch APIs, do not prompt for API keys, and do not invoke cost callbacks or success callbacks.
+    - Count input tokens with `count_tokens_for_messages(messages, model=model_name)` and compute the context limit with `get_context_limit(model_name)`. Apply the same Claude 1M context override when the estimate would use that extra header.
+    - Predict output tokens for `generate` with a calibrated generate-only heuristic based on prompt-size bucket, prompt text/language, `<pdd-interface>`, `<pdd-reason>`, include markers, and requests for tests/examples/docs/code-heavy output. Return `predicted_output_tokens`, `output_tokens_low`, `output_tokens_high`, and an uncertainty label. Ignore invalid ratio env values and fall back to the generate heuristic/default.
+    - Determine command name from the active Click context (`ctx.command.name`), then `PDD_ESTIMATE_COMMAND`, then `"unknown"`.
+    - Call the sibling token-counter API `estimate_completion_cost(input_tokens, predicted_output_tokens, model, pricing_csv)` from `pdd.server.token_counter`. Do not reimplement pricing lookup in `llm_invoke`. When it returns a `CompletionCostEstimate`, copy `total_cost` into both payload fields `estimated_cost` and `total_cost`, and copy `input_rate_per_million`, `output_rate_per_million`, `input_cost`, `output_cost`, `currency`, and the matched `model` as estimate metadata. Unknown pricing must set `estimated_cost=None`, `total_cost=None`, and `unknown_cost=True` while still returning token and context metrics.
+    - Append the estimate payload to `ctx.obj["estimate_results"]` (aliased by the CLI to `estimate_records`) when a Click context exists, and update aggregate token/cost totals only from records with known cost. Also publish `ctx.obj["attempted_models"]` with the selected model so cost/summary surfaces can report the would-be model without implying a provider call succeeded.
+    - Raise `EstimateOnlyResult(payload)` immediately after building the payload. The normal returned dictionary, grounding provenance, retry/fallback loop, provider calls, API-key prompts, and LiteLLM callbacks MUST NOT run in estimate mode.
+    - The local invocation error handlers MUST re-raise `EstimateOnlyResult` before authentication, schema, context-window, generic provider-error, retry, fallback, or all-candidates-failed handling. Estimate mode is a successful dry-run result, not a provider failure.
 
 % Structured Output:
     - Check 'structured_output' CSV flag.
@@ -202,15 +237,17 @@
       cost and token counts from _LAST_CALLBACK_DATA before the retry call. After the retry,
       add the retry's cost/tokens to the saved values. This ensures the final reported cost
       reflects all API calls, not just the last one.
+    - Keep retry reasoning kwargs candidate-local so provider-specific payloads (e.g. Azure AI adaptive extra_body) cannot leak into later fallback candidates.
 
 % Retry and Fallback:
     - Define SchemaValidationError exception that triggers model fallback.
     - On auth error with newly acquired key: Re-prompt for same key and retry.
     - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
     - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
-    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
+    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry. Treat top-level thinking/reasoning_effort and extra_body.thinking as thinking being sent.
       Two directions: (1) thinking enabled but temperature≠1 → force temperature=1;
       (2) temperature=1 without thinking → retry with 0.99. Track adjustment to avoid infinite loop.
+      When direction (1) selects temperature=1, the same-model retry must send temperature=1 even if that model normally strips temperature.
     - Catch litellm.ContextWindowExceededError as a post-call safety net (for cases where
       approximate pre-call token counting underestimates). Treat as model overflow: log warning
       and skip to next candidate model.
@@ -266,6 +303,28 @@
       overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
       the cost CSV. When no Click context exists (library usage, tests), this is a silent
       no-op — never raise from the context publication step.
+
+% Multi-Shot Generation:
+    - Guard: active only when `shots > 1` AND `PDD_ENABLE_TASK_ROUTING=1`. When the guard is inactive, the function behaves identically to `shots=1`.
+    - Hard cap: clamp the effective shot count to `min(shots, 5)`. Silently clamp; do not raise.
+    - Mutual exclusion: if `use_batch_mode=True` and the guard is active, raise `ValueError` before any provider call.
+    - Candidate loop: run the standard single-invocation flow (model selection, context validation, LLM call, response processing, retry) N times sequentially, collecting each successful result string. All existing per-call guards (`_model_disallows_temperature`, Gemini 3 clamping, `interactive_only` exclusion, context-window validation, schema validation) apply inside each iteration.
+    - Reasoning parameters for `reasoning_type="adaptive"` models inside the loop: pass `thinking={"type": "adaptive"}` and `output_config={"effort": level}` (mirroring the `adaptive` branch). Other `reasoning_type` values follow their existing parameter paths unchanged.
+    - Candidate selection:
+      1. If `verifier` is provided, return the first candidate for which `verifier(result)` is `True`.
+      2. If no candidate passes (or `verifier` is None), use self-consistency: return the mode of all candidate results (most frequent string); break ties by first occurrence.
+    - Cost accumulation: sum costs across all N calls; report the total in the returned `'cost'` key.
+    - The returned dictionary uses the last attempted model (or the model that produced the selected result) as `model_name`.
+
+% Per-Task Config Router:
+    - Guard: active only when `PDD_ENABLE_TASK_ROUTING=1`. When unset, skip the router entirely and use the existing strength-interpolation cascade.
+    - CSV loading: load `pdd/data/task_routing.csv` using the same `PathResolver` priority chain as `llm_model.csv` (user `~/.pdd/`, project `.pdd/`, packaged `pdd/data/`). Cache after first load (module-level). On missing file, unreadable CSV, or parse error: emit a debug-level log line and fall through to the existing baseline without raising.
+    - Columns: `task_class, model, temperature, effort, shots, pass_rate, avg_cost_usd`.
+    - Row filtering: select rows where `task_class` matches the `task_class` kwarg. If no rows match (including when `task_class` is None): cold-start fallback — use the existing strength-interpolation cascade.
+    - Scoring: for each matching row compute `score = pass_rate − λ × avg_cost_usd`. λ is read from the `PDD_ROUTER_LAMBDA` env var (default 1.0); invalid (non-numeric) values silently fall back to 1.0. Select the row with the highest score; break ties by lowest `avg_cost_usd`.
+    - Override application: the winning row's `model`, `temperature`, `effort`, and `shots` values override the caller-supplied equivalents. `effort` → `time` mapping: `"low"`→0.1, `"medium"`→0.3, `"high"`→0.5, `"xhigh"`→0.75, `"max"`→1.0. The `model` override bypasses the strength-interpolation cascade (the router selects the exact model directly). Unknown `effort` values fall through to the caller-supplied `time`.
+    - Post-override guards: apply `_model_disallows_temperature` and Gemini 3 clamping to the router-overridden temperature, exactly as in the normal path.
+    - On any failure during router evaluation (missing column, type error, etc.): debug-log and fall through to the existing baseline.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:

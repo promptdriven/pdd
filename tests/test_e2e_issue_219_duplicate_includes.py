@@ -32,6 +32,7 @@ from click.testing import CliRunner
 from pdd import cli
 from pdd import auto_include as auto_include_module
 from pdd.auto_include import AutoIncludeResult, NewInclude
+from pdd.insert_includes import InsertIncludesOutput
 
 
 @pytest.fixture(autouse=True)
@@ -130,8 +131,7 @@ context/helper_example.py,Helper utility functions,2023-02-02,"helper_func",""
                     deps = input_json.get("actual_dependencies_to_insert", "")
                     captured_dependencies.append(deps)
 
-                    mock_result = MagicMock()
-                    mock_result.output_prompt = f"{prompt_content}\n{deps}"
+                    mock_result = InsertIncludesOutput(output_prompt=f"{prompt_content}\n{deps}")
                     return {
                         "result": mock_result,
                         "cost": 0.001,
@@ -253,8 +253,7 @@ context/helper_example.py,Helper utility functions,2023-02-02,"helper_func",""
                     deps = input_json.get("actual_dependencies_to_insert", "")
                     captured_dependencies.append(deps)
 
-                    mock_result = MagicMock()
-                    mock_result.output_prompt = f"{prompt_content}\n{deps}"
+                    mock_result = InsertIncludesOutput(output_prompt=f"{prompt_content}\n{deps}")
                     return {
                         "result": mock_result,
                         "cost": 0.001,

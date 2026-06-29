@@ -121,6 +121,9 @@ Artifacts appear in `dist/`.
 - `--strength`: model strength/size.
 - `--temperature`: creativity vs. determinism.
 - `--time`: thinking tokens/budget.
+- `--estimate` / `--dry-run-cost`: preview token usage and rough cost for `pdd generate` before running it.
+- `--estimate-json`: emit the estimate as JSON for automation.
+- Estimate support must fail closed for all non-`generate` commands; do not surface a first LLM call or lower-bound preview as the full command estimate when later calls depend on provider output.
 
 ## Known Limitations and Roadmap
 - Some compile‑time prompts are not yet open‑sourced (pending investor approval). Until then, code edits may require maintainers to sync prompts.

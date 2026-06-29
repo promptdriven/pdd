@@ -39,6 +39,12 @@ EXCLUDED_MODULE_BASENAMES = {
     # Public release sync is an operational packaging helper, not a
     # prompt-managed PDD module.
     "copy_package_data_to_public",
+    # These canonical PDD Cloud prompts are packaged with PDD so logical
+    # prompt paths resolve, but their code files live in pdd_cloud's
+    # extensions/github_pdd_app tree, not this repository's pdd/ package.
+    "src/clients/github_client",
+    "src/pdd_issue_runner_job",
+    "src/services/pdd_issue_completion_evidence",
     # The model catalog score refresh is intentionally agent-reviewed and
     # manifest-driven. Headless auto-heal should not regenerate this module:
     # it can enter interactive agent auth while trying to rewrite the full

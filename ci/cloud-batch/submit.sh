@@ -64,6 +64,8 @@ SOURCE_PATHS=(
     prompts
     context
     examples
+    demos
+    research
     docs
     Makefile
     pyproject.toml
@@ -93,7 +95,7 @@ fi
 # ── Upload source tarball ─────────────────────────────────────────────────
 echo "=== Uploading source tarball ==="
 SOURCE_GCS="gs://${BUCKET}/${JOB_RUN_ID}/source/pdd-source.tar.gz"
-# Only include directories needed for tests (skip demos/, experiments/, etc.)
+# Only include directories and files needed for tests (skip experiments/, etc.)
 # Use the current working tree so local fixes can be validated without an
 # intermediate commit, but derive the file list from git so ignored files
 # (for example caches or node_modules) are not uploaded.

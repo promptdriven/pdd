@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from pdd.agentic_sync_runner import AsyncSyncRunner
 from pdd.durable_sync_runner import (
     DurableSyncRunner,
     _parse_checkpoint_trailer,
@@ -505,3 +508,296 @@ def test_total_budget_keeps_durable_runner_single_worker(tmp_path: Path):
     )
 
     assert runner.max_workers == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — DurableSyncRunner sibling: PDD_SYNC_MAX_WORKERS env var
+# ---------------------------------------------------------------------------
+
+# Scope addition: covers expansion item "pdd/durable_sync_runner.py:82 —
+# DurableSyncRunner.__init__ else-branch also falls back to MAX_WORKERS without
+# checking PDD_SYNC_MAX_WORKERS" identified by Step 6 but absent from Step 8's
+# primary test plan.
+def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var():
+    """PDD_SYNC_MAX_WORKERS must also limit DurableSyncRunner.max_workers when
+    durable_max_parallel is not set (the else-branch at durable_sync_runner.py:82).
+
+    Fails on buggy code: agentic_sync_runner.MAX_WORKERS is always 4, so the
+    imported durable_sync_runner.MAX_WORKERS is also always 4 regardless of the
+    env var.
+    """
+    _project_root = str(Path(__file__).resolve().parent.parent)
+    _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; os.environ['PDD_SYNC_MAX_WORKERS'] = '2'; "
+                "from pdd.durable_sync_runner import MAX_WORKERS; "
+                "print(MAX_WORKERS)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": _pythonpath},
+    )
+    assert result.returncode == 0, (
+        f"Import subprocess failed: stderr={result.stderr!r}"
+    )
+    assert result.stdout.strip() == "2", (
+        f"DurableSyncRunner's MAX_WORKERS should be 2 when "
+        f"PDD_SYNC_MAX_WORKERS=2; got {result.stdout.strip()!r}. "
+        "Bug: durable_sync_runner imports MAX_WORKERS from agentic_sync_runner "
+        "which is hardcoded to 4; the env var never reaches the durable runner."
+    )
+
+
+def test_durable_runner_reads_pdd_sync_max_workers_when_constructed(
+    tmp_path: Path, monkeypatch
+):
+    """DurableSyncRunner must see env changes made after module import."""
+    repo = _init_repo_with_remote(tmp_path)
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+
+    runner = _runner(repo)
+
+    assert runner.max_workers == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — Real-subprocess (not mocked Popen) worker-cap validation for
+# durable mode (Greg review item 4).
+#
+# DurableSyncRunner._run_child_sync delegates to super()._sync_one_module ->
+# AsyncSyncRunner._run_attempt, i.e. the SAME real subprocess.Popen reader the
+# agentic runner uses; durable only adds the worktree/checkpoint scheduling on
+# top. So the bounded-output and sticky-failure-marker behaviors are inherited
+# verbatim and are covered by the real-subprocess tests in
+# tests/test_agentic_sync_runner.py. The durable-specific risk is the worker
+# cap, validated here with real child processes. The assertion is two-sided
+# (peak <= 2 AND peak >= 2) so it cannot pass vacuously on a run that happened
+# to serialize.
+# ---------------------------------------------------------------------------
+
+# Concurrency-only fake child: drop a presence token, sample peak co-running
+# siblings for `hold_s`, record the peak, make no file changes (so the durable
+# checkpoint is empty), and exit 0.
+_DURABLE_FAKE_CHILD_SOURCE = r'''
+import os
+import sys
+import time
+import uuid
+
+presence_dir, result_path = sys.argv[1], sys.argv[2]
+hold_s, sample_s = float(sys.argv[3]), float(sys.argv[4])
+os.makedirs(presence_dir, exist_ok=True)
+token = os.path.join(presence_dir, "%d-%s" % (os.getpid(), uuid.uuid4().hex))
+open(token, "w").close()
+peak = 0
+deadline = time.time() + hold_s
+try:
+    while time.time() < deadline:
+        try:
+            peak = max(peak, len(os.listdir(presence_dir)))
+        except OSError:
+            pass
+        time.sleep(sample_s)
+finally:
+    try:
+        os.remove(token)
+    except OSError:
+        pass
+with open(result_path, "w") as handle:
+    handle.write(str(peak))
+sys.exit(0)
+'''
+
+
+def test_real_subprocess_durable_max_workers_limits_concurrency(
+    tmp_path: Path, monkeypatch
+):
+    """PDD_SYNC_MAX_WORKERS=2 caps concurrent module syncs in DURABLE mode,
+    proven with real subprocesses driven through the durable scheduler.
+
+    Four independent modules sync through real ``subprocess.Popen`` children
+    (each producing an empty checkpoint); the observed peak concurrency must
+    not exceed the cap.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    child = tmp_path / "durable_fake_child.py"
+    child.write_text(_DURABLE_FAKE_CHILD_SOURCE, encoding="utf-8")
+    presence = tmp_path / "presence"
+    results = tmp_path / "results"
+    presence.mkdir()
+    results.mkdir()
+
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+    basenames = ["a", "b", "c", "d"]
+
+    def _fake_build_command(self, basename, in_flight_cost=0.0):
+        return [
+            sys.executable,
+            str(child),
+            str(presence),
+            str(results / basename),
+            "0.6",
+            "0.01",
+        ]
+
+    runner = DurableSyncRunner(
+        basenames=basenames,
+        dep_graph={b: [] for b in basenames},
+        sync_options={},
+        github_info=None,
+        issue_number=1565,
+        project_root=repo,
+        quiet=True,
+        issue_url="https://github.com/org/repo/issues/1565",
+    )
+    assert runner.max_workers == 2
+
+    with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+        success, message, _cost = runner.run()
+
+    assert success, f"durable real-subprocess run failed: {message!r}"
+    peaks = [
+        int((results / b).read_text())
+        for b in basenames
+        if (results / b).exists()
+    ]
+    assert peaks, "no durable child reported a peak — children never ran"
+    observed = max(peaks)
+    # Upper bound: the cap holds. Lower bound: the children genuinely run
+    # concurrently, so the cap assertion is not vacuously satisfied by a run
+    # that happened to serialize. With 4 always-ready modules and 2 workers the
+    # durable scheduler must drive the peak to exactly 2 (worktree-create and
+    # checkpoint serialize under _checkpoint_lock, but the child sync — where
+    # the peak is measured — runs outside it).
+    assert observed <= 2, (
+        f"PDD_SYNC_MAX_WORKERS=2 did not cap durable concurrency: real children "
+        f"observed a peak of {observed} simultaneous syncs (expected <= 2)"
+    )
+    assert observed >= 2, (
+        f"durable children never ran 2-wide (peak {observed}); the <= 2 cap "
+        f"assertion would be vacuous — with 4 ready modules and 2 workers the "
+        f"peak must reach 2"
+    )
+
+
+def test_durable_runner_builds_remapped_context_and_target(tmp_path):
+    """Durable carries target + context identity into `_build_command` (#1675).
+
+    Target and context are cwd-independent, so even though durable repopulates
+    module_cwds with a per-module worktree at runtime, the child must still run
+    `pdd --context <ctx> sync <target>` — using the resolved target (not the
+    scheduler key) and the cwd's own context (not the invalid global one).
+    """
+    worktree = tmp_path / "wt" / "backend"
+    worktree.mkdir(parents=True)
+    (worktree / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  report_ctx:\n    paths: ["report*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},  # not defined in the nested .pddrc
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/report": tmp_path / "backend"},
+        module_targets={"backend/report": "report"},
+        module_contexts={"backend/report": "report_ctx"},
+    )
+    # Simulate the per-module worktree cwd that _sync_one_module sets at runtime.
+    runner.module_cwds["backend/report"] = worktree
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"  # resolved target, not the "backend/report" key
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert "root_ctx" not in cmd
+
+
+def test_durable_remaps_unit_into_worktree_for_build_command(tmp_path):
+    """Durable carries a ResolvedSyncUnit and rebases it onto the worktree cwd
+    so the child runs `pdd --context <ctx> sync <target>` there (#1675)."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    parent_cwd = tmp_path / "backend"
+    parent_cwd.mkdir()
+    unit = ResolvedSyncUnit(
+        key="backend/report",
+        target_basename="report",
+        cwd=parent_cwd,
+        pddrc_path=parent_cwd / ".pddrc",
+        context="report_ctx",
+        prompts_dir=parent_cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_units={"backend/report": unit},
+    )
+    assert runner.parent_module_units["backend/report"].context == "report_ctx"
+
+    # Simulate the per-module worktree remap that _sync_one_module performs
+    # (relocate from the repo root onto the worktree root).
+    worktree_root = tmp_path / "wt"
+    runner.module_units["backend/report"] = runner.parent_module_units[
+        "backend/report"
+    ].relocate(tmp_path, worktree_root)
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert runner._module_cwd_path("backend/report") == worktree_root / "backend"
+
+
+def test_durable_allows_ancestor_pddrc_metadata(tmp_path):
+    """#1675 (review): operation_log anchors a module's metadata at the nearest
+    .pddrc PARENT, which can be an ANCESTOR of the module cwd. A module run from
+    backend/functions governed by backend/.pddrc writes backend/.pdd/meta — durable
+    mode must treat that as allowed, not reject the correctly-staged file as unsafe."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    cwd = tmp_path / "backend" / "functions"
+    cwd.mkdir(parents=True)
+    governing = tmp_path / "backend"
+    unit = ResolvedSyncUnit(
+        key="backend/functions/report",
+        target_basename="report",
+        cwd=cwd,
+        pddrc_path=governing / ".pddrc",  # ancestor of cwd
+        context=None,
+        prompts_dir=cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/functions/report"],
+        dep_graph={"backend/functions/report": []},
+        sync_options={},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/functions/report": cwd},
+        module_targets={"backend/functions/report": "report"},
+        module_units={"backend/functions/report": unit},
+    )
+    prefixes = {p.as_posix() for p in runner._allowed_metadata_prefixes("backend/functions/report")}
+    assert "backend/.pdd/meta" in prefixes, prefixes  # the governing .pddrc parent
+    # the correctly-anchored ancestor metadata file is NOT flagged unsafe
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/report_python.json"]
+    ) == []
+    # but a wrong-name file under that same dir is still rejected
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/other_python.json"]
+    ) == ["backend/.pdd/meta/other_python.json"]

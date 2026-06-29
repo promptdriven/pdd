@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List, Set, Mapping
+from typing import Optional, Tuple, Dict, Any, Iterator, List, Set, Mapping
 
 import click
 from rich.console import Console
@@ -641,6 +641,146 @@ def _collect_bound_module_names(tree: ast.Module) -> Set[str]:
     return bound
 
 
+# Scope and comprehension node groups used by the ``__all__`` mutation scan.
+_SCOPE_NODE_TYPES = (
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+)
+_COMPREHENSION_TYPES = (
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+)
+# List methods that mutate the receiver in place. A call to any of these on
+# ``__all__`` (``__all__.append(...)`` etc.) changes the runtime export list,
+# so a clean literal can no longer be trusted. Read-only methods like
+# ``.copy()`` / ``.index()`` are deliberately excluded so they do not force the
+# fallback needlessly.
+_DUNDER_ALL_MUTATOR_METHODS = frozenset({
+    "append", "extend", "insert", "remove", "pop", "clear",
+    "sort", "reverse", "__setitem__", "__delitem__", "__iadd__",
+})
+
+
+def _scannable_children(node: ast.AST) -> Iterator[ast.AST]:
+    """Yield the children of *node* to scan for module-level ``__all__`` writes,
+    with two scope-aware adjustments:
+
+    * A nested scope (def / async def / class / lambda) yields NOTHING — its
+      body executes later (or never) against a LOCAL ``__all__``, and its header
+      (decorators / defaults / annotations) is not scanned either: a write to
+      ``__all__`` from there is absurd in generated code AND, for annotations
+      under ``from __future__ import annotations``, never evaluated, so scanning
+      it produced false positives. Such writes are an accepted limitation.
+    * A comprehension / generator expression omits the loop TARGETS (Python-3
+      comprehension-local) but yields the iterables, filter conditions, and
+      element/key/value expressions, so a walrus (``(__all__ := ...)``) — which
+      leaks to the enclosing scope — is still seen.
+
+    Every other node yields all children unchanged.
+    """
+    if isinstance(node, _SCOPE_NODE_TYPES):
+        return
+    if isinstance(node, _COMPREHENSION_TYPES):
+        for generator in node.generators:
+            yield generator.iter
+            yield from generator.ifs
+        if isinstance(node, ast.DictComp):
+            yield node.key
+            yield node.value
+        else:
+            yield node.elt
+        return
+    yield from ast.iter_child_nodes(node)
+
+
+def _node_writes_dunder_all(node: ast.AST) -> bool:
+    """True if *node* itself is a direct write / in-place mutation of the bare
+    module ``__all__`` name. ``_subtree_mutates_dunder_all`` applies it across a
+    statement's whole subtree, so a non-literal rebind trips it through its
+    target ``Name(__all__, Store)``. Clean literal rebinds never rely on this:
+    ``_extract_dunder_all`` resolves them via ``_clean_dunder_all_literal``
+    before the scan, so any ``__all__`` store/delete reaching here is an
+    unresolvable (computed / conditional / unpacked) write."""
+    store_del = (ast.Store, ast.Del)
+    if isinstance(node, ast.Name):
+        return node.id == "__all__" and isinstance(node.ctx, store_del)
+    if isinstance(node, ast.Subscript):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "__all__"
+            and isinstance(node.ctx, store_del)
+        )
+    if isinstance(node, ast.Call):
+        func = node.func
+        return (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "__all__"
+            and func.attr in _DUNDER_ALL_MUTATOR_METHODS
+        )
+    # Pattern / exception captures bind a bare name given as a STRING field, so
+    # they never appear as a Store ``Name`` node.
+    if isinstance(node, ast.ExceptHandler):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchAs):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchStar):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == "__all__"
+    # An import that BINDS ``__all__`` (``from exports import __all__`` /
+    # ``from m import x as __all__`` / ``import __all__``) replaces the module's
+    # ``__all__`` with an imported value we cannot resolve statically — so it is
+    # an unreadable rebind, not just a normal import. (A plain ``from typing
+    # import Any`` binds ``Any``, not ``__all__``, and is ignored here.)
+    if isinstance(node, ast.ImportFrom):
+        return any(
+            (alias.asname or alias.name) == "__all__" for alias in node.names
+        )
+    if isinstance(node, ast.Import):
+        return any(
+            (alias.asname or alias.name.split(".", 1)[0]) == "__all__"
+            for alias in node.names
+        )
+    return False
+
+
+def _subtree_mutates_dunder_all(node: ast.AST) -> bool:
+    """Recursively scan *node* (module-level execution) for any ``__all__``
+    write/mutation, honouring scope and comprehension boundaries via
+    ``_scannable_children``."""
+    if _node_writes_dunder_all(node):
+        return True
+    return any(
+        _subtree_mutates_dunder_all(child) for child in _scannable_children(node)
+    )
+
+
+def _clean_dunder_all_literal(node: ast.AST) -> Optional[Set[str]]:
+    """Return the set of names when *node* is a top-level ``__all__ = <list /
+    tuple of string literals>`` (or the bound-``AnnAssign`` form ``__all__: T =
+    <same>``) — the ONLY statically readable ``__all__`` declaration. Returns
+    ``None`` for any other statement (a non-literal/computed value, a non-string
+    element, or a node that is not a direct ``__all__`` name assignment)."""
+    if isinstance(node, ast.Assign):
+        targets: List[ast.AST] = list(node.targets)
+        value: Optional[ast.AST] = node.value
+    elif isinstance(node, ast.AnnAssign) and node.value is not None:
+        targets = [node.target]
+        value = node.value
+    else:
+        return None
+    if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+        return None
+    if not isinstance(value, (ast.List, ast.Tuple)):
+        return None
+    names: Set[str] = set()
+    for elt in value.elts:
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+            names.add(elt.value)
+        else:
+            return None
+    return names
+
+
 def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     """Return module-level ``__all__`` names if declared as a clean literal list.
 
@@ -664,56 +804,42 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     - Bound ``ast.AnnAssign`` (``__all__: list[str] = [...]``) →
       treated the same as a plain assignment.
 
-    Returns ``None`` when no clean ``__all__`` literal survives to the
-    end of the module, OR when ``__all__`` is never assigned at module
-    scope. In either case the fallback "non-underscore" heuristic
-    applies.
+    Returns ``None`` when no clean ``__all__`` literal survives to the end of
+    the module, when ``__all__`` is never assigned at module scope, OR when the
+    last thing to touch ``__all__`` is a runtime write the literal cannot
+    capture — a computed/imported rebind, an ``ast.AugAssign``, an in-place
+    mutation (``__all__.append(...)``, ``__all__[i] = ...``, ``del __all__``), a
+    conditional/looped rebind, etc. (see ``_subtree_mutates_dunder_all``). The
+    scan is SOURCE-ORDER: an earlier mutation is OVERRIDDEN by a later clean
+    literal rebind (``__all__ = [...]; __all__.append(...); __all__ = [...]`` is
+    resolvable again), matching Python's last-write-wins runtime semantics. When
+    the result is ``None`` the fallback "non-underscore" heuristic applies, which
+    still protects defined symbols added via a mutation (e.g. a function appended
+    to ``__all__``) while keeping imports re-export-only.
     """
     state: Optional[Set[str]] = None
     for node in tree.body:
-        if isinstance(node, ast.AugAssign):
-            target = node.target
-            if isinstance(target, ast.Name) and target.id == "__all__":
-                # AugAssign is opaque: fall back to heuristic.
-                state = None
+        # A value-less annotation (``__all__: T``, ``__all__[0]: T``, ``x: T``)
+        # does NOT assign or mutate at runtime — it is purely a type hint — so it
+        # is a no-op for ``__all__`` resolution (leaves any prior clean literal
+        # in place). Its target's ``Store`` ctx is an AST artifact, not a write.
+        # (An annotation EXPRESSION that mutates ``__all__`` — ``x:
+        # __all__.append(...)`` — is absurd and, under ``from __future__ import
+        # annotations``, never even evaluated; treated as an accepted limitation.)
+        if isinstance(node, ast.AnnAssign) and node.value is None:
             continue
-
-        targets: List[ast.AST] = []
-        value: Optional[ast.AST] = None
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-            value = node.value
-        else:
-            continue
-        # Look for a target that is a plain `__all__` Name.
-        is_dunder_all_target = any(
-            isinstance(t, ast.Name) and t.id == "__all__" for t in targets
-        )
-        if not is_dunder_all_target or value is None:
-            continue
-        if not isinstance(value, (ast.List, ast.Tuple)):
-            # Computed __all__ (e.g. sorted(...), X + Y, name reference).
-            # The last assignment wins per Python runtime semantics, so
-            # this OVERRIDES any prior clean literal — reset to None so
-            # the heuristic falls back.
+        literal = _clean_dunder_all_literal(node)
+        if literal is not None:
+            # Clean top-level literal rebind — authoritative. A later one wins
+            # and RESTORES resolvability even after an earlier mutation.
+            state = literal
+        elif _subtree_mutates_dunder_all(node):
+            # Any other write to ``__all__`` (computed/imported rebind, augmented
+            # assignment, in-place mutation, conditional/looped rebind, tuple
+            # unpacking, walrus, ``for``/``with``/``except``/``case`` target):
+            # the runtime value diverges from any static literal, so fall back.
             state = None
-            continue
-        names: Set[str] = set()
-        clean = True
-        for elt in value.elts:
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                names.add(elt.value)
-            else:
-                clean = False
-                break
-        # Whether clean or dirty, this assignment overrides any prior
-        # state. Clean literals replace state with the new set; dirty
-        # literals (non-string elements like a Name reference inside the
-        # list) reset to None because we cannot trust the runtime value.
-        state = names if clean else None
+        # else: this statement does not touch ``__all__`` → state unchanged.
     return state
 
 
@@ -789,6 +915,38 @@ def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
     return set(collect_patch_symbols_for_module(file_path))
 
 
+def _reexport_binding(alias: ast.alias) -> Optional[str]:
+    """Return the bound name when an import *alias* is an explicit re-export.
+
+    Imported names are implementation details by default: ``from typing import
+    Any``, ``import json``, ``from dataclasses import dataclass`` and the like
+    are tools the module uses, NOT part of the contract a downstream caller
+    relies on. Removing such an import when a regeneration no longer needs it
+    is a routine cleanup, not a public-API regression (issues #1662 / #1663 /
+    pdd_cloud#2256 — the public-surface gate was hard-failing real syncs over
+    `removed: Any, Literal, dataclass, field, json` and similar).
+
+    An import counts as public surface ONLY when it is *deliberately*
+    re-exported, following Python's own re-export convention (PEP 484, the
+    same rule mypy enforces under ``implicit_reexport = False``):
+
+    - a redundant alias ``import x as x`` / ``from m import y as y`` where the
+      bound name equals the imported name (handled here), or
+    - membership in a declared ``__all__`` (handled authoritatively by the
+      ``__all__`` branches in the snapshot helpers, not here).
+
+    Plain imports (``import git``) and *renaming* aliases (``from m import y as
+    z``, ``z != y``) are NOT re-exports — to keep them protected a module must
+    list them in ``__all__`` or use the redundant-alias form. Underscore
+    (private) names are never public outside ``__all__``. Returns ``None`` for
+    anything that is not an explicit, public re-export.
+    """
+    asname = alias.asname
+    if asname is None or asname != alias.name or asname.startswith("_"):
+        return None
+    return asname
+
+
 def _snapshot_public_surface(
     code_text: str,
     language: str,
@@ -801,10 +959,17 @@ def _snapshot_public_surface(
     both the removed-symbol diff and the signature-change diff because the
     enclosing class ``Outer.Inner`` is unchanged.
 
-    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets, ``ast.Import``
-    aliases, and ``ast.ImportFrom`` aliases are ALSO captured as public
-    surface — removing a re-export like ``import git`` or a public constant
-    like ``PUBLIC_SETTING = ...`` is a real downstream-breaking change.
+    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets are ALSO captured
+    as public surface — removing a public constant like ``PUBLIC_SETTING =
+    ...`` is a real downstream-breaking change.
+
+    Imports are captured ONLY when they are explicit re-exports: a redundant
+    alias ``import x as x`` / ``from m import y as y`` (see
+    ``_reexport_binding``) or a name listed in ``__all__``. Plain imports
+    (``from typing import Any``, ``import json``) and renaming aliases are
+    implementation details, so removing them does NOT trigger a regression
+    (issues #1662 / #1663 / pdd_cloud#2256). ``from X import *`` and
+    ``from __future__ import ...`` never contribute a fixed public name.
 
     When the module declares ``__all__`` as a clean list/tuple of string
     constants, that list is AUTHORITATIVE per Python semantics: a name is
@@ -922,10 +1087,13 @@ def _snapshot_public_surface(
                 _add_assign_targets(node.target)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                # ``import foo.bar`` binds the top-level package name ``foo``;
-                # ``import foo.bar as baz`` binds ``baz``.
-                exposed = alias.asname or alias.name.split(".", 1)[0]
-                if exposed and not exposed.startswith("_"):
+                # Only explicit re-exports (``import foo as foo``) are public
+                # surface; a plain ``import foo`` / ``import foo.bar`` is an
+                # implementation detail (see ``_reexport_binding``). Names in a
+                # clean ``__all__`` are handled by the authoritative branch
+                # above (which returns before this fallback).
+                exposed = _reexport_binding(alias)
+                if exposed:
                     names.add(exposed)
         elif isinstance(node, ast.ImportFrom):
             # ``from __future__ import annotations`` (and other future
@@ -940,8 +1108,12 @@ def _snapshot_public_surface(
                 # identifier is bound, so it does not contribute.
                 if alias.name == "*":
                     continue
-                exposed = alias.asname or alias.name
-                if exposed and not exposed.startswith("_"):
+                # Only redundant-alias re-exports (``from m import y as y``)
+                # are public surface; a plain ``from typing import Any`` or a
+                # renaming alias ``from m import y as z`` is an implementation
+                # detail (see ``_reexport_binding``).
+                exposed = _reexport_binding(alias)
+                if exposed:
                     names.add(exposed)
 
     if patch_targets:
@@ -1921,7 +2093,16 @@ def _snapshot_public_signatures(
                 exposed = alias.asname or alias.name.split(".", 1)[0]
                 if not exposed or not _is_public_top_level(exposed):
                     continue
-                if alias.asname:
+                # Mirror ``_snapshot_public_surface``: with NO ``__all__`` an
+                # import is public surface only as an explicit re-export
+                # (``import x as x``). Without this the primary signature
+                # comparison would still flag a non-public import flipping to
+                # a same-named def (``from typing import Any`` →
+                # ``def Any()``) as a regression even though ``Any`` was never
+                # public (issues #1662 / #1663 / pdd_cloud#2256).
+                if dunder_all is None and _reexport_binding(alias) is None:
+                    continue
+                if alias.asname and alias.asname != alias.name:
                     # ``import pathlib as p`` → ``p`` binds to the
                     # ``pathlib`` module. Encoding the source module so
                     # ``import os as p`` would still produce a distinct
@@ -1932,7 +2113,11 @@ def _snapshot_public_signatures(
                     # a single top-level name; record as plain
                     # ``[import]`` — the diff key is the bound name
                     # itself, the source is whatever's documented in
-                    # the prompt body.
+                    # the prompt body. A redundant alias ``import pathlib as
+                    # pathlib`` binds the SAME object as the plain form, so it
+                    # canonicalizes to ``[import]`` too — otherwise an
+                    # alias-style normalization under ``__all__`` would diff as
+                    # a phantom signature change.
                     signatures[exposed] = "[import]"
         elif isinstance(node, ast.ImportFrom):
             # ``from X import *`` does NOT bind a fixed name (the
@@ -1947,14 +2132,26 @@ def _snapshot_public_signatures(
             # ``[assignment]``) on the same name.
             if node.module == "__future__":
                 continue
-            module = node.module or ""
+            # Encode the relative-import level so a re-export's source package
+            # is part of its fingerprint: ``from . import Foo`` and ``from ..
+            # import Foo`` bind the same name to DIFFERENT modules and must not
+            # collide on ``[import:from ]``. ``node.level`` is 0 for absolute
+            # imports (``from pathlib import Path`` stays ``pathlib``).
+            module = "." * node.level + (node.module or "")
             for alias in node.names:
                 if alias.name == "*":
                     continue
                 exposed = alias.asname or alias.name
                 if not exposed or not _is_public_top_level(exposed):
                     continue
-                if alias.asname:
+                # Mirror ``_snapshot_public_surface``: with NO ``__all__`` only
+                # redundant-alias re-exports (``from m import y as y``) are
+                # public surface; a plain ``from typing import Any`` or a
+                # renaming alias ``from m import y as z`` is an implementation
+                # detail (issues #1662 / #1663 / pdd_cloud#2256).
+                if dunder_all is None and _reexport_binding(alias) is None:
+                    continue
+                if alias.asname and alias.asname != alias.name:
                     # ``from pathlib import Path as P`` records the
                     # source identifier so re-pointing the alias at a
                     # different attribute (``from os.path import join
@@ -1964,7 +2161,11 @@ def _snapshot_public_signatures(
                     # ``from pathlib import Path`` — the bound name is
                     # ``alias.name`` so encoding the source module is
                     # sufficient to distinguish it from a same-named
-                    # ``def Path()`` later in the file.
+                    # ``def Path()`` later in the file. A redundant alias
+                    # ``from pathlib import Path as Path`` binds the SAME object
+                    # as the plain form, so it canonicalizes here too —
+                    # otherwise an alias-style normalization under ``__all__``
+                    # would diff as a phantom signature change.
                     signatures[exposed] = f"[import:from {module}]"
     if patch_targets:
         for symbol in sorted(patch_targets):
@@ -2011,6 +2212,36 @@ def _verify_public_surface_regression(
         language or "python",
         patch_targets=patch_targets,
     )
+    # Syntax gate (issue #1612 Bug 2): if the freshly generated Python is
+    # unparseable, ``_snapshot_public_surface`` silently returns an empty set,
+    # which would misroute the failure as a phantom public-surface regression
+    # (``post_surface_size: 0``) and send the repair loop chasing removed
+    # symbols instead of the real problem. Raise a syntax-focused
+    # ``ArchitectureConformanceError`` so the repair loop targets the syntax
+    # error while still listing the expected public symbols to restore.
+    if before:
+        try:
+            ast.parse(generated_code or "")
+        except SyntaxError as syntax_err:
+            expected = sorted(before)
+            raise ArchitectureConformanceError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                architecture_entry={},
+                expected_symbols=expected,
+                found_symbols=[],
+                missing_symbols=expected,
+                message=(
+                    f"Architecture conformance error for {prompt_name}: "
+                    f"generated Python has a syntax error: {syntax_err}"
+                ),
+                repair_directive=(
+                    f"Fix the Python syntax error in the generated code: "
+                    f"{syntax_err}\n"
+                    f"Then restore all expected public symbols: "
+                    f"{', '.join(expected)}."
+                ),
+            ) from syntax_err
     after_patch_targets = _effective_patch_targets(
         generated_code, language or "python", output_path
     )
@@ -3796,6 +4027,25 @@ def code_generator_main(
         )
         can_attempt_incremental = False
 
+    # Conformance repair must bypass incremental generation. When
+    # PDD_REPAIR_DIRECTIVE is active, the directive was appended to
+    # prompt_content above, which makes the in-memory prompt look "changed"
+    # relative to HEAD and would otherwise satisfy the incremental-eligibility
+    # logic. Routing a repair retry through incremental_code_generator's
+    # diff-analysis (patch-vs-regenerate) step can silently swallow the named
+    # repair if that analysis fails or misclassifies. Force a clean full
+    # regeneration so the <architecture_repair_directive> block reaches the
+    # full generator directly. Normal incremental generation is unaffected when
+    # no repair directive is set (#1724).
+    repair_directive_active = bool(repair_directive_env and repair_directive_env.strip())
+    if repair_directive_active and can_attempt_incremental:
+        if verbose:
+            console.print(
+                "[blue]PDD_REPAIR_DIRECTIVE active: bypassing incremental generation "
+                "and performing full generation with the repair directive.[/blue]"
+            )
+        can_attempt_incremental = False
+
     try:
         # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         post_process_script: Optional[str] = None
@@ -4658,6 +4908,11 @@ def code_generator_main(
         # User cancelled - re-raise to stop the sync loop
         raise
     except Exception as e:
+        if (
+            e.__class__.__name__ == "EstimateOnlyResult"
+            and isinstance(getattr(e, "estimate", None), dict)
+        ):
+            raise
         if isinstance(e, click.UsageError):
             raise
 

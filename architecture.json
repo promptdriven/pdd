@@ -1,12 +1,13 @@
 [
   {
-    "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode.",
+    "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
       "_keyring_timeout_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "routing_policy_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -19,6 +20,25 @@
     "interface": {
       "type": "module",
       "module": {
+        "dataclasses": [
+          {
+            "name": "SteerEntry",
+            "fields": [
+              {
+                "name": "comment_id",
+                "type": "str"
+              },
+              {
+                "name": "author",
+                "type": "str"
+              },
+              {
+                "name": "body",
+                "type": "str"
+              }
+            ]
+          }
+        ],
         "functions": [
           {
             "name": "get_agent_provider_preference",
@@ -31,9 +51,29 @@
             "returns": "List[str]"
           },
           {
+            "name": "get_agentic_capabilities",
+            "signature": "() -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "validate_claude_policy",
+            "signature": "(policy: Any, *, interactive: bool = False) -> ClaudePolicy",
+            "returns": "ClaudePolicy"
+          },
+          {
+            "name": "build_agentic_task_instruction",
+            "signature": "(instruction: str, *, user_feedback: Optional[str] = None, steers: Optional[List[SteerEntry]] = None) -> str",
+            "returns": "str"
+          },
+          {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult",
+            "returns": "AgenticTaskResult"
+          },
+          {
+            "name": "select_harness_for_task",
+            "signature": "(task_class: str, candidates: List[str]) -> List[str]",
+            "returns": "List[str]"
           },
           {
             "name": "detect_control_token",
@@ -72,7 +112,7 @@
           },
           {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None) -> bool",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None, failure_mode: Optional[str] = None, failure_detail: Optional[str] = None) -> bool",
             "returns": "bool"
           },
           {
@@ -131,6 +171,11 @@
             "returns": "bool"
           },
           {
+            "name": "drain_issue_steers",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, state: Dict, *, cwd: Path) -> List[SteerEntry]",
+            "returns": "List[SteerEntry]"
+          },
+          {
             "name": "load_workflow_state",
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]",
             "returns": "Tuple[Optional[Dict], Optional[int]]"
@@ -145,12 +190,199 @@
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> bool",
             "returns": "bool"
           }
+        ],
+        "enums": [
+          {
+            "name": "EffortCapability",
+            "values": [
+              "FULL",
+              "CLAMPED",
+              "CONFIG_ONLY",
+              "INTERACTIVE_ONLY",
+              "UNSUPPORTED"
+            ]
+          }
+        ],
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
+          }
         ]
       }
     },
     "position": {
       "x": 14400,
       "y": 800
+    }
+  },
+  {
+    "reason": "Static task-class routing table and bounded escalation ladder for agentic CLI config selection.",
+    "description": "Provides a static YAML-configurable lookup table keyed by coarse task class and a bounded four-step escalation ladder. Consumed by run_agentic_task() via optional routing_policy argument. Records policy version, task class, selected config, escalation step, fallback reason, cost, latency, and verifier result.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "routing_policy_python.prompt",
+    "filepath": "pdd/routing_policy.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "dataclasses": [
+          {
+            "name": "RoutingConfig",
+            "fields": [
+              {
+                "name": "harness",
+                "type": "str"
+              },
+              {
+                "name": "model_tier",
+                "type": "int"
+              },
+              {
+                "name": "thinking_effort",
+                "type": "EffortLevel"
+              },
+              {
+                "name": "repeat_runs",
+                "type": "int"
+              }
+            ]
+          },
+          {
+            "name": "EscalationStep",
+            "fields": [
+              {
+                "name": "axis",
+                "type": "str"
+              },
+              {
+                "name": "value",
+                "type": "Any"
+              },
+              {
+                "name": "reason",
+                "type": "str"
+              }
+            ]
+          },
+          {
+            "name": "RoutingPolicyRow",
+            "fields": [
+              {
+                "name": "initial_config",
+                "type": "Optional[RoutingConfig]"
+              },
+              {
+                "name": "escalation_steps",
+                "type": "List[EscalationStep]"
+              }
+            ]
+          },
+          {
+            "name": "RoutingPolicy",
+            "fields": [
+              {
+                "name": "version",
+                "type": "str"
+              },
+              {
+                "name": "rows",
+                "type": "Dict[str, RoutingPolicyRow]"
+              },
+              {
+                "name": "path",
+                "type": "Optional[Path]"
+              }
+            ]
+          },
+          {
+            "name": "RoutingRecord",
+            "fields": [
+              {
+                "name": "timestamp_utc",
+                "type": "str"
+              },
+              {
+                "name": "job_id",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "policy_version",
+                "type": "str"
+              },
+              {
+                "name": "task_class",
+                "type": "str"
+              },
+              {
+                "name": "selected_config",
+                "type": "Optional[RoutingConfig]"
+              },
+              {
+                "name": "escalation_step",
+                "type": "int"
+              },
+              {
+                "name": "fallback_reason",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "latency_seconds",
+                "type": "float"
+              },
+              {
+                "name": "verifier_result",
+                "type": "Optional[str]"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> RoutingPolicy",
+            "returns": "RoutingPolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> RoutingPolicy",
+            "returns": "RoutingPolicy"
+          },
+          {
+            "name": "select_config",
+            "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]",
+            "returns": "tuple[RoutingConfig | None, RoutingRecord]"
+          },
+          {
+            "name": "escalate",
+            "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]",
+            "returns": "tuple[RoutingConfig | None, RoutingRecord]"
+          },
+          {
+            "name": "resolve_model_for_tier",
+            "signature": "(tier: int) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "emit_routing_record",
+            "signature": "(record: RoutingRecord, log_dir: Path) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14400,
+      "y": 1200
     }
   },
   {
@@ -1207,34 +1439,22 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
         ]
       }
@@ -2200,9 +2420,15 @@
     }
   },
   {
-    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
+    "reason": "Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2216,19 +2442,8 @@
         "functions": [
           {
             "name": "insert_includes",
-            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
-            "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)",
+            "returns": "Tuple[str, str, float, str]"
           }
         ]
       }
@@ -2267,7 +2482,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the update command.",
+    "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
@@ -2388,8 +2603,8 @@
     }
   },
   {
-    "reason": "Classifies test/verification failure modes for failure-aware retries.",
-    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop to skip unproductive retries on syntax/import or timeout/flaky failures.",
+    "reason": "Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.",
+    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop and agentic_multishot to categorize failures. Covers five FailureKind values; budget_truncated and infrastructure_error are set programmatically by the multi-shot controller rather than derived from output text.",
     "dependencies": [],
     "priority": 64,
     "filename": "failure_classification_python.prompt",
@@ -2406,34 +2621,126 @@
           {
             "name": "classify_failure",
             "signature": "(text: str) -> FailureKind",
-            "returns": "FailureKind",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "FailureKind"
           },
           {
             "name": "extract_failure_signature",
             "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "failure_classification_hint",
             "signature": "(kind: FailureKind) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "format_signature_hint",
             "signature": "(sig: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.",
+    "description": "Orchestration controller for sequential multi-shot CLI repeat-runs. Wraps run_agentic_task with per-shot and total budget/timeout caps, hidden-verifier candidate selection, append-only JSONL persistence, and stop-early behavior on first pass.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "failure_classification_python.prompt"
+    ],
+    "priority": 65,
+    "filename": "agentic_multishot_python.prompt",
+    "filepath": "pdd/agentic_multishot.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "dataclasses": [
+          {
+            "name": "MultishotCandidateRecord",
+            "fields": [
+              {
+                "name": "shot_id",
+                "type": "int"
+              },
+              {
+                "name": "task_id",
+                "type": "str"
+              },
+              {
+                "name": "multishot_run_id",
+                "type": "str"
+              },
+              {
+                "name": "cli_version",
+                "type": "str"
+              },
+              {
+                "name": "config_id",
+                "type": "str"
+              },
+              {
+                "name": "verdict",
+                "type": "str"
+              },
+              {
+                "name": "failure_class",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "latency_ms",
+                "type": "float"
+              },
+              {
+                "name": "started_at",
+                "type": "str"
+              },
+              {
+                "name": "finished_at",
+                "type": "str"
+              },
+              {
+                "name": "stop_reason",
+                "type": "Optional[str]"
+              }
             ]
+          },
+          {
+            "name": "MultishotResult",
+            "fields": [
+              {
+                "name": "winner",
+                "type": "Optional[MultishotCandidateRecord]"
+              },
+              {
+                "name": "candidates",
+                "type": "List[MultishotCandidateRecord]"
+              },
+              {
+                "name": "total_cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "total_latency_ms",
+                "type": "float"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "run_multishot_candidates",
+            "signature": "(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult",
+            "returns": "MultishotResult"
           }
         ]
       }
@@ -2445,7 +2752,8 @@
     "dependencies": [
       "failure_classification_python.prompt",
       "fix_focus_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2461,7 +2769,7 @@
         "functions": [
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)",
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose = False, time = DEFAULT_TIME, code_file_ext = '.py', protect_tests = False, failure_classification = None, compressed_context = None)",
             "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
@@ -3853,6 +4161,33 @@
     }
   },
   {
+    "reason": "Generates the task_routing.csv skeleton: per-task static routing table for the E[pass]−λ·cost router in llm_invoke.",
+    "description": "Defines the static per-task config routing table (task_class, model, temperature, effort, shots, pass_rate, avg_cost_usd) consumed by llm_invoke()'s E[pass]−λ·cost router when PDD_ENABLE_TASK_ROUTING=1.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 115,
+    "filename": "task_routing_csv.prompt",
+    "filepath": "pdd/data/task_routing.csv",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "task_class",
+          "model",
+          "temperature",
+          "effort",
+          "shots",
+          "pass_rate",
+          "avg_cost_usd"
+        ]
+      }
+    }
+  },
+  {
     "reason": "Shell completion script for bash.",
     "description": "Provides command-line completion for pdd in bash. Lists commands and options.",
     "dependencies": [],
@@ -4272,7 +4607,8 @@
               "provider: str",
               "cli_path: str",
               "api_key_configured: bool",
-              "skipped: bool"
+              "skipped: bool",
+              "cli_version: str"
             ]
           }
         ]
@@ -5083,7 +5419,7 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
             "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
@@ -5095,9 +5431,13 @@
     }
   },
   {
-    "reason": "Applies targeted patches to existing code based on prompt changes.",
+    "reason": "Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "preprocess_python.prompt",
+      "postprocess_python.prompt"
+    ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -5113,10 +5453,7 @@
           {
             "name": "incremental_code_generator",
             "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
-            "returns": "Tuple[Optional[str], bool, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Optional[str], bool, float, str]"
           }
         ]
       }
@@ -5418,7 +5755,7 @@
     }
   },
   {
-    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
+    "reason": "Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.",
     "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5441,13 +5778,13 @@
         "functions": [
           {
             "name": "run_incremental_prd_propagation",
-            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple of success flag, message, cost, model, and changed files"
           },
           {
             "name": "apply_architecture_patch",
-            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
-            "returns": "PatchApplication"
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
+            "returns": "Validated in-memory architecture patch application result"
           }
         ]
       }
@@ -5983,11 +6320,10 @@
     }
   },
   {
-    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation, code cleanup, and a final PR-mode checkup gate that re-validates CI when it pushes additional fixes.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
+    "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and code cleanup.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and a deterministic pre-checkup drift-sync gate.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
-      "agentic_checkup_python.prompt",
       "ci_validation_python.prompt",
       "pre_checkup_gate_python.prompt"
     ],
@@ -6015,47 +6351,6 @@
             "sideEffects": [
               "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true",
               "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
-            ]
-          },
-          {
-            "name": "_fetch_pr_head_sha",
-            "signature": "(repo_owner: str, repo_name: str, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Calls gh api repos/{owner}/{repo}/pulls/{n} via the shared _fetch_pr_metadata helper",
-              "Best-effort: returns empty string on any failure so callers can fail closed"
-            ]
-          },
-          {
-            "name": "_read_checkup_worktree_head_sha",
-            "signature": "(cwd: Path, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Locates .pdd/worktrees/checkup-pr-{N}/ relative to cwd's git root and runs git rev-parse HEAD inside it",
-              "Returns the SHA the checkup last verified or pushed; comparing against the live PR remote SHA is what distinguishes a checkup self-push from an external party advancing the PR during the checkup",
-              "Best-effort: returns empty string when the worktree is missing or the rev-parse fails"
-            ]
-          },
-          {
-            "name": "_read_review_loop_verified_head_sha",
-            "signature": "(cwd: Path, issue_number: int, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Reads verified_head_sha from the final gate's Layer-2 (review-loop) final-state.json via checkup_review_loop.load_final_state(cwd, issue_number, pr_number)",
-              "The review-loop pushes Layer-2 fixes from its OWN worktree, so a Layer-2 push advances the remote PR head past the Layer-1 checkup worktree head; this SHA is the second authoritative 'last verified/pushed' head the provenance check accepts as 'ours'",
-              "Best-effort: returns empty string when no review-loop verdict exists (Layer 2 not run or errored before finalizing)"
-            ]
-          },
-          {
-            "name": "_run_final_checkup_on_pr",
-            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Runs the canonical two-layer final gate (issue #1406) by calling run_agentic_checkup(..., final_gate=True): Layer 1 = PR-scoped checkup, Layer 2 = review-loop on the resulting head; the returned success is a real ship verdict, not 'report produced'",
-              "Snapshots PR remote head SHA before/after the gate",
-              "When pre and post SHAs differ, the post head is 'ours' (and safe to CI-revalidate) when it equals EITHER the Layer-1 checkup worktree HEAD (_read_checkup_worktree_head_sha) OR the Layer-2 review-loop verified head (_read_review_loop_verified_head_sha); if it matches neither, an external push raced the gate — fail closed without re-validating CI because no reviewer saw the new code",
-              "When the post head matches a verified head, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post head>",
-              "Fails closed when the pre/post head SHAs cannot be fetched, or when NEITHER verified head (checkup worktree, review-loop) is available — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7149,13 +7444,52 @@
     }
   },
   {
+    "reason": "Carries canonical per-module sync identity through agentic sync, runner, and durable worktree flows.",
+    "description": "Defines ResolvedSyncUnit and resolve_sync_unit so every sync stage uses the same cwd, target basename, context, prompts directory, and advisory paths for a module.",
+    "dependencies": [
+      "construct_paths_python.prompt"
+    ],
+    "priority": 215,
+    "filename": "resolved_sync_unit_python.prompt",
+    "filepath": "pdd/resolved_sync_unit.py",
+    "tags": [
+      "sync",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ResolvedSyncUnit",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "ResolvedSyncUnit.relocate",
+            "signature": "(old_root: Path, new_root: Path) -> ResolvedSyncUnit",
+            "returns": "ResolvedSyncUnit"
+          },
+          {
+            "name": "resolve_sync_unit",
+            "signature": "(key: str, target_basename: str, cwd: Path, *, requested_context: Optional[str] = None, architecture_path: Optional[Path] = None) -> ResolvedSyncUnit",
+            "returns": "ResolvedSyncUnit"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
     "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "durable_sync_runner_python.prompt"
+      "durable_sync_runner_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -7171,7 +7505,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7179,7 +7513,7 @@
           },
           {
             "name": "run_global_sync",
-            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder, strength, temperature, and context_override are forwarded via sync_options so child retries keep the parent config/model knobs"
@@ -7211,12 +7545,13 @@
   },
   {
     "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses — architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) — and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block — '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) — plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
+    "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses — architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) — and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block — '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) — plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
-      "sync_order_python.prompt"
+      "sync_order_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7232,7 +7567,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
             "returns": "AsyncSyncRunner"
           },
           {
@@ -7275,9 +7610,10 @@
   },
   {
     "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
-    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
+    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Worker concurrency follows the same precedence as the parent: total_budget forces one worker, an explicit durable_max_parallel overrides, otherwise it reads the shared PDD_SYNC_MAX_WORKERS default via _read_sync_max_workers(). Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 216,
     "filename": "durable_sync_runner_python.prompt",
@@ -7293,10 +7629,10 @@
         "functions": [
           {
             "name": "DurableSyncRunner",
-            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
+            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0)",
             "returns": "DurableSyncRunner",
             "sideEffects": [
-              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, otherwise durable_max_parallel caps concurrency"
+              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, else an explicit durable_max_parallel caps concurrency, else concurrency falls back to the shared PDD_SYNC_MAX_WORKERS default via agentic_sync_runner._read_sync_max_workers()"
             ]
           },
           {
@@ -7337,11 +7673,11 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Fetches the GitHub issue (when provided) and PR context via gh api",
-              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False)",
+              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False). For review-loop/final-gate mode, forwards allow_same_reviewer_fixer into ReviewLoopConfig so the loop can explicitly opt into single-role review/fix semantics",
               "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
               "Posts an error comment on the source issue if the legacy orchestrator raises"
             ]
@@ -7404,7 +7740,7 @@
   },
   {
     "reason": "Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.",
-    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to a separate fixer such as Claude, then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. An optional fixer_fallback is the analog for the fix step: when the primary fixer reports success=False (typical cause: Claude Code subscription-tier credential exhaustion classified as credential-limit) the loop captures the pre-fix HEAD SHA, resets the worktree (`git reset --hard <pre_fix_sha>` + `git clean -fd`) so the failed primary's partial edits do not leak, alias-normalizes the fallback role, refuses it if it equals the primary fixer, the active reviewer, or the originally configured reviewer (preserved as ReviewLoopState.original_reviewer), then invokes the fallback once. On success the fallback role becomes ReviewLoopState.active_fixer and drives every subsequent round's fix step (the one-shot fallback is consumed); both the failed primary FixResult and the fallback FixResult are appended to state.fixes for an honest audit trail. When the fallback also fails its FixResult is still appended before the loop breaks; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so [CRITICAL], issue_aligned: false, and max-*-reached: true tokens from raw subprocess output cannot downgrade an otherwise-verified fallback verdict. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. Issue #1088 trust boundary: findings only flip to status=fixed after the verifier clears the exact SHA the fixer just pushed. ReviewLoopState carries verified_head_sha (the pushed SHA the verifier most recently cleared), remote_pr_head_sha (observed at render time via a single _fetch_pr_metadata re-fetch), and verification_status_by_round (per-round outcome in {verified, unverified, stale, skipped}). When the fixer left the worktree unchanged (`No changes to push.`) or `git rev-parse HEAD` returns empty after a reported push, the loop skips the verifier, marks the round skipped, and stops; verification never runs against a SHA that did not land. When _finalize re-fetches the PR head and observes either a SHA mismatch or a missing head_sha, fresh-final downgrades to missing, any verified rounds are recorded as stale, and fixed findings revert to open in final-state.json so downstream consumers cannot treat the stale verifier verdict as ship-ready. FixResult and the per-round round-N-fix-...findings.json artifact persist fixer_result, push_status, local_fixer_commit_sha, and pushed_head_sha (rendered explicitly, even when null) so the on-disk audit trail matches the prompt contract. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
+    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to the resolved fixer (a separate role such as Claude by default, or the same role only when allow_same_reviewer_fixer explicitly opts into single-role review/fix mode), then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. An optional fixer_fallback is the analog for the fix step: when the primary fixer reports success=False (typical cause: Claude Code subscription-tier credential exhaustion classified as credential-limit) the loop captures the pre-fix HEAD SHA, resets the worktree (`git reset --hard <pre_fix_sha>` + `git clean -fd`) so the failed primary's partial edits do not leak, alias-normalizes the fallback role, refuses it if it equals the primary fixer, the active reviewer, or the originally configured reviewer (preserved as ReviewLoopState.original_reviewer), then invokes the fallback once. On success the fallback role becomes ReviewLoopState.active_fixer and drives every subsequent round's fix step (the one-shot fallback is consumed); both the failed primary FixResult and the fallback FixResult are appended to state.fixes for an honest audit trail. When the fallback also fails its FixResult is still appended before the loop breaks; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so [CRITICAL], issue_aligned: false, and max-*-reached: true tokens from raw subprocess output cannot downgrade an otherwise-verified fallback verdict. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. Issue #1088 trust boundary: findings only flip to status=fixed after the verifier clears the exact SHA the fixer just pushed. ReviewLoopState carries verified_head_sha (the pushed SHA the verifier most recently cleared), remote_pr_head_sha (observed at render time via a single _fetch_pr_metadata re-fetch), and verification_status_by_round (per-round outcome in {verified, unverified, stale, skipped}). When the fixer left the worktree unchanged (`No changes to push.`) or `git rev-parse HEAD` returns empty after a reported push, the loop skips the verifier, marks the round skipped, and stops; verification never runs against a SHA that did not land. When _finalize re-fetches the PR head and observes either a SHA mismatch or a missing head_sha, fresh-final downgrades to missing, any verified rounds are recorded as stale, and fixed findings revert to open in final-state.json so downstream consumers cannot treat the stale verifier verdict as ship-ready. FixResult and the per-round round-N-fix-...findings.json artifact persist fixer_result, push_status, local_fixer_commit_sha, and pushed_head_sha (rendered explicitly, even when null) so the on-disk audit trail matches the prompt contract. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
     "dependencies": [
       "agentic_common_python.prompt",
       "agentic_change_python.prompt",
@@ -7434,6 +7770,7 @@
               "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
               "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
               "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
+              "Requires distinct reviewer/fixer roles by default; when ReviewLoopConfig.allow_same_reviewer_fixer is true and the resolved roles are equal, runs explicit single-role review/fix mode without writing the legacy fixer sentinel into reviewer_status. The final report renders same-role-review-fix: true and final-state.json records same_role_review_fix=true with mode=single-role-review-fix",
               "Can invoke one alias-normalized fixer_fallback when the primary fixer reports success=False (typical: credential-limit). Before the fallback runs, captures the pre-fix HEAD SHA and resets the worktree (git reset --hard <sha> + git clean -fd) so failed primary edits do not leak into the next commit. The fallback is skipped when it resolves to the primary fixer, the active reviewer, or the originally configured reviewer (ReviewLoopState.original_reviewer) to preserve reviewer/fixer role independence. On success the fallback becomes ReviewLoopState.active_fixer and drives every subsequent round; the fallback is one-shot for the entire loop. Both the failed primary FixResult and the fallback FixResult (success or failure) are appended to state.fixes for the audit trail; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so trip-wire tokens cannot downgrade an otherwise-verified fallback verdict",
               "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
               "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
@@ -7443,7 +7780,7 @@
               "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
               "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
               "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
-              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
+              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes same_role_review_fix, mode, verified_head_sha, remote_pr_head_sha, reviewed_head_sha, source_of_truth, gates, and verification_status_by_round so downstream consumers can re-verify the trust boundary and distinguish independent reviewer/fixer runs from explicit single-role review/fix runs",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
               "Issue #1092: at every clean-exit site (round-start LLM clean, review-only clean, post-verify clean, pending-findings-empty early exit, and fallback-reviewer clean), invokes _enforce_gates_before_clean to run pdd.checkup_gates over the loop-owned worktree; any failing deterministic gate (PR-range git diff --check, prettier --check, a non-mutating Python syntax check via builtin compile(), optional ruff/black/mypy/`npx --no-install tsc --noEmit`) is converted to a synthetic blocker ReviewFinding (reviewer prefix `gate:`) that the loop feeds back into the fixer rather than declaring clean",
               "Issue #1092 base-ref refresh: when config.enable_gates is True the loop calls pdd.agentic_checkup_orchestrator._refresh_pr_base_ref after _fetch_pr_metadata, fetching the PR's base branch into the dedicated tracking ref refs/remotes/pdd-checkup/pr-{N}/base (NEVER refs/remotes/origin/<base>, which would mutate the operator's tracking refs when their origin is a fork) and populating pr_metadata['base_local_ref']. The fetch is bounded by a 60s subprocess timeout so a stalled transport cannot hold the review loop forever. The refresh helper resolves a trusted absolute git binary through pdd.checkup_gates and uses the sanitized gate env for its git-root, remote, and fetch subprocesses, so PATH=.:$PATH cannot execute a PR-shipped ./git before gate discovery. The review-loop short-circuit that skipped _fetch_pr_metadata in review-only mode is suppressed when gates are enabled so review-only on non-main-base PRs still gets the PR-range git-diff-check guarantee. discover_gates resolves base_ref from pr_metadata['base_local_ref'] first and falls back to the raw base_ref name when the refresh helper succeeded but did not land the ref",
@@ -7495,7 +7832,9 @@
           "reasoning_time",
           "enable_gates",
           "gate_timeout",
-          "gate_allow"
+          "gate_allow",
+          "enable_source_of_truth_repair",
+          "allow_same_reviewer_fixer"
         ],
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
@@ -7811,7 +8150,7 @@
           },
           {
             "name": "_build_state",
-            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None) -> Dict",
+            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None) -> Dict",
             "returns": "Dict",
             "sideEffects": [
               "None"
@@ -7878,7 +8217,9 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -7895,8 +8236,13 @@
             "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
             "returns": "Tuple[bool, str, float]",
             "sideEffects": [
-              "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
+              "expected_head_sha_override forces the poll to wait for a specific pushed PR head SHA instead of _get_head_sha(cwd); used by a caller that must validate CI against a specific PR head rather than cwd's local HEAD (e.g. when the head was pushed from a different worktree, so cwd's local HEAD is stale relative to the PR remote)"
             ]
+          },
+          {
+            "name": "run_github_checks_gate",
+            "signature": "(cwd, repo_owner, repo_name, pr_number, quiet, expected_head_sha=None, required_only=False)",
+            "returns": "Tuple[bool, str, str]"
           },
           {
             "name": "post_ci_failure_comment",
@@ -8765,6 +9111,42 @@
     }
   },
   {
+    "reason": "Central error handling and reporting for the CLI.",
+    "description": "Provides shared Rich console error output and core-dump error collection for CLI command failures.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "core/errors_python.prompt",
+    "filepath": "pdd/core/errors.py",
+    "tags": [
+      "core",
+      "cli",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_core_dump_errors",
+            "signature": "() -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]"
+          },
+          {
+            "name": "clear_core_dump_errors",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "handle_error",
+            "signature": "(exception: Exception, command_name: str, quiet: bool) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
@@ -9134,7 +9516,7 @@
     }
   },
   {
-    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "reason": "Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.",
     "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "dependencies": [
       "path_resolution_python.prompt",
@@ -9153,7 +9535,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
             "returns": "Dict[str, Any]"
           },
           {
@@ -9751,6 +10133,33 @@
     }
   },
   {
+    "reason": "Ranks candidate test files by a four-signal composite score and packs them under a configurable token budget, emitting a TestPackingManifest for every selection and omission decision.",
+    "dependencies": [
+      "pytest_slicer_python.prompt"
+    ],
+    "priority": 102,
+    "filename": "test_context_packer_python.prompt",
+    "filepath": "pdd/test_context_packer.py",
+    "tags": [
+      "module",
+      "python",
+      "testing",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "TestContextPacker.pack",
+            "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None, candidate_files: list[str] | None = None, slice_failing_tests: bool = False) -> TestPackingResult",
+            "returns": "TestPackingResult"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "dependencies": [
@@ -9955,7 +10364,8 @@
     "dependencies": [
       "context_snapshot_python.prompt",
       "contract_ir_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 249,
     "filename": "compressed_sync_context_python.prompt",
@@ -9971,7 +10381,7 @@
         "functions": [
           {
             "name": "build_compressed_sync_context",
-            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None) -> CompressedSyncContext",
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext",
             "returns": "CompressedSyncContext"
           },
           {
@@ -9984,8 +10394,8 @@
     }
   },
   {
-    "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
-    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "reason": "Shared blocking quality gate that drift-syncs and build/smoke-verifies a PR for pre-checkup or fix-final validation.",
+    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",

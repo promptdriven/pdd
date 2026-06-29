@@ -19,6 +19,17 @@ Any non-trivial bug that needs to ship as a PR. Especially when:
 
 All implementation, test, review, rebase, and PR-branch commands happen inside the PR worktree. The main clone is only for orchestration and the final `gh pr merge`.
 
+Prefer external per-user worktrees for hand-created or explicitly configured
+agent worktrees:
+
+```bash
+AGENT_WORKTREE_ROOT="${AGENT_WORKTREE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees}"
+PDD_AGENT_WORKTREE_DIR="$AGENT_WORKTREE_ROOT/promptdriven__pdd/<name>"
+```
+
+Use the actual path returned by Claude Code if a built-in `isolation:
+"worktree"` dispatch creates the worktree for you.
+
 ## The loop
 
 ### 1. Implementer round
@@ -58,7 +69,7 @@ Use `codex exec review` — same review engine as plain `codex review`, but insi
 From inside the agent's worktree:
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION: `git reset --hard` below will destroy local work. Confirm
@@ -179,14 +190,14 @@ There's no `safe-gh-merge` helper in this repo. Clean up the worktree manually b
 
 ```bash
 # 1. From the worktree, confirm everything is pushed and the tree is clean.
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git status                              # must be clean
 git log origin/<pr-branch>..HEAD        # must be empty (nothing un-pushed)
 
 # 2. Switch to the main clone (NOT inside the worktree) and remove it.
 cd /path/to/main-clone
 git worktree list                       # confirm the worktree path
-git worktree remove /path/to/.claude/worktrees/agent-<id>
+git worktree remove <agent-worktree>
 
 # 3. Squash-merge and delete the remote branch.
 gh pr merge <PR> --squash --delete-branch
@@ -213,7 +224,7 @@ Several pdd test paths exercise the `pdd` CLI itself. Most use `tmp_path`/`CliRu
 If contamination lands, fix via clean rebase:
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin main
 # Cherry-pick the intentional commits onto fresh main
 git checkout origin/main -b tmp-rebase
@@ -328,7 +339,7 @@ OUTPUT EARLY when done. Don't iterate silently.
 ### Codex review
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION before any hard reset (see § "Codex review" earlier).
@@ -410,7 +421,7 @@ OUTPUT EARLY when done. Don't iterate silently.
 ## Sample Codex invocation template
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION before any hard reset.

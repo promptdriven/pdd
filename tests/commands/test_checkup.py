@@ -43,8 +43,39 @@ def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
     assert kwargs["reviewer"] == "codex"
     assert kwargs["fixer"] == "claude"
     assert kwargs["reviewer_fallback"] == "gemini"
+    assert kwargs["allow_same_reviewer_fixer"] is False
     assert kwargs["max_review_rounds"] == 3
     assert kwargs["blocking_severities"] == "blocker,critical,medium"
+
+
+def test_checkup_review_loop_cli_forwards_same_role_flag() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.25, "codex")
+
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/org/repo/pull/7",
+                "--issue",
+                "https://github.com/org/repo/issues/6",
+                "--review-loop",
+                "--reviewer",
+                "codex",
+                "--fixer",
+                "codex",
+                "--allow-same-reviewer-fixer",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0
+    kwargs = run_checkup.call_args.kwargs
+    assert kwargs["reviewer"] == "codex"
+    assert kwargs["fixer"] == "codex"
+    assert kwargs["allow_same_reviewer_fixer"] is True
 
 
 def test_checkup_review_only_requires_review_loop() -> None:

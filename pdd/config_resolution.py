@@ -18,6 +18,9 @@ _COMPRESSION_KEYS = (
     "compress_examples",
     "compress_test_context",
     "compression_fallback",
+    "test_token_budget",
+    "test_ranking_weights",
+    "test_dedup_threshold",
 )
 
 _CLI_COMPRESSION_OVERRIDE: Optional[Dict[str, Any]] = None
@@ -50,6 +53,9 @@ def _default_compression_config() -> Dict[str, Any]:
         "compress_examples": False,
         "compress_test_context": False,
         "compression_fallback": "full",
+        "test_token_budget": None,
+        "test_ranking_weights": None,
+        "test_dedup_threshold": None,
     }
 
 
@@ -100,6 +106,9 @@ def apply_compression_env(config: Dict[str, Any]) -> None:
         os.environ.pop("PDD_CONTEXT_COMPRESSION", None)
         os.environ.pop("PDD_COMPRESS_EXAMPLES", None)
         os.environ.pop("PDD_COMPRESS_TEST_CONTEXT", None)
+        os.environ.pop("PDD_TEST_TOKEN_BUDGET", None)
+        os.environ.pop("PDD_TEST_RANKING_WEIGHTS", None)
+        os.environ.pop("PDD_TEST_DEDUP_THRESHOLD", None)
     elif "context_compression" in config:
         if config["context_compression"] is None:
             os.environ.pop("PDD_CONTEXT_COMPRESSION", None)
@@ -121,6 +130,18 @@ def apply_compression_env(config: Dict[str, Any]) -> None:
 
     if "compression_fallback" in config and config["compression_fallback"] is not None:
         os.environ["PDD_COMPRESSION_FALLBACK"] = str(config["compression_fallback"])
+
+    test_env_map = {
+        "test_token_budget": "PDD_TEST_TOKEN_BUDGET",
+        "test_ranking_weights": "PDD_TEST_RANKING_WEIGHTS",
+        "test_dedup_threshold": "PDD_TEST_DEDUP_THRESHOLD",
+    }
+    for key, env_key in test_env_map.items():
+        if key in config:
+            if config[key] is None:
+                os.environ.pop(env_key, None)
+            else:
+                os.environ[env_key] = str(config[key])
 
 
 def resolve_effective_config(
@@ -169,6 +190,9 @@ def resolve_effective_config(
         "compress_examples": resolve_value("compress_examples", False),
         "compress_test_context": resolve_value("compress_test_context", False),
         "compression_fallback": resolve_value("compression_fallback", "full"),
+        "test_token_budget": resolve_value("test_token_budget", None),
+        "test_ranking_weights": resolve_value("test_ranking_weights", None),
+        "test_dedup_threshold": resolve_value("test_dedup_threshold", None),
     }
     effective_config = _apply_compression_off_semantics(effective_config)
 

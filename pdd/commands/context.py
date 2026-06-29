@@ -41,27 +41,25 @@ from ..context_audit import (
 from ..core.errors import handle_error
 
 # Glyphs mirror Claude Code's ``/context`` usage box — the view this command is
-# modeled on: ``⛁`` (U+26C1) for a used token cell and ``⛶`` (U+26F6) for free
+# modeled on: a draughts piece for a used token cell and ``⛶`` (U+26F6) for free
 # space. On macOS, Terminal.app's CoreText font fallback (Apple Symbols) renders
-# both as single narrow cells, so the grid stays aligned. Color is the *primary*
-# per-source channel; glyph is a *secondary* one (see ``_SOURCE_GLYPHS`` /
-# ``_row_styles``) that only diverges once the color palette wraps, so a counted
-# source stays uniquely identifiable past the palette size. The cloud-only
-# ``unavailable`` row uses a faint ``▨`` and free space a faint ``⛶``, both
-# legible without color. ``_glyph_for`` picks the glyph for override rows.
+# all of them as single narrow cells, so the grid stays aligned. Color is the
+# *primary* per-source channel, but the glyph is a *parallel* one: every counted
+# source also gets its own glyph (see ``_SOURCE_GLYPHS`` / ``_row_styles``), so the
+# grid keeps per-source attribution even with color off (pipes, CI, ``NO_COLOR``).
+# The cloud-only ``unavailable`` row uses a faint ``▨`` and free space a faint
+# ``⛶``, both legible without color. ``_glyph_for`` picks the glyph for the
+# reserved override rows.
 _USED_GLYPH = "⛁"          # U+26C1 — a used token cell (Claude /context style)
 _UNAVAILABLE_GLYPH = "▨"   # U+25A8 — faint, distinct (requires PDD Cloud)
 _FREE_GLYPH = "⛶"          # U+26F6 — faint, reads as empty space
-# White-draughts variants used as a *second* per-source channel alongside color:
-# the stacked "king" ``⛁`` (U+26C1) then the single "man" ``⛀`` (U+26C0). Both
-# are Neutral-width like ``_USED_GLYPH``, so the grid stays aligned in
-# Terminal.app's Apple Symbols fallback. Color cycles every counted source; the
-# glyph advances only when the ``_SOURCE_CYCLE`` palette wraps (see
-# ``_row_styles``), so a source keeps a unique ``(glyph, color)`` identity well
-# past the four palette hues — and even the no-color render tells the 5th+ source
-# apart by glyph. The first ``len(_SOURCE_CYCLE)`` sources all use ``⛁``, so
-# output is unchanged until the palette wraps.
-_SOURCE_GLYPHS = (_USED_GLYPH, "⛀")  # U+26C1 stacked, U+26C0 single
+# One distinct draughts glyph per palette hue, so a counted source is identified
+# by glyph as well as color. All four are Neutral-width like ``_USED_GLYPH`` and
+# render via Terminal.app's Apple Symbols fallback, so the grid stays aligned.
+# With color off the glyph alone keeps the first ``len(_SOURCE_GLYPHS)`` sources
+# distinct in the grid; like the colors, the glyphs cycle (wrap) when there are
+# more sources than entries, so two sources that share a glyph also share a color.
+_SOURCE_GLYPHS = (_USED_GLYPH, "⛀", "⛃", "⛂")  # U+26C1/26C0/26C3/26C2 draughts
 _BOX_COLS = 27
 _BOX_ROWS = 5
 
@@ -106,13 +104,13 @@ def _row_styles(rows: List[AuditRow]) -> List[Tuple[str, str]]:
 
     A row whose ``status`` has a reserved override takes that color and a
     status glyph (:func:`_glyph_for`: ``⛁``, or ``▨`` for ``unavailable``). Every
-    other (counted) source takes a combined glyph+color identity by its position
-    among counted rows: the color cycles through ``_SOURCE_CYCLE`` every source,
-    and the glyph advances through ``_SOURCE_GLYPHS`` each time the color palette
-    wraps. So distinct sources stay distinct — by color first, then by glyph once
-    the palette is exhausted — and the no-color render still tells wrapped sources
-    apart by glyph. Overrides never consume a cycle slot. Deterministic, given the
-    core's stable row order.
+    other (counted) source takes a parallel glyph+color identity by its position
+    among counted rows: glyph and color each cycle their own table per source, so
+    the first ``len(_SOURCE_GLYPHS)`` distinct sources differ in *both* channels.
+    The glyph alone therefore keeps the grid source-attributed with color off; like
+    the colors, glyphs wrap when there are more sources than entries (two sources
+    sharing a glyph also share a color). Overrides never consume a cycle slot.
+    Deterministic, given the core's stable row order.
     """
     styles: List[Tuple[str, str]] = []
     nth_source = 0
@@ -122,7 +120,7 @@ def _row_styles(rows: List[AuditRow]) -> List[Tuple[str, str]]:
             styles.append((_glyph_for(row.status), override))
         else:
             color = _SOURCE_CYCLE[nth_source % len(_SOURCE_CYCLE)]
-            glyph = _SOURCE_GLYPHS[(nth_source // len(_SOURCE_CYCLE)) % len(_SOURCE_GLYPHS)]
+            glyph = _SOURCE_GLYPHS[nth_source % len(_SOURCE_GLYPHS)]
             styles.append((glyph, color))
             nth_source += 1
     return styles
@@ -175,11 +173,7 @@ def _color_enabled(preference: Optional[bool], stream) -> bool:
 
 
 def _render_usage_box(  # pylint: disable=too-many-locals
-    rows: List[AuditRow],
-    total_tokens: int,
-    context_limit: Optional[int],
-    model: str,
-    percent_used: Optional[float],
+    audit: ContextAudit,
     paint: Optional[Painter] = None,
 ) -> str:
     """Render a Claude-Code ``/context``-style usage box for the attribution.
@@ -192,6 +186,8 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     """
     if paint is None:
         paint = _make_painter(False)
+    rows = audit.rows
+    context_limit = audit.context_limit
     styles = _row_styles(rows)
     lines: List[str] = ["Context Usage", ""]
 
@@ -209,17 +205,17 @@ def _render_usage_box(  # pylint: disable=too-many-locals
             lines.append("  " + " ".join(chunk))
         lines.append("")
 
-    lines.append(f"  {model}")
+    lines.append(f"  {audit.model}")
     if context_limit:
         lines.append(
-            f"  {total_tokens:,}/{context_limit:,} tokens ({percent_used}%)"
+            f"  {audit.total_tokens:,}/{context_limit:,} tokens ({audit.percent_used}%)"
         )
     else:
-        lines.append(f"  {total_tokens:,} tokens  (context limit unknown)")
+        lines.append(f"  {audit.total_tokens:,} tokens  (context limit unknown)")
     lines.append("")
     lines.append("  Estimated usage by category")
 
-    share_basis = context_limit if context_limit else total_tokens
+    share_basis = context_limit if context_limit else audit.total_tokens
     for row, (glyph, color) in zip(rows, styles):
         share = percent(row.tokens, share_basis)
         share_text = f"{share}%" if share is not None else "-"
@@ -230,7 +226,7 @@ def _render_usage_box(  # pylint: disable=too-many-locals
         )
 
     if context_limit:
-        free = max(0, context_limit - total_tokens)
+        free = max(0, context_limit - audit.total_tokens)
         free_pct = percent(free, context_limit)
         free_text = f"{free_pct}%" if free_pct is not None else "-"
         free_marker = paint(_FREE_COLOR, f"{_FREE_GLYPH} Free space")
@@ -239,14 +235,7 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     return "\n".join(lines)
 
 
-def _render_table(
-    rows: List[AuditRow],
-    total_tokens: int,
-    context_limit: Optional[int],
-    model: str,
-    percent_used: Optional[float],
-    paint: Optional[Painter] = None,
-) -> str:
+def _render_table(audit: ContextAudit, paint: Optional[Painter] = None) -> str:
     """Render the per-source token-attribution table (``--table``).
 
     ``paint`` colors only the ``Source`` cell by the row's color; it is applied
@@ -255,18 +244,19 @@ def _render_table(
     """
     if paint is None:
         paint = _make_painter(False)
+    rows = audit.rows
     colors = _row_colors(rows)
-    limit_text = f"{context_limit:,} tokens" if context_limit else "unknown"
-    pct_text = f"{percent_used}%" if percent_used is not None else "unknown%"
+    limit_text = f"{audit.context_limit:,} tokens" if audit.context_limit else "unknown"
+    pct_text = f"{audit.percent_used}%" if audit.percent_used is not None else "unknown%"
     lines = [
-        f"Model: {model}  |  Context limit: {limit_text}",
-        f"Total tokens: {total_tokens:,}  ({pct_text} of context window)",
+        f"Model: {audit.model}  |  Context limit: {limit_text}",
+        f"Total tokens: {audit.total_tokens:,}  ({pct_text} of context window)",
         "",
         f"{'Source':<48}{'Tokens':>10}{'% of total':>14}",
         "-" * 72,
     ]
     for row, color in zip(rows, colors):
-        row_pct = percent(row.tokens, total_tokens)
+        row_pct = percent(row.tokens, audit.total_tokens)
         pct_col = f"{row_pct}%" if row_pct is not None else "-"
         note = f"  (WARN: {row.note})" if row.note else ""
         source_col = paint(color, f"{row.source:<48}")
@@ -375,26 +365,20 @@ def context(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         # does not second-guess us: click strips ANSI on a non-TTY by default,
         # which would drop color from a forced ``--color`` run, and would keep
         # it on a TTY even when we chose to suppress it.
-        use_color = _color_enabled(color, sys.stdout)
+        #
+        # Precedence: this command's own ``--color/--no-color`` wins; otherwise
+        # inherit the global ``pdd --color/--no-color`` preference (ctx.obj);
+        # otherwise auto-detect. This keeps ``pdd --color context …`` consistent
+        # with the rest of the CLI even through a pipe.
+        color_pref = color
+        if color_pref is None and isinstance(ctx.obj, dict):
+            color_pref = ctx.obj.get("color")
+        use_color = _color_enabled(color_pref, sys.stdout)
         paint = _make_painter(use_color)
         if table_output:
-            rendered = _render_table(
-                audit.rows,
-                audit.total_tokens,
-                audit.context_limit,
-                audit.model,
-                audit.percent_used,
-                paint,
-            )
+            rendered = _render_table(audit, paint)
         else:
-            rendered = _render_usage_box(
-                audit.rows,
-                audit.total_tokens,
-                audit.context_limit,
-                audit.model,
-                audit.percent_used,
-                paint,
-            )
+            rendered = _render_usage_box(audit, paint)
         click.echo(rendered, color=use_color)
 
         for warning in audit.warnings:
@@ -409,5 +393,5 @@ def context(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(2)
     except (click.Abort, click.UsageError, click.exceptions.Exit):
         raise
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:  # pragma: no cover - defensive  # pylint: disable=broad-exception-caught
         handle_error(exc, "context", (ctx.obj or {}).get("quiet", False))

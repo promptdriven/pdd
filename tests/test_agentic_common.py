@@ -19,6 +19,11 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    select_harness_for_task,
+    _normalize_token_buckets,
+    _meets_usage_contract,
+    _get_provider_cli_version,
+    _provider_cli_binary_name,
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -29,6 +34,7 @@ from pdd.agentic_common import (
     _classify_permanent_error,
     _detect_claude_interactive_auth_failure,
     _estimate_claude_interactive_session_cost,
+    _extract_anthropic_standard_usage,
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
@@ -43,11 +49,138 @@ from pdd.agentic_common import (
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
     AGENTIC_LOG_DIR,
+    TASK_CLASS_HIGH_ISOLATION,
+    TASK_CLASS_MULTI_FILE,
+    TASK_CLASS_REPO_SCALE,
+    TASK_CLASS_SINGLE_FILE,
 )
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
 # ---------------------------------------------------------------------------
+
+def test_select_harness_for_task_routes_known_task_classes():
+    candidates = ["google", "openai", "opencode", "anthropic"]
+
+    assert select_harness_for_task(TASK_CLASS_SINGLE_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_HIGH_ISOLATION, candidates) == [
+        "opencode",
+        "anthropic",
+        "google",
+        "openai",
+    ]
+
+
+def test_select_harness_for_task_preserves_unmatched_and_unknown_order():
+    candidates = ["openai", "custom", "google"]
+
+    assert select_harness_for_task("future_task_class", candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "custom",
+        "openai",
+        "google",
+    ]
+
+
+def test_run_agentic_task_task_class_reorders_available_candidates(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["opencode", "anthropic", "google", "openai"]
+
+
+def test_run_agentic_task_task_class_none_preserves_candidate_order(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=None,
+        )
+
+    assert not result.success
+    assert attempted == ["google", "openai", "opencode", "anthropic"]
+
+
+def test_run_agentic_task_claude_policy_overrides_task_class(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            claude_policy={"outputFormat": "json"},
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["anthropic"]
 
 def test_z3_pricing_properties():
     """
@@ -212,12 +345,21 @@ def mock_shutil_which():
 
 @pytest.fixture
 def mock_subprocess():
-    with patch('pdd.agentic_common._subprocess_run') as mock:
+    # Issue #1646: the openai provider now routes through
+    # ``_subprocess_run_spooled``. Patch it too, sharing the same mock so a
+    # configured ``return_value`` (a plain CompletedProcess-like MagicMock)
+    # flows through and ``_run_with_provider`` takes the in-RAM branch
+    # (result_is_spooled is False).
+    with patch('pdd.agentic_common._subprocess_run') as mock, \
+         patch('pdd.agentic_common._subprocess_run_spooled') as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
 def mock_subprocess_run():
-    with patch("pdd.agentic_common._subprocess_run") as mock:
+    with patch("pdd.agentic_common._subprocess_run") as mock, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
@@ -1513,6 +1655,533 @@ def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_comma
     assert cmd[cmd.index("--output-format") + 1] == "json"
 
 
+def test_standard_claude_policy_json_usage_reaches_provider_and_agentic_result(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage.txt"
+    prompt_path.write_text("Audit billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    expected_usage = {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 1200,
+                "output_tokens": 340,
+                "cached_input_tokens": 56,
+                "cache_creation_input_tokens": 78,
+            }
+        ]
+    }
+    claude_stdout = {
+        "result": "Structured billing usage returned for GVS noninteractive Claude bridge.",
+        "usage": {
+            "input_tokens": 1200,
+            "output_tokens": 340,
+            "cache_read_input_tokens": 56,
+            "cache_creation_input_tokens": 78,
+        },
+        "modelUsage": {model: {}},
+    }
+    policy = {
+        "allowedTools": "Read,Glob",
+        "addDirs": [],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(claude_stdout)
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy=policy,
+    )
+    success, output, cost, actual_model = provider_result
+
+    assert (success, output, actual_model) == (
+        True,
+        claude_stdout["result"],
+        model,
+    )
+    assert cost > 0.0
+    assert provider_result[4] == expected_usage
+    json.dumps(provider_result[4])
+
+    result = run_agentic_task(
+        "Audit billing usage",
+        mock_cwd,
+        claude_policy=policy,
+    )
+    unpacked_success, unpacked_output, unpacked_cost, provider = result
+
+    assert (unpacked_success, unpacked_output, provider) == (
+        True,
+        claude_stdout["result"],
+        "anthropic",
+    )
+    assert unpacked_cost > 0.0
+    assert result.usage == expected_usage
+    assert result[4] == expected_usage
+    json.dumps(result.usage)
+
+
+def test_standard_claude_policy_json_usage_preserves_model_usage_records(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_multi.txt"
+    prompt_path.write_text("Audit multi-model billing usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a mixed-model Claude run.",
+        "usage": {
+            "input_tokens": 9999,
+            "output_tokens": 8888,
+            "cache_read_input_tokens": 777,
+            "cache_creation_input_tokens": 666,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 120,
+                "outputTokens": 34,
+                "cacheReadInputTokens": 5,
+                "cacheCreationInputTokens": 6,
+                "costUSD": 0.001,
+            },
+            model_opus: {
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cache_read_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+                "costUSD": 0.02,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model_haiku,
+                "input_tokens": 120,
+                "output_tokens": 34,
+                "cached_input_tokens": 5,
+                "cache_creation_input_tokens": 6,
+            },
+            {
+                "model": model_opus,
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cached_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+            },
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_merges_issue686_partial_model_usage_cache_counters(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_issue686.txt"
+    prompt_path.write_text("Audit partial modelUsage billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 50000,
+                "outputTokens": 5000,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_prefers_complete_aggregate_for_inconsistent_single_model_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_inconsistent_cache.txt"
+    prompt_path.write_text("Audit inconsistent partial modelUsage cache", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for inconsistent cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 0,
+                "outputTokens": 5,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_accepts_aggregate_cache_larger_than_input():
+    """Aggregate Claude usage buckets can legitimately exceed fresh input tokens."""
+    data = {
+        "result": "ok",
+        "model": "claude-opus-4-8",
+        "usage": {
+            "input_tokens": 2225,
+            "output_tokens": 140,
+            "cache_read_input_tokens": 24991,
+            "cache_creation_input_tokens": 27351,
+        },
+    }
+
+    usage = _extract_anthropic_standard_usage(data, actual_model=None)
+
+    assert usage == {
+        "claude": [
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 2225,
+                "output_tokens": 140,
+                "cached_input_tokens": 24991,
+                "cache_creation_input_tokens": 27351,
+            },
+        ],
+    }
+    assert _calculate_anthropic_cost(data) == pytest.approx(0.59419275)
+
+
+def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model_only.txt"
+    prompt_path.write_text("Audit modelUsage-only billing usage", encoding="utf-8")
+    model = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned with per-model counters only.",
+        "modelUsage": {
+            model: {
+                "inputTokens": 2000,
+                "outputTokens": 300,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected_cost = (
+        (2000 / 1_000_000) * pricing.input_per_million
+        + (300 / 1_000_000) * pricing.output_per_million
+    )
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 2000,
+                "output_tokens": 300,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        ],
+    }
+    assert provider_result[2] == pytest.approx(expected_cost)
+
+
+def test_standard_claude_policy_json_usage_rejects_ambiguous_multi_model_partial_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_ambiguous_cache.txt"
+    prompt_path.write_text("Audit ambiguous multi-model cache usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for ambiguous cached model routing.",
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            model_opus: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-sonnet-4-6-20251201"},
+        {"message": {"model": "claude-sonnet-4-6-20251201"}},
+    ],
+)
+def test_standard_claude_policy_json_usage_infers_model_without_model_usage(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    model_fields,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model.txt"
+    prompt_path.write_text("Audit aggregate billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned without modelUsage.",
+        "usage": {
+            "inputTokens": 123,
+            "outputTokens": 45,
+        },
+        **model_fields,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] == model
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 123,
+                "output_tokens": 45,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_rejects_requested_model_fallback(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_no_model.txt"
+    prompt_path.write_text("Audit aggregate usage with no observed model", encoding="utf-8")
+    mock_env["CLAUDE_MODEL"] = "claude-sonnet-requested-only"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned aggregate usage without an observed model.",
+        "usage": {
+            "input_tokens": 123,
+            "output_tokens": 45,
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] is None
+    assert provider_result[4] is None
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"output_tokens": 45},
+        {"input_tokens": "not-a-token-count", "output_tokens": 45},
+        {"input_tokens": 123, "output_tokens": -1},
+    ],
+)
+def test_standard_claude_policy_json_usage_rejects_invalid_required_counters(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    usage,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_invalid.txt"
+    prompt_path.write_text("Audit invalid billing usage", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned usage with invalid required counters.",
+        "modelUsage": {"claude-sonnet-4-6-20251201": {}},
+        "usage": usage,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
+def test_standard_claude_policy_json_usage_ignores_non_object_json(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_array.txt"
+    prompt_path.write_text("Audit non-object Claude JSON", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps([])
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[0] is False
+    assert "Error parsing anthropic JSON" in provider_result[1]
+    assert provider_result[4] is None
+
+
 def test_anthropic_claude_policy_null_allowed_tools_uses_no_tools(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
@@ -2109,7 +2778,170 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
         "provider": "anthropic",
         "usage": usage,
         "changed_files": ["src/app.py"],
+        "usage_source": "unavailable",
+        "estimate_method": "unavailable",
+        "cli_version": "",
+        "model_id": None,
+        "cumulative_cost_usd": 0.123,
+        "usage_comparable": False,
+        "token_buckets": {
+            "input_tokens": 21,
+            "output_tokens": 15,
+            "cache_read_tokens": 7,
+            "cache_write_tokens": 11,
+            "reasoning_tokens": 0,
+        },
     }
+
+
+# ---------------------------------------------------------------------------
+# Issue #1593: cross-CLI cost and usage instrumentation
+# ---------------------------------------------------------------------------
+
+
+def test_agentic_task_result_instrumentation_defaults_are_unavailable():
+    """Un-instrumented results default to the 'unavailable' contract values so
+    they are excluded from E[pass]-lambda*cost routing comparisons (#1593)."""
+    result = AgenticTaskResult(True, "ok", 0.5, "anthropic", None)
+    assert result.usage_source == "unavailable"
+    assert result.estimate_method == "unavailable"
+    assert result.cli_version == ""
+    assert result.model_id is None
+    # cost > 0 but usage_source unavailable => NOT comparable.
+    assert result.meets_usage_contract() is False
+    assert _meets_usage_contract(result) is False
+
+
+def test_meets_usage_contract_gate():
+    """_meets_usage_contract requires a known usage_source AND positive cost."""
+    comparable = AgenticTaskResult(
+        True, "ok", 0.4, "openai", None,
+        usage_source="pricing_table_estimate",
+        estimate_method="token_delta_x_pricing_csv",
+    )
+    assert _meets_usage_contract(comparable) is True
+
+    # Known source but zero cost is not comparable.
+    zero_cost = AgenticTaskResult(
+        True, "ok", 0.0, "openai", None, usage_source="provider_reported"
+    )
+    assert _meets_usage_contract(zero_cost) is False
+
+    # Positive cost but unavailable source is not comparable.
+    no_source = AgenticTaskResult(True, "ok", 0.9, "google", None)
+    assert _meets_usage_contract(no_source) is False
+
+
+def test_normalize_token_buckets_per_provider():
+    assert _normalize_token_buckets("anthropic", "not-a-dict") == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    # Anthropic raw envelope field names.
+    anthropic_raw = {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+    }
+    assert _normalize_token_buckets("anthropic", anthropic_raw) == {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 2,
+        "reasoning_tokens": 0,
+    }
+    # OpenAI nested total_token_usage.
+    openai_usage = {
+        "total_token_usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 20,
+            "reasoning_tokens": 9,
+        }
+    }
+    assert _normalize_token_buckets("openai", openai_usage) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_tokens": 20,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 9,
+    }
+    # Google nested tokens.
+    google_usage = {"tokens": {"prompt": 7, "candidates": 8, "cached": 1, "thoughts": 2}}
+    assert _normalize_token_buckets("google", google_usage) == {
+        "input_tokens": 7,
+        "output_tokens": 8,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 2,
+    }
+    # OpenCode nested cache read/write.
+    opencode_usage = {"input": 5, "output": 6, "cache": {"read": 3, "write": 4}}
+    assert _normalize_token_buckets("opencode", opencode_usage) == {
+        "input_tokens": 5,
+        "output_tokens": 6,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 4,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_normalize_token_buckets_handles_wrapped_claude_usage():
+    """AgenticTaskResult.usage wraps Claude rows as {'claude': [...]}; the
+    normalizer must collapse and sum that shape."""
+    wrapped = {
+        "claude": [
+            {"model": "m", "input_tokens": 21, "output_tokens": 15,
+             "cached_input_tokens": 7, "cache_creation_input_tokens": 11},
+            {"model": "m", "input_tokens": 4, "output_tokens": 1,
+             "cached_input_tokens": 0, "cache_creation_input_tokens": 0},
+        ]
+    }
+    assert _normalize_token_buckets("anthropic", wrapped) == {
+        "input_tokens": 25,
+        "output_tokens": 16,
+        "cache_read_tokens": 7,
+        "cache_write_tokens": 11,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_get_provider_cli_version_probes_binary(monkeypatch):
+    """cli_version is read from the resolved binary's --version, cached, and
+    falls back to '' when the CLI is missing (#1593)."""
+    import pdd.agentic_common as ac
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: "/usr/bin/codex")
+
+    calls = {"n": 0}
+
+    def _fake_run(cmd, *args, **kwargs):
+        calls["n"] += 1
+        assert cmd == ["/usr/bin/codex", "--version"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="codex 1.2.3\n", stderr="")
+
+    monkeypatch.setattr(ac.subprocess, "run", _fake_run)
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    # Cached: a second call does not re-probe.
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    assert calls["n"] == 1
+
+    # Missing binary => empty version, no crash.
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: None)
+    assert _get_provider_cli_version("opencode") == ""
+
+
+def test_provider_cli_binary_name_mapping():
+    assert _provider_cli_binary_name("anthropic") == "claude"
+    assert _provider_cli_binary_name("openai") == "codex"
+    assert _provider_cli_binary_name("opencode") == "opencode"
+    assert _provider_cli_binary_name("unknown") is None
 
 
 def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
@@ -2144,6 +2976,248 @@ def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
     assert result[4] == usage
     assert result.usage == usage
     json.dumps(result[4])
+
+
+def test_run_agentic_task_routing_policy_selects_initial_config(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL")))
+        return (True, "done", 0.25, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", calls[0][1], "tier-2-model")]
+    assert calls[0][1]["reasoning_time"] == 0.5
+    assert os.environ.get("CLAUDE_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["model_tier"] == 2
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL"), os.environ.get("GEMINI_MODEL")))
+        return (True, "done via fallback", 0.25, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.provider == "google"
+    assert calls == [("google", calls[0][1], None, None)]
+    assert calls[0][1]["reasoning_time"] is None
+    assert os.environ.get("CLAUDE_MODEL") is None
+    assert os.environ.get("GEMINI_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["harness"] == "anthropic"
+    assert payload["fallback_reason"] == "selected_harness_unavailable:anthropic"
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_unknown_task_class_falls_back_without_env_mutation(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("CLAUDE_MODEL", "preexisting-model")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["anthropic"])
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, os.environ.get("CLAUDE_MODEL"), kwargs))
+        return (True, "done", 0.1, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Do the work",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="unknown-task-class",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", "preexisting-model", calls[0][2])]
+    assert calls[0][2]["reasoning_time"] is None
+    assert os.environ["CLAUDE_MODEL"] == "preexisting-model"
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "default"
+    assert payload["selected_config"] is None
+    assert payload["fallback_reason"] == "no_policy_row"
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_escalates_after_failure(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "fixed on escalation"
+    assert providers == ["anthropic", "google"]
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+    assert [row["verifier_result"] for row in records] == ["fail", "pass"]
+    assert records[1]["escalation_step"] == 1
+    assert records[1]["selected_config"]["harness"] == "google"
+
+
+def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_back(
+    mock_cwd,
+    monkeypatch,
+):
+    """Issue #1431: feasibility-aware routing escalation.
+
+    The default ``bug-fix`` ladder escalates the harness to ``google``. When
+    google is not installed/authed but anthropic and openai are, the escalated
+    google configs must be skipped (recorded with an explicit fallback reason,
+    not as failed provider attempts) and routing must fall back to the
+    available openai provider instead of laddering through unavailable google
+    configs and failing with "No agent providers are available".
+    """
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.delenv("PDD_AGENTIC_PROVIDER", raising=False)
+    # anthropic + openai available; google unavailable.
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["anthropic", "openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model"
+    )
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        if provider == "openai":
+            return (True, "fixed by openai fallback", 0.2, "openai-model", None)
+        raise AssertionError(f"infeasible provider must not be invoked: {provider}")
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    # OpenAI is reached and succeeds; the unavailable google harness is never run.
+    assert result.success is True
+    assert result.output_text == "fixed by openai fallback"
+    assert result.provider == "openai"
+    assert "google" not in providers
+    assert providers == ["anthropic", "openai"]
+
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+
+    # Skipped infeasible google configs are recorded with an explicit fallback
+    # reason rather than as failed provider attempts.
+    infeasible = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith("infeasible_harness_unavailable:")
+    ]
+    assert infeasible, "expected at least one infeasible-harness skip record"
+    assert all(
+        row["fallback_reason"] == "infeasible_harness_unavailable:google"
+        for row in infeasible
+    )
+
+    # The fallback to the feasible provider is recorded once and passes.
+    fallback = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith(
+            "cascade_fallback_to_feasible_provider:"
+        )
+    ]
+    assert len(fallback) == 1
+    assert "openai" in fallback[0]["fallback_reason"]
+    assert fallback[0]["verifier_result"] == "pass"
 
 
 # ---------------------------------------------------------------------------
@@ -3545,12 +4619,13 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     """Test that cache_creation tokens are NOT double-counted.
 
     Bug #686: cache_creation tokens were charged at both the regular input
-    rate (1.0x) AND the cache write rate (1.25x), totaling 2.25x instead
-    of just 1.25x. The fix subtracts cache_creation from new_input.
+    rate (1.0x) AND the cache write rate (1.25x). Anthropic usage reports
+    input_tokens as the fresh input bucket, so cache_creation is added only
+    at the cache write rate.
     """
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 200,
             "output_tokens": 200,
             "cache_read_input_tokens": 500,
             "cache_creation_input_tokens": 300,
@@ -3559,10 +4634,8 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 500 (cache_read) - 300 (cache_creation) = 200
-    new_input = 200
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (200 / 1e6) * pricing.input_per_million
         + (500 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (200 / 1e6) * pricing.output_per_million
@@ -3594,7 +4667,7 @@ def test_anthropic_cost_cache_read_only():
     """Test cost calculation with cache_read but no cache_creation."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 400,
             "output_tokens": 200,
             "cache_read_input_tokens": 600,
         }
@@ -3634,7 +4707,7 @@ def test_anthropic_cost_opus_pricing():
             "claude-opus-4-20250514": {}  # No costUSD → falls through to token math
         },
         "usage": {
-            "input_tokens": 2000,
+            "input_tokens": 800,
             "output_tokens": 500,
             "cache_read_input_tokens": 800,
             "cache_creation_input_tokens": 400,
@@ -3643,10 +4716,8 @@ def test_anthropic_cost_opus_pricing():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
-    # new_input should be 2000 - 800 - 400 = 800
-    new_input = 800
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (800 / 1e6) * pricing.input_per_million
         + (800 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (400 / 1e6) * pricing.input_per_million * 1.25
         + (500 / 1e6) * pricing.output_per_million
@@ -3660,7 +4731,7 @@ def test_anthropic_cost_all_tokens_cached():
     """Test edge case where all input tokens are cached (read + creation = total)."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 0,
             "output_tokens": 100,
             "cache_read_input_tokens": 700,
             "cache_creation_input_tokens": 300,
@@ -3669,9 +4740,8 @@ def test_anthropic_cost_all_tokens_cached():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 700 - 300 = 0
     expected = (
-        0  # no regular input cost
+        0  # no fresh input cost
         + (700 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (100 / 1e6) * pricing.output_per_million
@@ -6390,6 +7460,111 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "owner/repo" in cmd
 
 
+def test_post_step_comment_recoverable_mode_posts_degraded_detail(tmp_path):
+    """Recoverable fallback comments must read as degraded, not fatal."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output="All agent providers failed: strategy timed out",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+            failure_detail="Test strategy failed; using fallback/default planning.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** DEGRADED - workflow continuing" in body
+        assert "FAILED - workflow aborting" not in body
+        assert "Test strategy failed; using fallback/default planning." in body
+
+
+def test_post_step_comment_fatal_mode_posts_aborting_detail(tmp_path):
+    """Fatal fallback comments must make the workflow abort explicit."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=12,
+            description="Triage",
+            output="All agent providers failed: third consecutive failure",
+            cwd=tmp_path,
+            failure_mode="fatal",
+            failure_detail="Stopping after 3 consecutive provider failures.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED - workflow aborting" in body
+        assert "Stopping after 3 consecutive provider failures." in body
+
+
+@pytest.mark.parametrize("failure_mode", [None, "unexpected"])
+def test_post_step_comment_unknown_mode_keeps_legacy_failed_body(tmp_path, failure_mode):
+    """Missing or unknown modes keep the legacy fallback wording."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=4,
+            total_steps=12,
+            description="Research",
+            output="Provider unavailable",
+            cwd=tmp_path,
+            failure_mode=failure_mode,
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED\n" in body
+        assert "workflow continuing" not in body
+        assert "workflow aborting" not in body
+        assert "Automated fallback comment - agent did not execute" in body
+
+
+def test_post_step_comment_fallback_modes_redact_and_truncate(tmp_path):
+    """New fallback modes use the same redaction/truncation path as legacy comments."""
+    secret = "ghp_" + "A" * 36
+    long_tail_marker = "x" * 1500
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output=f"Provider failed {secret} {long_tail_marker}",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert secret not in body
+        assert "[REDACTED_GITHUB_TOKEN]" in body
+        assert "[truncated]" in body
+
+
 def test_post_step_comment_skips_github_when_disabled(tmp_path):
     """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
     with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
@@ -6772,7 +7947,10 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -6804,7 +7982,11 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
         clear=False,
     ), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai now routes through the spooled runner; share the
+        # mock so the configured CompletedProcess flows through the in-RAM path.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({
@@ -6856,7 +8038,10 @@ def test_codex_nonzero_prefers_jsonl_stdout_error_over_stdin_notice(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -6892,7 +8077,10 @@ def test_codex_nonzero_prefers_terminal_failure_over_intermediate_error(tmp_path
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -6927,7 +8115,10 @@ def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -6964,7 +8155,10 @@ def test_issue557_session_end_usage_for_cost(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7006,7 +8200,10 @@ def test_issue557_single_line_json_no_ndjson(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=single_json,
@@ -7115,7 +8312,10 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):  # Skip retry delays
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7166,7 +8366,10 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7363,11 +8566,31 @@ def test_anthropic_cost_from_model_usage_costUSD():
     assert cost == pytest.approx(0.030)
 
 
+def test_anthropic_cost_hybrid_model_usage_costusd_and_tokens():
+    """costUSD on one model should not hide token-priced sibling usage."""
+    data = {
+        "modelUsage": {
+            "claude-opus-4-20250514": {
+                "costUSD": 0.001,
+            },
+            "claude-haiku-3-5-20241022": {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+
+    cost = _calculate_anthropic_cost(data)
+
+    assert cost == pytest.approx(0.0034)
+
+
 def test_anthropic_cost_token_based_fallback():
     """Token-based estimation when no costUSD or total_cost_usd."""
     data = {
         "usage": {
-            "input_tokens": 5000,
+            "input_tokens": 2500,
             "output_tokens": 1000,
             "cache_read_input_tokens": 2000,
             "cache_creation_input_tokens": 500,
@@ -7377,13 +8600,85 @@ def test_anthropic_cost_token_based_fallback():
     }
     cost = _calculate_anthropic_cost(data)
     # Sonnet pricing: $3/M input, $15/M output, cache read 10%, cache write 1.25x input
-    # new_input = 5000 - 2000 - 500 = 2500 (subtract both cache_read and cache_creation)
     # input_cost = 2500/1M * 3 = 0.0075
     # cache_read_cost = 2000/1M * 3 * 0.1 = 0.0006
     # cache_write_cost = 500/1M * 3 * 1.25 = 0.001875
     # output_cost = 1000/1M * 15 = 0.015
     expected = 0.0075 + 0.0006 + 0.001875 + 0.015
     assert cost == pytest.approx(expected, abs=1e-6)
+
+
+def test_anthropic_cost_token_based_fallback_accepts_camel_case_usage():
+    """Token-based estimation should match structured usage aliases."""
+    data = {
+        "usage": {
+            "inputTokens": 2500,
+            "outputTokens": 1000,
+            "cacheReadInputTokens": 2000,
+            "cacheCreationInputTokens": 500,
+        },
+        "modelUsage": {"claude-sonnet-4-20250514": {}},
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    expected = 0.0075 + 0.0006 + 0.001875 + 0.015
+    assert cost == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-opus-4-20250514"},
+        {"message": {"model": "claude-opus-4-20250514"}},
+    ],
+)
+def test_anthropic_cost_aggregate_usage_uses_observed_opus_model(model_fields):
+    """Aggregate usage without modelUsage should price by the observed model."""
+    data = {
+        "usage": {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+        "result": "Done",
+        **model_fields,
+    }
+    cost = _calculate_anthropic_cost(data)
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected = pricing.input_per_million + pricing.output_per_million
+    assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_prefers_mixed_model_usage_counters_over_aggregate_usage():
+    """Mixed per-model counters should not be priced as one aggregate model."""
+    opus_model = "claude-opus-4-20250514"
+    haiku_model = "claude-haiku-3-5-20241022"
+    data = {
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+        },
+        "modelUsage": {
+            opus_model: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            haiku_model: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    opus = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    haiku = ANTHROPIC_PRICING_BY_FAMILY["haiku"]
+    expected = (
+        (1000 / 1_000_000) * opus.input_per_million
+        + (100 / 1_000_000) * opus.output_per_million
+        + (2000 / 1_000_000) * haiku.input_per_million
+        + (200 / 1_000_000) * haiku.output_per_million
+    )
+    assert cost == pytest.approx(expected)
 
 
 def test_anthropic_cost_opus_model_detection():
@@ -8609,6 +9904,28 @@ class TestProviderLimitMarker:
             assert reset_at == "2026-06-11T22:30:00Z", text
             assert source == "estimated", text
 
+    def test_parse_reset_legacy_iana_alias_survives_missing_zoneinfo_link(self, monkeypatch):
+        """Some runtimes omit legacy IANA links such as ``US/Pacific`` even
+        though canonical zones are available."""
+        from zoneinfo import ZoneInfoNotFoundError
+
+        from pdd import agentic_common
+
+        real_zone_info = agentic_common.ZoneInfo
+
+        def zone_info_without_legacy_links(name):
+            if name == "US/Pacific":
+                raise ZoneInfoNotFoundError(f"No time zone found with key {name}")
+            return real_zone_info(name)
+
+        monkeypatch.setattr(agentic_common, "ZoneInfo", zone_info_without_legacy_links)
+
+        reset_at, source = agentic_common._parse_reset_at(
+            "resets 3:30pm US/Pacific", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "estimated"
+
     def test_parse_reset_bare_iana_capture_does_not_eat_prose(self):
         """The IANA capture is anchored on the closed set of IANA area prefixes,
         so a slash-containing prose token ("and/or") is NOT mistaken for a zone
@@ -9242,12 +10559,10 @@ def test_codex_effort_env_is_case_and_whitespace_tolerant(
     assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
-def test_claude_always_prints_effort_notice_when_not_quiet(
+def test_claude_injects_effort_flag_when_not_quiet(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
 ):
-    """Silent-failure guard: dropping the user's reasoning request with no
-    feedback generates support tickets. The notice fires regardless of
-    --verbose, gated only by --quiet."""
+    """Claude Code supports --effort; PDD should apply the requested effort."""
     from pdd.agentic_common import _run_with_provider
 
     mock_shutil_which.return_value = "/bin/claude"
@@ -9265,8 +10580,11 @@ def test_claude_always_prints_effort_notice_when_not_quiet(
         os.environ.pop("PDD_REASONING_EFFORT", None)
 
     captured = capsys.readouterr()
-    assert "PDD_REASONING_EFFORT=high" in captured.out
-    assert "Claude Code CLI" in captured.out
+    assert "PDD_REASONING_EFFORT=high" not in captured.out
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "high"
 
 
 def test_claude_suppresses_effort_notice_when_quiet(
@@ -9291,6 +10609,57 @@ def test_claude_suppresses_effort_notice_when_quiet(
 
     captured = capsys.readouterr()
     assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+def test_claude_interactive_injects_effort_env(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Interactive bridge cannot receive argv flags, so effort is passed via env."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["PDD_REASONING_EFFORT"] = "medium"
+    try:
+        with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+            bridge.return_value = (True, "ok", 0.0, None)
+            _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_CLAUDE_CODE_MODE", None)
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    _, kwargs = bridge.call_args
+    assert kwargs["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+
+
+def test_opencode_warns_when_effort_requested_without_variant(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """OpenCode has no generic effort flag; users should get the variant hint."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/opencode"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"type": "message", "text": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    os.environ["OPENCODE_MODEL"] = "openai/gpt-5"
+    os.environ.pop("OPENCODE_VARIANT", None)
+    try:
+        _run_with_provider("opencode", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+        os.environ.pop("OPENCODE_MODEL", None)
+
+    captured = capsys.readouterr()
+    assert "OPENCODE_VARIANT" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -11525,3 +12894,385 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1646: Codex JSONL output is spooled to disk so the parent process
+# never holds the full NDJSON transcript in RAM (3-4x decoded-str copies that
+# could SIGKILL the parent on large runs). These tests drive a real
+# fake-codex script through the OpenAI provider path.
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+
+def _write_fake_codex(
+    tmp_path: Path,
+    *,
+    body_lines: str,
+    exit_code: int = 0,
+    consume_stdin: bool = True,
+) -> Path:
+    """Write an executable fake `codex` CLI that emits NDJSON on stdout.
+
+    ``body_lines`` is python source (run with locals available) that prints the
+    NDJSON event lines. The script optionally drains stdin first so the prompt
+    body the provider pipes in does not cause a broken pipe.
+    """
+    drain = "import sys; _ = sys.stdin.read()\n" if consume_stdin else ""
+    script = "#!/usr/bin/env python3\n" + drain + textwrap.dedent(body_lines)
+    if exit_code:
+        script += f"\nimport sys as _sys; _sys.exit({exit_code})\n"
+    fake = tmp_path / "fake_codex.py"
+    fake.write_text(script)
+    fake.chmod(0o755)
+    return fake
+
+
+def _prompt_file(tmp_path: Path) -> Path:
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the work described here.")
+    return prompt
+
+
+def test_openai_codex_jsonl_spooled_parses_large_transcript(tmp_path, mock_env):
+    """A long Codex NDJSON transcript is parsed correctly via the spooled path.
+
+    Also proves the spooled path (not the in-RAM ``_subprocess_run``) is used:
+    we patch ``_subprocess_run`` to blow up if the openai branch ever calls it.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # K large tool_output events, then the real agent_message + usage.
+        big = "x" * 4096
+        for i in range(2000):
+            print(json.dumps({"type": "item.completed",
+                              "item": {"type": "tool_output", "text": big}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Final answer."}}))
+        print(json.dumps({"type": "turn.completed",
+                          "model": "gpt-5",
+                          "usage": {"input_tokens": 1000000,
+                                    "output_tokens": 1000000,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+
+    prompt = _prompt_file(tmp_path)
+    with patch(
+        "pdd.agentic_common._subprocess_run",
+        side_effect=AssertionError(
+            "openai provider must use the spooled subprocess path, not _subprocess_run"
+        ),
+    ):
+        success, text, cost, actual_model = _run_with_provider(
+            "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+        )
+
+    assert success is True, text
+    assert text == "Final answer."
+    assert actual_model == "gpt-5"
+    # 1M input + 1M output at $1.50/$6.00 per M -> 7.50
+    assert abs(cost - 7.50) < 0.0001
+
+
+def test_openai_codex_spooled_error_extracted(tmp_path, mock_env):
+    """A terminal turn.failed event on a nonzero exit surfaces its message."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        print(json.dumps({"type": "turn.failed",
+                          "error": {"message": "boom"}}))
+        ''',
+        exit_code=1,
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert "boom" in text
+
+
+def test_openai_codex_spooled_blank_stdout(tmp_path, mock_env):
+    """Exit 0 with empty stdout is handled (no crash, returns failure/empty)."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        pass
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, _text, cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert cost == 0.0
+
+
+def test_openai_codex_spooled_skips_oversize_line(tmp_path, mock_env):
+    """A single >16 MiB NDJSON line is skipped without decode; real events parse.
+
+    Issue #1646 FIX 2: a pathological multi-MB tool_output line must not be
+    decoded/json.loads'd (heap spike). The oversize line is dropped by
+    ``_iter_spooled_lines`` while the (tiny) agent_message + turn.completed that
+    follow it are still parsed normally.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # One oversize tool_output event (>16 MiB) the parser must skip.
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "tool_output", "text": "x" * (17 * 1024 * 1024)}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Done."}}))
+        print(json.dumps({"type": "turn.completed", "model": "gpt-5",
+                          "usage": {"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, actual_model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is True, text
+    assert text == "Done."
+    assert actual_model == "gpt-5"
+
+
+def test_iter_spooled_lines_drops_oversize_and_resumes():
+    """Issue #1646 (FM2): a line larger than the cap is drained and dropped
+    WITHOUT being decoded, and iteration resumes at the next line. The blob here
+    deliberately contains the words ``error``/``failed`` — size, not content,
+    decides, so a huge tool-output log can no longer force a full decode.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    before = b'{"type":"item.completed","item":{"type":"agent_message","text":"first"}}\n'
+    blob = b'{"type":"tool_output","text":"error failed ' + b"x" * (cap + 4096) + b'"}\n'
+    after = b'{"type":"turn.completed","model":"gpt-5","usage":{}}\n'
+
+    out = list(_iter_spooled_lines(io.BytesIO(before + blob + after)))
+
+    assert out == [before.decode("utf-8"), after.decode("utf-8")]
+    assert all("tool_output" not in line for line in out)  # oversize blob dropped
+
+
+def test_iter_spooled_lines_bounds_per_line_read():
+    """Issue #1646 (FM1): the reader never pulls more than the cap into memory in
+    a single read, even for one line several times the cap — so a pathological
+    multi-MB NDJSON line cannot cause an unbounded parent allocation.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+
+    class _TrackingBytesIO(io.BytesIO):
+        def __init__(self, data):
+            super().__init__(data)
+            self.max_read = 0
+
+        def readline(self, size=-1):
+            data = super().readline(size)
+            self.max_read = max(self.max_read, len(data))
+            return data
+
+    huge = b'{"type":"tool_output","text":"' + b"x" * (cap + (1 << 20)) + b'"}\n'
+    real = b'{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+
+    spool = _TrackingBytesIO(huge + real)
+    out = list(_iter_spooled_lines(spool))
+
+    assert out == [real.decode("utf-8")]     # huge line dropped, real one kept
+    assert spool.max_read <= cap             # never read more than the cap at once
+
+
+def test_iter_spooled_lines_keeps_oversize_retained_event():
+    """Issue #1646 (review): an oversize line whose event TYPE is one a consumer
+    retains (here a pathologically large agent_message) is read in full and
+    yielded — never silently dropped — so the actual answer can't be lost. A
+    same-size tool-output blob (different type) is still dropped.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    big_answer = "A" * (cap + 4096)
+    retained = (
+        '{"type":"item.completed","item":{"type":"agent_message","text":"'
+        + big_answer + '"}}\n'
+    ).encode()
+    blob = (
+        '{"type":"item.completed","item":{"type":"tool_output","text":"'
+        + ("x" * (cap + 4096)) + '"}}\n'
+    ).encode()
+
+    out = list(_iter_spooled_lines(io.BytesIO(retained + blob)))
+
+    assert len(out) == 1                 # retained kept, blob dropped
+    assert '"type":"agent_message"' in out[0]
+    assert big_answer in out[0]          # full payload preserved, not truncated
+
+
+def test_iter_spooled_lines_drops_retained_event_over_ceiling(monkeypatch):
+    """Issue #1646 (review): even a retained-type line is bounded — one beyond
+    the hard ceiling is dropped (not buffered without limit), and iteration
+    resumes at the next line.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_MAX_JSONL_LINE_BYTES", 1024)
+    monkeypatch.setattr(ac, "_AGENT_MAX_RETAINED_LINE_BYTES", 4096)
+
+    over_ceiling = (
+        '{"type":"agent_message","text":"' + ("A" * 8192) + '"}\n'
+    ).encode()
+    after = b'{"type":"turn.completed","model":"gpt-5"}\n'
+
+    out = list(ac._iter_spooled_lines(io.BytesIO(over_ceiling + after)))
+
+    assert out == [after.decode("utf-8")]   # over-ceiling retained line dropped
+
+
+def test_agent_spool_dir_unset_returns_none(monkeypatch):
+    """Issue #1646: unset env var -> system default temp (None), no warning."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.delenv("PDD_AGENT_SPOOL_DIR", raising=False)
+    assert ac._agent_spool_dir() is None
+
+
+def test_agent_spool_dir_returns_writable_path(monkeypatch, tmp_path):
+    """Issue #1646: a set, writable directory is used as the spool dir."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path))
+    assert ac._agent_spool_dir() == str(tmp_path)
+
+
+def test_agent_spool_dir_warns_once_on_unusable_path(monkeypatch, capsys, tmp_path):
+    """Issue #1646: a set-but-unusable path warns (once) instead of silently
+    falling back, so operators know disk spooling isn't actually active.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_SPOOL_DIR_WARNED", False)
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path / "nope"))
+
+    assert ac._agent_spool_dir() is None
+    first = capsys.readouterr().out
+    assert "PDD_AGENT_SPOOL_DIR" in first
+
+    # Second call stays silent (one-shot).
+    assert ac._agent_spool_dir() is None
+    assert "PDD_AGENT_SPOOL_DIR" not in capsys.readouterr().out
+
+
+# Driver that runs _run_with_provider against a fake codex in a FRESH
+# interpreter and reports peak RSS. Running in its own process keeps the
+# measurement free of pytest's heap. argv: repo_root, fake_cli, prompt, cwd.
+_RSS_DRIVER = r"""
+import json
+import os
+import resource
+import sys
+from pathlib import Path
+
+repo, fake, prompt, cwd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, repo)
+
+# Keep env minimal/deterministic (no provider creds leaking in).
+for k in list(os.environ):
+    if "TOKEN" in k or "API_KEY" in k:
+        os.environ.pop(k, None)
+
+from pdd.agentic_common import _run_with_provider
+
+success, text, cost, model = _run_with_provider(
+    "openai", Path(prompt), Path(cwd), quiet=True, cli_path=fake
+)
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+# darwin reports ru_maxrss in bytes, linux in kilobytes.
+peak_bytes = peak if sys.platform == "darwin" else peak * 1024
+print(json.dumps({"success": success, "text": text[:64],
+                  "cost": cost, "peak_bytes": peak_bytes}))
+"""
+
+
+def _fake_codex_n_lines(tmp_path: Path, n_lines: int) -> Path:
+    """A fake codex emitting ``n_lines`` large tool_output events + a result."""
+    return _write_fake_codex(
+        tmp_path,
+        body_lines=f'''
+        import json
+        big = "x" * 4096
+        for i in range({n_lines}):
+            print(json.dumps({{"type": "item.completed",
+                              "item": {{"type": "tool_output", "text": big}}}}))
+        print(json.dumps({{"type": "item.completed",
+                          "item": {{"type": "agent_message", "text": "Done."}}}}))
+        print(json.dumps({{"type": "turn.completed", "model": "gpt-5",
+                          "usage": {{"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}}}))
+        ''',
+    )
+
+
+def _run_rss_driver(tmp_path, n_lines: int) -> dict:
+    """Run the RSS driver subprocess against a fake codex with ``n_lines`` events."""
+    work = tmp_path / f"work_{n_lines}"
+    work.mkdir()
+    fake = _fake_codex_n_lines(work, n_lines)
+    prompt = _prompt_file(work)
+    driver = work / "rss_driver.py"
+    driver.write_text(_RSS_DRIVER)
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    proc = subprocess.run(
+        [sys.executable, str(driver), repo_root, str(fake), str(prompt), str(work)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"driver crashed (rc={proc.returncode}, n_lines={n_lines}); "
+        f"stdout={proc.stdout!r} stderr={proc.stderr[-2000:]!r}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.slow
+def test_openai_codex_spool_caps_peak_rss(tmp_path):
+    """#1646 reproduction: a >=128 MiB Codex transcript must NOT blow up parent RSS.
+
+    The pre-fix in-RAM path (`capture_output=True, text=True` + `.strip()` +
+    `.splitlines()`) peaks at ~3-4x the transcript size, which crossed cloud
+    RSS limits and SIGKILLed the parent. The spooled path keeps peak ~constant
+    regardless of transcript size.
+
+    We run the SAME workload twice in fresh interpreters — a tiny transcript
+    (calibrates the module-import baseline) and a >=128 MiB transcript — and
+    assert the large run's peak RSS is only marginally above the tiny run's.
+    On the old path the large run would be hundreds of MiB higher; the spooled
+    path keeps the delta tiny because only bounded snippets are decoded.
+    """
+    # ~128 MiB of NDJSON for the large run: 32768 lines * 4096-byte payload.
+    small = _run_rss_driver(tmp_path, n_lines=4)
+    large = _run_rss_driver(tmp_path, n_lines=32768)
+
+    assert small["success"] is True and small["text"] == "Done.", small
+    assert large["success"] is True and large["text"] == "Done.", large
+
+    small_mib = small["peak_bytes"] / (1024 * 1024)
+    large_mib = large["peak_bytes"] / (1024 * 1024)
+    delta_mib = large_mib - small_mib
+    # The old in-RAM path would add ~384-512 MiB for a 128 MiB transcript. The
+    # spooled path adds essentially nothing; 96 MiB is a generous ceiling that
+    # the old path blows past while the fix clears it with wide margin.
+    assert delta_mib < 96, (
+        f"128 MiB transcript inflated peak RSS by {delta_mib:.1f} MiB "
+        f"(small={small_mib:.1f}, large={large_mib:.1f}); spool not bounding heap"
+    )

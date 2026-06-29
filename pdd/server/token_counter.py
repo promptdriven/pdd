@@ -3,7 +3,13 @@ Token counting and cost estimation utilities.
 
 Uses litellm for model-aware token counting and context window lookup.
 Falls back to tiktoken for unknown models.
-Loads model pricing from .pdd/llm_model.csv.
+
+Model pricing is read from an explicit ``pricing_csv`` when provided. The
+output-inclusive ``estimate_completion_cost`` API additionally resolves a
+canonical pricing CSV via ``default_pricing_csv()`` (``$HOME/.pdd``, then the
+project ``.pdd``, then the bundled ``pdd/data/llm_model.csv``) so pre-flight
+cost previews work out of the box. When no pricing is available, cost is
+reported as explicitly unknown rather than guessed.
 """
 
 from __future__ import annotations
@@ -14,7 +20,7 @@ import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Dict
+from typing import Any, Callable, Optional, Dict, NamedTuple, Union
 
 import litellm
 import tiktoken
@@ -88,6 +94,26 @@ class CostEstimate:
     tokens: int
     cost_per_million: float
     currency: str = "USD"
+    output_cost: float = 0.0
+    total_cost: Optional[float] = None
+    matched_model: Optional[str] = None
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    input_cost_per_million: Optional[float] = None
+    output_cost_per_million: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Populate compatibility/default fields."""
+        if self.total_cost is None:
+            self.total_cost = self.input_cost + self.output_cost
+        if self.matched_model is None:
+            self.matched_model = self.model
+        if self.input_tokens is None:
+            self.input_tokens = self.tokens
+        if self.output_tokens is None:
+            self.output_tokens = 0
+        if self.input_cost_per_million is None:
+            self.input_cost_per_million = self.cost_per_million
 
     def to_dict(self) -> Dict:
         """Serialize to dict."""
@@ -97,6 +123,17 @@ class CostEstimate:
             "tokens": self.tokens,
             "cost_per_million": self.cost_per_million,
             "currency": self.currency,
+            "output_cost": round(self.output_cost, 6),
+            "total_cost": round(self.total_cost, 6) if self.total_cost is not None else None,
+            "matched_model": self.matched_model,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "input_cost_per_million": self.input_cost_per_million,
+            "output_cost_per_million": self.output_cost_per_million,
+            # Aliases so estimate-mode consumers that read per-million "rate"
+            # keys work against the single canonical CostEstimate.
+            "input_rate_per_million": self.input_cost_per_million,
+            "output_rate_per_million": self.output_cost_per_million,
         }
 
 
@@ -250,20 +287,157 @@ def get_context_limit(model: str) -> Optional[int]:
         return None
 
 
+def get_max_output_tokens(model: str) -> Optional[int]:
+    """
+    Get the maximum completion (output) token budget for a model via litellm.
+
+    Returns None for unknown models or when litellm has no completion cap for
+    the model. Shares the same defensive timeout/exception handling as
+    :func:`get_context_limit` so a stuck provider-detection path returns None
+    rather than wedging the CLI.
+
+    This is used by the cost estimator to bound a predicted output-token count
+    at what the model can actually emit, instead of trusting an unbounded
+    ``input_tokens * ratio`` heuristic.
+
+    Args:
+        model: Model name.
+
+    Returns:
+        Maximum output tokens, or None if unknown to litellm, the lookup times
+        out, or the call raises.
+    """
+    try:
+        info = _call_litellm_with_timeout(litellm.get_model_info, model)
+        if not info:
+            return None
+        value = info.get("max_output_tokens")
+        if value is None:
+            return None
+        value = int(value)
+        return value if value > 0 else None
+    except Exception as exc:  # includes TimeoutError from our wrapper
+        logger.warning(
+            "get_max_output_tokens: litellm.get_model_info failed for %s (%s); "
+            "skipping output-token cap",
+            model,
+            exc,
+        )
+        return None
+
+
+class ModelPricing(NamedTuple):
+    """Per-million-token input and output pricing for a model."""
+
+    input_cost_per_million: float
+    output_cost_per_million: Optional[float]
+    provider: str = ""
+    interactive_only: bool = False
+
+
+def _is_zero_rate(rates: ModelPricing) -> bool:
+    return (
+        rates.input_cost_per_million == 0.0
+        and rates.output_cost_per_million == 0.0
+    )
+
+
+def _csv_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _zero_rate_is_known_free(model: str, rates: ModelPricing) -> bool:
+    """Return True only for genuinely free/local rows, not subscriptions."""
+    provider = (rates.provider or "").strip().lower().replace(" ", "_")
+    model_lower = (model or "").strip().lower()
+    if provider in {"lm_studio", "ollama", "local"}:
+        return True
+    if model_lower.startswith(("lm_studio/", "ollama/", "local/")):
+        return True
+    return "local" in model_lower or "free" in model_lower
+
+
+def _zero_rate_is_unknown_subscription(model: str, rates: ModelPricing) -> bool:
+    """Return True for zero-rate subscription rows that are not billable prices."""
+    if not _is_zero_rate(rates) or _zero_rate_is_known_free(model, rates):
+        return False
+    provider = (rates.provider or "").strip().lower().replace(" ", "_")
+    model_lower = (model or "").strip().lower()
+    return (
+        rates.interactive_only
+        or provider in {"github_copilot", "openai_chatgpt", "chatgpt"}
+        or model_lower.startswith(("github_copilot/", "chatgpt/"))
+    )
+
+
+PricingCsvPath = Union[str, Path]
+
+# Canonical list-price CSV shipped inside the package (pdd/data/llm_model.csv),
+# used as the final pricing fallback so cost estimation works without any user
+# configuration. Resolved relative to this module: pdd/server/ -> pdd/data/.
+_BUNDLED_PRICING_CSV = Path(__file__).resolve().parent.parent / "data" / "llm_model.csv"
+
+
+def _existing_pricing_path(pricing_csv: Optional[PricingCsvPath]) -> Optional[Path]:
+    """Normalize a pricing CSV path and return it only when it exists."""
+    if pricing_csv is None:
+        return None
+    path = Path(pricing_csv)
+    return path if path.exists() else None
+
+
+def default_pricing_csv() -> Optional[Path]:
+    """Resolve the canonical pricing CSV when a caller does not pass one.
+
+    Resolution order (first existing wins):
+      1. ``$HOME/.pdd/llm_model.csv`` — the user's configured pricing.
+      2. ``<cwd>/.pdd/llm_model.csv`` — project-local pricing.
+      3. the ``pdd/data/llm_model.csv`` bundled with the package.
+
+    Returns ``None`` only when none of these exist, so callers still observe
+    the "cost is explicitly unknown" contract when no pricing is available.
+    """
+    for candidate in (
+        Path.home() / ".pdd" / "llm_model.csv",
+        Path.cwd() / ".pdd" / "llm_model.csv",
+        _BUNDLED_PRICING_CSV,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 @lru_cache(maxsize=1)
-def _load_model_pricing(csv_path: str) -> Dict[str, float]:
+def _load_model_pricing(csv_path: str) -> Dict[str, ModelPricing]:
     """Load model pricing from CSV (cached)."""
-    pricing: Dict[str, float] = {}
+    pricing: Dict[str, ModelPricing] = {}
 
     try:
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 model = row.get("model", "")
-                input_cost = row.get("input", "0")
+                input_cost = row.get("input")
+                output_cost = row.get("output")
+                if not model or input_cost in (None, ""):
+                    continue
                 try:
-                    pricing[model] = float(input_cost)
-                except ValueError:
+                    parsed_output = (
+                        float(output_cost)
+                        if output_cost not in (None, "")
+                        else None
+                    )
+                    pricing[model] = ModelPricing(
+                        float(input_cost),
+                        parsed_output,
+                        row.get("provider", "") or "",
+                        _csv_bool(row.get("interactive_only")),
+                    )
+                except (TypeError, ValueError):
                     continue
     except (FileNotFoundError, PermissionError):
         pass
@@ -271,10 +445,61 @@ def _load_model_pricing(csv_path: str) -> Dict[str, float]:
     return pricing
 
 
+def _find_model_pricing(
+    model: str,
+    pricing: Dict[str, ModelPricing],
+) -> Optional[tuple[str, ModelPricing]]:
+    """Find valid pricing for model without borrowing family/provider prices."""
+    if model in pricing:
+        return model, pricing[model]
+
+    model_lower = model.lower()
+    for csv_model, rates in pricing.items():
+        if csv_model.lower() == model_lower:
+            return csv_model, rates
+
+    requested_provider, _, requested_name = model_lower.rpartition("/")
+    requested_is_qualified = bool(requested_provider)
+
+    for csv_model, rates in pricing.items():
+        csv_model_lower = csv_model.lower()
+
+        csv_provider, _, csv_name = csv_model_lower.rpartition("/")
+        csv_is_qualified = bool(csv_provider)
+
+        if (
+            requested_is_qualified
+            and not csv_is_qualified
+            and requested_name == csv_name
+        ):
+            return csv_model, rates
+
+        if (
+            not requested_is_qualified
+            and not csv_is_qualified
+            and requested_name.startswith(f"{csv_name}-")
+        ):
+            suffix = requested_name[len(csv_name) + 1 :]
+            if suffix.isdigit():
+                return csv_model, rates
+
+        if (
+            requested_is_qualified
+            and csv_is_qualified
+            and requested_provider == csv_provider
+            and requested_name.startswith(f"{csv_name}-")
+        ):
+            suffix = requested_name[len(csv_name) + 1 :]
+            if suffix.isdigit():
+                return csv_model, rates
+
+    return None
+
+
 def estimate_cost(
     token_count: int,
     model: str,
-    pricing_csv: Optional[Path] = None,
+    pricing_csv: Optional[PricingCsvPath] = None,
 ) -> Optional[CostEstimate]:
     """
     Estimate the input cost for a given token count.
@@ -287,48 +512,93 @@ def estimate_cost(
     Returns:
         CostEstimate or None if pricing not found.
     """
-    if pricing_csv is None or not pricing_csv.exists():
+    pricing_path = _existing_pricing_path(pricing_csv)
+    if pricing_path is None:
         return None
 
-    pricing = _load_model_pricing(str(pricing_csv))
+    pricing = _load_model_pricing(str(pricing_path))
 
     if not pricing:
         return None
 
-    cost_per_million = None
-    matched_model = model
-
-    # Exact match first
-    if model in pricing:
-        cost_per_million = pricing[model]
-    else:
-        # Partial/substring match
-        model_lower = model.lower()
-        for csv_model, cost in pricing.items():
-            if model_lower in csv_model.lower() or csv_model.lower() in model_lower:
-                cost_per_million = cost
-                matched_model = csv_model
-                break
-
-    if cost_per_million is None:
-        # Fall back to well-known defaults present in most pricing CSVs
-        for default_model in ["claude-sonnet-4-20250514", "gpt-4o", "claude-3-5-sonnet-latest"]:
-            if default_model in pricing:
-                cost_per_million = pricing[default_model]
-                matched_model = default_model
-                break
-
-    if cost_per_million is None:
+    match = _find_model_pricing(model, pricing)
+    if match is None:
+        return None
+    matched_model, rates = match
+    if _zero_rate_is_unknown_subscription(matched_model, rates):
         return None
 
     # Pricing is expressed per million tokens
-    input_cost = (token_count / 1_000_000) * cost_per_million
+    input_cost = (token_count / 1_000_000) * rates.input_cost_per_million
 
     return CostEstimate(
         input_cost=input_cost,
         model=matched_model,
+        matched_model=matched_model,
         tokens=token_count,
-        cost_per_million=cost_per_million,
+        input_tokens=token_count,
+        output_tokens=0,
+        cost_per_million=rates.input_cost_per_million,
+        input_cost_per_million=rates.input_cost_per_million,
+        output_cost_per_million=rates.output_cost_per_million,
+    )
+
+
+def estimate_completion_cost(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+    pricing_csv: Optional[PricingCsvPath] = None,
+) -> Optional[CostEstimate]:
+    """
+    Estimate combined input and predicted output cost for a completion.
+
+    When ``pricing_csv`` is omitted, the canonical pricing CSV is resolved via
+    ``default_pricing_csv()`` so pre-flight cost previews work without callers
+    plumbing a path through. An explicitly supplied path is used as-is and is
+    never silently replaced by the default.
+
+    Returns None when pricing is unavailable or the model has no valid pricing
+    row. Unknown models must not borrow another model's price.
+    """
+    if pricing_csv is None:
+        pricing_path = default_pricing_csv()
+    else:
+        pricing_path = _existing_pricing_path(pricing_csv)
+    if pricing_path is None:
+        return None
+
+    pricing = _load_model_pricing(str(pricing_path))
+    if not pricing:
+        return None
+
+    match = _find_model_pricing(model, pricing)
+    if match is None:
+        return None
+    matched_model, rates = match
+    if rates.output_cost_per_million is None:
+        return None
+    if _zero_rate_is_unknown_subscription(matched_model, rates):
+        return None
+
+    input_cost = (input_tokens / 1_000_000) * rates.input_cost_per_million
+    output_cost = (
+        predicted_output_tokens / 1_000_000
+    ) * rates.output_cost_per_million
+    total_cost = input_cost + output_cost
+
+    return CostEstimate(
+        input_cost=input_cost,
+        output_cost=output_cost,
+        total_cost=total_cost,
+        model=matched_model,
+        matched_model=matched_model,
+        tokens=input_tokens,
+        input_tokens=input_tokens,
+        output_tokens=predicted_output_tokens,
+        cost_per_million=rates.input_cost_per_million,
+        input_cost_per_million=rates.input_cost_per_million,
+        output_cost_per_million=rates.output_cost_per_million,
     )
 
 

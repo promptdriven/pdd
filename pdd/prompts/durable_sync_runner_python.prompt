@@ -1,5 +1,17 @@
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>resolved_sync_unit_python.prompt</pdd-dependency>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "DurableSyncRunner", "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0)", "returns": "DurableSyncRunner"},
+      {"name": "DurableSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"}
+    ]
+  }
+}
+</pdd-interface>
 
 % Goal
 Write the `pdd/durable_sync_runner.py` module.
@@ -20,8 +32,9 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
 10. On patch conflict or failed module output, exit non-zero for the durable run, abort any in-progress `git am`, preserve prior checkpoints, and do not create later checkpoints.
 11. Push behavior must be conservative: retry transient push failures up to three attempts, halt immediately on non-fast-forward, and preserve local checkpoint commits for recovery.
 12. Remove successful module worktrees; retain failed module worktrees for inspection. Startup cleanup may remove only stale worktrees for the current issue.
-13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully.
+13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully. When `total_budget` is set, force one worker; when `durable_max_parallel` is provided, use `max(1, int(durable_max_parallel))`; otherwise read the shared `PDD_SYNC_MAX_WORKERS` fallback via `agentic_sync_runner._read_sync_max_workers()` so durable mode honors the same env-backed default as `AsyncSyncRunner`.
 14. Durable runs still update the same GitHub progress comment path as standard `AsyncSyncRunner` runs; fresh reruns must patch the existing progress comment rather than posting duplicates.
+15. Carry per-module identity into the base runner: accept optional `module_cwds`, `module_targets`, `module_contexts`, and `module_units` mappings. Store the units as `parent_module_units` and pass `module_units={}` to `AsyncSyncRunner` (like `module_cwds`); thread `module_targets`/`module_contexts` through. At runtime in `_sync_one_module`, after creating the per-module worktree, rebase the parent unit from the repo root onto the worktree (`self.module_units[key] = parent_unit.relocate(self.git_root, worktree_path)`) and clear it in the `finally` block, so the base runner builds `pdd --context <ctx> sync <target>` using the canonical unit inside the worktree. Target and context are cwd-independent (the worktree checks out the same `.pddrc`); `relocate` rebases EVERY advisory path relative to the repo root, so a `.pddrc` that is an ancestor of cwd relocates into the worktree too (a plain cwd-relative rebase would leave it pointing at the original checkout). Checkpoint metadata is staged/validated by the resolved target basename (`_metadata_basename` -> `_module_target`), not the scheduler key. `_allowed_metadata_prefixes(basename)` allowlists the root `.pdd/meta`, the module cwd's `.pdd/meta`, AND the governing project root's `.pdd/meta` derived from `unit.pddrc_path.parent` — because `operation_log` anchors a module's metadata at its nearest `.pddrc` PARENT, which may be an ANCESTOR of the module cwd (e.g. cwd `backend/functions` governed by `backend/.pddrc` writes `backend/.pdd/meta`); without that governing root, `_force_add_module_metadata`/`_unsafe_staged_paths` would fail to force-add or would wrongly reject correctly-staged ancestor metadata. Import `ResolvedSyncUnit` from `pdd.resolved_sync_unit` (#1675).
 
 % Dependencies
 <pdd.agentic_sync_runner>

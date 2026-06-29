@@ -705,6 +705,20 @@ def _clear_run_report_before_fingerprint(
     return True
 
 
+def _estimate_mode_active() -> bool:
+    """Return True when the root CLI is running a read-only estimate preview."""
+    try:
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        obj = getattr(ctx, "obj", None) if ctx is not None else None
+        if isinstance(obj, dict) and obj.get("estimate"):
+            return True
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in {"1", "true", "yes", "on"}
+
+
 def log_operation(
     operation: str,
     updates_fingerprint: bool = False,
@@ -764,7 +778,9 @@ def log_operation(
                         model = _extract_model_from_result(operation, result)
 
                 update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
-                if basename and language:
+                if _estimate_mode_active():
+                    pass
+                elif basename and language:
                     append_log_entry(basename, language, entry, paths=log_paths)
                     if success:
                         fingerprint_allowed = True

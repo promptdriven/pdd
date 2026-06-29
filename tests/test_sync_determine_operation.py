@@ -2626,21 +2626,19 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
 
 
 def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, monkeypatch):
-    """When config paths end with /, files go directly into configured directory.
+    """A path-qualified basename keeps its subdirectory under the configured dir (#1677).
 
-    For basename='core/cloud' with .pddrc paths ending in /:
-    - generate_output_path: pdd/ → code: pdd/cloud.py
-    - test_output_path: tests/ → test: tests/test_cloud.py
-    - example_output_path: examples/ → example: examples/cloud_example.py
+    For basename='core/cloud' with no architecture entry and .pddrc paths ending in /:
+    - generate_output_path: pdd/ → code: pdd/core/cloud.py
+    - test_output_path: tests/ → test: tests/core/test_cloud.py
+    - example_output_path: examples/ → example: examples/core/cloud_example.py
 
-    Note: When config paths explicitly end with /, they are treated as COMPLETE
-    directories. The dir_prefix from basename is NOT added because the config
-    already specifies the exact directory. This prevents double-pathing bugs
-    like 'backend/functions/utils/backend/utils/file.py'.
-
-    If you WANT subdirectory structure, either:
-    1. Don't end config paths with / (e.g., 'pdd' instead of 'pdd/')
-    2. Use template-based paths with {dir_prefix} placeholder
+    Issue #1677: the basename's directory (`core/`) is preserved so two modules sharing
+    a leaf (`core/cloud`, `aws/cloud`) don't collapse onto one `pdd/cloud.py`. Any
+    segment the configured directory already provides is de-duplicated (it is NOT
+    re-prefixed to `pdd/pdd/...`). A context whose prompts_dir already maps the
+    directory keeps using its generate_output_path directly (see
+    test_explicit_output_paths).
     """
     _write_pddrc_here()
 
@@ -2654,19 +2652,17 @@ def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, mon
 
     paths = get_pdd_file_paths(basename="core/cloud", language="python", prompts_dir="prompts")
 
-    # When config paths end with /, files go directly into that directory
-    # The dir_prefix (core/) is NOT added because explicit paths are used
+    # The basename's subdirectory (core/) is preserved under each configured dir.
     code_path = paths["code"].as_posix()
     test_path = paths["test"].as_posix()
     example_path = paths["example"].as_posix()
 
-    # Files go directly into configured directories (no dir_prefix added)
-    assert code_path.endswith("pdd/cloud.py"), \
-        f"Expected path ending with 'pdd/cloud.py', got {code_path}"
-    assert test_path.endswith("tests/test_cloud.py"), \
-        f"Expected path ending with 'tests/test_cloud.py', got {test_path}"
-    assert example_path.endswith("examples/cloud_example.py"), \
-        f"Expected path ending with 'examples/cloud_example.py', got {example_path}"
+    assert code_path.endswith("pdd/core/cloud.py"), \
+        f"Expected path ending with 'pdd/core/cloud.py', got {code_path}"
+    assert test_path.endswith("tests/core/test_cloud.py"), \
+        f"Expected path ending with 'tests/core/test_cloud.py', got {test_path}"
+    assert example_path.endswith("examples/core/cloud_example.py"), \
+        f"Expected path ending with 'examples/core/cloud_example.py', got {example_path}"
 
 
 def test_get_pdd_file_paths_no_path_duplication_with_deep_prompts_dir(tmp_path, monkeypatch):

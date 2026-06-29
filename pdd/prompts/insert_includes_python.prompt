@@ -48,6 +48,7 @@ It calls `auto_include` to analyze the prompt and get back a string of directive
 11. If `<new>` blocks exist after separating out `<update>` blocks, invoke the LLM with `insert_includes_LLM` to place them in the prompt
     - Pass `actual_prompt_to_update` (prompt after updates applied) and `actual_dependencies_to_insert` (only the `<new>` blocks)
     - Use Pydantic structured output to get back the updated prompt
+    - Guard the structured result before reading its fields: if the llm_invoke result is not an `InsertIncludesOutput` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.output_prompt` — instead raise a typed ValueError, using a positive `isinstance(result, InsertIncludesOutput)` check (NOT a `None`/`str` blacklist) so any non-`InsertIncludesOutput` shape is caught (issue #1612)
 12. If no `<new>` blocks exist (only updates), skip the LLM call and use the updated prompt directly
 
 % Deduplication (when dedup=True)

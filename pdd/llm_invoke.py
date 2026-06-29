@@ -2,6 +2,7 @@
 # Added optional debugging prints in _select_model_candidates
 
 import copy
+import csv
 import getpass
 import os
 import pandas as pd
@@ -15,7 +16,8 @@ import sys
 import traceback
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
@@ -95,9 +97,9 @@ except Exception:
 # works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
 # native opus-4-7 matching.
 #
-# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
-# so none of these patches reach the Azure adapter. Azure Opus 4.7
-# callers need a separate code-path fix (stock CSV row is `budget`).
+# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig.
+# The runtime adaptive branch sends Azure Opus 4.7/4.8 payloads via
+# `extra_body`, which LiteLLM preserves for AzureAIStudioConfig.
 try:
     from litellm.llms.anthropic.chat.transformation import (
         AnthropicConfig as _AnthropicConfigOpus47,
@@ -469,7 +471,7 @@ import json
 # from rich import print as rprint # Replaced with logger
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Type, Union, Tuple
+from typing import Optional, Dict, List, Any, Type, Union, Tuple, Callable
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
@@ -479,6 +481,14 @@ from pdd.server.token_counter import (
     count_tokens_for_messages,
     get_context_limit,
 )
+try:
+    from pdd.server.token_counter import get_max_output_tokens as _get_max_output_tokens
+except ImportError:  # Older checkout without the output-cap helper.
+    _get_max_output_tokens = None  # type: ignore[assignment]
+try:
+    from pdd.server.token_counter import estimate_completion_cost as _estimate_completion_cost
+except ImportError:  # Prerequisite sub-issue may not be present in this checkout.
+    _estimate_completion_cost = None  # type: ignore[assignment]
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -531,6 +541,15 @@ class InsufficientCreditsError(Exception):
     and should NOT fall back to local execution - the user needs to know.
     """
     pass
+
+
+class EstimateOnlyResult(Exception):
+    """Raised by llm_invoke when estimate mode should stop before providers."""
+
+    def __init__(self, estimate: Dict[str, Any]):
+        super().__init__("LLM estimate computed; provider call skipped")
+        self.estimate = estimate
+        self.payload = estimate
 
 
 # --- Cloud Execution Helpers ---
@@ -1474,6 +1493,507 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
     _register_csv_models_with_litellm()
 
 
+_ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
+    "generate": 0.52,
+    "default": 0.52,
+}
+
+_ESTIMATE_INPUT_TOKEN_OVERHEADS: Dict[str, int] = {
+    # Provider transcript accounting includes chat/message framing that is not
+    # visible in the local prompt text. This keeps no-target generate estimates
+    # closer to observed usage while remaining overrideable for evaluation.
+    "generate": 24,
+    "default": 0,
+}
+
+
+def _estimate_mode_active(explicit: Optional[bool]) -> bool:
+    """Return whether this invocation should estimate and skip providers."""
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            if click_ctx.obj.get("estimate"):
+                return True
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in ("1", "true", "yes", "on")
+
+
+def _current_estimate_command_name() -> str:
+    """Best-effort command name for output-ratio selection and reporting."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and click_ctx.command is not None:
+            name = click_ctx.command.name
+            if name:
+                return str(name)
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE_COMMAND", "unknown") or "unknown"
+
+
+def _estimate_output_ratio(command_name: str) -> float:
+    """Resolve the configurable output-token ratio for an estimate."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_OUTPUT_RATIO_{normalized}")
+    env_keys.append("PDD_ESTIMATE_OUTPUT_RATIO")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative float", key, raw_value)
+
+    return _ESTIMATE_OUTPUT_RATIOS.get(
+        command_name,
+        _ESTIMATE_OUTPUT_RATIOS["default"],
+    )
+
+
+def _estimate_input_token_overhead(command_name: str) -> int:
+    """Resolve the configurable per-request input-token overhead."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_{normalized}")
+    env_keys.append("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = int(float(raw_value))
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative integer", key, raw_value)
+
+    return _ESTIMATE_INPUT_TOKEN_OVERHEADS.get(
+        command_name,
+        _ESTIMATE_INPUT_TOKEN_OVERHEADS["default"],
+    )
+
+
+def _current_estimate_output_path_hint() -> Optional[str]:
+    """Return a current-command target file hint, if the CLI provided one."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            hint = click_ctx.obj.get("estimate_output_path_hint")
+            if hint:
+                return str(hint)
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_tokens_from_file_size(path_hint: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Cheap, provider-free token proxy for an existing target file."""
+    if not path_hint:
+        return None
+    try:
+        path = Path(path_hint)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    token_proxy = max(1, int((len(text) + 3) // 4))
+    return {
+        "tokens": token_proxy,
+        "path": str(path),
+        "bytes": len(text.encode("utf-8")),
+        "chars": len(text),
+    }
+
+
+def _messages_text_for_estimate(messages_for_count: Any) -> str:
+    """Flatten message content for generate-only heuristic features."""
+    parts: List[str] = []
+
+    def _scan(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            parts.append(value)
+            return
+        if isinstance(value, dict):
+            content = value.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            else:
+                _scan(content)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                _scan(item)
+
+    _scan(messages_for_count)
+    return "\n".join(parts).lower()
+
+
+def _generate_output_token_prediction(
+    *,
+    input_tokens: int,
+    messages_for_count: Any,
+    target_hint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Predict generate output tokens with fixture-calibrated prompt features.
+
+    This intentionally applies only to ``pdd generate``. The predictor uses
+    stable, provider-free signals that are visible in the built request:
+    prompt-size bucket, interface/reason sections, include expansion markers,
+    and wording that asks for code, docs, tests, or examples.
+    """
+    if target_hint:
+        tokens = max(1, int(target_hint["tokens"]))
+        low = max(1, int(round(tokens * 0.85)))
+        high = max(tokens, int(round(tokens * 1.15)))
+        return {
+            "tokens": tokens,
+            "low": low,
+            "high": high,
+            "ratio": round(tokens / max(input_tokens, 1), 4),
+            "basis": "target_file_size_hint",
+            "uncertainty": "low",
+        }
+
+    text = _messages_text_for_estimate(messages_for_count)
+    if input_tokens < 220:
+        ratio = 0.50
+    elif input_tokens < 700:
+        ratio = 0.43
+    else:
+        ratio = 0.34
+
+    if "<pdd-interface" in text:
+        ratio += 0.08
+    if "<pdd-reason" in text:
+        ratio += 0.03
+    if "<include" in text or "processing xml include" in text:
+        ratio += 0.04
+    if any(term in text for term in ("unit test", "pytest", "examples", "example code")):
+        ratio += 0.15
+    if any(term in text for term in ("documentation", "docstring", "readme", "markdown")):
+        ratio += 0.10
+    if any(term in text for term in ("parser", "algorithm", "class ", "dataclass", "api endpoint")):
+        ratio += 0.10
+
+    ratio = min(max(ratio, 0.25), 0.85)
+    tokens = max(1, int(round(input_tokens * ratio)))
+    spread = 0.22 if input_tokens < 700 else 0.28
+    low = max(1, int(round(tokens * (1.0 - spread))))
+    high = max(tokens, int(round(tokens * (1.0 + spread))))
+    return {
+        "tokens": tokens,
+        "low": low,
+        "high": high,
+        "ratio": round(ratio, 4),
+        "basis": "generate_feature_heuristic",
+        "uncertainty": "medium",
+    }
+
+
+def _model_info_value(model_info: Any, key: str) -> Any:
+    """Read a field from a pandas row, dict, or lightweight test object."""
+    try:
+        if isinstance(model_info, dict):
+            return model_info.get(key)
+        if hasattr(model_info, "get"):
+            return model_info.get(key)
+        return getattr(model_info, key)
+    except Exception:
+        return None
+
+
+def _truthy_model_info_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _estimate_metadata_probe_is_safe(model_info: Any, model_name: str) -> bool:
+    """Return False for provider families whose metadata lookup can touch auth."""
+    provider = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    provider_prefix = str(model_name).split("/", 1)[0].strip().lower()
+    if _truthy_model_info_value(_model_info_value(model_info, "interactive_only")):
+        return False
+    return provider not in {"github copilot", "openai chatgpt", "lm studio", "ollama"} and provider_prefix not in {
+        "github_copilot",
+        "chatgpt",
+        "lm_studio",
+        "ollama",
+    }
+
+
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _catalog_context_limit(model_info: Any) -> Optional[int]:
+    for key in ("max_input_tokens", "context_limit", "context_window", "max_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _catalog_output_token_cap(model_info: Any) -> Optional[int]:
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _completion_cost_from_pricing_api(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Call the token-counter completion-pricing API when this checkout has it."""
+    if _estimate_completion_cost is None:
+        return None
+    try:
+        estimate = _estimate_completion_cost(
+            input_tokens=input_tokens,
+            predicted_output_tokens=predicted_output_tokens,
+            model=model,
+            pricing_csv=LLM_MODEL_CSV_PATH,
+        )
+    except Exception as exc:
+        logger.debug("estimate_completion_cost failed for %s: %s", model, exc)
+        return None
+    if estimate is None:
+        return None
+    if hasattr(estimate, "to_dict"):
+        return estimate.to_dict()
+    if isinstance(estimate, dict):
+        return estimate
+    return None
+
+
+def _build_estimate_payload(
+    *,
+    command_name: str,
+    model_info: Any,
+    messages_for_count: Any,
+    model_name: str,
+    context_limit: Optional[int],
+    attempted_models: List[str],
+    call_type: str,
+) -> Dict[str, Any]:
+    """Build the provider-free estimate payload for one concrete LLM request.
+
+    Output tokens cannot be known without running the request, so they are a
+    heuristic: ``input_tokens * ratio`` (a per-command ratio) bounded by the
+    model's real maximum completion budget when litellm exposes one. The bound
+    keeps the prediction request/model-aware rather than letting a large prompt
+    project an impossible output. The result is still a *rough preview*, which
+    the payload labels via ``output_estimation`` and ``estimate_basis`` so the
+    renderer and any programmatic consumer treat it as approximate, not exact.
+
+    Context-window usage is reported against ``input + predicted_output`` (the
+    real constraint — completions are generated into the same window), with the
+    input-only figure retained separately for transparency.
+    """
+    raw_input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    input_token_overhead = _estimate_input_token_overhead(command_name)
+    input_tokens = raw_input_tokens + input_token_overhead
+    ratio = _estimate_output_ratio(command_name)
+    ratio_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    target_hint = _estimate_tokens_from_file_size(_current_estimate_output_path_hint())
+    if command_name == "generate":
+        prediction = _generate_output_token_prediction(
+            input_tokens=input_tokens,
+            messages_for_count=messages_for_count,
+            target_hint=target_hint,
+        )
+        raw_predicted_output_tokens = int(prediction["tokens"])
+        output_tokens_low = int(prediction["low"])
+        output_tokens_high = int(prediction["high"])
+        ratio = float(prediction["ratio"])
+        output_estimation = str(prediction["basis"])
+        uncertainty = str(prediction["uncertainty"])
+    else:
+        # Root CLI currently prevents non-generate estimate mode. This fallback
+        # keeps direct library callers side-effect-free but deliberately generic.
+        raw_predicted_output_tokens = ratio_predicted_output_tokens
+        output_estimation = "heuristic_ratio"
+        output_tokens_low = max(1, int(round(raw_predicted_output_tokens * 0.70)))
+        output_tokens_high = max(raw_predicted_output_tokens, int(round(raw_predicted_output_tokens * 1.30)))
+        uncertainty = "high"
+
+    # Bound the heuristic by what the model can actually emit, so the prediction
+    # is at least an upper bound the provider would honor rather than an
+    # unbounded ratio of the input size.
+    max_output_tokens: Optional[int] = _catalog_output_token_cap(model_info)
+    if max_output_tokens is None and _get_max_output_tokens is not None and _estimate_metadata_probe_is_safe(model_info, model_name):
+        try:
+            max_output_tokens = _get_max_output_tokens(model_name)
+        except Exception:
+            max_output_tokens = None
+    if max_output_tokens and max_output_tokens > 0:
+        predicted_output_tokens = min(raw_predicted_output_tokens, max_output_tokens)
+        output_capped = predicted_output_tokens < raw_predicted_output_tokens
+        output_tokens_low = min(output_tokens_low, predicted_output_tokens)
+        output_tokens_high = min(output_tokens_high, max_output_tokens)
+    else:
+        predicted_output_tokens = raw_predicted_output_tokens
+        output_capped = False
+    if output_capped:
+        output_estimation = f"{output_estimation}_capped"
+
+    # Context usage reflects the real constraint: prompt plus the completion
+    # budget both consume the model's context window. Keep the input-only figure
+    # for callers that want to distinguish the two.
+    input_context_usage_percent = (
+        round((input_tokens / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+    context_usage_percent = (
+        round(((input_tokens + predicted_output_tokens) / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+
+    pricing = _completion_cost_from_pricing_api(
+        input_tokens,
+        predicted_output_tokens,
+        model_name,
+    )
+
+    input_rate = None
+    output_rate = None
+    input_cost = None
+    output_cost = None
+    total_cost = None
+    cost_known = False
+    pricing_model = model_name
+
+    if pricing:
+        input_rate = pricing.get("input_rate_per_million")
+        output_rate = pricing.get("output_rate_per_million")
+        input_cost = pricing.get("input_cost")
+        output_cost = pricing.get("output_cost")
+        total_cost = pricing.get("total_cost")
+        pricing_model = pricing.get("model") or model_name
+        cost_known = total_cost is not None
+
+    payload = {
+        "estimate": True,
+        "command": command_name,
+        "model": model_name,
+        "pricing_model": pricing_model,
+        "input_tokens": input_tokens,
+        "raw_input_tokens": raw_input_tokens,
+        "input_token_overhead": input_token_overhead,
+        "predicted_output_tokens": predicted_output_tokens,
+        "output_tokens_low": output_tokens_low,
+        "output_tokens_high": output_tokens_high,
+        "uncertainty": uncertainty,
+        "output_ratio": ratio,
+        "ratio_predicted_output_tokens": ratio_predicted_output_tokens,
+        # Output tokens are a heuristic, not a measured value. Surface the basis
+        # so consumers do not mistake the projected cost for an exact figure.
+        "output_estimation": output_estimation,
+        "output_hint_path": target_hint["path"] if target_hint else None,
+        "output_hint_chars": target_hint["chars"] if target_hint else None,
+        "output_hint_bytes": target_hint["bytes"] if target_hint else None,
+        "output_token_cap": max_output_tokens,
+        "estimate_basis": "approximate",
+        "input_rate_per_million": input_rate if cost_known else None,
+        "output_rate_per_million": output_rate if cost_known else None,
+        "input_cost": round(float(input_cost), 6) if input_cost is not None else None,
+        "output_cost": round(float(output_cost), 6) if output_cost is not None else None,
+        "estimated_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "total_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "unknown_cost": not cost_known,
+        "cost_known": cost_known,
+        "currency": "USD",
+        "context_limit": context_limit,
+        # Reported against input + predicted output (the real window constraint).
+        "context_usage_percent": context_usage_percent,
+        "input_context_usage_percent": input_context_usage_percent,
+        "call_type": call_type,
+        "provider_call_made": False,
+        "attempted_models": list(attempted_models),
+    }
+    return payload
+
+
+def _accumulate_estimate_on_click_context(estimate: Dict[str, Any]) -> None:
+    """Store estimate rows on ctx.obj for command wrappers and tests."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is None:
+            return
+        if click_ctx.obj is None:
+            click_ctx.obj = {}
+        if not isinstance(click_ctx.obj, dict):
+            return
+        estimates = click_ctx.obj.setdefault("estimate_results", [])
+        if isinstance(estimates, list):
+            estimates.append(estimate)
+        totals = click_ctx.obj.setdefault(
+            "estimate_totals",
+            {
+                "input_tokens": 0,
+                "predicted_output_tokens": 0,
+                "total_cost": 0.0,
+                "cost_known": True,
+                "output_estimations": [],
+                "output_hint_paths": [],
+            },
+        )
+        if isinstance(totals, dict):
+            totals["input_tokens"] = int(totals.get("input_tokens", 0)) + int(estimate.get("input_tokens", 0))
+            totals["predicted_output_tokens"] = int(totals.get("predicted_output_tokens", 0)) + int(estimate.get("predicted_output_tokens", 0))
+            output_estimations = totals.setdefault("output_estimations", [])
+            if isinstance(output_estimations, list):
+                output_estimation = estimate.get("output_estimation")
+                if output_estimation and output_estimation not in output_estimations:
+                    output_estimations.append(output_estimation)
+            output_hint_paths = totals.setdefault("output_hint_paths", [])
+            if isinstance(output_hint_paths, list):
+                output_hint_path = estimate.get("output_hint_path")
+                if output_hint_path and output_hint_path not in output_hint_paths:
+                    output_hint_paths.append(output_hint_path)
+            if estimate.get("cost_known"):
+                totals["total_cost"] = float(totals.get("total_cost", 0.0)) + float(estimate.get("total_cost", 0.0))
+            else:
+                totals["cost_known"] = False
+    except Exception:
+        pass
+
+
 def _register_csv_models_with_litellm() -> None:
     """Register CSV-defined models with LiteLLM so completion_cost works for
     models LiteLLM doesn't ship pricing for (e.g., new Fireworks aliases). CSV
@@ -2025,7 +2545,9 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     summary["has_api_key"] = bool(kwargs.get("api_key"))
     summary["has_base_url"] = bool(kwargs.get("base_url") or kwargs.get("api_base"))
     summary["has_response_format"] = "response_format" in kwargs
-    summary["has_reasoning"] = any(key in kwargs for key in ("reasoning", "reasoning_effort", "thinking"))
+    summary["has_reasoning"] = (
+        "reasoning" in kwargs or _has_thinking_or_reasoning_payload(kwargs)
+    )
     messages = kwargs.get("messages")
     if isinstance(messages, list):
         summary["message_count"] = len(messages)
@@ -2044,6 +2566,14 @@ def _model_disallows_temperature(model_name: Any) -> bool:
         or "claude-opus-4-8" in model_lower
         or "claude-opus-4.8" in model_lower
     )
+
+
+def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
+    """Return True when a LiteLLM request carries Claude thinking/reasoning."""
+    if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
+        return True
+    extra_body = litellm_kwargs.get("extra_body")
+    return isinstance(extra_body, dict) and "thinking" in extra_body
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
@@ -2565,10 +3095,96 @@ def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_DEEPSWE_MANIFEST_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_deepswe_manifest() -> Dict[str, Any]:
+    """Load DeepSWE manifest metadata keyed by model and aliases."""
+    global _DEEPSWE_MANIFEST_CACHE
+    if _DEEPSWE_MANIFEST_CACHE is not None:
+        return _DEEPSWE_MANIFEST_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "deepswe_manifest.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "deepswe_manifest.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "deepswe_manifest.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("deepswe_manifest.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    by_model: Dict[str, Any] = {}
+    entries = data.get("entries", data if isinstance(data, list) else []) if isinstance(data, (dict, list)) else []
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            keys = []
+            for key_name in ("model", "model_name", "catalog_model", "canonical_model"):
+                value = entry.get(key_name)
+                if isinstance(value, str) and value.strip():
+                    keys.append(value.strip())
+            aliases = entry.get("aliases")
+            if isinstance(aliases, list):
+                keys.extend(str(alias).strip() for alias in aliases if str(alias).strip())
+            raw_model_name = entry.get("raw_model_name")
+            if isinstance(raw_model_name, str) and raw_model_name.strip():
+                parts = raw_model_name.split()
+                keys.append(parts[0])
+            for key in keys:
+                by_model.setdefault(key, entry)
+
+    _DEEPSWE_MANIFEST_CACHE = by_model
+    return by_model
+
+
+def _manifest_effort(raw_model_name: Any) -> Optional[str]:
+    if not isinstance(raw_model_name, str):
+        return None
+    parts = raw_model_name.split()
+    if len(parts) < 2:
+        return None
+    effort = parts[-1].strip().lower()
+    return effort if effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else None
+
+
+def _manifest_is_stale(retrieved_at: str) -> bool:
+    try:
+        max_age = int(os.getenv("PDD_DEEPSWE_MAX_AGE_DAYS", "30"))
+    except ValueError:
+        max_age = 30
+    try:
+        retrieved = date.fromisoformat(str(retrieved_at)[:10])
+    except Exception:
+        return False
+    return (date.today() - retrieved).days > max_age
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
-    model_df: pd.DataFrame
+    model_df: pd.DataFrame,
+    manifest_by_model: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Selects and sorts candidate models based on strength and availability."""
 
@@ -2734,6 +3350,19 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    manifest_by_model = manifest_by_model or {}
+    for candidate in candidates:
+        entry = manifest_by_model.get(str(candidate.get("model", ""))) or {}
+        candidate["target_effort_level"] = _manifest_effort(entry.get("raw_model_name"))
+        candidate["deepswe_manifest_date"] = str(entry.get("retrieved_at") or "")
+
+    if candidates:
+        first = candidates[0]
+        manifest_date = str(first.get("deepswe_manifest_date") or "")
+        if manifest_date and _manifest_is_stale(manifest_date):
+            first["model_rank_source"] = f"deepswe:stale:{manifest_date}"
+            logger.warning("DeepSWE manifest metadata for selected model is stale: %s", manifest_date)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
@@ -3459,6 +4088,222 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
 
 # --- Main Function ---
 
+# =============================================================================
+# Per-task config routing (issue #1584)
+# -----------------------------------------------------------------------------
+# A static lookup table (pdd/data/task_routing.csv) maps a PDD task class to the
+# best (model, temperature, effort, shots) configuration measured offline. The
+# router scores each candidate row as ``pass_rate - lambda * avg_cost_usd`` and
+# the multi-shot loop samples N candidates with verifier-backed selection. The
+# entire feature is gated behind PDD_ENABLE_TASK_ROUTING=1; when the flag is
+# unset, llm_invoke behaves exactly as before and these helpers are never hit.
+# =============================================================================
+
+import contextvars
+
+# Module-level cache for the routing table. None = not yet loaded.
+_TASK_ROUTING_TABLE: Optional[List[Dict[str, str]]] = None
+
+# Carries the router's exact-model selection into the recursive single-shot
+# calls made by _run_multishot, so llm_invoke's public signature stays in sync
+# with llm_invoke_python.prompt (no internal-only parameter). Default None.
+_ROUTER_MODEL_OVERRIDE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "pdd_router_model_override", default=None
+)
+
+# Effort level -> llm_invoke's 0-1 ``time`` scale.
+_EFFORT_TO_TIME: Dict[str, float] = {
+    "low": 0.1,
+    "medium": 0.3,
+    "high": 0.5,
+    "xhigh": 0.75,
+    "max": 1.0,
+}
+
+
+def _effort_to_time(effort: Optional[str]) -> Optional[float]:
+    """Map a routing-table effort level to llm_invoke's 0-1 ``time`` scale.
+
+    Returns None for unknown/empty values so the caller keeps its own ``time``.
+    """
+    if effort is None:
+        return None
+    return _EFFORT_TO_TIME.get(str(effort).strip().lower())
+
+
+def _resolve_task_routing_csv() -> Optional[Path]:
+    """Resolve task_routing.csv via the same priority chain as llm_model.csv.
+
+    Order: user ``~/.pdd/`` -> project ``.pdd/`` (PDD_PATH then CWD) -> None
+    (the caller then falls back to the packaged ``pdd/data/`` copy).
+    """
+    user_csv = user_pdd_dir / "task_routing.csv"
+    if user_csv.is_file():
+        return user_csv
+    if PROJECT_ROOT_FROM_ENV:
+        env_csv = project_csv_from_env.parent / "task_routing.csv"
+        if env_csv.is_file():
+            return env_csv
+    cwd_csv = project_csv_from_cwd.parent / "task_routing.csv"
+    if cwd_csv.is_file():
+        return cwd_csv
+    return None
+
+
+def _load_task_routing_table(force_reload: bool = False) -> List[Dict[str, str]]:
+    """Load and cache the per-task routing table.
+
+    Returns a list of row dicts (possibly empty). Never raises: on a missing
+    file, unreadable CSV, or parse error it debug-logs and returns ``[]`` so the
+    router transparently falls through to the strength-interpolation baseline.
+    """
+    global _TASK_ROUTING_TABLE
+    if _TASK_ROUTING_TABLE is not None and not force_reload:
+        return _TASK_ROUTING_TABLE
+    rows: List[Dict[str, str]] = []
+    try:
+        csv_path = _resolve_task_routing_csv()
+        if csv_path is not None:
+            text = csv_path.read_text()
+        else:
+            text = importlib.resources.files('pdd').joinpath(
+                'data/task_routing.csv'
+            ).read_text()
+        import io
+        for row in csv.DictReader(io.StringIO(text)):
+            rows.append(dict(row))
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing table unavailable, using baseline: {e}")
+        rows = []
+    _TASK_ROUTING_TABLE = rows
+    return rows
+
+
+def _select_task_route(task_class: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pick the best routing row for ``task_class`` by ``pass_rate - lambda*cost``.
+
+    ``lambda`` comes from PDD_ROUTER_LAMBDA (default 1.0; invalid -> 1.0). Ties
+    break on lowest ``avg_cost_usd``. Returns a normalized override dict with any
+    of ``model``/``temperature``/``shots``/``effort`` present, or None when no
+    row matches (cold start) or on any evaluation error (baseline fallthrough).
+    """
+    if task_class is None:
+        return None
+    try:
+        lam_raw = os.environ.get("PDD_ROUTER_LAMBDA", "")
+        try:
+            lam = float(lam_raw) if str(lam_raw).strip() != "" else 1.0
+        except (TypeError, ValueError):
+            lam = 1.0
+        target = str(task_class).strip()
+        matching = [
+            r for r in _load_task_routing_table()
+            if str(r.get("task_class", "")).strip() == target
+        ]
+        if not matching:
+            return None
+        best: Optional[Dict[str, str]] = None
+        best_score: Optional[float] = None
+        best_cost: Optional[float] = None
+        for r in matching:
+            pass_rate = float(str(r.get("pass_rate", "")).strip() or 0.0)
+            avg_cost = float(str(r.get("avg_cost_usd", "")).strip() or 0.0)
+            score = pass_rate - lam * avg_cost
+            # Tolerant tie detection: float subtraction makes nominally-equal
+            # scores (e.g. 0.8-0.2 vs 0.7-0.1) differ in the last bit.
+            tie = best_score is not None and abs(score - best_score) <= 1e-9
+            if (
+                best_score is None
+                or (score > best_score and not tie)
+                or (tie and avg_cost < best_cost)
+            ):
+                best, best_score, best_cost = r, score, avg_cost
+        if best is None:
+            return None
+        override: Dict[str, Any] = {}
+        model = str(best.get("model", "")).strip()
+        if model:
+            override["model"] = model
+        temp_raw = str(best.get("temperature", "")).strip()
+        if temp_raw != "":
+            override["temperature"] = float(temp_raw)
+        shots_raw = str(best.get("shots", "")).strip()
+        if shots_raw != "":
+            override["shots"] = int(float(shots_raw))
+        effort = str(best.get("effort", "")).strip()
+        if effort:
+            override["effort"] = effort
+        return override
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing evaluation failed, using baseline: {e}")
+        return None
+
+
+def _run_multishot(
+    *,
+    shots: int,
+    verifier: Optional[Callable[[str], bool]],
+    model_override: Optional[str],
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Run llm_invoke up to ``shots`` times and select a winning candidate.
+
+    Each attempt is a standard single-shot invocation (``shots=1``,
+    ``task_class=None``) so all per-call guards apply unchanged. Selection: the
+    first candidate accepted by ``verifier`` wins; otherwise self-consistency
+    returns the mode of the result strings (ties broken by first occurrence).
+    Costs are summed across every attempt.
+    """
+    results: List[Dict[str, Any]] = []
+    total_cost = 0.0
+    for _ in range(shots):
+        token = _ROUTER_MODEL_OVERRIDE.set(model_override)
+        try:
+            attempt = llm_invoke(
+                shots=1,
+                verifier=None,
+                task_class=None,
+                **kwargs,
+            )
+        finally:
+            _ROUTER_MODEL_OVERRIDE.reset(token)
+        if not isinstance(attempt, dict):
+            continue
+        results.append(attempt)
+        try:
+            total_cost += float(attempt.get("cost", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+        if verifier is not None:
+            try:
+                if verifier(attempt.get("result")):
+                    winner = dict(attempt)
+                    winner["cost"] = total_cost
+                    return winner
+            except Exception as e:  # noqa: BLE001 - a bad verifier must not crash
+                logger.debug(f"Verifier raised on a candidate: {e}")
+    if not results:
+        raise RuntimeError("Multi-shot generation produced no candidates.")
+
+    def _key(r: Dict[str, Any]) -> str:
+        res = r.get("result")
+        return res if isinstance(res, str) else repr(res)
+
+    counts: Dict[str, int] = {}
+    order: List[str] = []
+    for r in results:
+        k = _key(r)
+        if k not in counts:
+            counts[k] = 0
+            order.append(k)
+        counts[k] += 1
+    # Highest count wins; among ties the earliest-seen result string wins.
+    best_key = max(order, key=lambda k: (counts[k], -order.index(k)))
+    winner = next(dict(r) for r in results if _key(r) == best_key)
+    winner["cost"] = total_cost
+    return winner
+
+
 def llm_invoke(
     prompt: Optional[str] = None,
     input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
@@ -3474,6 +4319,10 @@ def llm_invoke(
     use_cloud: Optional[bool] = None,
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
     source_prompt: Optional[str] = None,
+    estimate_only: Optional[bool] = None,
+    shots: int = 1,
+    verifier: Optional[Callable[[str], bool]] = None,
+    task_class: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3492,6 +4341,18 @@ def llm_invoke(
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
         use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+        estimate_only: If true, count the request and raise EstimateOnlyResult before provider calls.
+        shots: Number of candidate generations (default 1). When shots > 1 and
+            PDD_ENABLE_TASK_ROUTING=1, the multi-shot loop runs min(shots, 5)
+            generations. Mutually exclusive with use_batch_mode=True. Has no
+            effect when PDD_ENABLE_TASK_ROUTING is unset.
+        verifier: Optional callable (str) -> bool applied to each candidate. The
+            first candidate it accepts is returned immediately; otherwise the
+            mode (self-consistency) result is returned. None -> mode selection.
+        task_class: Optional PDD command name ("generate", "fix", "optimize",
+            "explain") used by the per-task router to look up the best
+            (model, temperature, effort, shots) row from task_routing.csv. Only
+            active when PDD_ENABLE_TASK_ROUTING=1; None skips the router.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -3505,6 +4366,7 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
+    estimate_mode = _estimate_mode_active(estimate_only)
 
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
@@ -3518,6 +4380,7 @@ def llm_invoke(
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
+        logger.debug(f"  estimate_only: {estimate_mode}")
 
     # --- 0. Validate Inputs (before any dispatch) ---
     # Validation runs before cloud dispatch so the ValueError contract holds
@@ -3541,6 +4404,68 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    if estimate_mode and use_batch_mode:
+        raise RuntimeError(
+            "Estimate mode supports one concrete llm_invoke call only; batch mode "
+            "or list-of-message batches are outside this dry-run cost contract."
+        )
+
+    # --- Per-task config router + multi-shot (issue #1584) ---
+    # Gated entirely behind PDD_ENABLE_TASK_ROUTING=1. When unset, shots/verifier/
+    # task_class have no effect and the function behaves exactly as before.
+    # The router's exact-model choice for THIS call arrives either from a matched
+    # route below or, inside a multi-shot recursion, via _ROUTER_MODEL_OVERRIDE.
+    model_override: Optional[str] = _ROUTER_MODEL_OVERRIDE.get()
+    if _env_truthy("PDD_ENABLE_TASK_ROUTING"):
+        if use_batch_mode and isinstance(shots, int) and shots > 1:
+            raise ValueError(
+                "Multi-shot generation (shots > 1) is mutually exclusive with "
+                "use_batch_mode=True."
+            )
+        # Apply the static router's overrides before model resolution.
+        route = _select_task_route(task_class)
+        if route:
+            if route.get("model"):
+                model_override = route["model"]
+            if "temperature" in route:
+                temperature = route["temperature"]
+            if "shots" in route:
+                shots = route["shots"]
+            routed_time = _effort_to_time(route.get("effort"))
+            if routed_time is not None:
+                time = routed_time
+        # Clamp and normalize the effective shot count (silent clamp; no raise).
+        try:
+            shots = int(shots)
+        except (TypeError, ValueError):
+            shots = 1
+        shots = max(1, min(shots, 5))
+        # Multi-shot: run the single-invocation flow N times, then select.
+        if shots > 1:
+            return _run_multishot(
+                shots=shots,
+                verifier=verifier,
+                model_override=model_override,
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+                use_cloud=use_cloud,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
+                estimate_only=estimate_only,
+            )
+    else:
+        # Guard inactive: shots/verifier/task_class are inert.
+        shots = 1
 
     resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
         grounding_overrides, source_prompt
@@ -3654,7 +4579,34 @@ def llm_invoke(
         attempted_models.append(model_label)
         _publish_attempted_models()
 
-    if use_cloud:
+    def _publish_model_provenance(
+        *,
+        resolved_model: str = "",
+        outcome: str = "",
+        deepswe_manifest_date: str = "",
+    ) -> None:
+        """Best-effort: publish selected-model provenance for track_cost."""
+        try:
+            import click as _click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                if resolved_model:
+                    click_ctx.obj["resolved_model"] = str(resolved_model)
+                if outcome:
+                    click_ctx.obj["model_selection_outcome"] = str(outcome)
+                if deepswe_manifest_date:
+                    click_ctx.obj["deepswe_manifest_date"] = str(deepswe_manifest_date)
+        except Exception:
+            pass
+
+    if use_cloud and not estimate_mode:
         from rich.console import Console
         console = Console()
 
@@ -3782,7 +4734,41 @@ def llm_invoke(
                     _effective_default_model,
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
-        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        manifest_by_model = _load_deepswe_manifest()
+        # Router exact-model override (issue #1584): bypass the strength
+        # cascade and select the routed model directly when it exists.
+        if model_override:
+            _effective_default_model = model_override
+        candidate_models = _select_model_candidates(
+            strength,
+            _effective_default_model,
+            model_df,
+            manifest_by_model=manifest_by_model,
+        )
+        if model_override:
+            _exact = [
+                c for c in candidate_models
+                if str(c.get("model")) == str(model_override)
+            ]
+            if _exact:
+                candidate_models = _exact
+            else:
+                logger.debug(
+                    f"Router model {model_override!r} not in candidate set; "
+                    "falling back to the strength cascade."
+                )
+        try:
+            import click as _click_for_provenance
+            _ctx_for_provenance = _click_for_provenance.get_current_context(silent=True)
+            if _ctx_for_provenance is not None:
+                if _ctx_for_provenance.obj is None:
+                    _ctx_for_provenance.obj = {}
+                if isinstance(_ctx_for_provenance.obj, dict):
+                    _ctx_for_provenance.obj["requested_model"] = str(candidate_models[0].get("model", "")) if candidate_models else ""
+                    _ctx_for_provenance.obj["strength_used"] = str(strength)
+                    _ctx_for_provenance.obj["target_effort_level"] = candidate_models[0].get("target_effort_level") if candidate_models else None
+        except Exception:
+            pass
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3880,7 +4866,6 @@ def llm_invoke(
 
     # Initialize variables for retry section
     response_format = None
-    time_kwargs = {}
 
     # Update global rate map for callback cost fallback
     try:
@@ -3908,14 +4893,17 @@ def llm_invoke(
         # Track per-model temperature adjustment attempt (avoid infinite loop)
         current_temperature = temperature
         temp_adjustment_done = False
+        force_temperature_on_retry = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
             attempt_counter += 1
+            time_kwargs: Dict[str, Any] = {}
             request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
             attempt_id = f"{request_id}-{attempt_counter}"
 
             # --- 4. API Key Check & Acquisition ---
-            if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
+            # Estimate mode must not prompt for credentials or touch providers.
+            if not estimate_mode and not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
                 _emit_llm_attribution(
                     attribution_context,
@@ -3937,7 +4925,10 @@ def llm_invoke(
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
-            if _model_disallows_temperature(model_name_litellm):
+            if (
+                _model_disallows_temperature(model_name_litellm)
+                and not force_temperature_on_retry
+            ):
                 if verbose:
                     logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
             else:
@@ -4214,31 +5205,57 @@ def llm_invoke(
                             logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
 
                 elif reasoning_type == 'adaptive':
-                    # Anthropic Claude Opus 4.7 (and onward) removed the legacy
+                    # Claude Opus 4.7 (and onward) on Anthropic and Azure AI
+                    # removed the legacy
                     # `thinking={"type":"enabled","budget_tokens":N}` shape and
                     # only accepts the new adaptive thinking API:
                     # `thinking={"type":"adaptive"}` + `output_config.effort`.
-                    # We send `thinking` explicitly (with summarized display so
-                    # any future structured thinking blocks surface in logs)
-                    # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
-                    # `output_config.effort` server-side (gated by
-                    # AnthropicConfig._is_claude_opus_4_5 on its side; callers
-                    # that ship a newer Opus may need to monkey-patch that
-                    # helper until LiteLLM ships native matching).
+                    # Anthropic accepts top-level `thinking` and
+                    # `reasoning_effort`; Azure AI's OpenAI-style optional-param
+                    # filter drops those keys, so Azure must use `extra_body`.
                     from .reasoning import time_to_effort_level
                     effort = time_to_effort_level(time)
-                    provider_lower = str(provider).lower()
+                    provider_lower = str(provider).strip().lower().replace('_', ' ')
+                    thinking_param = {"type": "adaptive", "display": "summarized"}
                     if provider_lower == 'anthropic':
-                        thinking_param = {"type": "adaptive", "display": "summarized"}
                         litellm_kwargs["thinking"] = thinking_param
                         time_kwargs["thinking"] = thinking_param
                         litellm_kwargs["reasoning_effort"] = effort
                         time_kwargs["reasoning_effort"] = effort
                         if verbose:
-                            logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
+                            logger.info(
+                                "[INFO] Requesting Anthropic adaptive "
+                                f"thinking with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
+                    elif provider_lower == 'azure ai':
+                        azure_adaptive_body = {
+                            "thinking": thinking_param,
+                            "output_config": {"effort": effort},
+                        }
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            if isinstance(existing_extra_body, dict):
+                                kwargs["extra_body"] = {
+                                    **existing_extra_body,
+                                    **azure_adaptive_body,
+                                }
+                            else:
+                                kwargs["extra_body"] = dict(azure_adaptive_body)
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Azure AI adaptive thinking "
+                                f"via extra_body with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
                     else:
                         if verbose:
-                            logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
+                            logger.warning(
+                                "[WARN] reasoning_type='adaptive' but provider "
+                                f"'{provider}' is not Anthropic or Azure AI; "
+                                "reasoning parameter not sent for "
+                                f"{model_name_litellm}."
+                            )
 
                 elif reasoning_type == 'none':
                     if verbose:
@@ -4280,6 +5297,46 @@ def llm_invoke(
                     logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
+
+                if estimate_mode:
+                    estimate_context_limit = _catalog_context_limit(model_info)
+                    if estimate_context_limit is None and _estimate_metadata_probe_is_safe(model_info, str(model_name_litellm)):
+                        try:
+                            estimate_context_limit = get_context_limit(model_name_litellm)
+                            extra_headers = litellm_kwargs.get("extra_headers", {})
+                            if (
+                                estimate_context_limit is not None
+                                and "anthropic-beta" in extra_headers
+                                and "context-1m" in extra_headers.get("anthropic-beta", "")
+                            ):
+                                estimate_context_limit = 1_000_000
+                        except Exception:
+                            estimate_context_limit = None
+
+                    call_type_for_estimate = (
+                        "batch_completion" if use_batch_mode else "completion"
+                    )
+                    estimate_payload = _build_estimate_payload(
+                        command_name=_current_estimate_command_name(),
+                        model_info=model_info,
+                        messages_for_count=litellm_kwargs.get("messages", []),
+                        model_name=str(model_name_litellm),
+                        context_limit=estimate_context_limit,
+                        attempted_models=attempted_models,
+                        call_type=call_type_for_estimate,
+                    )
+                    _accumulate_estimate_on_click_context(estimate_payload)
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.estimate_only",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        token_count=estimate_payload.get("input_tokens"),
+                        predicted_output_tokens=estimate_payload.get("predicted_output_tokens"),
+                        cost=estimate_payload.get("total_cost"),
+                    )
+                    raise EstimateOnlyResult(estimate_payload)
 
 
                 # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
@@ -4467,6 +5524,11 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
+                        _publish_model_provenance(
+                            resolved_model=str(model_name_litellm),
+                            outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                            deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                        )
                         return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
@@ -4574,11 +5636,13 @@ def llm_invoke(
                 else:
                     # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
                     # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
-                    # Check both 'thinking' and 'reasoning_effort' because litellm translates
-                    # reasoning_effort to thinking internally during transform_request.
+                    # Check top-level and extra_body payloads because LiteLLM
+                    # may route provider-specific thinking through either.
                     try:
                         is_claude_model = 'claude' in model_name_litellm.lower()
-                        has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
+                        has_thinking_or_reasoning = _has_thinking_or_reasoning_payload(
+                            litellm_kwargs
+                        )
                         if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
@@ -5133,6 +6197,11 @@ def llm_invoke(
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
                 )
+                _publish_model_provenance(
+                    resolved_model=str(model_name_litellm),
+                    outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                    deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                )
                 return _with_local_grounding({
                     'result': final_result,
                     'cost': total_cost,
@@ -5143,6 +6212,9 @@ def llm_invoke(
                 })
 
             # --- 6b. Handle Invocation Errors ---
+            except EstimateOnlyResult:
+                raise
+
             except openai.AuthenticationError as e:
                 last_exception = e
                 error_message = str(e)
@@ -5224,7 +6296,10 @@ def llm_invoke(
                 # 2) thinking enabled but temperature!=1 -> retry with 1
                 lower_err = error_str.lower()
                 if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
+                    claude_thinking_sent = (
+                        _has_thinking_or_reasoning_payload(litellm_kwargs)
+                        and 'claude' in model_name_litellm.lower()
+                    )
                     # Decide direction of adjustment based on whether thinking was enabled in the call
                     if claude_thinking_sent:
                         # thinking enabled -> force temperature=1
@@ -5242,6 +6317,7 @@ def llm_invoke(
                         )
                     current_temperature = adjusted_temp
                     temp_adjustment_done = True
+                    force_temperature_on_retry = claude_thinking_sent and adjusted_temp == 1
                     retry_with_same_model = True
                     _emit_llm_attribution(
                         attribution_context,

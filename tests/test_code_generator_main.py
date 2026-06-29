@@ -5620,17 +5620,48 @@ class TestSyncCompatibilityGates:
 
         assert excinfo.value.changed_signatures == ["process"]
 
-    def test_public_surface_regression_catches_removed_import(self):
-        """Removing an ``import`` re-export is a real downstream-breaking
-        change — issue #1012's user-cited regression was specifically the
-        loss of the ``git`` module re-export, so this MUST surface."""
+    def test_public_surface_regression_ignores_removed_plain_import(self):
+        """Removing a plain ``import`` is routine cleanup, NOT a public-API
+        regression. ``import git`` (like ``from typing import Any``) is an
+        implementation detail unless it is deliberately re-exported via
+        ``__all__`` or a redundant alias. The gate used to hard-fail real
+        syncs over removed import/typing-helper names (issues #1662 / #1663 /
+        pdd_cloud#2256)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        # Plain ``import git`` is not public surface — removing it must pass
+        # silently (no PublicSurfaceRegressionError).
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
+        )
+
+    def test_public_surface_regression_catches_removed_reexport_alias(self):
+        """A redundant-alias re-export (``import git as git``) IS public
+        surface per Python's re-export convention (PEP 484 / mypy
+        ``implicit_reexport=False``); removing it MUST surface. This explicit
+        opt-in replaces the old "every import is public" behavior."""
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
         )
 
         before = (
-            "import git\n"
+            "import git as git\n"
             "def read_fingerprint():\n"
             "    return 'old'\n"
         )
@@ -5651,6 +5682,39 @@ class TestSyncCompatibilityGates:
 
         assert "git" in excinfo.value.removed_symbols
         assert "- git" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_catches_removed_dunder_all_import(self):
+        """An import listed in ``__all__`` is an explicit public re-export;
+        removing it (and dropping it from ``__all__``) MUST surface. ``__all__``
+        remains the authoritative way to protect a re-exported import."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = ['git', 'read_fingerprint']\n"
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "__all__ = ['read_fingerprint']\n"
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "git" in excinfo.value.removed_symbols
 
     def test_public_surface_regression_catches_removed_module_attribute(self):
         """Module-level ``ast.Assign`` targets (public constants) are part
@@ -5711,40 +5775,383 @@ class TestSyncCompatibilityGates:
             "Update internals only.",
         )
 
-    def test_public_surface_regression_tracks_from_import_aliases(self):
-        """``from X import Y`` and ``from X import Y as Z`` bind ``Y``
-        and ``Z`` respectively as module attributes; both are public
-        re-exports that must be tracked. ``from X import *`` binds no
-        fixed identifier and is ignored."""
+    def test_public_surface_regression_from_import_reexport_policy(self):
+        """Outside ``__all__`` only a redundant-alias re-export
+        (``from m import y as y``) is public surface. A plain
+        ``from pathlib import Path`` or a *renaming* alias
+        ``from os.path import join as pjoin`` is an implementation detail whose
+        removal must NOT raise; the redundant-alias form MUST raise. ``from X
+        import *`` binds no fixed identifier and is ignored (issues #1662 /
+        #1663 / pdd_cloud#2256)."""
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
         )
 
-        before = (
+        keep = "def read_fingerprint():\n    return 'new'\n"
+
+        # Plain import + renaming alias: neither is a re-export, so removing
+        # them must pass silently.
+        _verify_public_surface_regression(
             "from pathlib import Path\n"
             "from os.path import join as pjoin\n"
-            "def read_fingerprint():\n"
-            "    return 'old'\n"
-        )
-        after = (
-            "def read_fingerprint():\n"
-            "    return 'new'\n"
+            "def read_fingerprint():\n    return 'old'\n",
+            keep,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
         )
 
+        # Redundant alias ``from os.path import join as join`` IS an explicit
+        # re-export → removing it MUST raise.
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
             _verify_public_surface_regression(
-                before,
-                after,
+                "from os.path import join as join\n"
+                "def read_fingerprint():\n    return 'old'\n",
+                keep,
                 "update_main_Python.prompt",
                 "pdd/update_main.py",
                 "python",
                 "Update internals only.",
             )
 
-        # Both the direct name and the alias surface as removed.
-        assert "Path" in excinfo.value.removed_symbols
-        assert "pjoin" in excinfo.value.removed_symbols
+        assert "join" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_ignores_import_only_helper_removals(self):
+        """Regression for issues #1662 / #1663 / pdd_cloud#2256: removing
+        import-only / typing-helper names (``Any``, ``Literal``, ``dataclass``,
+        ``field``, ``json``, ``Dict``, ``GoogleAuthError``, ``List``,
+        ``Optional``) when the regenerated module no longer needs them must NOT
+        trip the public-surface gate. These reproduce the verbatim
+        ``removed: ...`` failures that blocked real cloud syncs."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from typing import Any, Dict, List, Literal, Optional\n"
+            "from dataclasses import dataclass, field\n"
+            "from google.auth.exceptions import GoogleAuthError\n"
+            "import json\n"
+            "\n"
+            "def build_verdict(payload):\n"
+            "    return json.loads(payload)\n"
+        )
+        # Regenerated body keeps the real public function but drops every
+        # now-unused import/typing helper.
+        after = (
+            "def build_verdict(payload):\n"
+            "    import json\n"
+            "    return json.loads(payload)\n"
+        )
+
+        # Must pass silently — none of the removed names are public surface.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "checkup_verdict_engine_Python.prompt",
+            "pdd/checkup_verdict_engine.py",
+            "python",
+            "Refactor internals; drop unused imports.",
+        )
+
+    def test_public_surface_regression_import_only_removal_keeps_real_removal(self):
+        """Dropping unused imports is allowed, but a real public function
+        removed in the SAME generation must still surface — and ONLY that
+        function, not the imports, appears in ``removed_symbols``."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from typing import Any, Optional\n"
+            "import json\n"
+            "def keep_me():\n"
+            "    return 1\n"
+            "def drop_me():\n"
+            "    return 2\n"
+        )
+        after = (
+            "def keep_me():\n"
+            "    return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "mod_Python.prompt",
+                "pdd/mod.py",
+                "python",
+                "Remove drop_me and unused imports.",
+            )
+
+        # Only the real public function regressed; the typing/json imports are
+        # filtered out of the public surface entirely.
+        assert excinfo.value.removed_symbols == ["drop_me"]
+
+    def test_public_surface_regression_redundant_alias_normalization_is_no_op(self):
+        """Under a stable ``__all__``, normalizing a redundant alias to the
+        plain import form (``from pathlib import Path as Path`` ->
+        ``from pathlib import Path``, or ``import pathlib as pathlib`` ->
+        ``import pathlib``) binds the SAME object and must NOT diff as a phantom
+        signature change — the redundant alias canonicalizes to the plain
+        re-export marker."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "__all__ = ['Path']\nfrom pathlib import Path as Path\n",
+            "__all__ = ['Path']\nfrom pathlib import Path\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+        _verify_public_surface_regression(
+            "__all__ = ['pathlib']\nimport pathlib as pathlib\n",
+            "__all__ = ['pathlib']\nimport pathlib\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_bare_dunder_all_annotation_is_lenient(self):
+        """A bare ``__all__: list[str]`` annotation (no value) does NOT bind
+        ``__all__`` at runtime — it is a type hint, not a declaration — so the
+        module is treated as having no ``__all__`` and imports stay
+        implementation details. Removing an unused ``import json`` must NOT
+        raise."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__: list[str]\n"
+            "import json\n"
+            "def keep():\n    return 1\n"
+        )
+        after = "def keep():\n    return 1\n"
+
+        # Bare annotation ⇒ lenient ⇒ removing the unused import is allowed.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    @pytest.mark.parametrize("unreadable_all", [
+        "__all__ = sorted(['keep'])",                 # computed
+        "__all__ = _EXPORTS",                          # name reference
+        "__all__ = ['keep']\n__all__ += ['Extra']",    # augmented
+        "__all__ = ['keep']\n__all__.append('Extra')", # in-place mutation
+        "__all__ = ['keep']\nif _cond:\n    __all__.append('Extra')",  # conditional export
+    ])
+    def test_public_surface_regression_unresolvable_dunder_all_is_lenient(self, unreadable_all):
+        """When ``__all__`` cannot be statically resolved (computed, augmented,
+        or mutated — including the realistic ``if platform: __all__.append(...)``
+        conditional-export pattern), the gate stays LENIENT FOR IMPORTS: an
+        import is still treated as an implementation detail, so removing an
+        unused ``from typing import Any`` must NOT raise. Capturing every import
+        conservatively here would reintroduce the #2256 false positive.
+        Protecting a plain-IMPORT re-export listed only in such an unresolvable
+        ``__all__`` is a documented limitation — use a clean ``__all__`` literal
+        or a redundant alias. (A DEFINED symbol added via the mutation IS
+        protected — see the next test.)"""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "_EXPORTS = ['keep']\n_cond = True\n"
+            f"{unreadable_all}\n"
+            "from typing import Any\n"
+            "def keep():\n    return 1\n"
+        )
+        after = "_EXPORTS = ['keep']\n_cond = True\ndef keep():\n    return 1\n"
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    @pytest.mark.parametrize("mutation", [
+        "__all__.append('Extra')",                  # in-place method mutation
+        "__all__.extend(['Extra'])",                # another mutator method
+        "__all__ += ['Extra']",                     # augmented assignment
+        "__all__[0] = 'Extra'",                     # subscript write
+        "if _cond:\n    __all__.append('Extra')",   # conditional export
+    ])
+    def test_public_surface_regression_mutated_dunder_all_protects_appended_symbol(self, mutation):
+        """A runtime ``__all__`` mutation makes the static literal unresolvable,
+        so ``_extract_dunder_all`` returns ``None`` and the module falls back to
+        the heuristic — which still protects a DEFINED public symbol added via
+        that mutation. Here ``Extra`` is a real function exported by
+        ``__all__.append('Extra')`` / ``.extend`` / ``+=`` / subscript / a
+        conditional append; removing it on regeneration MUST raise. This guards
+        the mutation-fallback behavior: a parser that silently IGNORED ``.append``
+        would treat ``__all__`` as the stale ``['keep']`` and let ``Extra`` be
+        removed. (Imports in the same regime stay re-export-only — see the
+        lenient test above — so this is NOT the #2256 conservative path.)"""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "_cond = True\n"
+            "__all__ = ['keep']\n"
+            f"{mutation}\n"
+            "def keep():\n    return 1\n"
+            "def Extra():\n    return 2\n"
+        )
+        # Regeneration keeps the mutation but drops the appended public function.
+        after = (
+            "_cond = True\n"
+            "__all__ = ['keep']\n"
+            f"{mutation}\n"
+            "def keep():\n    return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Extra" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_mutation_overridden_by_later_literal(self):
+        """``__all__`` resolution is SOURCE-ORDER: an earlier in-place mutation
+        is OVERRIDDEN by a later clean top-level literal rebind (Python's
+        last-write-wins). ``__all__ = ['A']; __all__.append('B'); __all__ =
+        ['A']`` resolves to ``{'A'}`` again — so the module stays authoritative
+        and removing the unlisted ``B`` MUST NOT raise (the append is discarded
+        at runtime, so ``B`` was never actually exported)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = ['A']\n"
+            "__all__.append('B')\n"
+            "__all__ = ['A']\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            "__all__.append('B')\n"
+            "__all__ = ['A']\n"
+            "def A():\n    return 1\n"
+        )
+
+        # ``__all__`` resolves to {'A'}; ``B`` is not exported -> removable.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_dunder_all_import_rebind_falls_back(self):
+        """Importing ``__all__`` (``from exports import __all__``) replaces the
+        module's ``__all__`` with a value that cannot be resolved statically, so
+        the gate falls back to the heuristic and conservatively protects defined
+        symbols. A bare ``import``/``from`` that binds some OTHER name (``from
+        typing import Any``) is unaffected — it does not touch ``__all__``."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = ['A']\n"
+            "from exports import __all__\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            "from exports import __all__\n"
+            "def A():\n    return 1\n"
+        )
+
+        # ``__all__`` is unresolvable (imported) -> heuristic -> ``B`` protected.
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "B" in excinfo.value.removed_symbols
+
+    @pytest.mark.parametrize("annotation", [
+        "__all__: list[str]",      # value-less name annotation
+        "__all__[0]: str",         # value-less subscript annotation (no runtime write)
+    ])
+    def test_public_surface_regression_value_less_dunder_all_annotation_is_no_op(self, annotation):
+        """A value-less annotation on ``__all__`` (or one of its elements) does
+        NOT assign or mutate at runtime — it is purely a type hint — so it must
+        NOT reset the resolved ``__all__``. With a prior clean literal
+        ``__all__ = ['A']`` still authoritative, removing an unlisted ``B`` must
+        NOT raise (the annotation's ``Store`` ctx is an AST artifact, not a
+        write)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = ['A']\n"
+            f"{annotation}\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            f"{annotation}\n"
+            "def A():\n    return 1\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_relative_reexport_source_flip_is_detected(self):
+        """A redundant-alias relative re-export records its source package level,
+        so re-pointing ``from . import Foo as Foo`` to ``from .. import Foo as
+        Foo`` (same bound name, different module) is a detectable signature
+        change, not a silent no-op."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "from . import Foo as Foo\n",
+                "from .. import Foo as Foo\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
 
     def test_public_surface_regression_tracks_annotated_assignment(self):
         """Module-level ``ast.AnnAssign`` targets (annotated public
@@ -7763,6 +8170,101 @@ class TestSyncCompatibilityGates:
         )
 
     # -----------------------------------------------------------------
+    # Issue #1612: syntactically invalid generated Python must raise
+    # ArchitectureConformanceError (not PublicSurfaceRegressionError).
+    #
+    # Root cause: _snapshot_public_surface silently returns set() on
+    # SyntaxError, so after = set() while before = {'process_data',
+    # 'validate'}.  _verify_public_surface_regression then raises
+    # PublicSurfaceRegressionError with post_surface_size=0, misrouting
+    # the failure as a phantom symbol-removal regression instead of a
+    # syntax error.  The repair loop then chases phantom removed symbols
+    # rather than the real syntax problem.
+    # -----------------------------------------------------------------
+
+    def test_syntax_error_in_generated_python_raises_arch_conformance_not_surface_regression_issue_1612(
+        self,
+    ):
+        """When generated_code has a Python syntax error,
+        _verify_public_surface_regression must raise ArchitectureConformanceError
+        rather than PublicSurfaceRegressionError.
+
+        Before the fix: _snapshot_public_surface silently returns set() on
+        SyntaxError.  _verify_public_surface_regression sees
+        before={'process_data', 'validate'} and after=set(), raises
+        PublicSurfaceRegressionError with post_surface_size=0 — a misleading
+        phantom-removal report that directs the repair loop away from the real
+        syntax error.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        # Syntactically invalid Python: truncated/prose-wrapped LLM output.
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError):
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+    def test_syntax_error_arch_conformance_lists_expected_symbols_and_syntax_directive_issue_1612(
+        self,
+    ):
+        """ArchitectureConformanceError raised for syntax-invalid generated Python
+        must carry the expected public symbols as missing_symbols and must include
+        the word 'syntax' in the repair_directive so the repair loop targets the
+        actual problem rather than phantom removed exports.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+        # Sorted symbols snapshotted from existing_code.
+        assert excinfo.value.missing_symbols == ["process_data", "validate"]
+        # Repair directive must name the expected symbols so the model knows
+        # what to restore once the syntax is fixed.
+        assert "process_data" in excinfo.value.repair_directive
+        assert "validate" in excinfo.value.repair_directive
+        # Repair directive must mention 'syntax' so the repair loop targets
+        # the syntax error, not phantom removed exports.
+        assert "syntax" in excinfo.value.repair_directive.lower()
+
+    # -----------------------------------------------------------------
     # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
     # generated body MUST trigger the compatibility gates rather than
     # silently truncating the existing file to 0 bytes. The original
@@ -9225,12 +9727,17 @@ class TestPublicSurfaceBindingKind:
     # ------------------------------------------------------------------
     # External review (PR #1015, iter-4): top-level imports were
     # captured by the surface helper but NOT by the signatures helper.
-    # That asymmetry let ``from pathlib import Path`` → ``def Path():
-    # ...`` slip through — the surface set kept ``Path`` (no removal),
-    # and the signatures dict had no ``Path`` entry on the before side
-    # so the new ``[function] ()`` looked like a brand-new symbol, not
-    # a re-export break. Recording imports as ``[import:...]`` in the
-    # signatures dict closes the gap.
+    # That asymmetry let an explicit re-export ``from pathlib import Path
+    # as Path`` → ``def Path(): ...`` slip through — the surface set kept
+    # ``Path`` (no removal), and the signatures dict had no ``Path`` entry
+    # on the before side so the new ``[function] ()`` looked like a
+    # brand-new symbol, not a re-export break. Recording re-exports as
+    # ``[import:...]`` in the signatures dict closes the gap.
+    #
+    # Issues #1662 / #1663 / pdd_cloud#2256: only DELIBERATE re-exports
+    # (redundant alias ``x as x`` / ``__all__``) are public surface, so
+    # the flip fixtures below use redundant aliases; plain / renaming-alias
+    # flips are covered by ``test_*_non_reexport_*`` as no-ops.
     # ------------------------------------------------------------------
     def test_from_import_to_function_flip_is_detected(self):
         from pdd.code_generator_main import (
@@ -9238,9 +9745,10 @@ class TestPublicSurfaceBindingKind:
             _verify_public_surface_regression,
         )
 
-        before = "from pathlib import Path\n"
-        # Same bound name ``Path`` but now resolves to a local function;
+        # Redundant-alias re-export ``from pathlib import Path as Path``;
+        # the same bound name ``Path`` now resolves to a local function, so
         # ``Path("/tmp")`` callers that expect the pathlib API break.
+        before = "from pathlib import Path as Path\n"
         after = "def Path():\n    return None\n"
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9261,10 +9769,10 @@ class TestPublicSurfaceBindingKind:
             _verify_public_surface_regression,
         )
 
-        before = "import pathlib\n"
-        # Same bound name ``pathlib`` but now ``None`` — code that does
-        # ``pathlib.Path(...)`` raises ``AttributeError`` after the
-        # rewrite.
+        # Redundant-alias re-export ``import pathlib as pathlib``; the same
+        # bound name is now ``None`` — code that does ``pathlib.Path(...)``
+        # raises ``AttributeError`` after the rewrite.
+        before = "import pathlib as pathlib\n"
         after = "pathlib = None\n"
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9279,37 +9787,45 @@ class TestPublicSurfaceBindingKind:
 
         assert "pathlib" in excinfo.value.changed_signatures
 
-    def test_import_aliased_to_function_flip_is_detected(self):
-        # ``import pathlib as p`` binds ``p``; replacing with a local
-        # ``def p()`` is the same flip as the unaliased form. The alias
-        # is encoded in the signatures snapshot so this still trips.
-        from pdd.code_generator_main import (
-            PublicSurfaceRegressionError,
-            _verify_public_surface_regression,
-        )
-
-        before = "import pathlib as p\n"
-        after = "def p():\n    return None\n"
-
-        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
-            _verify_public_surface_regression(
-                before,
-                after,
-                "module_Python.prompt",
-                "pdd/module.py",
-                "python",
-                "",
-            )
-
-        assert "p" in excinfo.value.changed_signatures
-
-    def test_unchanged_from_import_is_allowed(self):
-        # Sanity check: identical ``from X import Y`` on both sides must
-        # NOT produce a snapshot diff. The encoded source module keeps
-        # the entry stable across regeneration.
+    def test_non_reexport_import_flip_is_allowed(self):
+        """A plain import or a *renaming* alias is NOT a public re-export, so
+        flipping it to a same-named def/assignment is NOT a regression
+        (issues #1662 / #1663 / pdd_cloud#2256). ``import pathlib as p`` binds
+        a private-by-convention local name ``p`` that no caller imports as part
+        of this module's contract."""
         from pdd.code_generator_main import _verify_public_surface_regression
 
-        source = "from pathlib import Path\n"
+        # Renaming alias (``p`` != ``pathlib``) flipped to a function — allowed.
+        _verify_public_surface_regression(
+            "import pathlib as p\n",
+            "def p():\n    return None\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+        # Plain ``from pathlib import Path`` flipped to a function — allowed,
+        # even with a sibling public symbol keeping the surface non-empty.
+        _verify_public_surface_regression(
+            "from pathlib import Path\ndef keep():\n    return 1\n",
+            "def Path():\n    return None\ndef keep():\n    return 1\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_unchanged_reexport_is_allowed(self):
+        # Sanity check: an identical re-export on both sides must NOT produce
+        # a snapshot diff. A redundant alias (``Path as Path``) keeps the name
+        # on the public surface, so ``before`` is non-empty and the gate
+        # actually exercises the signature-stability path (a plain
+        # ``from pathlib import Path`` would be filtered out entirely, making
+        # this test vacuous).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "from pathlib import Path as Path\n"
 
         _verify_public_surface_regression(
             source,
@@ -10588,3 +11104,382 @@ class TestFrontMatterStripping:
             )
 
         assert "old_helper" in excinfo.value.removed_symbols
+
+
+# =============================================================================
+# Issue #1724: conformance repair retries must bypass incremental generation
+# =============================================================================
+#
+# Bug: When `pdd sync` fails architecture conformance it sets PDD_REPAIR_DIRECTIVE
+#      and `code_generator_main` appends an <architecture_repair_directive> block
+#      to the in-memory prompt_content (pdd/code_generator_main.py:3734-3740).
+#      That append makes the prompt look "changed" vs HEAD (or vs an explicit
+#      original prompt), so the incremental-eligibility logic flips
+#      can_attempt_incremental=True. The incremental dispatch guard at
+#      pdd/code_generator_main.py:4120 has NO check for an active repair
+#      directive, so the conformance-repair retry is routed through
+#      incremental_code_generator_func (:4169) — a diff-analysis (patch-vs-
+#      regenerate) LLM — BEFORE full generation. In staging that diff-analysis
+#      call returned a raw error string, producing the secondary
+#      "'str' object has no attribute ..." crash, so the named repair
+#      (add missing `extract_step_report`) never reached the full generator.
+#
+# Fix: when PDD_REPAIR_DIRECTIVE is non-empty (after .strip()), force
+#      can_attempt_incremental=False so the repair retry falls straight to full
+#      generation with the <architecture_repair_directive> block visible. Normal
+#      incremental generation (no directive) must remain unchanged.
+#
+# These tests exercise the caller→callee routing boundary. They mock the
+# incremental callee (the only production dispatch site,
+# code_generator_main.incremental_code_generator_func) and assert that during a
+# repair it is NOT called and the full local/cloud generator receives the
+# directive-bearing prompt instead. All assertions are behavioral (mock
+# call/no-call + prompt/payload contents), never signature/source introspection.
+# =============================================================================
+
+# The real staging repair directive named the missing public wrapper. We keep
+# the symbol name for fidelity but phrase it as plain prose (no <pdd-interface>
+# block) so only the routing behavior under test is exercised — a bare
+# <pdd-interface> mention would otherwise feed the prompt-interface conformance
+# parser.
+ISSUE_1724_REPAIR_DIRECTIVE = (
+    "Architecture conformance repair required. The prompt declares a public "
+    "function missing from the generated code: extract_step_report. Add the "
+    "missing public wrapper extract_step_report so the interface conforms."
+)
+
+# Public-surface-preserving bodies. The existing output file and every
+# generation result expose the same single public symbol `existing`, so the
+# post-generation public-surface regression gate (which fires whenever an
+# existing output file is present) never produces a false failure that would
+# mask the routing assertion under test.
+ISSUE_1724_EXISTING_CODE = "def existing():\n    return 42\n"
+ISSUE_1724_REPAIRED_CODE = "def existing():\n    return 99\n"
+
+
+def test_issue_1724_repair_via_git_change_bypasses_incremental(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Primary repro: a conformance-repair retry whose incremental eligibility
+    comes from the git-detected "prompt looks changed vs HEAD" path must NOT be
+    routed through incremental generation.
+
+    On buggy code the directive append makes prompt_content differ from HEAD,
+    flipping can_attempt_incremental=True, and the dispatch guard (no repair
+    check) sends the retry through incremental_code_generator_func. After the
+    fix the active repair directive forces full generation, and the local
+    generator receives the <architecture_repair_directive> block.
+    """
+    mock_ctx.obj['local'] = True
+
+    # Unique prompt name so the post-generation architecture-conformance gate
+    # (which loads the repo's real architecture.json by default) finds no entry
+    # and the test fails on the routing assertion, not on an unrelated
+    # conformance mismatch. The staging repro used agentic_common; the routing
+    # behavior under test is identical regardless of module name.
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_1724_git_python.prompt"
+    base_prompt = "Generate the agentic_common module."
+    create_file(prompt_file_path, base_prompt)
+
+    output_file_path = temp_dir_setup["output_dir"] / "issue_1724_git.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        # No "original_prompt_file" key -> eligibility is decided by the git path.
+        {"prompt_file": base_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    # Generation results preserve the public surface so the compatibility gates
+    # pass regardless of which path is taken (keeps the no-call assertion clean).
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    # Make the on-disk prompt look identical to HEAD *before* the directive is
+    # appended: the only reason the prompt differs from HEAD is the directive.
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", return_value=base_prompt):
+        code, incremental, _cost, _model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False,
+        )
+
+    # Routing assertion: repair must NOT touch the incremental diff-analysis path.
+    mock_incremental_generator_fixture.assert_not_called()
+    # Full generation must run and receive the directive-bearing prompt.
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert "</architecture_repair_directive>" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_repair_via_explicit_original_prompt_bypasses_incremental(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """A conformance-repair retry whose incremental eligibility comes from an
+    explicit original_prompt_file must still bypass incremental generation."""
+    mock_ctx.obj['local'] = True
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_explicit.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_explicit.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_explicit_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_force_incremental_flag_cannot_reenable_during_repair(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Even with force_incremental_flag=True, an active repair directive must
+    keep the retry on the full-generation path (the force flag must not be able
+    to re-enable incremental when PDD_REPAIR_DIRECTIVE is set)."""
+    mock_ctx.obj['local'] = True
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_force.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_force.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_force_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path),
+        True,  # force_incremental_flag
+    )
+
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_cloud_channel_bypasses_incremental_and_carries_directive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_requests_post_fixture,
+    mock_get_jwt_token_fixture, monkeypatch, mock_env_vars,
+):
+    """The cloud generation channel must also bypass incremental during a repair
+    and send the full generator a prompt containing the repair directive.
+
+    K_SERVICE/FUNCTIONS_EMULATOR are cleared by the autouse _clear_cloud_runtime_env
+    fixture, so the mocked cloud call is actually reached.
+    """
+    mock_ctx.obj['local'] = False  # cloud path
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_cloud.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_cloud.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_cloud_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+    # Cloud full-generation returns public-surface-preserving code.
+    cloud_response = MagicMock(spec=requests.Response)
+    cloud_response.json.return_value = {
+        "generatedCode": ISSUE_1724_REPAIRED_CODE,
+        "totalCost": DEFAULT_MOCK_COST,
+        "modelName": "cloud_model",
+    }
+    cloud_response.status_code = 200
+    cloud_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = cloud_response
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Repair must not enter incremental, and the cloud full generator must be hit.
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_requests_post_fixture.assert_called_once()
+    payload = mock_requests_post_fixture.call_args.kwargs["json"]
+    # searchInput carries the raw prompt_content (with the directive appended);
+    # promptContent is the preprocessed prompt. Both must carry the directive.
+    assert "<architecture_repair_directive>" in payload["searchInput"]
+    assert "extract_step_report" in payload["searchInput"]
+    assert "<architecture_repair_directive>" in payload["promptContent"]
+    assert incremental is False
+
+
+def test_issue_1724_normal_incremental_still_works_without_directive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Regression guard: with NO repair directive active, ordinary incremental
+    generation must still run (the fix gates strictly on the directive, it is
+    not a blanket disable of incremental)."""
+    mock_ctx.obj['local'] = True
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "normal_incremental.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "normal_incremental.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "normal_incremental_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    # Incremental returns a valid patched result that preserves the public surface.
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, 0.002, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    mock_incremental_generator_fixture.assert_called_once()
+    assert incremental is True
+    # No directive set -> the full local generator is not used for this path.
+    mock_local_generator_fixture.assert_not_called()
+
+
+def test_issue_1724_whitespace_only_directive_is_inactive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Edge case (.strip() symmetry): a whitespace-only PDD_REPAIR_DIRECTIVE must
+    behave exactly like "no directive" — incremental runs, and no
+    <architecture_repair_directive> block is injected. This proves the bypass
+    keys off the same .strip()-non-empty condition the directive injection uses.
+    """
+    mock_ctx.obj['local'] = True
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "   \n\t  ")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "ws_directive.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "ws_directive.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "ws_directive_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    captured = {}
+
+    def _incremental_side_effect(*args, **kwargs):
+        captured["new_prompt"] = kwargs.get("new_prompt")
+        return (ISSUE_1724_REPAIRED_CODE, True, 0.002, "inc_model")
+
+    mock_incremental_generator_fixture.side_effect = _incremental_side_effect
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Whitespace directive is inactive: incremental still runs.
+    mock_incremental_generator_fixture.assert_called_once()
+    assert incremental is True
+    mock_local_generator_fixture.assert_not_called()
+    # And no repair-directive block was injected into the prompt.
+    assert "<architecture_repair_directive>" not in (captured.get("new_prompt") or "")

@@ -12,9 +12,9 @@ import warnings
 
 import click
 import yaml
-from rich.console import Console
 from rich.theme import Theme
 
+from .cli_theme import get_console
 from .get_extension import get_extension
 from .get_language import get_language
 from .generate_output_paths import EXAMPLES_DIR, generate_output_paths
@@ -52,7 +52,7 @@ def _default_examples_project_root(pddrc_path: Optional[Path]) -> Path:
 # Add csv import for the new helper function
 import csv
 
-console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+console = get_console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
 def _extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
     """Extract the path suffix after the 'prompts' segment in a prompts_dir value.
@@ -149,6 +149,9 @@ _PDDRC_DEFAULTS_KEYS = {
     "compress_examples",
     "compress_test_context",
     "compression_fallback",
+    "test_token_budget",
+    "test_ranking_weights",
+    "test_dedup_threshold",
 }
 
 
@@ -556,6 +559,9 @@ def _resolve_config_hierarchy(
         'compress_examples': 'PDD_COMPRESS_EXAMPLES',
         'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
         'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
+        'test_token_budget': 'PDD_TEST_TOKEN_BUDGET',
+        'test_ranking_weights': 'PDD_TEST_RANKING_WEIGHTS',
+        'test_dedup_threshold': 'PDD_TEST_DEDUP_THRESHOLD',
     }
 
     for config_key, env_var in config_keys.items():

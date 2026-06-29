@@ -1,0 +1,8 @@
+<pdd-reason>
+Prefer a small state machine so malformed lines can be reported with exact line
+numbers. Keep parsing and validation separate so future callers can reuse each
+piece independently.
+</pdd-reason>
+
+Generate a Python parser for a simple `.env`-style configuration format.
+Comments start with `#`; values may be quoted; duplicate keys should raise.

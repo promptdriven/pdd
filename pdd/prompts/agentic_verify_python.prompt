@@ -1,3 +1,22 @@
+<pdd-reason>Autonomously verifies code against specifications.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_verify",
+        "signature": "(prompt_file: Path, code_file: Path, program_file: Path, verification_log_file: Path) -> tuple[bool, str, float, str, list[str]]",
+        "returns": "tuple[bool, str, float, str, list[str]]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 
 % Goal

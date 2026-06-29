@@ -257,6 +257,25 @@ def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _render_stale_head_summary(
+    *,
+    pr_number: int,
+    expected_head_sha: str,
+    live_head_sha: str,
+    checks: List[Dict[str, str]],
+) -> str:
+    """Render a clear diagnostic when the expected PR head never became live."""
+    expected = expected_head_sha or "<unknown>"
+    live = live_head_sha or "<unknown>"
+    summary = _render_check_summary(checks)
+    return (
+        f"PR #{pr_number} head did not match the expected CI validation head.\n"
+        f"- expected head: `{expected}`\n"
+        f"- live PR head: `{live}`\n"
+        f"- last known checks:\n{summary}"
+    )
+
+
 def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
     """Classify `gh pr checks` output using both exit code and bucket values."""
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
@@ -289,20 +308,23 @@ def _poll_required_checks(
     saw_checks = False
     saw_ambiguous_error = False
     matched_expected_head = not bool(expected_head_sha)
+    last_remote_head_sha = ""
     latest_checks: List[Dict[str, str]] = []
     start = time.monotonic()
 
     while time.monotonic() - start < MAX_POLL_SECONDS:
         remote_head_sha = _get_pr_head_sha(repo_owner, repo_name, pr_number, cwd)
+        if remote_head_sha:
+            last_remote_head_sha = remote_head_sha
         if expected_head_sha and remote_head_sha:
             matched_expected_head = remote_head_sha == expected_head_sha
             if not matched_expected_head:
                 if not quiet:
                     console.print(
-                        f"[dim]Waiting for PR #{pr_number} to update to head {expected_head_sha[:7]}...[/dim]"
+                        f"[dim]PR #{pr_number} live head is {remote_head_sha[:7]}, "
+                        f"not expected head {expected_head_sha[:7]}; checking "
+                        "live-head status before waiting...[/dim]"
                     )
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
 
         check_args = ["pr", "checks", str(pr_number)]
         if required_only:
@@ -363,7 +385,9 @@ def _poll_required_checks(
 
         status = _classify_check_result(result.returncode, latest_checks)
 
-        if status in {"passed", "failed"}:
+        if status == "failed":
+            return status, latest_checks
+        if status == "passed" and matched_expected_head:
             return status, latest_checks
 
         if result.returncode not in {0, 1, 8} and not quiet:
@@ -375,6 +399,21 @@ def _poll_required_checks(
 
     if not saw_checks and matched_expected_head and not saw_ambiguous_error:
         return "no_checks", []
+    if expected_head_sha and not matched_expected_head:
+        stale_summary = _render_stale_head_summary(
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            live_head_sha=last_remote_head_sha,
+            checks=latest_checks,
+        )
+        return "stale_head", [
+            {
+                "name": "PR head mismatch",
+                "state": stale_summary,
+                "bucket": "fail",
+                "link": "",
+            }
+        ]
     return "timeout", latest_checks
 
 
@@ -395,6 +434,7 @@ def _poll_check_runs_for_head(
     API.
     """
     saw_checks = False
+    saw_api_error = False
     latest_checks: List[Dict[str, str]] = []
     start = time.monotonic()
 
@@ -419,6 +459,7 @@ def _poll_check_runs_for_head(
                 return status, latest_checks
 
         if result.returncode != 0:
+            saw_api_error = True
             stderr_lower = (result.stderr or "").lower()
             if "resource not accessible by integration" in stderr_lower:
                 if not quiet:
@@ -426,7 +467,7 @@ def _poll_check_runs_for_head(
                         "[yellow]CI polling: cannot read GitHub check runs "
                         "(GitHub App may lack checks:read permission on this repo).[/yellow]"
                     )
-                return "no_checks", []
+                return "unreadable", []
             if not quiet:
                 stderr = result.stderr.strip()
                 if stderr:
@@ -435,6 +476,8 @@ def _poll_check_runs_for_head(
         time.sleep(POLL_INTERVAL_SECONDS)
 
     if not saw_checks:
+        if saw_api_error:
+            return "unreadable", []
         return "no_checks", []
     return "timeout", latest_checks
 
@@ -521,7 +564,7 @@ def run_github_checks_gate(
         )
     if status == "failed":
         return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
-    if status == "no_checks":
+    if status in {"no_checks", "unreadable"}:
         return (
             False,
             (
@@ -540,6 +583,8 @@ def run_github_checks_gate(
             ),
             head_sha,
         )
+    if status == "stale_head":
+        return False, summary, head_sha
     return (
         False,
         f"{source_name} returned unexpected status {status!r} on PR head {head_sha[:8]}:\n{summary}",
@@ -819,13 +864,13 @@ def run_ci_validation_loop(
 ) -> Tuple[bool, str, float]:
     """Poll required PR checks and iterate on CI-only failures until they pass.
 
-    ``expected_head_sha_override`` lets callers wait for a specific PR head
-    SHA instead of inferring it from ``cwd``'s local HEAD. The final-checkup
-    gate uses this: the checkup pushes from its own worktree, so ``cwd``'s
-    local HEAD is stale relative to the PR remote. Passing the
-    post-checkup PR head SHA via this override makes the poll wait for the
-    correct head and prevents the timeout from burning while ``cwd``'s
-    stale HEAD is compared to the advanced remote.
+    ``expected_head_sha_override`` lets a caller wait for a specific PR head
+    SHA instead of inferring it from ``cwd``'s local HEAD — useful when the
+    head being validated was pushed from a different worktree, so ``cwd``'s
+    local HEAD is stale relative to the PR remote. Passing the exact PR head
+    SHA via this override makes the poll wait for the correct head and
+    prevents the timeout from burning while ``cwd``'s stale HEAD is compared
+    to the advanced remote.
     """
     total_cost = 0.0
     max_retries = max(0, int(max_retries))
@@ -848,7 +893,11 @@ def run_ci_validation_loop(
     last_summary = "No required CI checks were reported."
 
     while True:
-        head_sha = expected_head_sha_override or _get_head_sha(cwd)
+        head_sha = (
+            expected_head_sha_override
+            or _get_pr_head_sha(repo_owner, repo_name, pr_number, cwd)
+            or _get_head_sha(cwd)
+        )
         status, checks = _poll_required_checks(
             repo_owner,
             repo_name,
@@ -861,11 +910,134 @@ def run_ci_validation_loop(
         if status == "passed":
             return True, "Required CI checks passed", total_cost
         if status == "no_checks":
-            return True, "No CI checks detected", total_cost
+            # Requirement 12: cross-check the live PR head's real check runs before
+            # treating "no_checks" as ready. _poll_required_checks returns "no_checks"
+            # for several distinct situations that are NOT "genuinely no required
+            # checks" (App-token-unreadable status rollup, required checks not yet
+            # reported, or a poll timeout with nothing read). Failing open on all of
+            # these silently green-lights a PR whose live head actually has failing
+            # checks. Reuse the REST Checks API path the final gate uses.
+            cross_head_sha = expected_head_sha_override or _get_pr_head_sha(
+                repo_owner,
+                repo_name,
+                pr_number,
+                cwd,
+            ) or head_sha
+            cross_status, cross_checks = _poll_check_runs_for_head(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                head_sha=cross_head_sha,
+                cwd=cwd,
+                quiet=quiet,
+            )
+            # Only treat as genuinely having no checks if the cross-check confirms it.
+            if cross_status == "no_checks":
+                return True, "No CI checks detected", total_cost
+            # The required-check poll could not read the rollup, but the live
+            # head's real check runs are all green: the PR genuinely passed.
+            # Return ready here instead of falling through to the failure path,
+            # otherwise an already-passing PR whose GraphQL statusCheckRollup is
+            # unreadable by the App token (the exact condition this cross-check
+            # exists for) would drive a pointless fix loop or be reported as not
+            # ready.
+            if cross_status == "passed":
+                return (
+                    True,
+                    f"Required CI checks passed on live PR head {cross_head_sha[:8]}",
+                    total_cost,
+                )
+            # Otherwise the PR is not ready; fall through with the real check status.
+            status = cross_status
+            checks = cross_checks
+            if status == "unreadable":
+                message = (
+                    f"GitHub check runs were missing or unreadable for PR head "
+                    f"{cross_head_sha[:8]}; CI validation cannot verify the PR."
+                )
+                post_ci_failure_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    failures=[message],
+                    attempts=fix_attempt,
+                    cwd=cwd,
+                )
+                return False, message, total_cost
         if status == "timeout":
+            # A poll timeout means the required checks never reached
+            # a terminal state in the window. Two distinct cases must be split:
+            #
+            #   (a) we OBSERVED the required checks and they are merely pending
+            #       (`checks` is non-empty). A genuine check FAILURE returns
+            #       "failed" from _classify_check_result / _poll_required_checks
+            #       and never reaches this branch, so observed-at-timeout checks
+            #       are pending, never failing. This is genuinely INCONCLUSIVE
+            #       (commonly a manually-triggered or external check the bot
+            #       structurally cannot run, e.g. a /gcbrun-gated build) — fail
+            #       OPEN so a pending check does not retroactively hard-fail an
+            #       already-committed fix. Leave a neutral best-effort note (NOT
+            #       a CI-failure comment) and proceed.
+            #
+            #   (b) we NEVER got a clean read (`checks` is empty): the PR head
+            #       never matched the expected SHA, or the rollup was unreadable
+            #       for the whole window. We cannot prove the checks are merely
+            #       pending rather than failing, so fail CLOSED rather than
+            #       green-light a head whose real status we never saw.
             if checks:
                 last_failures = checks
                 last_summary = _render_check_summary(checks)
+                note = (
+                    f"Required CI checks for PR #{pr_number} did not reach a "
+                    f"terminal state within the {MAX_POLL_SECONDS // 60}-minute "
+                    f"poll window (still pending or unreported). Treating CI as "
+                    f"inconclusive and proceeding: external or manually-triggered "
+                    f"checks the bot cannot run are best-effort, not a hard gate. "
+                    f"Last observed status:\n{last_summary}"
+                )
+                try:
+                    post_pr_comment(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        pr_number=pr_number,
+                        body=note,
+                        cwd=cwd,
+                    )
+                except Exception:  # noqa: BLE001 — informational note is best-effort
+                    pass
+                return (
+                    True,
+                    (
+                        "Required CI checks did not complete within the poll "
+                        "window (still pending or unavailable); proceeding — "
+                        "external CI is best-effort and treated as inconclusive."
+                    ),
+                    total_cost,
+                )
+            # Case (b): the required checks were never read for the expected head.
+            post_ci_failure_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                pr_number=pr_number,
+                failures=[
+                    "Could not read the required CI checks before the poll "
+                    "window elapsed: the PR head never matched the expected SHA, "
+                    "or the check status was unreadable for the whole window."
+                ],
+                attempts=fix_attempt,
+                cwd=cwd,
+            )
+            return (
+                False,
+                (
+                    "Could not read required CI checks before the poll window "
+                    "elapsed (the PR head never matched the expected SHA, or the "
+                    "checks were unreadable); failing closed."
+                ),
+                total_cost,
+            )
+        if status == "stale_head":
+            last_failures = checks
+            last_summary = _render_check_summary(last_failures)
             post_ci_failure_comment(
                 repo_owner=repo_owner,
                 repo_name=repo_name,
@@ -874,7 +1046,7 @@ def run_ci_validation_loop(
                 attempts=fix_attempt,
                 cwd=cwd,
             )
-            return False, "Timed out waiting for required CI checks to complete", total_cost
+            return False, last_summary, total_cost
 
         last_failures = checks
         last_summary = _render_check_summary(last_failures)

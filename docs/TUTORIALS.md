@@ -128,6 +128,7 @@ This tutorial walks through implementing a GitHub issue using PDD.
 ### Tips
 
 - **Resume from anywhere**: Workflow state is saved to GitHub, so you can continue on any machine
+- **Step status comments**: A GitHub step comment marked `DEGRADED - workflow continuing` means that step hit a recoverable failure and PDD is continuing with fallback/default behavior. A comment marked `FAILED - workflow aborting` means the workflow stopped and needs intervention.
 - **Cost budgeting**: Use `--budget` flag to limit spending on complex issues
 - **Skip steps**: If a step hangs, check the GitHub issue for clarifying questions
 

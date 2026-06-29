@@ -6,6 +6,8 @@ updates a live GitHub issue comment with progress, and pauses on failure.
 """
 from __future__ import annotations
 
+import collections
+import codecs
 import csv as _csv
 import datetime
 import json
@@ -30,7 +32,13 @@ from .agentic_common import (
     ensure_issue_steer_cursor_seeded,
     peek_agentic_progress_steer_metadata,
 )
-from .construct_paths import _is_known_language
+from .construct_paths import (
+    _detect_context_from_basename,
+    _find_pddrc_file,
+    _is_known_language,
+    _load_pddrc_config,
+)
+from .resolved_sync_unit import ResolvedSyncUnit
 from .sync_order import compute_sccs
 
 console = Console()
@@ -39,8 +47,95 @@ console = Console()
 # Module-level constants and helpers
 # ---------------------------------------------------------------------------
 
-# Maximum concurrent syncs
-MAX_WORKERS = 4
+def _read_sync_max_workers() -> int:
+    """Read PDD_SYNC_MAX_WORKERS, preserving default 4 and clamping 1-4."""
+    try:
+        return max(1, min(4, int(os.environ.get("PDD_SYNC_MAX_WORKERS", "4"))))
+    except ValueError:
+        return 4
+
+
+# Backwards-compatible module constant; AsyncSyncRunner reads the env at init.
+MAX_WORKERS = _read_sync_max_workers()
+
+# Maximum output retained per stream when capturing child subprocess output.
+# The line limit keeps parser work bounded; the byte limit protects against
+# very long lines that would otherwise bypass a line-only cap.
+STDOUT_CAPTURE_LINE_LIMIT = 5000
+STDOUT_CAPTURE_BYTE_LIMIT = 1024 * 1024
+OUTPUT_CAPTURE_READ_CHUNK_SIZE = 8192
+
+
+class _BoundedTextCapture:
+    """Tail capture with both line and UTF-8 byte caps."""
+
+    def __init__(self, *, line_limit: int, byte_limit: int) -> None:
+        self.line_limit = max(1, int(line_limit))
+        self.byte_limit = max(1, int(byte_limit))
+        self.lines: collections.deque[str] = collections.deque()
+        self.byte_count = 0
+        self.dropped_lines = 0
+        self.dropped_bytes = 0
+        self._partial = ""
+
+    @staticmethod
+    def _byte_len(text: str) -> int:
+        return len(text.encode("utf-8", errors="replace"))
+
+    def _trim_to_byte_limit(self, text: str) -> str:
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) <= self.byte_limit:
+            return text
+        tail = encoded[-self.byte_limit:].decode("utf-8", errors="ignore")
+        self.dropped_bytes += len(encoded) - self._byte_len(tail)
+        return tail
+
+    def _drop_oldest(self) -> None:
+        dropped = self.lines.popleft()
+        dropped_len = self._byte_len(dropped)
+        self.byte_count -= dropped_len
+        self.dropped_lines += 1
+        self.dropped_bytes += dropped_len
+
+    def _append_line(self, line: str) -> None:
+        line = self._trim_to_byte_limit(line)
+        line_len = self._byte_len(line)
+        while len(self.lines) >= self.line_limit:
+            self._drop_oldest()
+        while self.lines and self.byte_count + line_len > self.byte_limit:
+            self._drop_oldest()
+        self.lines.append(line)
+        self.byte_count += line_len
+
+    def _trim_partial(self) -> None:
+        self._partial = self._trim_to_byte_limit(self._partial)
+
+    def feed(self, text: str) -> List[str]:
+        if not text:
+            return []
+        text = self._partial + text
+        self._partial = ""
+        parts = text.splitlines(keepends=True)
+        if parts and not parts[-1].endswith(("\n", "\r")):
+            self._partial = parts.pop()
+            self._trim_partial()
+        for line in parts:
+            self._append_line(line)
+        return parts
+
+    def finish(self) -> List[str]:
+        if not self._partial:
+            return []
+        line = self._partial
+        self._partial = ""
+        self._append_line(line)
+        return [line]
+
+    def text(self) -> str:
+        return "".join(self.lines)
+
+    def reversed_lines(self):
+        return reversed(self.lines)
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -968,6 +1063,61 @@ def build_dep_graph_from_architecture(
 
 
 # ---------------------------------------------------------------------------
+# Per-module context resolution (issue #1675)
+# ---------------------------------------------------------------------------
+
+
+class SyncContextResolutionError(RuntimeError):
+    """A requested ``--context`` is invalid for a module's own cwd.
+
+    Raised when the global ``--context`` does not exist in the ``.pddrc`` that
+    governs the module's resolved cwd and no per-module context can be resolved
+    for the target. Surfacing this before spawning the child sync turns a later,
+    opaque child-process ``Unknown context`` failure into an actionable
+    resolver error.
+    """
+
+
+class _ModuleContextDecision(NamedTuple):
+    """Resolved ``--context`` decision for a single module.
+
+    ``status`` is one of:
+      * ``"omitted"`` — no global context requested; let the child resolve from
+        its own cwd (legacy behavior).
+      * ``"ok"`` — forward the requested context unchanged (valid for the cwd,
+        or no governing ``.pddrc`` to validate against).
+      * ``"substituted"`` — the requested context is not defined for this cwd,
+        so the cwd's own context for the target is used instead.
+      * ``"unresolved"`` — the requested context is invalid for the cwd and no
+        per-module context resolves; the caller must fail early.
+    """
+
+    context: Optional[str]
+    status: str
+    requested: Optional[str] = None
+    cwd: Optional[Path] = None
+    available: Tuple[str, ...] = ()
+    target: Optional[str] = None
+
+
+def _detect_context_for_cwd(target: str, cwd: Path) -> Optional[str]:
+    """Return the context the ``.pddrc`` governing ``cwd`` assigns to ``target``.
+
+    Mirrors the child's own resolution: find the nearest ``.pddrc`` from ``cwd``
+    and match ``target`` against its contexts. Returns ``None`` when no
+    ``.pddrc`` is found, it cannot be parsed, or no context matches.
+    """
+    pddrc = _find_pddrc_file(cwd)
+    if pddrc is None:
+        return None
+    try:
+        config = _load_pddrc_config(pddrc)
+        return _detect_context_from_basename(target, config, pddrc_path=pddrc)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # AsyncSyncRunner
 # ---------------------------------------------------------------------------
 
@@ -990,6 +1140,8 @@ class AsyncSyncRunner:
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
         module_targets: Optional[Dict[str, str]] = None,
+        module_contexts: Optional[Dict[str, Optional[str]]] = None,
+        module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
     ):
         self.basenames: List[str] = list(basenames)
@@ -1004,11 +1156,22 @@ class AsyncSyncRunner:
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
+        # Per-module context resolved against each module's own .pddrc (issue
+        # #1675). Mirrors module_cwds/module_targets; the runner never forwards
+        # a context that is invalid for the cwd the child will run in.
+        self.module_contexts: Dict[str, Optional[str]] = dict(module_contexts or {})
+        # Canonical per-module identity (issue #1675). When a unit exists for a
+        # key it is the single source of truth for cwd / target / context; the
+        # module_cwds/targets/contexts dicts are a fallback for callers that pass
+        # no units (ad-hoc callers, unit tests).
+        self.module_units: Dict[str, ResolvedSyncUnit] = dict(module_units or {})
         self.initial_cost = float(initial_cost or 0.0)
         self._steer_state: Dict[str, Any] = {}
 
         self.total_budget = self.sync_options.get("total_budget")
-        self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
+        self.max_workers = (
+            1 if self.total_budget is not None else _read_sync_max_workers()
+        )
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
@@ -1948,6 +2111,168 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     # Subprocess execution
     # ------------------------------------------------------------------
+    def _unit_for(self, basename: str) -> Optional[ResolvedSyncUnit]:
+        """Return the canonical ResolvedSyncUnit for a key, if one was provided."""
+        return self.module_units.get(basename)
+
+    def _module_cwd_path(self, basename: str) -> Path:
+        """Return the resolved cwd the child sync for `basename` will run in.
+
+        A canonical unit (when present) is the source of truth; otherwise fall
+        back to the module_cwds dict / project_root.
+        """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return Path(unit.cwd)
+        return Path(self.module_cwds.get(basename, str(self.project_root)))
+
+    def _module_target(self, basename: str) -> str:
+        """Return the actual `pdd sync` target for a scheduler key."""
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return unit.target_basename
+        return self.module_targets.get(basename, basename)
+
+    def _compute_module_context(self, basename: str) -> _ModuleContextDecision:
+        """Decide which ``--context`` (if any) to pass to this module's child.
+
+        The child runs in this module's own cwd (``module_cwds``), which may be a
+        nested project with its own ``.pddrc``. A global ``--context`` is only
+        valid when that ``.pddrc`` defines it; forwarding a parent/root context
+        into a nested cwd (or vice versa) makes the child die with
+        ``Unknown context`` (issue #1675).
+
+        When a canonical :class:`ResolvedSyncUnit` exists for the key, its
+        already-resolved context is authoritative (resolved with the
+        omit-not-fail policy — a nested project that only has a default context
+        omits ``--context`` rather than failing). Without a unit, behavior is a
+        no-op for every case that works today: when no context is requested, when
+        the runner has no resolved cwd for the module, when no ``.pddrc`` governs
+        the cwd, or when the requested context is valid there, the requested
+        value is forwarded unchanged. Resolution only intervenes when a requested
+        context is invalid for the module's own cwd — exactly the leak this fixes.
+        """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return _ModuleContextDecision(
+                context=unit.context,
+                status="unit",
+                requested=(
+                    str(self.sync_options["context"])
+                    if self.sync_options.get("context")
+                    else None
+                ),
+                cwd=Path(unit.cwd),
+                target=unit.target_basename,
+            )
+
+        requested = self.sync_options.get("context")
+        requested = str(requested) if requested else None
+        if not requested:
+            return _ModuleContextDecision(context=None, status="omitted")
+
+        # Only modules the orchestrator placed in a specific cwd get cwd-aware
+        # resolution. Directly-constructed runners (ad-hoc callers, unit tests)
+        # keep legacy forwarding.
+        if basename not in self.module_cwds:
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested
+            )
+
+        cwd = self._module_cwd_path(basename)
+        pddrc = _find_pddrc_file(cwd)
+        if pddrc is None:
+            # No .pddrc governs this cwd — nothing to validate against; preserve
+            # legacy behavior and forward the requested context unchanged.
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested, cwd=cwd
+            )
+        try:
+            config = _load_pddrc_config(pddrc)
+            available = tuple((config.get("contexts") or {}).keys())
+        except Exception:
+            # Malformed .pddrc: do not second-guess it here; forward as-is and
+            # let the child surface the parse error.
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested, cwd=cwd
+            )
+
+        if requested in available:
+            return _ModuleContextDecision(
+                context=requested,
+                status="ok",
+                requested=requested,
+                cwd=cwd,
+                available=available,
+            )
+
+        # Requested context is not defined for this cwd's .pddrc (the leak).
+        # Resolve the context the cwd's own .pddrc assigns to this target.
+        target = self.module_targets.get(basename, basename)
+        resolved = self.module_contexts.get(basename)
+        if not resolved:
+            resolved = _detect_context_for_cwd(target, cwd)
+        if resolved and resolved in available:
+            return _ModuleContextDecision(
+                context=resolved,
+                status="substituted",
+                requested=requested,
+                cwd=cwd,
+                available=available,
+                target=target,
+            )
+
+        return _ModuleContextDecision(
+            context=None,
+            status="unresolved",
+            requested=requested,
+            cwd=cwd,
+            available=available,
+            target=target,
+        )
+
+    @staticmethod
+    def _format_context_resolution_error(
+        basename: str, decision: _ModuleContextDecision
+    ) -> str:
+        """Build an actionable message for an unresolved context decision."""
+        available = ", ".join(decision.available) if decision.available else "<none>"
+        cwd = decision.cwd if decision.cwd is not None else "<unknown>"
+        return (
+            f"Requested --context '{decision.requested}' is not defined in the "
+            f".pddrc governing module '{basename}' (cwd: {cwd}); available "
+            f"contexts: {available}. No context in that .pddrc maps to target "
+            f"'{decision.target or basename}'. Add the context to that .pddrc, "
+            f"or run from the directory whose .pddrc defines it."
+        )
+
+    def _reproduce_command(self, basename: str) -> str:
+        """Return a copy-pasteable reproduce-local command for `basename`.
+
+        Includes the module's cwd and the resolved context so the printed
+        command matches what the runner actually executed (issue #1675).
+        """
+        target = self._module_target(basename)
+        try:
+            context = self._compute_module_context(basename).context
+        except Exception:
+            context = None
+
+        cmd = "pdd "
+        if context:
+            cmd += f"--context {context} "
+        cmd += f"sync {target}"
+
+        cwd = self._module_cwd_path(basename)
+        rel_str = ""
+        try:
+            rel_str = str(cwd.resolve().relative_to(self.project_root.resolve()))
+        except Exception:
+            rel_str = str(cwd)
+        if rel_str and rel_str != ".":
+            return f"cd {rel_str} && {cmd}"
+        return cmd
+
     def _build_command(self, basename: str, in_flight_cost: float = 0.0) -> List[str]:
         """Build the pdd sync subprocess command for a basename."""
         pdd_exe = _find_pdd_executable()
@@ -1958,9 +2283,23 @@ class AsyncSyncRunner:
 
         if self.sync_options.get("local"):
             cmd.append("--local")
-        context_override = self.sync_options.get("context")
-        if context_override:
-            cmd.extend(["--context", str(context_override)])
+        decision = self._compute_module_context(basename)
+        if decision.status == "unresolved":
+            raise SyncContextResolutionError(
+                self._format_context_resolution_error(basename, decision)
+            )
+        if decision.status == "substituted" and not self.quiet:
+            try:
+                console.print(
+                    f"[yellow]Module {basename}: requested context "
+                    f"'{decision.requested}' is not defined in {decision.cwd}/"
+                    f".pddrc; using its own context '{decision.context}' "
+                    f"instead.[/yellow]"
+                )
+            except Exception:
+                pass
+        if decision.context:
+            cmd.extend(["--context", str(decision.context)])
         strength = self.sync_options.get("strength")
         if strength is not None:
             cmd.extend(["--strength", str(strength)])
@@ -2004,7 +2343,7 @@ class AsyncSyncRunner:
         elif self.sync_options.get("budget") is not None:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
 
-        cmd.append(self.module_targets.get(basename, basename))
+        cmd.append(self._module_target(basename))
         return cmd
 
     def _build_env(
@@ -2162,7 +2501,7 @@ class AsyncSyncRunner:
             "missing: "
             + (", ".join(missing_symbols) if missing_symbols else "<none>"),
             "",
-            f"Reproduce locally: pdd sync {basename}",
+            f"Reproduce locally: {self._reproduce_command(basename)}",
             "",
             _env_fingerprint(),
         ]
@@ -2233,7 +2572,7 @@ class AsyncSyncRunner:
                 "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
                 "`rename`, `change signature`).",
                 "",
-                f"Reproduce locally: pdd sync {basename}",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
@@ -2309,7 +2648,7 @@ class AsyncSyncRunner:
                 "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
                 "directive to the prompt body.",
                 "",
-                f"Reproduce locally: pdd sync {basename}",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
@@ -2326,7 +2665,12 @@ class AsyncSyncRunner:
 
         Returns (success, cost, error, stdout, stderr).
         """
-        cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
+        try:
+            cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
+        except SyncContextResolutionError as exc:
+            # Fail this module early with an actionable resolver error instead of
+            # spawning a child that would die with "Unknown context" (#1675).
+            return False, 0.0, str(exc), "", ""
 
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         cost_file.close()
@@ -2339,37 +2683,120 @@ class AsyncSyncRunner:
             except Exception:
                 pass
 
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
+        # Bounded tail buffers: cap retained child output so a verbose or
+        # retrying child cannot grow these to tens of MB and trigger a SIGKILL.
+        # Allocated fresh per attempt, so output from a previous repair-retry
+        # attempt is not retained across retries in memory.
+        stdout_capture = _BoundedTextCapture(
+            line_limit=STDOUT_CAPTURE_LINE_LIMIT,
+            byte_limit=STDOUT_CAPTURE_BYTE_LIMIT,
+        )
+        stderr_capture = _BoundedTextCapture(
+            line_limit=STDOUT_CAPTURE_LINE_LIMIT,
+            byte_limit=STDOUT_CAPTURE_BYTE_LIMIT,
+        )
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
 
-        def _read_stream(stream, lines_list: List[str], prefix: str = "") -> None:
+        # Sticky capture of the child's "Overall status: ... Failed" verdict.
+        # Recorded as each stdout line streams in (see _process_child_line) so a
+        # failure marker followed by a flood of output that evicts it from the
+        # bounded tail still yields a failed verdict and a correct failure
+        # reason. Only the stdout reader thread writes it, so no lock is needed.
+        streamed_failure_markers: List[str] = []
+
+        def _dropped_output_message() -> str:
+            out_lines = stdout_capture.dropped_lines
+            out_bytes = stdout_capture.dropped_bytes
+            err_lines = stderr_capture.dropped_lines
+            err_bytes = stderr_capture.dropped_bytes
+            if not (out_lines or out_bytes or err_lines or err_bytes):
+                return ""
+            return (
+                f"{basename}: bounded child output capture dropped "
+                f"{out_lines} stdout line(s) / {out_bytes} stdout byte(s), "
+                f"{err_lines} stderr line(s) / {err_bytes} stderr byte(s) "
+                f"(kept last {STDOUT_CAPTURE_LINE_LIMIT} line(s) and "
+                f"{STDOUT_CAPTURE_BYTE_LIMIT} byte(s) per stream)"
+            )
+
+        def _log_dropped_output() -> None:
+            """Emit a diagnostic when bounded capture discarded child output.
+
+            The count is logged to the runner's own stdout, never injected into
+            the captured child stdout/stderr, so conformance/public-surface/
+            test-churn parsing and the success scan keep seeing exactly what the
+            child emitted.
+            """
+            msg = _dropped_output_message()
+            if msg and not self.quiet:
+                try:
+                    print(f"  {msg}")
+                except Exception:
+                    pass
+
+        def _read_stream_chunk(stream):
             try:
-                for line in iter(stream.readline, ''):
-                    if not line:
+                return os.read(stream.fileno(), OUTPUT_CAPTURE_READ_CHUNK_SIZE)
+            except Exception:
+                return stream.read(OUTPUT_CAPTURE_READ_CHUNK_SIZE)
+
+        def _process_child_line(line: str, prefix: str = "") -> None:
+            stripped = line.strip()
+            # Record the failure verdict on the stdout stream (prefix == "") the
+            # moment it is seen, mirroring the success-scan predicate, so it is
+            # not lost if later output evicts the line from the bounded tail.
+            if (
+                prefix == ""
+                and not streamed_failure_markers
+                and "Overall status:" in stripped
+                and "Failed" in stripped
+            ):
+                streamed_failure_markers.append(stripped)
+            if stripped.startswith("PDD_PHASE: "):
+                phase = stripped[len("PDD_PHASE: "):]
+                try:
+                    self._on_phase_change(basename, phase)
+                except Exception:
+                    pass
+            if "Successfully submitted example" in stripped:
+                try:
+                    print(f"[{basename}] Example submitted to cloud")
+                except Exception:
+                    pass
+            if verbose_print:
+                try:
+                    console.print(
+                        f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}"
+                    )
+                except Exception:
+                    pass
+
+        def _read_stream(
+            stream,
+            capture: _BoundedTextCapture,
+            prefix: str = "",
+        ) -> None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            try:
+                while True:
+                    raw_chunk = _read_stream_chunk(stream)
+                    if not raw_chunk:
                         break
+                    if isinstance(raw_chunk, bytes):
+                        text = decoder.decode(raw_chunk)
+                    else:
+                        text = str(raw_chunk)
                     with line_lock:
-                        lines_list.append(line)
-                    stripped = line.strip()
-                    if stripped.startswith("PDD_PHASE: "):
-                        phase = stripped[len("PDD_PHASE: "):]
-                        try:
-                            self._on_phase_change(basename, phase)
-                        except Exception:
-                            pass
-                    if "Successfully submitted example" in stripped:
-                        try:
-                            print(f"[{basename}] Example submitted to cloud")
-                        except Exception:
-                            pass
-                    if verbose_print:
-                        try:
-                            console.print(
-                                f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}"
-                            )
-                        except Exception:
-                            pass
+                        lines = capture.feed(text)
+                    for line in lines:
+                        _process_child_line(line, prefix)
+                final_text = decoder.decode(b"", final=True)
+                with line_lock:
+                    lines = capture.feed(final_text)
+                    lines.extend(capture.finish())
+                for line in lines:
+                    _process_child_line(line, prefix)
             except Exception:
                 pass
             finally:
@@ -2378,8 +2805,7 @@ class AsyncSyncRunner:
                 except Exception:
                     pass
 
-        cwd_value = self.module_cwds.get(basename, str(self.project_root))
-        cwd_str = str(cwd_value)
+        cwd_str = str(self._module_cwd_path(basename))
 
         try:
             process = subprocess.Popen(
@@ -2389,8 +2815,8 @@ class AsyncSyncRunner:
                 stdin=subprocess.DEVNULL,
                 cwd=cwd_str,
                 env=env,
-                text=True,
-                bufsize=1,
+                text=False,
+                bufsize=0,
                 start_new_session=True,
             )
             try:
@@ -2410,12 +2836,12 @@ class AsyncSyncRunner:
 
         t_out = threading.Thread(
             target=_read_stream,
-            args=(process.stdout, stdout_lines, ""),
+            args=(process.stdout, stdout_capture, ""),
             daemon=True,
         )
         t_err = threading.Thread(
             target=_read_stream,
-            args=(process.stderr, stderr_lines, "err:"),
+            args=(process.stderr, stderr_capture, "err:"),
             daemon=True,
         )
         t_out.start()
@@ -2464,7 +2890,7 @@ class AsyncSyncRunner:
                         else:
                             last_line = ""
                             with line_lock:
-                                for line in reversed(stdout_lines):
+                                for line in stdout_capture.reversed_lines():
                                     stripped = line.strip()
                                     if stripped and not _BOX_CHARS_RE.match(
                                         stripped
@@ -2516,12 +2942,17 @@ class AsyncSyncRunner:
                 os.unlink(cost_file.name)
             except OSError:
                 pass
-            stdout = "".join(stdout_lines)
-            stderr = "".join(stderr_lines)
+            stdout = stdout_capture.text()
+            stderr = stderr_capture.text()
+            _log_dropped_output()
+            truncation_msg = _dropped_output_message()
+            error_msg = f"Timeout after {int(effective_timeout)}s waiting for sync"
+            if truncation_msg:
+                error_msg = f"{error_msg}\n{truncation_msg}"
             return (
                 False,
                 cost,
-                f"Timeout after {int(effective_timeout)}s waiting for sync",
+                error_msg,
                 stdout,
                 stderr,
             )
@@ -2535,15 +2966,19 @@ class AsyncSyncRunner:
         except OSError:
             pass
 
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
+        stdout = stdout_capture.text()
+        stderr = stderr_capture.text()
+        _log_dropped_output()
 
         success = exit_code == 0
-        if success:
-            for line in stdout.splitlines():
-                if "Overall status:" in line and "Failed" in line:
-                    success = False
-                    break
+        if success and (
+            streamed_failure_markers
+            or any(
+                "Overall status:" in line and "Failed" in line
+                for line in stdout.splitlines()
+            )
+        ):
+            success = False
 
         if not self.quiet:
             try:
@@ -2560,10 +2995,13 @@ class AsyncSyncRunner:
 
         # Build failure-summary
         failure_reason = f"Exit code {exit_code}"
-        for line in stdout.splitlines():
-            if "Overall status:" in line and "Failed" in line:
-                failure_reason = line.strip()
-                break
+        if streamed_failure_markers:
+            failure_reason = streamed_failure_markers[0]
+        else:
+            for line in stdout.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    failure_reason = line.strip()
+                    break
 
         all_output = (stderr or "") + "\n" + (stdout or "")
         info_debug_re = re.compile(
@@ -2617,6 +3055,9 @@ class AsyncSyncRunner:
                 )
 
         error = "\n".join(p for p in summary_parts if p)
+        truncation_msg = _dropped_output_message()
+        if truncation_msg:
+            error = f"{error}\n{truncation_msg}" if error else truncation_msg
         if not self.quiet:
             try:
                 console.print(
