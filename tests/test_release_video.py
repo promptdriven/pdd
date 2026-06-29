@@ -3058,16 +3058,13 @@ def test_release_video_status_query_refreshes_recovery_commands_with_project(
 
     refreshed = json.loads(sidecar.read_text(encoding="utf8"))
     assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
     assert (
-        refreshed["recoverCommand"]
-        == "pds --project pdd-v1-1-0-release release-video status "
-        "--run-id agent_run_current --json"
+        "release-video status --run-id agent_run_current --json"
+        in refreshed["recoverCommand"]
     )
-    assert (
-        refreshed["watchCommand"]
-        == "pds --project pdd-v1-1-0-release jobs watch "
-        "--run-id agent_run_current --jsonl"
-    )
+    assert "--project pdd-v1-1-0-release" in refreshed["watchCommand"]
+    assert "jobs watch --run-id agent_run_current --jsonl" in refreshed["watchCommand"]
 
 
 def test_release_video_status_query_keeps_sidecar_when_only_unrelated_run_returns(

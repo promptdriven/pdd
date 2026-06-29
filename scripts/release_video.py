@@ -49,6 +49,29 @@ TERMINAL_PDS_STATUSES = {
     "timed_out",
     "timeout",
 }
+SENSITIVE_COMMAND_OPTIONS = {
+    "--access-token",
+    "--api-key",
+    "--auth-token",
+    "--authorization",
+    "--password",
+    "--secret",
+    "--token",
+}
+SENSITIVE_FIELD_NAMES = {
+    "accesstoken",
+    "apikey",
+    "authorization",
+    "clientsecret",
+    "credential",
+    "password",
+    "refreshtoken",
+    "secret",
+    "signature",
+    "signedurl",
+    "sig",
+    "token",
+}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
@@ -481,6 +504,10 @@ def persist_status_query_success(
         completed.stderr,
         preferred_run_id=persisted_run_id or None,
     ) or {}
+    metadata_refreshed_status = status_metadata_has_refresh_data(
+        status_metadata,
+        persisted_run_id,
+    )
     for key in ("runId", "projectId", "status", "attemptId"):
         if status_metadata.get(key):
             refreshed[key] = status_metadata[key]
@@ -499,13 +526,16 @@ def persist_status_query_success(
                 and response_run_id != persisted_run_id
             ):
                 continue
+            if (
+                target_key == "status"
+                and not response_run_id
+                and metadata_refreshed_status
+            ):
+                continue
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
                 refreshed[target_key] = value.strip()
-    refreshed_status = status_metadata_has_refresh_data(
-        status_metadata,
-        persisted_run_id,
-    ) or status_response_has_refresh_data(
+    refreshed_status = metadata_refreshed_status or status_response_has_refresh_data(
         response,
         persisted_run_id,
     )
@@ -515,13 +545,16 @@ def persist_status_query_success(
         else release_video_status_is_running(refreshed.get("status"))
     )
     refreshed["pdsContext"] = pds_context(pds_cli)
+    refresh_pds_recovery_commands(refreshed, pds_cli)
     refreshed["lastStatusQuery"] = {
         "ok": True,
         "queriedAt": utc_now_iso(),
         "runId": refreshed.get("runId", ""),
         "runStatus": refreshed.get("status", ""),
         "pdsContext": refreshed["pdsContext"],
-        "response": response if response is not None else completed.stdout.strip(),
+        "response": redact_status_artifact_value(
+            response if response is not None else completed.stdout.strip()
+        ),
     }
     write_json_file(path, refreshed)
 
@@ -548,12 +581,16 @@ def persist_status_query_failure(
             error.get("code"),
             response.get("code") if isinstance(response, dict) else None,
         ),
-        "errorMessage": first_nonempty_string(
-            error.get("message"),
-            response.get("message") if isinstance(response, dict) else None,
+        "errorMessage": redact_secret_text(
+            first_nonempty_string(
+                error.get("message"),
+                response.get("message") if isinstance(response, dict) else None,
+            )
         ),
         "pdsContext": pds_ctx,
-        "response": response if response is not None else completed.stdout.strip(),
+        "response": redact_status_artifact_value(
+            response if response is not None else completed.stdout.strip()
+        ),
         "details": process_details(completed),
     }
     write_json_file(path, refreshed)
@@ -622,6 +659,9 @@ def status_response_matches_run_id(value: Any, run_id: str) -> bool:
 
 def response_pds_run_id(value: dict[str, Any]) -> str:
     metadata = pds_run_metadata_from_mapping(value)
+    if not metadata:
+        nested = extract_primary_pds_run_metadata_from_json_value(value)
+        metadata = select_pds_run_metadata(nested, distinct_run_policy="last")
     return str((metadata or {}).get("runId") or "").strip()
 
 
@@ -652,7 +692,7 @@ def status_value_is_terminal(status: Any) -> bool:
 
 
 def pds_context(pds_cli: str) -> dict[str, str]:
-    context: dict[str, str] = {"pdsCli": pds_cli}
+    context: dict[str, str] = {"pdsCli": redact_command_text(pds_cli)}
     api_url = os.environ.get("PDS_API_URL", "").strip()
     if api_url:
         context["apiUrl"] = api_url
@@ -704,6 +744,88 @@ def first_nonempty_string(*values: Any) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def redact_status_artifact_value(value: Any) -> Any:
+    """Return a status value safe to persist in durable release artifacts."""
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, nested in value.items():
+            if is_sensitive_artifact_field(key):
+                redacted[key] = "[redacted]"
+            else:
+                redacted[key] = redact_status_artifact_value(nested)
+        return redacted
+    if isinstance(value, list):
+        return [redact_status_artifact_value(item) for item in value]
+    if isinstance(value, str):
+        return redact_secret_text(value)
+    return value
+
+
+def is_sensitive_artifact_field(key: Any) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "", str(key).lower())
+    if normalized in {"tokensource", "profilesource", "apiurlsource"}:
+        return False
+    if normalized in SENSITIVE_FIELD_NAMES:
+        return True
+    return normalized.endswith("token") or normalized.endswith("secret")
+
+
+def redact_secret_text(text: str) -> str:
+    redacted = str(text or "")
+    redacted = re.sub(
+        r"(?i)(\bauthorization\s*:\s*bearer\s+)[^\s\"'\\,;]+",
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(\bbearer\s+)[^\s\"'\\,;]+",
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)([?&](?:access_token|token|api_key|secret|signature|sig)=)"
+            r"[^&\s\"'<>]+"
+        ),
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)([\"']?(?:access[_-]?token|api[_-]?key|auth[_-]?token|"
+            r"client[_-]?secret|password|refresh[_-]?token|"
+            r"secret|signed[_-]?url|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}]+"
+        ),
+        r"\1[redacted]",
+        redacted,
+    )
+    return redacted
+
+
+def redact_command_text(command: str) -> str:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return redact_secret_text(command)
+    if not parts:
+        return command
+    redacted: list[str] = []
+    redact_next = False
+    for part in parts:
+        option, has_equals, _value = part.partition("=")
+        if redact_next:
+            redacted.append("[redacted]")
+            redact_next = False
+            continue
+        if option.lower() in SENSITIVE_COMMAND_OPTIONS and has_equals:
+            redacted.append(f"{option}=[redacted]")
+            continue
+        redacted.append(part)
+        if part.lower() in SENSITIVE_COMMAND_OPTIONS:
+            redact_next = True
+    return redact_secret_text(shlex.join(redacted))
 
 
 def preflight_release_video(args: argparse.Namespace) -> int:
@@ -1207,9 +1329,9 @@ def process_details(completed: subprocess.CompletedProcess[str]) -> str:
     stderr = completed.stderr.strip()
     stdout = completed.stdout.strip()
     if stderr:
-        details.append(f"stderr: {truncate(stderr, 1200)}")
+        details.append(f"stderr: {truncate(redact_secret_text(stderr), 1200)}")
     if stdout:
-        details.append(f"stdout: {truncate(stdout, 1200)}")
+        details.append(f"stdout: {truncate(redact_secret_text(stdout), 1200)}")
     if not details:
         details.append(f"exit code {completed.returncode}")
     return " | ".join(details)
@@ -1717,25 +1839,33 @@ def enrich_pds_run_metadata(
         enriched["projectId"] = str(project_id).strip()
     enriched.setdefault("pdsContext", pds_context(pds_cli))
     if run_id:
-        pds_command = split_command(pds_cli)
-        if enriched.get("projectId"):
-            pds_command.extend(["--project", enriched["projectId"]])
-        pds_base = shlex.join(pds_command)
-        recover_command = (
-            f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json"
-        )
-        watch_command = f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl"
-        if should_replace_recovery_command(
-            enriched.get("recoverCommand", ""),
-            enriched.get("projectId", ""),
-        ):
-            enriched["recoverCommand"] = recover_command
-        if should_replace_recovery_command(
-            enriched.get("watchCommand", ""),
-            enriched.get("projectId", ""),
-        ):
-            enriched["watchCommand"] = watch_command
+        refresh_pds_recovery_commands(enriched, pds_cli)
     return enriched
+
+
+def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> None:
+    run_id = str(metadata.get("runId") or "").strip()
+    if not run_id:
+        return
+    pds_command = split_command(redact_command_text(pds_cli))
+    project_id = str(metadata.get("projectId") or "").strip()
+    if project_id:
+        pds_command.extend(["--project", project_id])
+    pds_base = shlex.join(pds_command)
+    recover_command = (
+        f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json"
+    )
+    watch_command = f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl"
+    if should_replace_recovery_command(
+        str(metadata.get("recoverCommand") or ""),
+        project_id,
+    ):
+        metadata["recoverCommand"] = recover_command
+    if should_replace_recovery_command(
+        str(metadata.get("watchCommand") or ""),
+        project_id,
+    ):
+        metadata["watchCommand"] = watch_command
 
 
 def should_replace_recovery_command(command: str, project_id: str) -> bool:
@@ -2076,21 +2206,11 @@ def has_markdown_fence_line(script: str) -> bool:
 
 def has_unstripped_model_wrapper_text(script: str) -> bool:
     lines = script.splitlines()
-    if not lines:
-        return False
-    first_nonblank = next(
-        (index for index, line in enumerate(lines) if line.strip()),
-        None,
+    return any(
+        is_model_wrapper_line(line)
+        and not line_is_inside_narrator_block(lines, index)
+        for index, line in enumerate(lines)
     )
-    last_nonblank = next(
-        (index for index in range(len(lines) - 1, -1, -1) if lines[index].strip()),
-        None,
-    )
-    if first_nonblank is None or last_nonblank is None:
-        return False
-    if is_model_wrapper_line(lines[first_nonblank]):
-        return True
-    return is_model_wrapper_line(lines[last_nonblank])
 
 
 def duplicate_narrator_label_body(line: str) -> str | None:
