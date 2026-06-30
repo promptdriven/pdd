@@ -259,6 +259,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                 pass
             return {
                 "test_file": test_file,
+                "command": " ".join(pytest_args),
                 "test_results": [
                     {
                         "standard_output": "",
@@ -306,6 +307,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
 
         return {
             "test_file": test_file,
+            "command": " ".join(pytest_args),
             "test_results": [
                 {
                     "standard_output": stdout,
@@ -326,6 +328,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
     except Exception as e:
         return {
             "test_file": test_file,
+            "command": " ".join(pytest_args),
             "test_results": [
                 {
                     "standard_output": "",

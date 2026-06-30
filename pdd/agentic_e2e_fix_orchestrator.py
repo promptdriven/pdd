@@ -907,8 +907,12 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 detail = stdout
                 if stderr.strip():
                     detail = f"{detail}\n[stderr]\n{stderr}".strip()
+                # Exact command the runner used (python -B -m pytest ... -v
+                # --rootdir=...), surfaced verbatim so the rejection is
+                # reproducible; fall back to a representative form if absent.
+                cmd = result.get("command") or f"pytest {abs_path}"
                 all_outputs.append(
-                    f"$ pytest {abs_path}\n"
+                    f"$ {cmd}\n"
                     f"{test_file}: {failures} failure(s)\n{detail}"
                 )
             else:
@@ -941,12 +945,21 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                     )
                 else:
                     all_outputs.append(f"{test_file}: passed")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as te:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED (timeout)")
+                # Surface the command + any partial output captured before the
+                # timeout (Issue #1776 criterion #4 — keep the rejection
+                # reproducible). text=True makes te.stdout/te.stderr str|None.
+                _partial = (te.stdout or "") + (te.stderr or "")
+                all_outputs.append(
+                    f"$ {test_cmd.command}\n"
+                    f"{test_file}: FAILED (timeout after 120s)\n{_partial}".rstrip()
+                )
             except Exception as e:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED ({e})")
+                all_outputs.append(
+                    f"$ {test_cmd.command}\n{test_file}: FAILED ({e})"
+                )
 
     return all_passed, "\n".join(all_outputs)
 
