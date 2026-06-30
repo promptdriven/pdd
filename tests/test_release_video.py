@@ -29,6 +29,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
         "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_METADATA_CONFLICT",
+        "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
         "RELEASE_VIDEO_SCRIPT_PATH",
         "PDS_API_URL",
         "PDS_PROFILE",
@@ -41,6 +42,14 @@ def release_video_env(extra: dict | None = None) -> dict:
     if extra:
         env.update(extra)
     return env
+
+
+def test_release_video_env_scrubs_pds_create_timeout(monkeypatch):
+    monkeypatch.setenv("RELEASE_VIDEO_PDS_CREATE_TIMEOUT", "1")
+
+    env = release_video_env()
+
+    assert "RELEASE_VIDEO_PDS_CREATE_TIMEOUT" not in env
 
 
 def run(command, cwd: Path, **kwargs):
@@ -2288,6 +2297,57 @@ def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
     assert "secret-preflight-token" not in result.stdout + result.stderr
 
 
+def test_release_video_preflight_rejects_unknown_pds_cli_version(tmp_path: Path):
+    pds_cli = (
+        f"{pds_version_stub(tmp_path, 'pds development build\\n')} "
+        "--token secret-preflight-token"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            pds_cli,
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "could not determine PDS CLI version" in result.stderr
+    assert "could not parse --version output" in result.stderr
+    assert "--token '[redacted]'" in result.stdout
+    assert "secret-preflight-token" not in result.stdout + result.stderr
+
+
+def test_release_video_preflight_skip_allows_unknown_pds_cli_version(
+    tmp_path: Path,
+):
+    pds_cli = pds_version_stub(tmp_path, "pds development build\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            str(pds_cli),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"RELEASE_VIDEO": "0"}),
+        check=True,
+    )
+
+    assert "release-video preflight: skipped because RELEASE_VIDEO=0." in result.stdout
+
+
 def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -2594,6 +2654,77 @@ def test_release_video_create_uses_configured_pds_process_timeout(
 
     assert response["summary"]["youtubeUrl"] == "https://youtu.be/timeout"
     assert observed_timeouts == [42.0]
+
+
+def test_release_video_create_timeout_persists_partial_pds_run_metadata(
+    tmp_path: Path,
+    monkeypatch,
+):
+    release_video = load_release_video_module()
+    repo = init_release_repo(tmp_path)
+    script_path = tmp_path / "release_video_script.md"
+    release_notes_path = tmp_path / "release_notes.md"
+    run_metadata_path = tmp_path / "pds_run.json"
+    script_path.write_text(reusable_script_text(), encoding="utf8")
+    release_notes_path.write_text("Release notes\n", encoding="utf8")
+    timed_out_run = {
+        "runId": "agent_run_timeout123",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+    def fake_subprocess_run(command, **kwargs):
+        raise subprocess.TimeoutExpired(
+            command,
+            kwargs["timeout"],
+            output=json.dumps(timed_out_run) + "\n",
+            stderr="[pds] still waiting\n",
+        )
+
+    monkeypatch.setattr(release_video.subprocess, "run", fake_subprocess_run)
+
+    try:
+        release_video.create_release_video(
+            args=SimpleNamespace(
+                pds_cli=sys.executable,
+                project_id="",
+                project_name="",
+                idempotency_key="",
+                idempotency_attempt_id="",
+                idempotency_provenance="local-test",
+                preset="release-notes",
+                target="publish",
+                platform="youtube",
+                privacy="unlisted",
+                bootstrap_selected_project=False,
+                metadata_conflict="",
+                force_regenerate=False,
+                dry_run=False,
+                pds_create_timeout=0.01,
+            ),
+            repo=repo,
+            tag="v1.1.0",
+            git_sha="abc123def456",
+            repo_url="https://github.com/promptdriven/pdd",
+            repo_name="promptdriven/pdd",
+            script_path=script_path,
+            release_notes_path=release_notes_path,
+            changelog_path=Path("CHANGELOG.md"),
+            run_metadata_path=run_metadata_path,
+        )
+    except release_video.ReleaseVideoError as exc:
+        error = str(exc)
+    else:
+        raise AssertionError("expected release-video timeout to fail")
+
+    assert "timed out after 0.01 seconds" in error
+    assert str(run_metadata_path) in error
+    persisted = json.loads(run_metadata_path.read_text(encoding="utf8"))
+    assert persisted["runId"] == "agent_run_timeout123"
+    assert persisted["projectId"] == "pdd-v1-1-0-release"
+    assert "release-video status --run-id agent_run_timeout123 --json" in persisted[
+        "recoverCommand"
+    ]
 
 
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):
