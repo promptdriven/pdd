@@ -800,6 +800,7 @@ def redact_secret_text(text: str) -> str:
         else:
             if isinstance(parsed, (dict, list)):
                 return json.dumps(redact_status_artifact_value(parsed), sort_keys=True)
+    redacted = redact_json_values_in_text(redacted)
     redacted = re.sub(
         r"(?i)\b(https?://)[^/\s:@]+:[^/\s@]+@",
         r"\1[redacted]@",
@@ -864,6 +865,19 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     return redacted
+
+
+def redact_json_values_in_text(text: str) -> str:
+    pieces: list[str] = []
+    last_index = 0
+    for value, start, end in iter_json_value_spans(text):
+        pieces.append(text[last_index:start])
+        pieces.append(json.dumps(redact_status_artifact_value(value), sort_keys=True))
+        last_index = end
+    if not pieces:
+        return text
+    pieces.append(text[last_index:])
+    return "".join(pieces)
 
 
 def is_sensitive_command_option(option: str) -> bool:
@@ -1798,6 +1812,11 @@ def merge_pds_run_metadata_candidates(
 
 
 def iter_json_values(text: str):
+    for value, _, _ in iter_json_value_spans(text):
+        yield value
+
+
+def iter_json_value_spans(text: str):
     decoder = json.JSONDecoder()
     index = 0
     while index < len(text):
@@ -1816,7 +1835,7 @@ def iter_json_values(text: str):
         except json.JSONDecodeError:
             index = next_object + 1
             continue
-        yield value
+        yield value, next_object, next_object + end
         index = next_object + end
 
 
