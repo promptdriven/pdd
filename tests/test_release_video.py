@@ -3395,6 +3395,47 @@ def test_release_video_status_query_redacts_plaintext_access_key_diagnostics(
     assert combined_output.count("[redacted]") >= 4
 
 
+def test_release_video_redacts_access_key_command_options_in_status_diagnostics(
+    tmp_path: Path,
+):
+    release_video = load_release_video_module()
+    completed = subprocess.CompletedProcess(
+        ["pds"],
+        1,
+        stdout=(
+            "retry with pds --access-key-id AKIASTDOUT "
+            "--secret-access-key SECRETSTDOUT release-video status\n"
+        ),
+        stderr=(
+            "retry with pds --access-key-id=AKIASTDERR "
+            "--secret-access-key=SECRETSTDERR release-video status\n"
+        ),
+    )
+
+    process_details = release_video.redacted_process_details(completed)
+    status_stdout = release_video.redact_status_output_text(completed.stdout)
+    status_stderr = release_video.redact_status_output_text(completed.stderr)
+    sidecar = tmp_path / "pds_run.json"
+    release_video.persist_status_query_failure(
+        metadata={"runId": "agent_run_current", "status": "running"},
+        path=sidecar,
+        completed=completed,
+        pds_cli="pds",
+    )
+
+    combined = (
+        process_details
+        + status_stdout
+        + status_stderr
+        + sidecar.read_text(encoding="utf8")
+    )
+    assert "AKIASTDOUT" not in combined
+    assert "SECRETSTDOUT" not in combined
+    assert "AKIASTDERR" not in combined
+    assert "SECRETSTDERR" not in combined
+    assert combined.count("[redacted]") >= 8
+
+
 def test_release_video_redacts_status_query_output_and_command_secrets(
     tmp_path: Path,
 ):
