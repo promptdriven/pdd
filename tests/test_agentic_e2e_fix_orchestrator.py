@@ -11672,3 +11672,72 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
         assert "Step 9" not in (msg or ""), (
             f"non-Step-9 rejection must not be attributed to Step 9. msg={msg!r}"
         )
+
+
+class TestVerifierOutputDetail:
+    """Issue #1776 criterion #4: `_verify_tests_independently` must surface the
+    EXACT command and the full output (stdout+stderr) for a rejection — including
+    on the non-Python timeout/exception paths — so the rejection is reproducible.
+    """
+
+    def test_python_failure_surfaces_exact_command_and_stderr(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        exact_cmd = (
+            "/usr/bin/python3 -B -m pytest /abs/tests/test_x.py -v --rootdir=/abs"
+        )
+        fake_result = {
+            "test_file": "tests/test_x.py",
+            "command": exact_cmd,
+            "test_results": [
+                {
+                    "failures": 1,
+                    "errors": 0,
+                    "passed": 0,
+                    "standard_output": "FAILED tests/test_x.py::test_a - assert 1 == 2",
+                    "standard_error": "ERROR collecting: ImportError: no module named widget",
+                }
+            ],
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output",
+            return_value=fake_result,
+        ):
+            passed, output = _verify_tests_independently(["tests/test_x.py"], tmp_path)
+
+        assert passed is False
+        # fm#2: the EXACT command (python -B -m pytest ... -v --rootdir=...) is shown.
+        assert exact_cmd in output, output
+        # fm#2: BOTH stdout and stderr are surfaced.
+        assert "assert 1 == 2" in output
+        assert "ImportError: no module named widget" in output
+
+    def test_non_python_timeout_surfaces_command_and_partial_output(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        cmd_obj = MagicMock()
+        cmd_obj.command = "npx playwright test tests/widget.spec.ts"
+        cmd_obj.cwd = None
+        timeout_exc = subprocess.TimeoutExpired(
+            cmd="npx",
+            timeout=120,
+            output="partial stdout here",
+            stderr="partial stderr here",
+        )
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file",
+            return_value=cmd_obj,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=timeout_exc,
+        ):
+            passed, output = _verify_tests_independently(
+                ["tests/widget.spec.ts"], tmp_path
+            )
+
+        assert passed is False
+        # fm#3: the command and any partial output are surfaced on timeout.
+        assert "npx playwright test tests/widget.spec.ts" in output, output
+        assert "timeout" in output.lower()
+        assert "partial stdout here" in output
+        assert "partial stderr here" in output
