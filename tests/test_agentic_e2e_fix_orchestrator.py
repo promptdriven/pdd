@@ -11019,10 +11019,11 @@ class TestE2ESkipNotABugTerminalStop:
         ``last_completed_step=3``, and the inner loop would skip Steps 1-3 and
         run straight into Step 8 — the exact #1738 fall-through, on resume.
 
-        After fix: the persisted Step 2 ``E2E_SKIP`` signal is threaded into the
-        resume re-evaluation, which demotes the cached token so Step 3 reruns and
-        the inline E2E_SKIP-scoped stop fires — no ``step8`` label, scoped
-        message returned, and no false success/verified claim.
+        After fix: the persisted no-harness signal is threaded into the resume
+        re-evaluation, which demotes the cached token so Step 3 reruns. With NO
+        prior fixes, the reran NOT_A_BUG exits via the genuine "not a bug" branch
+        (the #1776 stop is scoped to the with-fixes suppression case) — the key
+        guarantee is that it does NOT fall through to Step 8 (the #1738 bug).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
         e2e_fix_default_args["resume"] = True
@@ -11107,15 +11108,17 @@ class TestE2ESkipNotABugTerminalStop:
             f"All called labels: {called_labels}"
         )
 
-        # Message channel: the scoped stop reason must be reported.
-        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
-            "Issue #1776 (resume, cached Step 3): expected the scoped E2E stop "
-            f"message ({_E2E_SKIP_STOP_SUBSTR!r}) but got msg={msg!r}"
+        # Message channel: with NO prior fixes, the reran NOT_A_BUG is a genuine
+        # "not a bug" (the #1776 stop is scoped to the with-fixes suppression
+        # case), so the user-facing reason explains that classification.
+        assert "not a bug" in (msg or "").lower(), (
+            "Issue #1776 (resume, cached Step 3): a no-fixes NOT_A_BUG must report "
+            f"the 'not a bug' classification. msg={msg!r}"
         )
 
         # Safety channel: never falsely claim verified success.
         assert "verified" not in (msg or "").lower(), (
-            f"Issue #1776: scoped E2E stop must not claim verified success. msg={msg!r}"
+            f"Issue #1776: stop must not claim verified success. msg={msg!r}"
         )
 
     def test_real_harness_with_remembered_timeout_skip_does_not_overfire(
