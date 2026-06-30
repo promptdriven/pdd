@@ -493,17 +493,16 @@ def _apply_step9_resolved_token(
     )
 
 
-def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
-    """Check if the executor environment has E2E test infrastructure.
+def _has_playwright_config(cwd: Path) -> bool:
+    """True if a Playwright/E2E config exists in the repo (root + one level of
+    subdirectories).
 
-    Returns (available, reason) where available is True if E2E tests
-    can run, False otherwise with a reason string.
+    This is a property of the REPO (does an E2E harness exist?), independent of
+    whether the npx runner happens to be installed in the executor. Issue #1776
+    keys its terminal stop off this — "no E2E harness exists" — so that a real
+    E2E repo whose runner tooling (npx) is merely missing is NOT mis-reported as
+    "no E2E test suite" and short-circuited.
     """
-    # Check for npx (needed for playwright)
-    if not shutil.which("npx"):
-        return (False, "npx not found — playwright/browser infrastructure unavailable")
-
-    # Check for playwright config files (root + one level of subdirectories)
     playwright_configs = [
         "playwright.config.ts",
         "playwright.config.js",
@@ -513,12 +512,26 @@ def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
         search_dirs = [cwd] + [d for d in cwd.iterdir() if d.is_dir() and not d.name.startswith(".")]
     except (FileNotFoundError, NotADirectoryError):
         search_dirs = [cwd]
-    has_config = any(
+    return any(
         (d / cfg).exists()
         for d in search_dirs
         for cfg in playwright_configs
     )
-    if not has_config:
+
+
+def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
+    """Check if the executor environment has E2E test infrastructure.
+
+    Returns (available, reason) where available is True if E2E tests
+    can run, False otherwise with a reason string. Combines an EXECUTOR check
+    (npx present) with a REPO check (Playwright config present); the latter is
+    factored into :func:`_has_playwright_config`.
+    """
+    # Check for npx (needed for playwright)
+    if not shutil.which("npx"):
+        return (False, "npx not found — playwright/browser infrastructure unavailable")
+
+    if not _has_playwright_config(cwd):
         return (False, "no playwright config found in project")
 
     return (True, "")
@@ -883,10 +896,21 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
             failures = tr.get("failures", 0) + tr.get("errors", 0)
             passed = tr.get("passed", 0)
             stdout = tr.get("standard_output", "")
+            stderr = tr.get("standard_error", "")
 
             if failures > 0:
                 all_passed = False
-                all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+                # Issue #1776 criterion #4: include the exact command and BOTH
+                # stdout and stderr so the surfaced verifier detail carries the
+                # files/command/output the issue asks for (stderr can hold
+                # collection/runner-level diagnostics absent from stdout).
+                detail = stdout
+                if stderr.strip():
+                    detail = f"{detail}\n[stderr]\n{stderr}".strip()
+                all_outputs.append(
+                    f"$ pytest {abs_path}\n"
+                    f"{test_file}: {failures} failure(s)\n{detail}"
+                )
             else:
                 all_outputs.append(f"{test_file}: {passed} passed")
         else:
@@ -911,7 +935,10 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 if proc.returncode != 0:
                     all_passed = False
                     output = proc.stdout + proc.stderr
-                    all_outputs.append(f"{test_file}: FAILED (exit code {proc.returncode})\n{output}")
+                    all_outputs.append(
+                        f"$ {test_cmd.command}\n"
+                        f"{test_file}: FAILED (exit code {proc.returncode})\n{output}"
+                    )
                 else:
                     all_outputs.append(f"{test_file}: passed")
             except subprocess.TimeoutExpired:
@@ -2185,7 +2212,7 @@ def run_agentic_e2e_fix_orchestrator(
                     source="step_outputs",
                     current_cycle=current_cycle,
                     cycle_start_hashes=resumed_cycle_start_hashes,
-                    e2e_skip=not _check_e2e_environment(cwd)[0],
+                    e2e_skip=not _has_playwright_config(cwd),
                 )
                 if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
                     # Honor the inline cycle-waste-breaker terminal-success
@@ -2671,7 +2698,7 @@ def run_agentic_e2e_fix_orchestrator(
                             source="bug_step_outputs",
                             current_cycle=None,
                             cycle_start_hashes=None,
-                            e2e_skip=not _check_e2e_environment(cwd)[0],
+                            e2e_skip=not _has_playwright_config(cwd),
                         )
                         if demoted_bug3 != cached_bug3:
                             # Drop the suppressed entry from both caches and fall
@@ -3037,13 +3064,18 @@ def run_agentic_e2e_fix_orchestrator(
                     # falsely present when Step 2 was skipped for a transient
                     # timeout on a real harness (Issue #791 → remembered as
                     # E2E_SKIP), which would wrongly stop a legitimate E2E run.
-                    # _check_e2e_environment is the same ground-truth used at the
-                    # Step 2 pre-flight, so it stays in lockstep with the skip.
+                    # Key off the REPO harness (Playwright config), NOT
+                    # _check_e2e_environment's boolean: the latter is also False
+                    # when npx is merely missing on a repo that DOES have an E2E
+                    # suite, which would mis-report "no E2E test suite" and skip
+                    # Step 8 for a real E2E repo with broken runner tooling
+                    # (Issue #1776 fm#4). Config presence is the repo property we
+                    # actually mean by "no E2E harness exists".
                     #
                     # Scoped strictly to the E2E workflow: success stays False so
                     # we never falsely mark the code fix verified/successful
                     # (preserves the #779/#1206 safety intent).
-                    if not _check_e2e_environment(cwd)[0]:
+                    if not _has_playwright_config(cwd):
                         console.print(
                             "[yellow]E2E fix stopped: no E2E test suite/failure "
                             "exists; use unit/code-fix verification.[/yellow]"
