@@ -481,12 +481,25 @@ def query_pds_release_video_status(
     if completed.stderr.strip():
         print(redact_status_output_text(completed.stderr.rstrip()), file=sys.stderr)
     if completed.returncode != 0:
-        persist_status_query_failure(
-            metadata=metadata,
-            path=run_metadata_path,
-            completed=completed,
-            pds_cli=args.pds_cli,
-        )
+        status_metadata = extract_pds_run_metadata(
+            completed.stdout,
+            completed.stderr,
+            preferred_run_id=run_id,
+        ) or {}
+        if status_metadata_has_refresh_data(status_metadata, run_id):
+            persist_status_query_success(
+                metadata=metadata,
+                path=run_metadata_path,
+                completed=completed,
+                pds_cli=args.pds_cli,
+            )
+        else:
+            persist_status_query_failure(
+                metadata=metadata,
+                path=run_metadata_path,
+                completed=completed,
+                pds_cli=args.pds_cli,
+            )
         raise ReleaseVideoError(
             f"PDS release-video status failed: {redacted_process_details(completed)}"
         )
@@ -540,6 +553,8 @@ def persist_status_query_success(
     )
     for key in ("runId", "projectId", "status", "attemptId"):
         value = status_metadata.get(key)
+        if key == "runId" and persisted_run_id and value != persisted_run_id:
+            continue
         if (
             key == "projectId"
             and persisted_project_id
@@ -844,6 +859,7 @@ def redact_secret_text(text: str) -> str:
         r"\1[redacted]",
         redacted,
     )
+    redacted = redact_sensitive_key_value_text(redacted)
     redacted = re.sub(
         (
             r"(?i)(^|\s)(--(?:[a-z0-9-]*token|[a-z0-9-]*secret|"
@@ -878,6 +894,26 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     return redacted
+
+
+def redact_sensitive_key_value_text(text: str) -> str:
+    """Redact arbitrary diagnostic key=value or key: value secret fields."""
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if is_sensitive_artifact_field(key):
+            return f"{match.group('prefix')}[redacted]"
+        return match.group(0)
+
+    return re.sub(
+        (
+            r"(?i)(?P<prefix>(?<![a-z0-9_.-])[\"']?"
+            r"(?P<key>[a-z_][a-z0-9_.-]{0,80})[\"']?\s*[:=]\s*[\"']?)"
+            r"(?P<value>[^\"'\s,;}]+)"
+        ),
+        replace,
+        text,
+    )
 
 
 def redact_json_values_in_text(text: str) -> str:
@@ -1720,27 +1756,30 @@ def extract_pds_run_metadata(
 ) -> dict[str, str] | None:
     primary_metadata: list[dict[str, str]] = []
     json_metadata: list[dict[str, str]] = []
+    compat_metadata: list[dict[str, str]] = []
     for text in texts:
         primary_metadata.extend(extract_primary_pds_run_metadata_from_json_text(text))
         json_metadata.extend(extract_all_pds_run_metadata_from_json_text(text))
-    if preferred_run_id and json_metadata:
-        preferred = [
-            metadata
-            for metadata in merge_pds_run_metadata_candidates(json_metadata)
-            if metadata.get("runId") == preferred_run_id
-        ]
-        if preferred:
-            return select_pds_run_metadata(preferred, distinct_run_policy="last")
-        primary_metadata = []
-        json_metadata = []
+        metadata = extract_pds_run_metadata_from_compat_lines(text)
+        if metadata:
+            compat_metadata.append(metadata)
+    if preferred_run_id:
+        for candidates in (primary_metadata, json_metadata, compat_metadata):
+            preferred = [
+                metadata
+                for metadata in merge_pds_run_metadata_candidates(candidates)
+                if metadata.get("runId") == preferred_run_id
+            ]
+            if preferred:
+                return select_pds_run_metadata(preferred, distinct_run_policy="last")
+        if primary_metadata or json_metadata or compat_metadata:
+            return None
     if primary_metadata:
         return select_pds_run_metadata(primary_metadata, distinct_run_policy="last")
     if json_metadata:
         return select_pds_run_metadata(json_metadata, distinct_run_policy="first")
-    for text in texts:
-        metadata = extract_pds_run_metadata_from_compat_lines(text)
-        if metadata:
-            return metadata
+    if compat_metadata:
+        return select_pds_run_metadata(compat_metadata, distinct_run_policy="last")
     return None
 
 
@@ -1930,7 +1969,7 @@ def pds_run_metadata_from_mapping(mapping: dict[str, Any]) -> dict[str, str] | N
         "project_id",
         "id",
     )
-    if not project_id and mapping_run_id:
+    if not project_id and run_id:
         project_id = first_string(mapping, "projectId", "project_id")
     run_status = first_string(run, "status", "state")
     mapping_status = first_string(mapping, "status", "state")
