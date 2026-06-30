@@ -128,8 +128,9 @@ def _find_nearest_pddrc_for_file(
 
 # Schema for .pddrc validation — see issue #1198.
 # Unknown keys at any level emit a UserWarning rather than being silently ignored.
-_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup"}
+_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup", "ci"}
 _PDDRC_CHECKUP_KEYS = {"prompt_gate"}
+_PDDRC_CI_KEYS = {"external_setup_fail_open", "manual_trigger_comment", "manual_triggers"}
 _PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
 _PDDRC_DEFAULTS_KEYS = {
     "generate_output_path",
@@ -182,6 +183,12 @@ def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
         for key in checkup.keys():
             if key not in _PDDRC_CHECKUP_KEYS:
                 _warn_unknown_pddrc_key(key, f"checkup.{key}")
+
+    ci_config = config.get("ci", {})
+    if isinstance(ci_config, dict):
+        for key in ci_config.keys():
+            if key not in _PDDRC_CI_KEYS:
+                _warn_unknown_pddrc_key(key, f"ci.{key}")
 
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):

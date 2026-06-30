@@ -59,7 +59,8 @@
      unknown key at the root, context, or defaults levels. Warning format:
      `WARNING: .pddrc contains unknown key 'X' at path 'Y', ignored. Run 'pdd setup' to regenerate.`
      Unknown keys are reported but not rejected, so stale configs continue to load.
-     Known keys by level — Root: `version`, `contexts`. Context: `paths`, `defaults`.
+     Known keys by level — Root: `version`, `contexts`, `checkup`, `ci`. `checkup`:
+     `prompt_gate`. `ci`: `external_setup_fail_open`, `manual_trigger_comment`, `manual_triggers`. Context: `paths`, `defaults`.
      Defaults: `generate_output_path`, `test_output_path`, `example_output_path`, `prompts_dir`,
      `default_language`, `target_coverage`, `strength`, `temperature`, `budget`,
      `max_attempts`, `outputs`, `auto_deps_csv_path`, `context_compression`,

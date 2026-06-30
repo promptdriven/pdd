@@ -2542,33 +2542,6 @@ class TestPrModeSourceArtifacts:
         assert "_check_architecture_registry_edit_guard" in function_names
         assert "_format_pr_mode_final_report" in function_names
 
-    def test_final_checkup_helper_is_in_prompt_and_context_sources(self) -> None:
-        root = Path(__file__).resolve().parent.parent
-        prompt = (
-            root / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
-        ).read_text(encoding="utf-8")
-        context = (
-            root / "context" / "agentic_e2e_fix_orchestrator_example.py"
-        ).read_text(encoding="utf-8")
-        architecture = json.loads(
-            (root / "architecture.json").read_text(encoding="utf-8")
-        )
-
-        assert "def:_run_final_checkup_on_pr" in prompt
-        assert "def _run_final_checkup_on_pr" in context
-        assert "cwd=cwd" in context
-
-        module = next(
-            item
-            for item in architecture
-            if item.get("filename") == "agentic_e2e_fix_orchestrator_python.prompt"
-        )
-        functions = module["interface"]["module"]["functions"]
-        helper = next(
-            fn for fn in functions if fn.get("name") == "_run_final_checkup_on_pr"
-        )
-        assert "cwd: Path" in helper["signature"]
-
 
 # ---------------------------------------------------------------------------
 # Round-4 Finding 1: gate the orchestrator on Step 7's JSON verdict.

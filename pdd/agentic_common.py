@@ -1795,6 +1795,13 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
 MAX_PDDRC_SEARCH_DEPTH: int = 10
 
 DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time for complex verify tasks
+# Issue #1714: shared explicit hard timeout for the standalone agentic helpers
+# (fix / crash / verify / update / test_generate). Bounded under
+# DEFAULT_TIMEOUT_SECONDS so a stalled step fails before the full 600s budget,
+# but kept close to it because these steps run real tools (test suites) that
+# legitimately need time and get no stall watchdog — a deeper cut would risk
+# killing healthy long runs.
+AGENTIC_STEP_TIMEOUT_SECONDS: float = 540.0
 MIN_VALID_OUTPUT_LENGTH: int = 50
 DEFAULT_MAX_RETRIES: int = 3
 DEFAULT_RETRY_DELAY: float = 5.0
@@ -1812,6 +1819,31 @@ CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
 # synthetic auth row); the interval throttles those checks inside the PTY loop.
 INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS: float = 2.0
 INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS: float = 1.0
+# Issue #1714: no-progress (stall) watchdog. A parked interactive TUI keeps the
+# PTY busy with spinner frames even after the model has stalled, so PTY byte
+# flow is NOT a progress signal — only growth of the session transcript (new
+# turns / tool calls) reflects real work. When a per-call ``stall_timeout`` is
+# supplied, ``_run_interactive_pty_until_reply`` aborts once the transcript has
+# stayed quiescent for that many seconds, well before the hard step timeout,
+# instead of burning the full budget on a spinner (~$2.22/hang in the report).
+# Opt-in (default ``None`` = off) so steps that legitimately idle on long
+# tool runs (verify/fix test suites) are unaffected; enable it only for
+# reasoning/discovery steps that should never sit quiescent.
+def _stall_watchdog_triggered(
+    last_progress_time: float,
+    now: float,
+    stall_timeout: Optional[float],
+) -> bool:
+    """Return True when the no-progress watchdog should abort the run.
+
+    ``stall_timeout`` is the maximum number of seconds the session transcript may
+    stay quiescent (no growth = no real progress) before the run is declared a
+    stall (issue #1714). ``None`` or a non-positive value disables the watchdog,
+    preserving the original "rely on the hard timeout only" behaviour.
+    """
+    if stall_timeout is None or stall_timeout <= 0:
+        return False
+    return (now - last_progress_time) > stall_timeout
 # The model name Claude Code stamps on a turn it generated locally for a failed
 # API call (auth failure, usage cap, transient error) rather than from a model.
 CLAUDE_SYNTHETIC_MODEL: str = "<synthetic>"
@@ -4751,6 +4783,7 @@ def run_agentic_task(
     quiet: bool = False,
     label: str = "",
     timeout: Optional[float] = None,
+    stall_timeout: Optional[float] = None,
     max_retries: int = 1,
     retry_delay: float = DEFAULT_RETRY_DELAY,
     deadline: Optional[float] = None,
@@ -4771,6 +4804,11 @@ def run_agentic_task(
         quiet: Suppress all non-error output
         label: Task label for logging
         timeout: Optional timeout override
+        stall_timeout: Optional no-progress watchdog window (issue #1714). When
+            set, an interactive run is aborted if its session transcript stays
+            quiescent for this many seconds — catching a parked/spinner-only
+            stall well before ``timeout``. ``None`` (default) disables it, so
+            steps that legitimately idle on long tool runs are unaffected.
         max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
         deadline: Optional Unix timestamp for job-level time budgeting
@@ -4958,6 +4996,7 @@ def run_agentic_task(
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
                     claude_policy=normalized_claude_policy,
+                    stall_timeout=stall_timeout,
                 )
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
@@ -6602,6 +6641,21 @@ def _terminate_process_group(proc: subprocess.Popen, sig: int) -> None:
             pass
 
 
+def _terminate_pty_proc_graceful(proc: subprocess.Popen) -> None:
+    """SIGTERM the process group, then SIGKILL if it doesn't exit within 5 s.
+
+    Shared teardown for the interactive PTY loop's three early-exit paths
+    (reply received, auth fast-fail, no-progress stall) so the graceful-then-
+    forced kill stays consistent in one place.
+    """
+    _terminate_process_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _terminate_process_group(proc, signal.SIGKILL)
+        proc.wait(timeout=5)
+
+
 def _parse_claude_interactive_reply(
     reply_path: Path,
     job_id: str,
@@ -6652,8 +6706,15 @@ def _run_interactive_pty_until_reply(
     reply_path: Path,
     job_id: str,
     session_id: Optional[str] = None,
+    stall_timeout: Optional[float] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
     """Run an interactive CLI under a PTY until the MCP reply file appears.
+
+    When ``stall_timeout`` is set, a no-progress watchdog (issue #1714) aborts
+    the run if the session transcript stops growing for that many seconds — a
+    parked TUI keeps the PTY busy with spinner frames, so only transcript growth
+    counts as real progress. ``None`` (default) leaves the run bounded solely by
+    the hard ``timeout``.
 
     When ``session_id`` is provided, the loop also fast-fails on a post-launch
     authentication failure (Issue #1365): a revoked or logged-out interactive
@@ -6698,16 +6759,20 @@ def _run_interactive_pty_until_reply(
         auth_buffer = b""  # carried incomplete trailing transcript line
         auth_state: Optional[str] = None  # running terminal-auth message
         auth_last_size = -1  # transcript size at previous poll (quiescence gate)
+        # Issue #1714 no-progress watchdog state. ``last_progress_time`` is the
+        # last wall-clock time the transcript grew (real work). Seeded to
+        # ``start`` so a session that never makes any progress is still caught
+        # after ``stall_timeout``. ``stall_last_size`` baselines the transcript
+        # size so an empty transcript merely *appearing* is not counted as
+        # progress.
+        last_progress_time = start
+        stall_last_size = 0
+        stall_armed = False  # Issue #1714: armed only once the transcript is located
 
         while True:
             if reply_path.exists():
                 parsed = _parse_claude_interactive_reply(reply_path, job_id)
-                _terminate_process_group(proc, signal.SIGTERM)
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    _terminate_process_group(proc, signal.SIGKILL)
-                    proc.wait(timeout=5)
+                _terminate_pty_proc_graceful(proc)
                 return parsed
 
             if proc.poll() is not None:
@@ -6728,6 +6793,21 @@ def _run_interactive_pty_until_reply(
                     # poll. (auth_last_size < 0 is the first observation.)
                     quiescent = auth_last_size >= 0 and current_size == auth_last_size
                     auth_last_size = current_size
+                    # Issue #1714 no-progress watchdog: the session transcript is
+                    # the only real-work signal (PTY spinner bytes are not). Arm
+                    # the watchdog the first time the transcript can actually be
+                    # read — baselining its current size so pre-existing content on
+                    # a resumed session is not mistaken for growth, and starting the
+                    # stall clock from this moment. If the transcript can never be
+                    # located the watchdog stays disarmed and the run falls back to
+                    # the hard timeout (never a spurious kill of a healthy run).
+                    if not stall_armed:
+                        stall_armed = True
+                        stall_last_size = current_size
+                        last_progress_time = now
+                    elif current_size > stall_last_size:
+                        stall_last_size = current_size
+                        last_progress_time = now
                     auth_state, auth_offset, auth_buffer = _advance_interactive_auth_scan(
                         auth_session_file, auth_offset, auth_buffer, auth_state
                     )
@@ -6740,14 +6820,25 @@ def _run_interactive_pty_until_reply(
                     # the next poll so a recovering session is never killed on a
                     # stale/partial trailing line.
                     if auth_failure is not None and quiescent:
-                        _terminate_process_group(proc, signal.SIGTERM)
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            _terminate_process_group(proc, signal.SIGKILL)
-                            proc.wait(timeout=5)
+                        _terminate_pty_proc_graceful(proc)
                         return False, auth_failure, 0.0, None
                 next_auth_check = now + INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS
+
+            # Issue #1714 no-progress watchdog: abort a stalled run (transcript
+            # quiescent past ``stall_timeout``) long before the hard timeout so a
+            # spinner-only hang fails fast and cheaply instead of burning the
+            # full step budget. Off unless the caller opts in via ``stall_timeout``.
+            if stall_armed and _stall_watchdog_triggered(last_progress_time, now, stall_timeout):
+                _terminate_pty_proc_graceful(proc)
+                tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                return (
+                    False,
+                    f"Claude interactive mode stalled: no transcript progress for "
+                    f"{stall_timeout:.0f}s (issue #1714 no-progress watchdog). "
+                    f"Output tail: {tail}",
+                    0.0,
+                    None,
+                )
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -6817,6 +6908,7 @@ def _run_claude_interactive_with_mcp(
     env: Dict[str, str],
     use_playwright: bool = False,
     claude_policy: Optional[ClaudePolicy] = None,
+    stall_timeout: Optional[float] = None,
 ) -> _ProviderRunResult:
     """Run Claude Code interactively and collect its result through MCP."""
     if os.name != "posix":
@@ -6860,6 +6952,7 @@ def _run_claude_interactive_with_mcp(
             reply_path=reply_path,
             job_id=job_id,
             session_id=session_id,
+            stall_timeout=stall_timeout,
         )
         session_cost, session_model, usage = _estimate_claude_interactive_session_cost(
             session_id,
@@ -6888,6 +6981,7 @@ def _run_with_provider(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
+    stall_timeout: Optional[float] = None,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
@@ -6992,6 +7086,7 @@ def _run_with_provider(
                 env=env,
                 use_playwright=use_playwright,
                 claude_policy=claude_policy,
+                stall_timeout=stall_timeout,
             )
 
         # Use -p - to pipe prompt as direct user message via stdin.

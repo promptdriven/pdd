@@ -14,6 +14,7 @@ from rich.markdown import Markdown
 
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
     get_available_agents,
     run_agentic_task,
     _revert_out_of_scope_changes,
@@ -29,7 +30,6 @@ try:
 except ImportError:  # pragma: no cover - defensive
     def extract_includes_from_file(file_path: Path) -> Set[str]:  # type: ignore[misc]
         return set()
-
 
 logger = logging.getLogger(__name__)
 
@@ -471,17 +471,20 @@ def run_agentic_update(
             verbose=verbose,
             quiet=quiet,
             label="agentic_update",
+            timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
             max_retries=DEFAULT_MAX_RETRIES,
         )
     except TypeError:
         # Test fixtures may patch run_agentic_task with a simpler signature
         # (e.g. *args, **kwargs); fall back to a minimal positional call so
-        # mocks that ignore cwd still work.
+        # mocks that ignore cwd still work. Keep the explicit timeout so this
+        # path stays bounded under 600s too (issue #1714).
         try:
             agent_success, agent_message, cost, model = run_agentic_task(
                 prompt_text,
                 max_retries=DEFAULT_MAX_RETRIES,
                 verbose=verbose,
+                timeout=AGENTIC_STEP_TIMEOUT_SECONDS,
             )
         except Exception as exc:
             msg = f"Agentic task failed with an exception: {exc}"

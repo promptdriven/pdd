@@ -1,10 +1,10 @@
 """Tests for pdd.agentic_checkup module."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +23,7 @@ from pdd.agentic_checkup import (
 # ---------------------------------------------------------------------------
 # _extract_json_from_text
 # ---------------------------------------------------------------------------
+
 
 class TestExtractJsonFromText:
     def test_extracts_from_markdown_code_block(self):
@@ -69,6 +70,7 @@ class TestExtractJsonFromText:
 # _load_pddrc_content
 # ---------------------------------------------------------------------------
 
+
 class TestLoadPddrcContent:
     def test_loads_existing_pddrc(self, tmp_path):
         pddrc = tmp_path / ".pddrc"
@@ -84,6 +86,7 @@ class TestLoadPddrcContent:
 # ---------------------------------------------------------------------------
 # _post_checkup_comment
 # ---------------------------------------------------------------------------
+
 
 class TestPostCheckupComment:
     @patch("pdd.agentic_checkup._run_gh_command")
@@ -144,6 +147,7 @@ class TestPostCheckupComment:
 # _post_error_comment
 # ---------------------------------------------------------------------------
 
+
 class TestPostErrorComment:
     @patch("pdd.agentic_checkup._run_gh_command")
     def test_posts_error_comment(self, mock_gh):
@@ -171,6 +175,7 @@ class TestPostErrorComment:
 # ---------------------------------------------------------------------------
 # _fetch_comments
 # ---------------------------------------------------------------------------
+
 
 class TestFetchComments:
     @patch("pdd.agentic_checkup._run_gh_command")
@@ -288,6 +293,7 @@ class TestFetchPrContext:
 # run_agentic_checkup
 # ---------------------------------------------------------------------------
 
+
 class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=False)
     def test_fails_without_gh_cli(self, mock_gh):
@@ -300,9 +306,7 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_fails_with_invalid_url(self, mock_gh):
-        success, msg, cost, model = run_agentic_checkup(
-            "not-a-url", quiet=True
-        )
+        success, msg, cost, model = run_agentic_checkup("not-a-url", quiet=True)
         assert not success
         assert "Invalid" in msg
 
@@ -328,7 +332,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=([], Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -362,7 +369,10 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup._post_error_comment")
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -393,7 +403,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -422,7 +435,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -454,7 +470,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -511,7 +530,9 @@ class TestRunAgenticCheckup:
         assert "Invalid GitHub PR URL" in msg
 
     @patch("pdd.agentic_checkup.run_checkup_review_loop")
-    @patch("pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}')
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
     @patch(
         "pdd.agentic_checkup._load_architecture_json",
@@ -545,12 +566,14 @@ class TestRunAgenticCheckup:
             review_loop=True,
             review_only=True,
             reviewer_fallback="gemini",
+            allow_same_reviewer_fixer=True,
         )
 
         config = mock_review_loop.call_args.kwargs["config"]
         context = mock_review_loop.call_args.kwargs["context"]
         assert config.review_only is True
         assert config.reviewer_fallback == "gemini"
+        assert config.allow_same_reviewer_fixer is True
         assert context.issue_title == "Check {workflow}"
         assert "check {value}" in context.issue_content
         assert context.pr_content == 'PR context {"ok": true}'
@@ -561,7 +584,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -592,7 +618,10 @@ class TestRunAgenticCheckup:
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
-    @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=(None, Path("/tmp/arch.json")),
+    )
     @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
     @patch("pdd.agentic_checkup._run_gh_command")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -656,6 +685,7 @@ class TestRunAgenticCheckup:
 # checkup CLI command
 # ---------------------------------------------------------------------------
 
+
 class TestCheckupCommand:
     """Test the Click command interface."""
 
@@ -674,7 +704,10 @@ class TestCheckupCommand:
         import json
 
         arch = [
-            {"filename": "child_Python.prompt", "dependencies": ["parent_Python.prompt"]},
+            {
+                "filename": "child_Python.prompt",
+                "dependencies": ["parent_Python.prompt"],
+            },
             {"filename": "parent_Python.prompt", "dependencies": []},
         ]
         (tmp_path / "architecture.json").write_text(json.dumps(arch), encoding="utf-8")

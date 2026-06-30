@@ -55,6 +55,19 @@ from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
+# Issue #1714: bound agentic-step stall duration well under the 600s
+# DEFAULT_TIMEOUT_SECONDS so a silent provider hang (spinner-only output) fails
+# fast instead of burning the full per-step budget (~$2.22/hang in the report).
+IDENTIFY_MODULES_TIMEOUT_SECONDS: float = 400.0  # module-discovery step
+FIX_DRY_RUN_TIMEOUT_SECONDS: float = 240.0  # quick dry-run repair suggestion
+# Issue #1714 no-progress watchdog windows. These reasoning/discovery steps run
+# no long-lived tools, so a session transcript that stays quiescent this long
+# signals a parked/spinner-only stall (the 600s hang in the report), not real
+# work — abort well before the hard timeout. Set above the observed healthy run
+# time (~221s for identify) so a legitimately slow run can never trip it.
+IDENTIFY_MODULES_STALL_SECONDS: float = 240.0
+FIX_DRY_RUN_STALL_SECONDS: float = 180.0
+
 console = Console()
 
 _GLOBAL_SYNC_NOOP_OPERATIONS = {"nothing", "all_synced"}
@@ -2025,6 +2038,8 @@ def _llm_fix_dry_run_failure(
         verbose=verbose,
         quiet=quiet,
         label="agentic_sync_fix_dry_run",
+        timeout=FIX_DRY_RUN_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
+        stall_timeout=FIX_DRY_RUN_STALL_SECONDS,  # Issue #1714: no-progress abort
         reasoning_time=reasoning_time,
     )
 
@@ -2790,6 +2805,8 @@ def run_agentic_sync(
             verbose=verbose,
             quiet=quiet,
             label="agentic_sync_identify_modules",
+            timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
+            stall_timeout=IDENTIFY_MODULES_STALL_SECONDS,  # Issue #1714: no-progress abort
             reasoning_time=reasoning_time,
         )
 
