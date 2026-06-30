@@ -491,6 +491,7 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files") as mock_detect, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
+         patch("pdd.agentic_e2e_fix_orchestrator._has_playwright_config") as mock_has_pw_config, \
          patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify, \
          patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment, \
          patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup", side_effect=lambda **kw: (kw["total_cost"], kw["changed_files"])):
@@ -511,6 +512,10 @@ def e2e_fix_mock_dependencies(tmp_path):
         mock_commit.return_value = (True, "No changes to commit")
         # Default: E2E environment available
         mock_check_e2e.return_value = (True, "")
+        # Default: a Playwright/E2E harness (config) exists in the repo. The
+        # #1776 terminal stop keys off this (repo property), not _check_e2e_
+        # environment's boolean (which also goes False on a missing npx runner).
+        mock_has_pw_config.return_value = True
 
         yield mock_run, mock_load, mock_console
 
@@ -10790,6 +10795,9 @@ class TestE2ESkipNotABugTerminalStop:
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
             "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
             return_value=["pdd/agentic_common.py"],
         ):
@@ -10962,6 +10970,9 @@ class TestE2ESkipNotABugTerminalStop:
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
             "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
             return_value=["pdd/agentic_common.py"],
         ):
@@ -11063,6 +11074,9 @@ class TestE2ESkipNotABugTerminalStop:
         ), patch(
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
         ), patch(
             # No direct edits and no fixed units => without the E2E_SKIP resume
             # handling the helper would TRUST the cached NOT_A_BUG and fall
@@ -11226,6 +11240,9 @@ class TestE2ESkipNotABugTerminalStop:
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
             "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
             return_value=["pdd/agentic_common.py"],
         ):
@@ -11275,6 +11292,9 @@ class TestE2ESkipNotABugTerminalStop:
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
             "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
             return_value=["pdd/agentic_common.py"],
         ):
@@ -11293,6 +11313,62 @@ class TestE2ESkipNotABugTerminalStop:
             f"Scoped stop must break the outer loop, not advance cycles. {called_labels}"
         )
         assert _E2E_SKIP_STOP_SUBSTR in (msg or "")
+
+    def test_real_harness_missing_npx_does_not_overfire(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """fm#4 (over-broad guard): a REAL E2E repo whose Playwright config EXISTS
+        but whose executor merely lacks the npx runner must NOT trigger the #1776
+        "no E2E test suite" stop. `_check_e2e_environment` returns False for a
+        missing npx even when a config is present, so the guard keys off
+        `_has_playwright_config` (the repo property) instead — the harness exists,
+        so the original suppression continues into Step 8.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "No failure here.\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            # Executor lacks npx → _check_e2e_environment reports unavailable...
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(
+                False,
+                "npx not found — playwright/browser infrastructure unavailable",
+            ),
+        ), patch(
+            # ...but the repo DOES have a Playwright config (a real E2E harness).
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # The harness EXISTS (config present) → the #1776 stop must NOT fire.
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 fm#4: a real E2E repo with a Playwright config but a "
+            f"missing npx runner must NOT report 'no E2E test suite'. msg={msg!r}"
+        )
+        # Original suppression preserved → workflow continues into Step 8.
+        assert step8_calls, (
+            "fm#4: with the harness present (config), the original NOT_A_BUG "
+            f"suppression must continue into Step 8. Called labels: {called_labels}"
+        )
 
 
 class TestStep9VerifierFailureSurfacedInFinalReport:
@@ -11560,6 +11636,9 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
             return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
         ), patch(
             "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
             return_value=["tests/test_x.py"],
