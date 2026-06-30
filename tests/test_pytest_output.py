@@ -679,3 +679,23 @@ def test_warning_count_mixed_library_and_pytest_warnings(tmp_path):
         f"Expected 1 warning (from pytest summary), got {results['warnings']}. "
         f"Library warnings in stdout should not inflate the count."
     )
+
+
+def test_run_pytest_returns_exact_shell_quoted_command(tmp_path):
+    """PDD #1776 criterion #4: the result includes a top-level ``command`` key
+    with the EXACT, shell-quoted pytest invocation so a rejection is reproducible
+    even when the test path contains spaces."""
+    import shlex as _shlex
+
+    spaced = tmp_path / "dir with space"
+    spaced.mkdir()
+    test_file = spaced / "test_sample.py"
+    test_file.write_text("def test_ok():\n    assert True\n")
+
+    result = run_pytest_and_capture_output(str(test_file))
+
+    assert "command" in result, f"result missing 'command' key: {list(result.keys())}"
+    cmd = result["command"]
+    assert "-m pytest" in cmd and "-v" in cmd, cmd
+    # Shell-quoted so it round-trips: the spaced absolute path survives shlex.split.
+    assert str(test_file.resolve()) in _shlex.split(cmd), (cmd, _shlex.split(cmd))

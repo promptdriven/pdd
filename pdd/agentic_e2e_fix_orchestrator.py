@@ -855,6 +855,18 @@ def _extract_test_files(
     return test_files
 
 
+def _decode_stream(stream: Any) -> str:
+    """Coerce a subprocess stream to str. ``subprocess.TimeoutExpired.stdout`` /
+    ``.stderr`` are BYTES even when ``run()`` used ``text=True`` (the timeout
+    drain path does not decode), so the verifier timeout path must not assume
+    str or it raises ``TypeError`` (Issue #1776 fm#1)."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", "replace")
+    return str(stream)
+
+
 def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
     """Run appropriate test runner on test files via subprocess. Returns (all_passed, output).
 
@@ -949,8 +961,9 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 all_passed = False
                 # Surface the command + any partial output captured before the
                 # timeout (Issue #1776 criterion #4 — keep the rejection
-                # reproducible). text=True makes te.stdout/te.stderr str|None.
-                _partial = (te.stdout or "") + (te.stderr or "")
+                # reproducible). te.stdout/te.stderr are BYTES even with
+                # text=True, so decode defensively (fm#1).
+                _partial = _decode_stream(te.stdout) + _decode_stream(te.stderr)
                 all_outputs.append(
                     f"$ {test_cmd.command}\n"
                     f"{test_file}: FAILED (timeout after 120s)\n{_partial}".rstrip()

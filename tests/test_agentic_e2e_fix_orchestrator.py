@@ -11718,11 +11718,16 @@ class TestVerifierOutputDetail:
         cmd_obj = MagicMock()
         cmd_obj.command = "npx playwright test tests/widget.spec.ts"
         cmd_obj.cwd = None
+        # subprocess.TimeoutExpired.stdout/stderr are BYTES even with text=True
+        # (fm#1). Use the ASYMMETRIC case (bytes stdout, EMPTY stderr): without the
+        # decode fix, `(te.stdout or "") + (te.stderr or "")` does bytes + str
+        # (empty bytes is falsy → ""), raising TypeError. The fix must not crash
+        # and must surface the partial stdout.
         timeout_exc = subprocess.TimeoutExpired(
             cmd="npx",
             timeout=120,
-            output="partial stdout here",
-            stderr="partial stderr here",
+            output=b"partial stdout here",
+            stderr=b"",
         )
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file",
@@ -11736,8 +11741,8 @@ class TestVerifierOutputDetail:
             )
 
         assert passed is False
-        # fm#3: the command and any partial output are surfaced on timeout.
+        # fm#3: the command and any partial output are surfaced on timeout
+        # (and fm#1: no TypeError on bytes-vs-empty stream coercion).
         assert "npx playwright test tests/widget.spec.ts" in output, output
         assert "timeout" in output.lower()
         assert "partial stdout here" in output
-        assert "partial stderr here" in output
