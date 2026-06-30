@@ -860,24 +860,7 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     redacted = redact_sensitive_key_value_text(redacted)
-    redacted = re.sub(
-        (
-            r"(?i)(^|\s)(--(?:[a-z0-9-]*token|[a-z0-9-]*secret|"
-            r"[a-z0-9-]*api-key|authorization|password))(\s+)"
-            r"[^\s\"'\\,;]+"
-        ),
-        r"\1\2\3[redacted]",
-        redacted,
-    )
-    redacted = re.sub(
-        (
-            r"(?i)(^|\s)(--(?:[a-z0-9-]*token|[a-z0-9-]*secret|"
-            r"[a-z0-9-]*api-key|authorization|password)=)"
-            r"[^\s\"'\\,;]+"
-        ),
-        r"\1\2[redacted]",
-        redacted,
-    )
+    redacted = redact_sensitive_command_option_text(redacted)
     redacted = re.sub(
         (
             r"(?i)([\"']?(?:access[_-]?token|api[_-]?key|"
@@ -909,10 +892,40 @@ def redact_sensitive_key_value_text(text: str) -> str:
         (
             r"(?i)(?P<prefix>(?<![a-z0-9_.-])[\"']?"
             r"(?P<key>[a-z_][a-z0-9_.-]{0,80})[\"']?\s*[:=]\s*[\"']?)"
-            r"(?P<value>[^\"'\s,;}]+)"
+            r"(?P<value>[^&\"'\s,;}]+)"
         ),
         replace,
         text,
+    )
+
+
+def redact_sensitive_command_option_text(text: str) -> str:
+    """Redact command option values from unstructured diagnostic text."""
+
+    def replace(match: re.Match[str]) -> str:
+        option = match.group("option")
+        if is_sensitive_command_option(option):
+            return (
+                f"{match.group('prefix')}{option}"
+                f"{match.group('separator')}[redacted]"
+            )
+        return match.group(0)
+
+    redacted = re.sub(
+        (
+            r"(?i)(?P<prefix>^|\s)(?P<option>--[a-z0-9][a-z0-9-]*)"
+            r"(?P<separator>\s+)(?P<value>[^\s\"'\\,;]+)"
+        ),
+        replace,
+        text,
+    )
+    return re.sub(
+        (
+            r"(?i)(?P<prefix>^|\s)(?P<option>--[a-z0-9][a-z0-9-]*)"
+            r"(?P<separator>=)(?P<value>[^\s\"'\\,;]+)"
+        ),
+        replace,
+        redacted,
     )
 
 
