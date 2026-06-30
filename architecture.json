@@ -8220,7 +8220,13 @@
             "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
             "returns": "Tuple[bool, str, float]",
             "sideEffects": [
-              "expected_head_sha_override forces the poll to wait for a specific pushed PR head SHA instead of _get_head_sha(cwd); used by a caller that must validate CI against a specific PR head rather than cwd's local HEAD (e.g. when the head was pushed from a different worktree, so cwd's local HEAD is stale relative to the PR remote)"
+              "without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout",
+              "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
+              "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
+              "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
+              "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive, ignoring passed checks for trigger matching",
+              "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code, except ACTION_REQUIRED state remains manual-action even with a missing bucket",
+              "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when .pddrc ci.external_setup_fail_open is exactly true; by default failed checks remain fail-closed/repairable"
             ]
           },
           {
