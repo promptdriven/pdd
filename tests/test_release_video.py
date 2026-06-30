@@ -2215,6 +2215,93 @@ def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     assert "did not return a YouTube URL" in result.stderr
 
 
+def test_release_video_accepts_noisy_create_stdout_json_without_leaking_secrets(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    stdout = (
+        "debug Authorization: Bearer secret-create-stdout-token\n"
+        + json.dumps({"youtubeUrl": "https://youtu.be/pdd-release"})
+        + "\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=stdout)),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "https://youtu.be/pdd-release" in result.stdout
+    assert "secret-create-stdout-token" not in result.stdout + result.stderr
+
+
+def test_release_video_create_parse_failure_redacts_stdout_secrets(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=(
+                        "not json Authorization: Bearer "
+                        "secret-invalid-stdout-token\n"
+                    ),
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "secret-invalid-stdout-token" not in result.stdout + result.stderr
+    assert "Authorization: [redacted]" in result.stderr
+
+
 def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -3307,6 +3394,67 @@ def test_release_video_status_query_redacts_pds_api_url_context(tmp_path: Path):
         assert secret not in persisted_text
     assert "[redacted]" in persisted["pdsContext"]["apiUrl"]
     assert persisted["pdsContext"]["apiUrlSource"] == "PDS_API_URL"
+
+
+def test_release_video_status_query_redacts_access_key_pds_cli_commands(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_access_key_cli",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {"runId": "agent_run_access_key_cli", "status": "succeeded"}
+    pds_cli = (
+        f"{pds_output_stub(tmp_path, stdout=json.dumps(status_response) + chr(10))} "
+        "--secret-access-key secret-access-key "
+        "--aws-secret-access-key=secret-aws-access-key "
+        "--access-key-id secret-access-key-id "
+        "--access-key=secret-access-key-equals"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            pds_cli,
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    for secret in (
+        "secret-access-key",
+        "secret-aws-access-key",
+        "secret-access-key-id",
+        "secret-access-key-equals",
+    ):
+        assert secret not in combined_output
+    assert "[redacted]" in combined_output
 
 
 def test_release_video_status_query_ignores_historical_terminal_runs(tmp_path: Path):
