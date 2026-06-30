@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +193,17 @@ capture.write_text(json.dumps({{"argv": sys.argv[1:]}}, indent=2), encoding="utf
 sys.stdout.write({stdout!r})
 sys.stderr.write({stderr!r})
 raise SystemExit({exit_code})
+""",
+    )
+
+
+def pds_version_stub(tmp_path: Path, version_output: str) -> Path:
+    return write_executable(
+        tmp_path / "pds-version-stub.py",
+        f"""#!/usr/bin/env python3
+import sys
+
+sys.stdout.write({version_output!r})
 """,
     )
 
@@ -1638,6 +1650,24 @@ def test_release_video_makefile_passes_recovery_env_vars():
     )
 
 
+def test_release_video_makefile_pds_cli_default_avoids_stale_global_cli():
+    makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
+
+    assert "PDS_CLI ?= npx -y @promptdriven/pds@0.1.6 --timeout 120s" in makefile_text
+
+
+def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli():
+    workflow_text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf8"
+    )
+
+    assert (
+        "PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.6' }}"
+        in workflow_text
+    )
+    assert "make check-release-video-config" in workflow_text
+
+
 def test_release_video_metadata_conflict_recovery_is_documented():
     doc_text = (
         ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
@@ -2184,6 +2214,62 @@ def test_release_video_preflight_with_env_token_and_project_reports_fixed_projec
     assert "env-secret-token" not in result.stdout + result.stderr
 
 
+def test_release_video_preflight_reports_redacted_pds_cli_command_and_version(
+    tmp_path: Path,
+):
+    pds_cli = (
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.6\\n')} "
+        "--token secret-preflight-token"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            pds_cli,
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=True,
+    )
+
+    assert "release-video preflight: PDS CLI command:" in result.stdout
+    assert "--token '[redacted]'" in result.stdout
+    assert "release-video preflight: PDS CLI version: 0.1.6" in result.stdout
+    assert "secret-preflight-token" not in result.stdout + result.stderr
+
+
+def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
+    pds_cli = (
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.5\\n')} "
+        "--token secret-preflight-token"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            pds_cli,
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "PDS CLI 0.1.5 is older than required 0.1.6" in result.stderr
+    assert "--token '[redacted]'" in result.stdout
+    assert "secret-preflight-token" not in result.stdout + result.stderr
+
+
 def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -2430,6 +2516,63 @@ def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: 
     assert "secret-create-auth" not in result.stderr
     assert "--token '[redacted]'" in result.stderr
     assert "--authorization '[redacted]'" in result.stderr
+
+
+def test_release_video_create_uses_configured_pds_process_timeout(
+    tmp_path: Path,
+    monkeypatch,
+):
+    release_video = load_release_video_module()
+    repo = init_release_repo(tmp_path)
+    script_path = tmp_path / "release_video_script.md"
+    release_notes_path = tmp_path / "release_notes.md"
+    run_metadata_path = tmp_path / "pds_run.json"
+    script_path.write_text(reusable_script_text(), encoding="utf8")
+    release_notes_path.write_text("Release notes\n", encoding="utf8")
+    observed_timeouts = []
+
+    def fake_run(command, *, cwd, input_text=None, timeout=None, env=None, check=True):
+        observed_timeouts.append(timeout)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"summary": {"youtubeUrl": "https://youtu.be/timeout"}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(release_video, "run", fake_run)
+
+    response = release_video.create_release_video(
+        args=SimpleNamespace(
+            pds_cli=sys.executable,
+            project_id="",
+            project_name="",
+            idempotency_key="",
+            idempotency_attempt_id="",
+            idempotency_provenance="local-test",
+            preset="release-notes",
+            target="publish",
+            platform="youtube",
+            privacy="unlisted",
+            bootstrap_selected_project=False,
+            metadata_conflict="",
+            force_regenerate=False,
+            dry_run=False,
+            pds_create_timeout=42.0,
+        ),
+        repo=repo,
+        tag="v1.1.0",
+        git_sha="abc123def456",
+        repo_url="https://github.com/promptdriven/pdd",
+        repo_name="promptdriven/pdd",
+        script_path=script_path,
+        release_notes_path=release_notes_path,
+        changelog_path=Path("CHANGELOG.md"),
+        run_metadata_path=run_metadata_path,
+    )
+
+    assert response["summary"]["youtubeUrl"] == "https://youtu.be/timeout"
+    assert observed_timeouts == [42.0]
 
 
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):
