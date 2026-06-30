@@ -75,6 +75,11 @@ SENSITIVE_FIELD_NAMES = {
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+MIN_PDS_CLI_VERSION = (0, 1, 6)
+MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
+PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
+PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
+DEFAULT_PDS_CREATE_TIMEOUT_SECONDS = 1800.0
 CLAUDE_OAUTH_TOKEN_ENV_VARS = (
     "CLAUDE_CODE_OAUTH_TOKEN_1",
     "CLAUDE_CODE_OAUTH_TOKEN_2",
@@ -281,6 +286,20 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
+    parser.add_argument(
+        "--pds-create-timeout",
+        type=float,
+        default=float(
+            os.environ.get(
+                "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
+                DEFAULT_PDS_CREATE_TIMEOUT_SECONDS,
+            )
+        ),
+        help=(
+            "Maximum seconds to allow the PDS release-video create process. "
+            "Set to 0 to rely only on the PDS CLI timeout/recovery behavior."
+        ),
+    )
     parser.add_argument(
         "--project-id",
         default=os.environ.get("RELEASE_VIDEO_PROJECT_ID", ""),
@@ -997,6 +1016,8 @@ def preflight_release_video(args: argparse.Namespace) -> int:
         print("release-video preflight: skipped because RELEASE_VIDEO=0.")
         return 0
 
+    preflight_pds_cli(args, Path(args.repo).resolve())
+
     project_id = str(args.project_id or "").strip()
     if project_id:
         print(f"release-video preflight: using explicit PDS project {project_id}.")
@@ -1083,6 +1104,85 @@ def read_pds_config(path: Path) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def preflight_pds_cli(args: argparse.Namespace, repo: Path) -> None:
+    """Print and validate the PDS CLI command used by release-video."""
+    redacted_command = redact_command_text(str(args.pds_cli or ""))
+    print(f"release-video preflight: PDS CLI command: {redacted_command}")
+
+    version, diagnostic = probe_pds_cli_version(str(args.pds_cli or ""), repo)
+    if diagnostic:
+        print(
+            "release-video preflight: could not determine PDS CLI version: "
+            f"{diagnostic}",
+            file=sys.stderr,
+        )
+        return
+    if version is None:
+        print(
+            "release-video preflight: could not determine PDS CLI version.",
+            file=sys.stderr,
+        )
+        return
+
+    print(f"release-video preflight: PDS CLI version: {version}")
+    if pds_cli_version_tuple(version) < MIN_PDS_CLI_VERSION:
+        raise ReleaseVideoError(
+            f"PDS CLI {version} is older than required "
+            f"{MIN_PDS_CLI_VERSION_TEXT}. Use @promptdriven/pds@"
+            f"{MIN_PDS_CLI_VERSION_TEXT} or newer. Command: {redacted_command}"
+        )
+
+
+def probe_pds_cli_version(
+    pds_cli: str,
+    repo: Path,
+) -> tuple[str | None, str | None]:
+    """Return the PDS CLI semantic version, or a redacted diagnostic."""
+    command = split_command(pds_cli)
+    if not command:
+        return None, "PDS_CLI is empty"
+    try:
+        ensure_command_exists(command[0], "PDS CLI")
+        completed = run(
+            [*command, "--version"],
+            cwd=repo,
+            timeout=PDS_VERSION_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except ReleaseVideoError as exc:
+        return None, redact_secret_text(str(exc))
+
+    combined = "\n".join(
+        part.strip()
+        for part in (completed.stdout, completed.stderr)
+        if part and part.strip()
+    )
+    if completed.returncode != 0:
+        return None, redacted_process_details(completed)
+    version = extract_pds_cli_version(combined)
+    if not version:
+        diagnostic = truncate(redact_secret_text(combined), 300) or "empty output"
+        return None, f"could not parse --version output: {diagnostic}"
+    return version, None
+
+
+def extract_pds_cli_version(text: str) -> str | None:
+    """Extract the first semantic version from PDS CLI version output."""
+    match = PDS_VERSION_RE.search(text)
+    if not match:
+        return None
+    return match.group("version")
+
+
+def pds_cli_version_tuple(version: str) -> tuple[int, int, int]:
+    """Return a comparable major/minor/patch tuple for a PDS CLI version."""
+    match = PDS_VERSION_RE.search(version)
+    if not match:
+        return (0, 0, 0)
+    major, minor, patch = match.group("version").split(".")
+    return (int(major), int(minor), int(patch))
+
+
 def run(
     command: list[str],
     *,
@@ -1092,6 +1192,7 @@ def run(
     env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    rendered_command = redact_command_text(shlex.join(command))
     try:
         completed = subprocess.run(
             command,
@@ -1105,7 +1206,7 @@ def run(
         )
     except subprocess.TimeoutExpired as exc:
         raise ReleaseVideoError(
-            f"{shlex.join(command)} timed out after {timeout:g} seconds"
+            f"{rendered_command} timed out after {timeout:g} seconds"
         ) from exc
     except FileNotFoundError as exc:
         raise ReleaseVideoError(f"Executable not found: {command[0]}") from exc
@@ -1113,7 +1214,9 @@ def run(
         stderr = completed.stderr.strip()
         stdout = completed.stdout.strip()
         details = stderr or stdout or f"exit code {completed.returncode}"
-        raise ReleaseVideoError(f"{shlex.join(command)} failed: {details[:2000]}")
+        raise ReleaseVideoError(
+            f"{rendered_command} failed: {redact_secret_text(details[:2000])}"
+        )
     return completed
 
 
@@ -1565,6 +1668,14 @@ def resolve_prompt_template_path(prompt_template: Path, cwd: Path) -> Path:
     raise ReleaseVideoError(f"Release-video prompt template not found. Tried:\n{tried}")
 
 
+def pds_create_process_timeout(args: argparse.Namespace) -> float | None:
+    """Return the configured PDS create subprocess timeout."""
+    timeout = float(
+        getattr(args, "pds_create_timeout", DEFAULT_PDS_CREATE_TIMEOUT_SECONDS)
+    )
+    return timeout if timeout > 0 else None
+
+
 def create_release_video(
     *,
     args: argparse.Namespace,
@@ -1634,7 +1745,12 @@ def create_release_video(
     if args.dry_run:
         pds_args.append("--dry-run")
 
-    completed = run(command + pds_args, cwd=repo, timeout=None, check=False)
+    completed = run(
+        command + pds_args,
+        cwd=repo,
+        timeout=pds_create_process_timeout(args),
+        check=False,
+    )
     persisted_run_metadata_path = persist_pds_run_metadata_from_output(
         completed=completed,
         path=run_metadata_path,

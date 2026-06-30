@@ -1653,7 +1653,10 @@ def test_release_video_makefile_passes_recovery_env_vars():
 def test_release_video_makefile_pds_cli_default_avoids_stale_global_cli():
     makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
 
-    assert "PDS_CLI ?= npx -y @promptdriven/pds@0.1.6 --timeout 120s" in makefile_text
+    assert (
+        "PDS_CLI ?= npx -y @promptdriven/pds@0.1.6 --timeout 120s"
+        in makefile_text
+    )
 
 
 def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli():
@@ -1662,7 +1665,8 @@ def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli
     )
 
     assert (
-        "PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.6' }}"
+        "PDS_CLI_PACKAGE: "
+        "${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.6' }}"
         in workflow_text
     )
     assert "make check-release-video-config" in workflow_text
@@ -2123,7 +2127,13 @@ def test_release_video_preflight_warns_for_project_scoped_profile(tmp_path: Path
     env.pop("RELEASE_VIDEO_PROJECT_ID", None)
 
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--preflight"],
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            str(pds_version_stub(tmp_path, "0.1.6\n")),
+        ],
         cwd=tmp_path,
         text=True,
         capture_output=True,
@@ -2166,7 +2176,13 @@ def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: 
     env.pop("RELEASE_VIDEO_PROJECT_ID", None)
 
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--preflight"],
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--preflight",
+            "--pds-cli",
+            str(pds_version_stub(tmp_path, "0.1.6\n")),
+        ],
         cwd=tmp_path,
         text=True,
         capture_output=True,
@@ -2199,6 +2215,8 @@ def test_release_video_preflight_with_env_token_and_project_reports_fixed_projec
             "--preflight",
             "--project-id",
             "fixed-project-123",
+            "--pds-cli",
+            str(pds_version_stub(tmp_path, "0.1.6\n")),
         ],
         cwd=repo,
         text=True,
@@ -2531,12 +2549,15 @@ def test_release_video_create_uses_configured_pds_process_timeout(
     release_notes_path.write_text("Release notes\n", encoding="utf8")
     observed_timeouts = []
 
-    def fake_run(command, *, cwd, input_text=None, timeout=None, env=None, check=True):
+    def fake_run(command, **kwargs):
+        timeout = kwargs["timeout"]
         observed_timeouts.append(timeout)
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=json.dumps({"summary": {"youtubeUrl": "https://youtu.be/timeout"}}),
+            stdout=json.dumps(
+                {"summary": {"youtubeUrl": "https://youtu.be/timeout"}}
+            ),
             stderr="",
         )
 
