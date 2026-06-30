@@ -3417,10 +3417,10 @@ def test_release_video_status_query_redacts_access_key_pds_cli_commands(
     status_response = {"runId": "agent_run_access_key_cli", "status": "succeeded"}
     pds_cli = (
         f"{pds_output_stub(tmp_path, stdout=json.dumps(status_response) + chr(10))} "
-        "--secret-access-key secret-access-key "
-        "--aws-secret-access-key=secret-aws-access-key "
-        "--access-key-id secret-access-key-id "
-        "--access-key=secret-access-key-equals"
+        "--secret-access-key value-space-alpha "
+        "--aws-secret-access-key=value-equals-beta "
+        "--access-key-id value-id-gamma "
+        "--access-key=value-access-delta"
     )
 
     result = subprocess.run(
@@ -3448,10 +3448,10 @@ def test_release_video_status_query_redacts_access_key_pds_cli_commands(
     sidecar_text = sidecar.read_text(encoding="utf8")
     combined_output = result.stdout + result.stderr + sidecar_text
     for secret in (
-        "secret-access-key",
-        "secret-aws-access-key",
-        "secret-access-key-id",
-        "secret-access-key-equals",
+        "value-space-alpha",
+        "value-equals-beta",
+        "value-id-gamma",
+        "value-access-delta",
     ):
         assert secret not in combined_output
     assert "[redacted]" in combined_output
