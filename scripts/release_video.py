@@ -2363,6 +2363,12 @@ def prepare_release_video_script(raw_script: str, *, source: str) -> dict[str, A
     candidate, duplicate_changed = collapse_duplicate_narrator_labels(candidate)
     if duplicate_changed:
         changes.append("collapsed_duplicate_narrator_labels")
+    candidate, visual_changed = collapse_label_only_visual_cues(candidate)
+    if visual_changed:
+        changes.append("collapsed_label_only_visual_cues")
+    candidate, wrapped_visual_changed = collapse_wrapped_visual_cues(candidate)
+    if wrapped_visual_changed:
+        changes.append("collapsed_wrapped_visual_cues")
     normalized = normalize_release_video_script(candidate)
     normalized, duplicate_changed_after = collapse_duplicate_narrator_labels(normalized)
     if duplicate_changed_after and "collapsed_duplicate_narrator_labels" not in changes:
@@ -2573,6 +2579,112 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
     return trim_repeated_blank_lines(normalized), changed
 
 
+def collapse_label_only_visual_cues(script: str) -> tuple[str, bool]:
+    """Collapse safe label-only visual blocks into same-line VISUAL cues."""
+    lines = script.splitlines()
+    normalized: list[str] = []
+    changed = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        if is_visual_label_only(line):
+            cue_lines, next_index = collect_visual_cue_paragraph(lines, index + 1)
+            if cue_lines:
+                cue = " ".join(cue_lines)
+                append_spaced(normalized, f"VISUAL: {cue}")
+                index = next_index
+                changed = True
+                continue
+        normalized.append(line)
+        index += 1
+
+    if not changed:
+        return script, False
+    return trim_repeated_blank_lines(normalized), True
+
+
+def collect_visual_cue_paragraph(lines: list[str], start: int) -> tuple[list[str], int]:
+    """Collect cue paragraph lines after a label-only visual marker."""
+    cue_lines: list[str] = []
+    index = start
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        if is_collapsible_visual_cue_line(line):
+            cue_lines.append(clean_visual_cue(line))
+            index += 1
+            continue
+        visual = visual_cue_text(line)
+        if visual and not cue_lines:
+            cue_lines.append(visual)
+            index += 1
+        break
+    return cue_lines, index
+
+
+def collapse_wrapped_visual_cues(script: str) -> tuple[str, bool]:
+    """Collapse safe continuation lines into their preceding VISUAL cue."""
+    lines = script.splitlines()
+    normalized: list[str] = []
+    changed = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        visual = visual_cue_text(line)
+        if visual:
+            continuation_lines, next_index = collect_visual_cue_continuation(
+                lines,
+                index + 1,
+            )
+            if continuation_lines:
+                cue = " ".join([visual, *continuation_lines])
+                append_spaced(normalized, f"VISUAL: {cue}")
+                index = next_index
+                changed = True
+                continue
+        normalized.append(line)
+        index += 1
+
+    if not changed:
+        return script, False
+    return trim_repeated_blank_lines(normalized), True
+
+
+def collect_visual_cue_continuation(
+    lines: list[str],
+    start: int,
+) -> tuple[list[str], int]:
+    """Collect safe visual cue continuation lines until the next block boundary."""
+    cue_lines: list[str] = []
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        if not is_collapsible_visual_cue_line(line):
+            break
+        cue_lines.append(clean_visual_cue(line))
+        index += 1
+    return cue_lines, index
+
+
+def is_collapsible_visual_cue_line(line: str) -> bool:
+    """Return whether a line can safely become cue text after VISUAL:."""
+    stripped = line.strip()
+    return bool(
+        stripped
+        and not re.match(r"^#{1,6}\s+\S", stripped)
+        and not is_release_video_script_line(line)
+        and not is_model_wrapper_line(line)
+        and not is_markdown_fence_line(line)
+    )
+
+
 def validate_release_video_script(
     *,
     script: str,
@@ -2587,6 +2699,7 @@ def validate_release_video_script(
         "hasVisual": any(visual_cue_text(line) for line in script.splitlines()),
         "hasNoModelWrapperText": not has_unstripped_model_wrapper_text(script),
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
+        "hasNoLabelOnlyVisualCues": not has_label_only_visual_cues(script),
         "hasNoMarkdownFences": not has_markdown_fence_line(script),
     }
     errors = [name for name, passed in checks.items() if not passed]
@@ -2615,6 +2728,11 @@ def has_duplicate_narrator_labels(script: str) -> bool:
         if line.strip():
             previous_pending_label = False
     return False
+
+
+def has_label_only_visual_cues(script: str) -> bool:
+    """Return whether the script still contains empty visual cue labels."""
+    return any(is_visual_label_only(line) for line in script.splitlines())
 
 
 def has_markdown_fence_line(script: str) -> bool:
@@ -2813,7 +2931,22 @@ def is_release_video_script_line(line: str) -> bool:
         re.match(r"^#{1,2}\s+\S", stripped)
         or is_narrator_label(line)
         or inline_narrator_label_body(line) is not None
+        or is_visual_label_only(line)
         or visual_cue_text(line)
+    )
+
+
+def is_visual_label_only(line: str) -> bool:
+    """Return whether a line is only a visual label with no cue text."""
+    stripped = line.strip()
+    return bool(
+        re.match(
+            r"^(?:\*\*)?"
+            r"(?:VISUAL|Visual direction|Scene|Shot|On[- ]screen):"
+            r"\s*(?:\*\*)?$",
+            stripped,
+            flags=re.IGNORECASE,
+        )
     )
 
 
