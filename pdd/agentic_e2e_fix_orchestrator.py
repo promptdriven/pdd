@@ -347,6 +347,10 @@ class _Step9TokenApplyResult(NamedTuple):
     last_completed_step: Optional[int] = None
     step_outputs_9: Optional[str] = None
     verification_failure_context_update: Optional[str] = None  # None = no change; str = set
+    # Issue #1776 criterion #4: when independent verification rejects a claimed
+    # Step 9 pass, carry the verifier detail (files/output) so the final report
+    # can surface it and a public "tests pass" comment is not left misleading.
+    verifier_failure_detail: Optional[str] = None
 
 
 def _apply_step9_resolved_token(
@@ -408,12 +412,14 @@ def _apply_step9_resolved_token(
                     import_error_retries=new_retries,
                     step_outputs_9=full_failed,
                     verification_failure_context_update=verify_output,
+                    verifier_failure_detail=failed_body,
                     last_completed_step=0,
                 )
             return _Step9TokenApplyResult(
                 break_inner=False,
                 import_error_retries=new_retries,
                 step_outputs_9=full_failed,
+                verifier_failure_detail=failed_body,
                 last_completed_step=step_num - 1,
             )
         console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
@@ -2030,6 +2036,12 @@ def run_agentic_e2e_fix_orchestrator(
     # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
     # terminal-success condition holds (Issue #1034). Skips the inner workflow.
     resume_terminal_success = False
+    # Issue #1776 criterion #4: most recent Step 9 independent-verification
+    # rejection (LLM claimed ALL_TESTS_PASS / LOCAL_TESTS_PASS but the
+    # independent pytest run failed). Persisted across cycles (step_outputs is
+    # cleared on cycle rollover) so the final report can surface the hidden
+    # verifier failure and a public "tests pass" comment is not left misleading.
+    last_verifier_failure: Optional[str] = None
     # Issue #1034 follow-up: True when the resumed cycle was mid-flight
     # (last_completed_step > 0, current_cycle > 1) but no cycle_start_hashes
     # was persisted (legacy state file or pre-snapshot interrupt). The outer
@@ -3052,7 +3064,10 @@ def run_agentic_e2e_fix_orchestrator(
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
                         nonlocal last_completed_step, verification_failure_context
+                        nonlocal last_verifier_failure
                         import_error_retries = r.import_error_retries
+                        if r.verifier_failure_detail is not None:
+                            last_verifier_failure = r.verifier_failure_detail
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
@@ -3525,6 +3540,22 @@ def run_agentic_e2e_fix_orchestrator(
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
             if remaining:
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
+
+            # Issue #1776 criterion #4: if a Step 9 "tests pass" claim was rejected
+            # by independent verification at any point, surface that here so the
+            # visible agent "tests pass" comment is not left misleading. Appended
+            # AFTER the banner decision above so it cannot alter banner routing.
+            if last_verifier_failure:
+                console.print(
+                    "[bold red]Note: a Step 9 'tests pass' claim was rejected by "
+                    "independent verification — surfacing it in the final comment.[/bold red]"
+                )
+                final_message = (
+                    f"{final_message}\n\n"
+                    "⚠️ Step 9 independent verification REJECTED a claimed test pass: a "
+                    "visible \"tests pass\" comment was NOT confirmed by an independent "
+                    f"run.\n{last_verifier_failure}"
+                )
 
             # Post final status comment to GitHub so users see why the workflow stopped
             post_final_comment(

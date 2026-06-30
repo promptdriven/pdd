@@ -11240,3 +11240,164 @@ class TestE2ESkipNotABugTerminalStop:
             "Issue #1776 (under-fire guard, pdd-bug reuse): expected the scoped E2E "
             f"stop message but got msg={msg!r}"
         )
+
+    def test_e2e_skip_not_a_bug_stops_under_default_max_cycles(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """The scoped stop must hold under the DEFAULT ``max_cycles`` (5), not just
+        the forced ``max_cycles=1`` the other tests use — the ``final_message``
+        break must exit the OUTER loop regardless of the remaining cycle budget,
+        so it can never silently advance into another cycle and reach Step 8.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Intentionally do NOT set max_cycles — exercise the orchestrator default.
+        e2e_fix_default_args.pop("max_cycles", None)
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "No E2E/browser failure exists.\n**Status:** NOT_A_BUG",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        # Must not advance to any later cycle's Step 8.
+        assert not [l for l in called_labels if "step8" in l], (
+            "Issue #1776: under the default max_cycles the scoped stop must still "
+            f"exit before Step 8. Called labels: {called_labels}"
+        )
+        # And must not have started a second cycle at all.
+        assert not [l for l in called_labels if l.startswith("cycle2")], (
+            f"Scoped stop must break the outer loop, not advance cycles. {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or "")
+
+
+class TestStep9VerifierFailureSurfacedInFinalReport:
+    """Issue #1776 criterion #4: when Step 9's independent verifier REJECTS a
+    claimed ``ALL_TESTS_PASS``/``LOCAL_TESTS_PASS``, the final report/comment must
+    surface the verifier output (files/failures), so a public agent "tests pass"
+    comment is not left misleading when hidden verification fails."""
+
+    def test_step9_rejected_pass_is_surfaced_in_final_report(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        verifier_output = (
+            "tests/test_widget.py: 1 failure(s)\n"
+            "E   assert widget.height == 10"
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                # A real bug (not NOT_A_BUG) so the workflow proceeds to Step 9.
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                # Agent publicly claims a pass — the misleading comment.
+                return (True, "All targeted tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            # Real harness so the #1776 E2E_SKIP stop does NOT pre-empt Step 9.
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            # Independent verification REJECTS the claimed pass.
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, verifier_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        # The hidden rejection must be surfaced in the returned final report.
+        assert "independent verification" in (msg or "").lower(), (
+            "Issue #1776 criterion #4: a Step 9 'tests pass' claim rejected by "
+            f"independent verification must be surfaced in the final report. msg={msg!r}"
+        )
+        # And it must include the actual verifier output (files/failures).
+        assert "1 failure(s)" in (msg or ""), (
+            "Issue #1776 criterion #4: the verifier output (files/failures) must be "
+            f"included in the surfaced report. msg={msg!r}"
+        )
+
+    def test_step9_reject_then_verified_pass_does_not_surface_stale_rejection(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Staleness guard: a Step 9 rejection in an early cycle that is later
+        SUPERSEDED by a genuinely verified pass must NOT be surfaced — the run
+        ends in success, so the (now-stale) rejection is irrelevant. This locks
+        in that the surfacing lives only in the non-success terminal branch."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        verifier_output = "tests/test_widget.py: 1 failure(s)\nE   assert False"
+
+        verify_calls = {"n": 0}
+
+        def verify_side_effect(*_a, **_k):
+            verify_calls["n"] += 1
+            # Cycle 1 rejects the claimed pass; cycle 2 accepts it.
+            if verify_calls["n"] == 1:
+                return (False, verifier_output)
+            return (True, "")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All targeted tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            side_effect=verify_side_effect,
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, f"expected eventual verified success; msg={msg!r}"
+        # The superseded cycle-1 rejection must NOT leak into the success report.
+        assert "1 failure(s)" not in (msg or ""), (
+            "Issue #1776 criterion #4: a rejection superseded by a later verified "
+            f"pass must NOT be surfaced on the success path. msg={msg!r}"
+        )
+        assert "rejected" not in (msg or "").lower(), (
+            f"Issue #1776 criterion #4: no stale rejection on success. msg={msg!r}"
+        )
