@@ -3045,51 +3045,40 @@ def run_agentic_e2e_fix_orchestrator(
                             "continuing without NOT_A_BUG fallback.[/yellow]"
                         )
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
-                    # Issue #1776: When the repo has no E2E/browser harness (no
-                    # npx / Playwright config — the same check that pre-flight-
-                    # skips Step 2 as E2E_SKIP), a Step 3 NOT_A_BUG means there is
-                    # no E2E failure to fix. That is terminal for the E2E path
-                    # regardless of any prior fixed dev units or direct edits
-                    # (those belong to the unit/code-fix path). Stop the E2E-fix
-                    # workflow cleanly BEFORE the has_fixed_units/has_direct_edits
-                    # suppression, instead of ignoring NOT_A_BUG and falling
-                    # through to Step 8's nested `pdd fix` (which looped to the
-                    # 14,400 s Cloud Run timeout in #1738).
-                    #
-                    # Re-check the environment directly rather than inferring from
-                    # step_outputs["2"].startswith("E2E_SKIP:"): that string proxy
-                    # is WRONG in two reachable cases — it is absent when Step 2
-                    # was bypassed via pdd-bug analysis reuse (no harness, but the
-                    # guard would miss it and fall through to Step 8), and it is
-                    # falsely present when Step 2 was skipped for a transient
-                    # timeout on a real harness (Issue #791 → remembered as
-                    # E2E_SKIP), which would wrongly stop a legitimate E2E run.
-                    # Key off the REPO harness (Playwright config), NOT
-                    # _check_e2e_environment's boolean: the latter is also False
-                    # when npx is merely missing on a repo that DOES have an E2E
-                    # suite, which would mis-report "no E2E test suite" and skip
-                    # Step 8 for a real E2E repo with broken runner tooling
-                    # (Issue #1776 fm#4). Config presence is the repo property we
-                    # actually mean by "no E2E harness exists".
-                    #
-                    # Scoped strictly to the E2E workflow: success stays False so
-                    # we never falsely mark the code fix verified/successful
-                    # (preserves the #779/#1206 safety intent).
-                    if not _has_playwright_config(cwd):
-                        console.print(
-                            "[yellow]E2E fix stopped: no E2E test suite/failure "
-                            "exists; use unit/code-fix verification.[/yellow]"
-                        )
-                        success = False
-                        final_message = (
-                            "E2E fix stopped: no E2E test suite/failure exists; "
-                            "use unit/code-fix verification."
-                        )
-                        break
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
                     has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
                     if has_fixed_units or has_direct_edits:
+                        # Issue #1776: prior fixes exist AND the repo has no E2E
+                        # harness → this NOT_A_BUG is terminal for the E2E path. Stop
+                        # cleanly HERE, before the suppression below logs "NOT_A_BUG
+                        # ignored" and falls through to Step 8's nested `pdd fix`
+                        # (which looped to the 14,400 s timeout in #1738). Scoped to
+                        # the with-fixes case ONLY — a genuine no-fixes NOT_A_BUG
+                        # still gets the "Issue determined to be not a bug" message
+                        # in the else branch (the existing #468/#830 user-facing
+                        # contract; do not pre-empt it).
+                        #
+                        # Key off the REPO harness (Playwright config) via
+                        # _has_playwright_config, NOT _check_e2e_environment's boolean
+                        # (also False when npx is merely missing on a repo that DOES
+                        # have an E2E suite — would over-fire for a real E2E repo with
+                        # broken runner tooling, #1776 fm#4) and NOT the
+                        # step_outputs["2"] E2E_SKIP marker (absent on pdd-bug reuse;
+                        # falsely present on a Step-2 timeout, #791). success stays
+                        # False so we never falsely mark the code fix verified
+                        # (preserves the #779/#1206 safety intent).
+                        if not _has_playwright_config(cwd):
+                            console.print(
+                                "[yellow]E2E fix stopped: no E2E test suite/failure "
+                                "exists; use unit/code-fix verification.[/yellow]"
+                            )
+                            success = False
+                            final_message = (
+                                "E2E fix stopped: no E2E test suite/failure exists; "
+                                "use unit/code-fix verification."
+                            )
+                            break
                         # Cycle-waste safeguard: if only direct edits (no PDD fix) and
                         # this cycle made no meaningful progress, treat the prior fix as
                         # terminal and exit successfully instead of looping.
