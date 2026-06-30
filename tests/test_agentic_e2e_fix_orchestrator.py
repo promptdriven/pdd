@@ -11485,7 +11485,14 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
 
         mock_run, _, _ = e2e_fix_mock_dependencies
         e2e_fix_default_args["max_cycles"] = 1
-        big_output = "tests/test_big.py: FAIL\n" + ("E   assertion detail line\n" * 6000)
+        # HEAD carries the file/context (where _verify_tests_independently writes
+        # the file names); TAIL carries the pytest failure summary. Both must
+        # survive truncation (Issue #1776 fm#3).
+        big_output = (
+            "tests/test_big.py: HEADMARKER_file_context_4_failures\n"
+            + ("E   assertion detail line\n" * 6000)
+            + "===== TAILMARKER 4 failed, 0 passed in 1.23s ====="
+        )
         assert len(big_output) > 50_000  # sanity: this is a large dump
 
         def side_effect(*args, **kwargs):
@@ -11520,6 +11527,11 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
         assert len(msg or "") < _VERIFIER_DETAIL_MAX_CHARS + 2000, (
             f"verifier detail not bounded: len(msg)={len(msg or '')}"
         )
+        # fm#3: both the file/context HEAD and the failure-summary TAIL must survive.
+        assert "HEADMARKER_file_context_4_failures" in (msg or ""), (
+            "truncation dropped the file/context head (issue asks for exact files)"
+        )
+        assert "TAILMARKER" in (msg or ""), "truncation dropped the failure-summary tail"
 
     def test_fallback_surfaces_verification_failed_from_step_outputs(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
@@ -11571,4 +11583,10 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
         )
         assert "4 failure(s)" in (msg or ""), (
             f"fallback must include the verifier output. msg={msg!r}"
+        )
+        # Issue #1776 fm#2: this rejection came from the Step-2-skip / Step-1-pass
+        # re-verification, NOT from Step 9 — the surfaced message must NOT
+        # mis-attribute it to "Step 9".
+        assert "Step 9" not in (msg or ""), (
+            f"non-Step-9 rejection must not be attributed to Step 9. msg={msg!r}"
         )
