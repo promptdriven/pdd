@@ -1129,6 +1129,7 @@ def _reevaluate_step3_not_a_bug_on_resume(
     source: str = "step_outputs",
     current_cycle: Optional[int] = None,
     cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None,
+    e2e_skip: bool = False,
 ) -> str:
     """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
 
@@ -1176,6 +1177,12 @@ def _reevaluate_step3_not_a_bug_on_resume(
             resume. If ``None`` (legacy state or stale post-cycle save), the
             terminal-success branch conservatively demotes to ``FAILED:
             NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits`` instead.
+        e2e_skip: True when Step 2 was skipped as ``E2E_SKIP`` because the repo
+            has no E2E/browser harness (Issue #1776). When True and the cached
+            token classifies as ``NOT_A_BUG``, demote to ``FAILED:
+            NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip`` BEFORE the other guards so
+            Step 3 reruns and the inline E2E_SKIP-scoped terminal stop applies
+            symmetrically on resume.
 
     Returns:
         The original ``cached_output`` if the token should still be trusted,
@@ -1187,6 +1194,24 @@ def _reevaluate_step3_not_a_bug_on_resume(
         return cached_output
     if _classify_step_output(cached_output, step_num=3) != "NOT_A_BUG":
         return cached_output
+
+    # Issue #1776: When Step 2 was skipped as E2E_SKIP because the repo has no
+    # E2E/browser harness, a cached Step 3 NOT_A_BUG is terminal for the E2E
+    # path regardless of any fixed dev units or direct edits. Demote BEFORE the
+    # has_fixed_units / direct-edit / cycle-waste-breaker guards so Step 3
+    # reruns and the inline E2E_SKIP-scoped terminal stop makes the single
+    # decision (mirrors the inner-loop guard symmetrically on resume, per the
+    # prompt). The rerun re-validates the token, so a fresh non-NOT_A_BUG
+    # classification is still honoured rather than being hard-stopped here.
+    if e2e_skip:
+        if not quiet:
+            console.print(
+                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} with "
+                f"Step 2 E2E_SKIP (no E2E harness). Demoting to FAILED: "
+                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip so Step 3 reruns and the "
+                f"E2E path stops cleanly.[/yellow]"
+            )
+        return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip"
 
     # Guard 1: dev_unit_states with any FIXED unit suppresses NOT_A_BUG.
     # Per the prompt's cycle-waste-breaker rule on resume (no cycle_start_hashes
@@ -2122,6 +2147,7 @@ def run_agentic_e2e_fix_orchestrator(
                     source="step_outputs",
                     current_cycle=current_cycle,
                     cycle_start_hashes=resumed_cycle_start_hashes,
+                    e2e_skip=not _check_e2e_environment(cwd)[0],
                 )
                 if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
                     # Honor the inline cycle-waste-breaker terminal-success
@@ -2600,6 +2626,7 @@ def run_agentic_e2e_fix_orchestrator(
                             source="bug_step_outputs",
                             current_cycle=None,
                             cycle_start_hashes=None,
+                            e2e_skip=not _check_e2e_environment(cwd)[0],
                         )
                         if demoted_bug3 != cached_bug3:
                             # Drop the suppressed entry from both caches and fall
@@ -2946,6 +2973,42 @@ def run_agentic_e2e_fix_orchestrator(
                             "continuing without NOT_A_BUG fallback.[/yellow]"
                         )
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
+                    # Issue #1776: When the repo has no E2E/browser harness (no
+                    # npx / Playwright config — the same check that pre-flight-
+                    # skips Step 2 as E2E_SKIP), a Step 3 NOT_A_BUG means there is
+                    # no E2E failure to fix. That is terminal for the E2E path
+                    # regardless of any prior fixed dev units or direct edits
+                    # (those belong to the unit/code-fix path). Stop the E2E-fix
+                    # workflow cleanly BEFORE the has_fixed_units/has_direct_edits
+                    # suppression, instead of ignoring NOT_A_BUG and falling
+                    # through to Step 8's nested `pdd fix` (which looped to the
+                    # 14,400 s Cloud Run timeout in #1738).
+                    #
+                    # Re-check the environment directly rather than inferring from
+                    # step_outputs["2"].startswith("E2E_SKIP:"): that string proxy
+                    # is WRONG in two reachable cases — it is absent when Step 2
+                    # was bypassed via pdd-bug analysis reuse (no harness, but the
+                    # guard would miss it and fall through to Step 8), and it is
+                    # falsely present when Step 2 was skipped for a transient
+                    # timeout on a real harness (Issue #791 → remembered as
+                    # E2E_SKIP), which would wrongly stop a legitimate E2E run.
+                    # _check_e2e_environment is the same ground-truth used at the
+                    # Step 2 pre-flight, so it stays in lockstep with the skip.
+                    #
+                    # Scoped strictly to the E2E workflow: success stays False so
+                    # we never falsely mark the code fix verified/successful
+                    # (preserves the #779/#1206 safety intent).
+                    if not _check_e2e_environment(cwd)[0]:
+                        console.print(
+                            "[yellow]E2E fix stopped: no E2E test suite/failure "
+                            "exists; use unit/code-fix verification.[/yellow]"
+                        )
+                        success = False
+                        final_message = (
+                            "E2E fix stopped: no E2E test suite/failure exists; "
+                            "use unit/code-fix verification."
+                        )
+                        break
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
                     has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
@@ -3449,8 +3512,13 @@ def run_agentic_e2e_fix_orchestrator(
         else:
             if not final_message:
                 final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            if "not a bug" in final_message.lower():
+            _final_message_lower = final_message.lower()
+            if "not a bug" in _final_message_lower:
                 console.print(f"\n[bold yellow]E2E fix stopped: not a bug[/bold yellow]")
+            elif _final_message_lower.startswith("e2e fix stopped"):
+                # Issue #1776: scoped E2E_SKIP terminal stop is a clean,
+                # intentional exit (no E2E harness) — not an incomplete fix.
+                console.print(f"\n[bold yellow]E2E fix stopped: no E2E test suite[/bold yellow]")
             else:
                 console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
