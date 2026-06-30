@@ -894,14 +894,24 @@ def redact_json_values_in_text(text: str) -> str:
 
 
 def is_sensitive_command_option(option: str) -> bool:
-    normalized = option.lstrip("-").replace("_", "-").lower()
+    if not option.startswith("-"):
+        return False
+    normalized = re.sub(r"[^a-z0-9]+", "", option.lstrip("-").lower())
     return (
         normalized in {"authorization", "password"}
-        or normalized.endswith("token")
-        or normalized.endswith("-token")
-        or normalized.endswith("secret")
-        or normalized.endswith("-secret")
-        or normalized.endswith("api-key")
+        or any(
+            marker in normalized
+            for marker in (
+                "token",
+                "secret",
+                "credential",
+                "signature",
+                "apikey",
+                "accesskey",
+                "password",
+                "authorization",
+            )
+        )
     )
 
 
@@ -1604,15 +1614,38 @@ def create_release_video(
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
         raise ReleaseVideoError(message)
     try:
-        parsed = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        message = f"PDS CLI did not return JSON: {exc}. Output: {completed.stdout[:2000]}"
+        parsed = parse_pds_create_response(completed.stdout)
+    except ReleaseVideoError as exc:
+        message = str(exc)
         if persisted_run_metadata_path:
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
         raise ReleaseVideoError(message) from exc
-    if not isinstance(parsed, dict):
-        raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
     return parsed
+
+
+def parse_pds_create_response(stdout: str) -> dict[str, Any]:
+    stripped = str(stdout or "").strip()
+    parse_error: json.JSONDecodeError | None = None
+    if stripped:
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            parse_error = exc
+        else:
+            if isinstance(parsed, dict):
+                return parsed
+            raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
+
+    for value in iter_json_values(stripped):
+        if isinstance(value, dict):
+            return value
+
+    output = truncate(redact_secret_text(stripped), 2000)
+    if parse_error:
+        raise ReleaseVideoError(
+            f"PDS CLI did not return JSON: {parse_error}. Output: {output}"
+        ) from parse_error
+    raise ReleaseVideoError(f"PDS CLI did not return JSON. Output: {output}")
 
 
 def release_video_idempotency_key(
