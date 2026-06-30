@@ -2258,6 +2258,7 @@ def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: 
 
 def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: Path):
     repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
     output_dir = tmp_path / "videos"
     existing_script = tmp_path / "existing_release_video_script.md"
     existing_script.write_text(reusable_script_text(), encoding="utf8")
@@ -2286,7 +2287,7 @@ def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: 
         cwd=repo,
         text=True,
         capture_output=True,
-        env=release_video_env(),
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
         check=False,
     )
 
@@ -2359,6 +2360,7 @@ def test_release_video_persists_parent_project_for_wrapped_run_metadata(
     tmp_path: Path,
 ):
     repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
     output_dir = tmp_path / "videos"
     existing_script = tmp_path / "existing_release_video_script.md"
     existing_script.write_text(reusable_script_text(), encoding="utf8")
@@ -2397,7 +2399,7 @@ def test_release_video_persists_parent_project_for_wrapped_run_metadata(
         cwd=repo,
         text=True,
         capture_output=True,
-        env=release_video_env(),
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
         check=False,
     )
 
