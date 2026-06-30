@@ -497,6 +497,34 @@ VISUAL: show release_video_script_validation.json with checks.hasVisual true.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_normalizes_wrapped_same_line_visual_cue_continuation():
+    release_video = load_release_video_module()
+    script = """Hook: PDD v1.1.0 turns release-video recovery into an operator-visible
+path instead of a best-effort publish step that can fail without enough context.
+
+Narration: The release wrapper now keeps generated scripts, validation evidence,
+PDS run handles, status query diagnostics, and recovery commands together before
+the publish request reaches PDS. Maintainers can reattach to the same run, see
+whether a running sidecar is stale, and retry with a stable idempotency key
+without regenerating the release story or losing the incident trail.
+
+Visual direction: show the changelog, generated script, pds_run.json, status
+query output, and final YouTube receipt side by side.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert (
+        "\nVISUAL: show the changelog, generated script, pds_run.json, status "
+        "query output, and final YouTube receipt side by side."
+        in artifacts["script"]
+    )
+    assert "\nNARRATOR:\nquery output" not in artifacts["script"]
+    assert "collapsed_wrapped_visual_cues" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasVisual"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_validation_rejects_leftover_label_only_visual_cues():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
