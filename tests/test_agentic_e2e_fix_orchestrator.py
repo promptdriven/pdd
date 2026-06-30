@@ -9872,7 +9872,12 @@ class TestIssue1033Step2ResumeReverification:
 
         assert mock_verify.call_count == 2
         assert success is False
-        assert msg == "Max cycles reached."
+        # Issue #1776 criterion #4: the Step 9 resume re-verification rejection is
+        # now ALSO surfaced in the user-visible final report (it is no longer a
+        # bare "Max cycles reached." that masks the hidden verifier failure).
+        assert msg.startswith("Max cycles reached.")
+        assert "independent verification" in msg.lower()
+        assert "Step 9 resume verification failed" in msg
         saved_states = [
             call.args[3]
             for call in mock_save.call_args_list
@@ -11400,4 +11405,170 @@ class TestStep9VerifierFailureSurfacedInFinalReport:
         )
         assert "rejected" not in (msg or "").lower(), (
             f"Issue #1776 criterion #4: no stale rejection on success. msg={msg!r}"
+        )
+
+    def test_resume_reverification_failure_is_surfaced(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """#1776 criterion #4 on the RESUME path: a cached Step 2 pass that fails
+        resume-time independent re-verification (`VERIFICATION_FAILED_ON_RESUME`)
+        must also be surfaced in the final non-success report — even though the
+        rerun overwrites step_outputs["2"], the in-memory tracker survives."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+        reverify_output = "tests/test_resume.py: 3 failure(s)\nE   assert resumed is False"
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in resumed run.", 0.1, "gpt-4")
+            if "step9" in label:
+                # No fresh pass-claim, so the only verifier failure is the resume one.
+                return (True, "Still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_resume.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, reverify_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "independent verification" in (msg or "").lower(), (
+            "Issue #1776 criterion #4 (resume): a resume-time re-verification "
+            f"rejection must be surfaced in the final report. msg={msg!r}"
+        )
+        assert "3 failure(s)" in (msg or ""), (
+            "Issue #1776 criterion #4 (resume): the resume re-verifier output must "
+            f"be surfaced even after the Step 2 rerun. msg={msg!r}"
+        )
+
+    def test_large_verifier_output_is_truncated_in_final_report(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """#1776 criterion #4 robustness: a large verifier dump must be truncated
+        so it cannot exceed the GitHub comment-size / `gh ... --body` argv limit
+        and drop the whole final comment."""
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_DETAIL_MAX_CHARS
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        big_output = "tests/test_big.py: FAIL\n" + ("E   assertion detail line\n" * 6000)
+        assert len(big_output) > 50_000  # sanity: this is a large dump
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_big.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, big_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "truncated" in (msg or "").lower(), (
+            f"large verifier output must be truncated. msg len={len(msg or '')}"
+        )
+        # The surfaced report must be bounded (cap + framing), not the full dump.
+        assert len(msg or "") < _VERIFIER_DETAIL_MAX_CHARS + 2000, (
+            f"verifier detail not bounded: len(msg)={len(msg or '')}"
+        )
+
+    def test_fallback_surfaces_verification_failed_from_step_outputs(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Directly pin the step_outputs FALLBACK branch: the Step-2-skip
+        early-exit re-verification writes a `VERIFICATION_FAILED` entry to
+        step_outputs WITHOUT setting the in-memory tracker. When the run then
+        terminates (here via the #1776 E2E_SKIP Step 3 stop), the fallback must
+        recover that rejection from step_outputs and surface it."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        verify_out = "tests/test_x.py: 4 failure(s)\nE   assert x == y"
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1" in label:
+                # ALL_TESTS_PASS triggers the Step-2-skip early-exit re-verify
+                # (which does NOT set last_verifier_failure → exercises fallback).
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            if "step3" in label:
+                return (True, "No E2E failure.\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_x.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, verify_out),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        # The #1776 E2E_SKIP stop fired AND the fallback surfaced the rejection.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or "")
+        assert "independent verification" in (msg or "").lower(), (
+            "fallback must surface the step_outputs VERIFICATION_FAILED entry when "
+            f"the in-memory tracker is unset. msg={msg!r}"
+        )
+        assert "4 failure(s)" in (msg or ""), (
+            f"fallback must include the verifier output. msg={msg!r}"
         )

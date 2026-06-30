@@ -98,6 +98,12 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 # See Issues #953, #1010, #1031 for history of fallback-scan stalls.
 VERIFY_TIMEOUT_SECONDS = 600
 
+# Issue #1776 criterion #4: cap the verifier-rejection detail appended to the
+# final report / GitHub comment so a large pytest dump cannot exceed the comment
+# size / argv limits and drop the whole final comment. We keep the TAIL (pytest
+# failure summaries land at the end).
+_VERIFIER_DETAIL_MAX_CHARS = 3000
+
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
 # the scan finds hundreds of files.  See Issue #1010.
@@ -2457,6 +2463,10 @@ def run_agentic_e2e_fix_orchestrator(
                 step_outputs["2"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
+                # Issue #1776 criterion #4: track the rejection in-memory so it
+                # survives the Step 2 rerun (which overwrites step_outputs["2"]) and
+                # is surfaced in the final report if the run ends non-success.
+                last_verifier_failure = step_outputs["2"]
                 last_completed_step = 1
                 _resume_deferred_action = None
                 _persist_resume_reverification_state()
@@ -2496,6 +2506,9 @@ def run_agentic_e2e_fix_orchestrator(
                 step_outputs["9"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
+                # Issue #1776 criterion #4: track in-memory so it survives the
+                # cycle rollover below and is surfaced if the run ends non-success.
+                last_verifier_failure = step_outputs["9"]
 
                 _persist_resume_reverification_state()
 
@@ -3542,10 +3555,42 @@ def run_agentic_e2e_fix_orchestrator(
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
 
             # Issue #1776 criterion #4: if a Step 9 "tests pass" claim was rejected
-            # by independent verification at any point, surface that here so the
-            # visible agent "tests pass" comment is not left misleading. Appended
-            # AFTER the banner decision above so it cannot alter banner routing.
-            if last_verifier_failure:
+            # by independent verification, surface it here so the visible agent
+            # "tests pass" comment is not left misleading. Appended AFTER the banner
+            # decision above so it cannot alter banner routing.
+            _verifier_failure = last_verifier_failure
+            if not _verifier_failure:
+                # Resume-path fallback + net for the verify sites that write a
+                # VERIFICATION_FAILED entry to step_outputs without touching the
+                # in-memory tracker (Step-2-skip / Step-2 early-exit reverify).
+                # step_outputs IS persisted/restored, so this recovers the current
+                # (restored) cycle's rejection. We intentionally do not resurrect
+                # an earlier cycle's superseded rejection (that would be stale and
+                # itself misleading) — only the current cycle's state.
+                #
+                # Known limitation (deliberately not fixed — see PR discussion):
+                # if a prior session persisted a rejection, a resume re-runs and
+                # OVERWRITES that step with fresh non-rejection output, and the run
+                # then ends non-success with no new rejection, the detail is lost
+                # and the report degrades to the bare terminal message. This costs
+                # only report richness, never safety: success stays False and the
+                # message never claims a pass. Persisting last_verifier_failure
+                # across all 6 state_data constructions was judged higher
+                # regression risk (fragile resume machinery) than the benefit.
+                for _v in step_outputs.values():
+                    if isinstance(_v, str) and "VERIFICATION_FAILED" in _v:
+                        _verifier_failure = _v
+                        break
+            if _verifier_failure:
+                # Bound the appended detail: a large pytest dump (many failures /
+                # long tracebacks) must not blow past GitHub's comment-size or the
+                # argv limit on `gh issue comment --body` and drop the whole report.
+                if len(_verifier_failure) > _VERIFIER_DETAIL_MAX_CHARS:
+                    _verifier_failure = (
+                        "…[verifier output truncated; showing the last "
+                        f"{_VERIFIER_DETAIL_MAX_CHARS} chars]…\n"
+                        + _verifier_failure[-_VERIFIER_DETAIL_MAX_CHARS:]
+                    )
                 console.print(
                     "[bold red]Note: a Step 9 'tests pass' claim was rejected by "
                     "independent verification — surfacing it in the final comment.[/bold red]"
@@ -3554,7 +3599,7 @@ def run_agentic_e2e_fix_orchestrator(
                     f"{final_message}\n\n"
                     "⚠️ Step 9 independent verification REJECTED a claimed test pass: a "
                     "visible \"tests pass\" comment was NOT confirmed by an independent "
-                    f"run.\n{last_verifier_failure}"
+                    f"run.\n{_verifier_failure}"
                 )
 
             # Post final status comment to GitHub so users see why the workflow stopped
