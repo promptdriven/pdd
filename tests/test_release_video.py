@@ -322,6 +322,10 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert "what changed, why it matters, and the practical business value" in claude_prompt
     assert "## Release hook (0:00 - 0:12)" in claude_prompt
     assert "Every spoken narration block starts with `NARRATOR:` on its own line." in claude_prompt
+    assert (
+        "Every non-spoken visual cue is written on one line as `VISUAL: <cue text>`."
+        in claude_prompt
+    )
     assert "release video automation" in claude_prompt
     claude_argv = json.loads((repo / "claude_argv.json").read_text(encoding="utf8"))
     assert claude_argv[claude_argv.index("--model") + 1] == "claude-opus-4-8"
@@ -411,6 +415,88 @@ Let me know if you want a punchier version.
     assert validation["checks"]["hasNoModelWrapperText"] is True
     assert validation["checks"]["hasNoDuplicateNarratorLabels"] is True
     assert validation["errors"] == []
+
+
+def test_release_video_normalizes_label_only_visual_blocks():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 makes release-video recovery easier to audit by preserving the
+generated script, the normalized script, and the validation evidence before
+the PDS create step receives anything.
+
+VISUAL:
+
+show the release context, normalized script, and pds_run.json side by side with callout labels for raw output, final script, and validation state.
+
+## Recovery
+
+NARRATOR:
+Operators can compare the raw model output with the final script and quickly
+see which sanitation steps ran, which reduces guesswork during release
+recovery and keeps publishing diagnostics reproducible.
+
+VISUAL:
+zoom into release_video_script_validation.json highlighting checks.hasVisual true and the collapsed visual-label change entry.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nVISUAL:\n" not in artifacts["script"]
+    assert (
+        "\nVISUAL: show the release context, normalized script, and pds_run.json"
+        in artifacts["script"]
+    )
+    assert "\nVISUAL: zoom into release_video_script_validation.json" in artifacts["script"]
+    assert artifacts["validation"]["checks"]["hasVisual"] is True
+    assert "collapsed_label_only_visual_cues" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_does_not_swallow_unsafe_label_only_visual_blocks():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+The wrapper must avoid converting structural lines or wrapper prose into visual
+cues when a model emits an empty visual label without useful cue text after it.
+
+VISUAL:
+
+## Recovery
+
+VISUAL:
+
+NARRATOR:
+This narration remains a narrator block instead of becoming a visual cue,
+because the line after the empty visual label is another script label.
+
+VISUAL:
+
+Here is the release video script you asked for:
+
+VISUAL:
+
+show the validation JSON beside the final PDS create command with a highlighted
+hasVisual check and a callout for the normalized script artifact.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nVISUAL: ## Recovery" not in artifacts["script"]
+    assert "\nVISUAL: NARRATOR:" not in artifacts["script"]
+    assert "\nVISUAL: Here is the release video script" not in artifacts["script"]
+    assert (
+        "\nVISUAL: show the validation JSON beside the final PDS create command"
+        in artifacts["script"]
+    )
+    assert artifacts["validation"]["checks"]["hasVisual"] is True
+    assert artifacts["validation"]["checks"]["hasNoModelWrapperText"] is False
 
 
 def test_release_video_preserves_exact_raw_claude_output_artifact(tmp_path: Path):
