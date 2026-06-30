@@ -2258,6 +2258,53 @@ def test_release_video_accepts_noisy_create_stdout_json_without_leaking_secrets(
     assert "secret-create-stdout-token" not in result.stdout + result.stderr
 
 
+def test_release_video_prefers_final_create_response_after_json_diagnostic(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    stdout = "\n".join(
+        [
+            json.dumps({"debug": True, "message": "starting release-video create"}),
+            json.dumps({"youtubeUrl": "https://youtu.be/pdd-release"}),
+        ]
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=stdout + "\n")),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "https://youtu.be/pdd-release" in result.stdout
+    response = json.loads(
+        (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
+    )
+    assert response == {"youtubeUrl": "https://youtu.be/pdd-release"}
+
+
 def test_release_video_create_parse_failure_redacts_stdout_secrets(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
