@@ -100,9 +100,29 @@ VERIFY_TIMEOUT_SECONDS = 600
 
 # Issue #1776 criterion #4: cap the verifier-rejection detail appended to the
 # final report / GitHub comment so a large pytest dump cannot exceed the comment
-# size / argv limits and drop the whole final comment. We keep the TAIL (pytest
-# failure summaries land at the end).
+# size / argv limits and drop the whole final comment.
 _VERIFIER_DETAIL_MAX_CHARS = 3000
+
+
+def _truncate_verifier_detail(detail: str) -> str:
+    """Bound the independent-verifier rejection detail for the final report
+    (Issue #1776 criterion #4) while preserving BOTH ends: the HEAD carries the
+    per-file context / file names (``_verify_tests_independently`` writes
+    ``"{test_file}: ..."`` at the start of each entry) and the TAIL carries the
+    pytest failure summary. Dropping the head would lose the "exact files"
+    context the issue asks for, so we keep a head slice and a (larger) tail
+    slice. Slicing is on Python ``str`` code points, so it is unicode-safe.
+    """
+    if len(detail) <= _VERIFIER_DETAIL_MAX_CHARS:
+        return detail
+    head = _VERIFIER_DETAIL_MAX_CHARS // 3
+    tail = _VERIFIER_DETAIL_MAX_CHARS - head
+    return (
+        f"{detail[:head]}\n"
+        f"…[verifier output truncated to ~{_VERIFIER_DETAIL_MAX_CHARS} chars; "
+        "kept the file/context head and the failure-summary tail]…\n"
+        f"{detail[-tail:]}"
+    )
 
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
@@ -3554,50 +3574,48 @@ def run_agentic_e2e_fix_orchestrator(
             if remaining:
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
 
-            # Issue #1776 criterion #4: if a Step 9 "tests pass" claim was rejected
-            # by independent verification, surface it here so the visible agent
+            # Issue #1776 criterion #4: if a "tests pass" claim was rejected by
+            # independent verification (Step 9, or a Step 1/2 cached-pass re-verify),
+            # surface it here so the visible agent
             # "tests pass" comment is not left misleading. Appended AFTER the banner
             # decision above so it cannot alter banner routing.
             _verifier_failure = last_verifier_failure
             if not _verifier_failure:
-                # Resume-path fallback + net for the verify sites that write a
-                # VERIFICATION_FAILED entry to step_outputs without touching the
-                # in-memory tracker (Step-2-skip / Step-2 early-exit reverify).
-                # step_outputs IS persisted/restored, so this recovers the current
-                # (restored) cycle's rejection. We intentionally do not resurrect
-                # an earlier cycle's superseded rejection (that would be stale and
-                # itself misleading) — only the current cycle's state.
+                # Net for the verify sites that write a VERIFICATION_FAILED entry to
+                # step_outputs without touching the in-memory tracker (Step-2-skip /
+                # Step-2 early-exit reverify). step_outputs is persisted/restored, so
+                # this also recovers the current cycle's rejection on resume. We do
+                # not resurrect an earlier cycle's superseded rejection (stale) —
+                # only the current cycle's state.
                 #
-                # Known limitation (deliberately not fixed — see PR discussion):
-                # if a prior session persisted a rejection, a resume re-runs and
-                # OVERWRITES that step with fresh non-rejection output, and the run
-                # then ends non-success with no new rejection, the detail is lost
-                # and the report degrades to the bare terminal message. This costs
-                # only report richness, never safety: success stays False and the
-                # message never claims a pass. Persisting last_verifier_failure
-                # across all 6 state_data constructions was judged higher
-                # regression risk (fragile resume machinery) than the benefit.
+                # Documented limitation (intentional, safety-preserving): if a
+                # rejection from a prior session is overwritten by a resume rerun
+                # and the run then ends non-success with no new rejection, the
+                # detail is lost and the report degrades to the bare terminal
+                # message. This costs only report richness — `success` stays False
+                # and the message never claims a pass. Persisting this across the
+                # ~6 state_data constructions in the resume machinery was judged
+                # (over multiple reviews) higher regression risk than the benefit.
                 for _v in step_outputs.values():
                     if isinstance(_v, str) and "VERIFICATION_FAILED" in _v:
                         _verifier_failure = _v
                         break
             if _verifier_failure:
-                # Bound the appended detail: a large pytest dump (many failures /
-                # long tracebacks) must not blow past GitHub's comment-size or the
-                # argv limit on `gh issue comment --body` and drop the whole report.
-                if len(_verifier_failure) > _VERIFIER_DETAIL_MAX_CHARS:
-                    _verifier_failure = (
-                        "…[verifier output truncated; showing the last "
-                        f"{_VERIFIER_DETAIL_MAX_CHARS} chars]…\n"
-                        + _verifier_failure[-_VERIFIER_DETAIL_MAX_CHARS:]
-                    )
+                # Bound the appended detail (keeps the file/context HEAD and the
+                # failure-summary TAIL) so a large pytest dump cannot blow past
+                # GitHub's comment-size / the `gh ... --body` argv limit and drop
+                # the whole report.
+                _verifier_failure = _truncate_verifier_detail(_verifier_failure)
+                # Step-agnostic wording: the rejection may come from the Step 9
+                # verifier OR from a Step 1/2 cached-pass re-verification, so do NOT
+                # attribute it specifically to "Step 9" (Issue #1776 fm#2).
                 console.print(
-                    "[bold red]Note: a Step 9 'tests pass' claim was rejected by "
-                    "independent verification — surfacing it in the final comment.[/bold red]"
+                    "[bold red]Note: a 'tests pass' claim was rejected by independent "
+                    "verification — surfacing it in the final comment.[/bold red]"
                 )
                 final_message = (
                     f"{final_message}\n\n"
-                    "⚠️ Step 9 independent verification REJECTED a claimed test pass: a "
+                    "⚠️ Independent verification REJECTED a claimed test pass: a "
                     "visible \"tests pass\" comment was NOT confirmed by an independent "
                     f"run.\n{_verifier_failure}"
                 )
