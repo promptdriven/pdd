@@ -10988,3 +10988,255 @@ class TestE2ESkipNotABugTerminalStop:
             "Issue #1776 (resume): expected the scoped E2E stop message "
             f"({_E2E_SKIP_STOP_SUBSTR!r}) on resume but got msg={msg!r}"
         )
+
+    def test_resume_cached_step3_not_a_bug_e2e_skip_demotes_and_stops(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 4 (resume path + CACHED Step 3 NOT_A_BUG, no fixes channel).
+
+        This exercises the resume re-evaluation helper directly — the gap Test 3
+        does not cover. Here the saved state carries a *cached*
+        ``step_outputs["3"]`` = ``NOT_A_BUG`` with ``last_completed_step=3`` and
+        NO fixed dev units and NO direct edits. Without the E2E_SKIP-scoped
+        resume handling, ``_reevaluate_step3_not_a_bug_on_resume`` would *trust*
+        the cached NOT_A_BUG (no suppression channel fires), leave
+        ``last_completed_step=3``, and the inner loop would skip Steps 1-3 and
+        run straight into Step 8 — the exact #1738 fall-through, on resume.
+
+        After fix: the persisted Step 2 ``E2E_SKIP`` signal is threaded into the
+        resume re-evaluation, which demotes the cached token so Step 3 reruns and
+        the inline E2E_SKIP-scoped stop fires — no ``step8`` label, scoped
+        message returned, and no false success/verified claim.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "E2E_SKIP: no playwright config found in project",
+                "3": (
+                    "## Root Cause Analysis\n"
+                    "No E2E/browser failure exists.\n"
+                    "**Status:** NOT_A_BUG"
+                ),
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {"2": "no playwright config found in project"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "No E2E/browser failure exists; unit/code-fix path.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            # No direct edits and no fixed units => without the E2E_SKIP resume
+            # handling the helper would TRUST the cached NOT_A_BUG and fall
+            # through to Step 8.
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # The cached NOT_A_BUG must be demoted so Step 3 actually reruns.
+        assert step3_calls, (
+            "Issue #1776 (resume, cached Step 3): the persisted E2E_SKIP signal "
+            "must demote the cached NOT_A_BUG so Step 3 reruns. Step 3 never ran. "
+            f"Called labels: {called_labels}"
+        )
+
+        # Control-flow channel: must stop before Step 8 (the #1738 fall-through).
+        assert not step8_calls, (
+            "Issue #1776 (resume, cached Step 3): a resumed run with a cached "
+            "Step 3 NOT_A_BUG under E2E_SKIP and no fixes must stop cleanly and "
+            f"must NOT fall through to Step 8. But Step 8 was invoked: {step8_calls}. "
+            f"All called labels: {called_labels}"
+        )
+
+        # Message channel: the scoped stop reason must be reported.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776 (resume, cached Step 3): expected the scoped E2E stop "
+            f"message ({_E2E_SKIP_STOP_SUBSTR!r}) but got msg={msg!r}"
+        )
+
+        # Safety channel: never falsely claim verified success.
+        assert "verified" not in (msg or "").lower(), (
+            f"Issue #1776: scoped E2E stop must not claim verified success. msg={msg!r}"
+        )
+
+    def test_real_harness_with_remembered_timeout_skip_does_not_overfire(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 5 (over-fire guard / Issue #791 interaction).
+
+        A REAL E2E harness whose Step 2 was skipped for a transient *timeout*
+        (Issue #791 remembers it in step_outputs["2"] with the ``E2E_SKIP:``
+        prefix) must NOT trigger the #1776 stop. The guard keys off the live
+        environment (``_check_e2e_environment``), not the ``E2E_SKIP:`` string, so
+        a real harness keeps the original #779/#1206 suppression and continues
+        into Step 8.
+
+        A string-prefix signal (``step_outputs["2"].startswith("E2E_SKIP:")``)
+        FALSELY fires here and wrongly stops a legitimate E2E run — this test
+        guards that regression.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                # Remembered Step-2 timeout (Issue #791) is persisted with the
+                # E2E_SKIP: prefix even though the harness is real.
+                "2": "E2E_SKIP: All agent providers failed: Timeout after 340s",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"u1": {"fixed": True}},
+            "skipped_steps": {"2": "All agent providers failed: Timeout after 340s"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "## Root Cause\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            # REAL harness present — the live truth differs from the stale marker.
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # With a real harness the #1776 stop must NOT fire; the original
+        # suppression continues into Step 8.
+        assert step8_calls, (
+            "Issue #1776 (over-fire guard): a real E2E harness whose Step 2 merely "
+            "timed out (remembered as E2E_SKIP) must NOT trigger the scoped stop; "
+            f"the workflow must continue into Step 8. Called labels: {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 (over-fire guard): the scoped stop fired on a real harness "
+            f"with only a stale E2E_SKIP timeout marker. msg={msg!r}"
+        )
+
+    def test_bug_reuse_no_harness_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
+    ):
+        """Test 6 (under-fire guard / pdd-bug reuse vector — the #1738 path).
+
+        When prior ``pdd-bug`` analysis is reused (Issue #830), Step 2's pre-flight
+        is bypassed and step_outputs["2"] holds the reused bug output, which does
+        NOT start with ``E2E_SKIP:``. On a repo with no harness a Step 3
+        ``NOT_A_BUG`` must STILL stop cleanly — the guard re-checks
+        ``_check_e2e_environment`` so the missing marker does not let the workflow
+        fall through to Step 8 (the #1738 timeout, reproduced on the reuse path by
+        a string-prefix signal).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        # e2e_fix_default_args uses cwd=tmp_path and issue_number=1.
+        bug_state_dir = tmp_path / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        (bug_state_dir / "bug_state_1.json").write_text(
+            json.dumps(
+                {
+                    "step_outputs": {
+                        # Reused pdd-bug Step 2 output — NOT an E2E_SKIP: marker.
+                        "2": "Reproduced the failure in the unit suite.",
+                        "3": "## Root Cause\n**Status:** NOT_A_BUG",
+                    }
+                }
+            )
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "## Root Cause\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        assert not step8_calls, (
+            "Issue #1776 (under-fire guard, pdd-bug reuse): a no-harness repo whose "
+            "Step 2 was bypassed via reused bug analysis (no E2E_SKIP marker) must "
+            f"still stop at Step 3 NOT_A_BUG, not reach Step 8. Labels: {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776 (under-fire guard, pdd-bug reuse): expected the scoped E2E "
+            f"stop message but got msg={msg!r}"
+        )
