@@ -2586,10 +2586,11 @@ def collapse_label_only_visual_cues(script: str) -> tuple[str, bool]:
     while index < len(lines):
         line = lines[index]
         if is_visual_label_only(line):
-            cue_index = next_nonblank_line_index(lines, index + 1)
-            if cue_index is not None and is_collapsible_visual_cue_line(lines[cue_index]):
-                append_spaced(normalized, f"VISUAL: {clean_visual_cue(lines[cue_index])}")
-                index = cue_index + 1
+            cue_lines, next_index = collect_visual_cue_paragraph(lines, index + 1)
+            if cue_lines:
+                cue = " ".join(cue_lines)
+                append_spaced(normalized, f"VISUAL: {cue}")
+                index = next_index
                 changed = True
                 continue
         normalized.append(line)
@@ -2600,12 +2601,26 @@ def collapse_label_only_visual_cues(script: str) -> tuple[str, bool]:
     return trim_repeated_blank_lines(normalized), True
 
 
-def next_nonblank_line_index(lines: list[str], start: int) -> int | None:
-    """Return the next nonblank line index at or after start."""
-    for index in range(start, len(lines)):
-        if lines[index].strip():
-            return index
-    return None
+def collect_visual_cue_paragraph(lines: list[str], start: int) -> tuple[list[str], int]:
+    """Collect cue paragraph lines after a label-only visual marker."""
+    cue_lines: list[str] = []
+    index = start
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        if is_collapsible_visual_cue_line(line):
+            cue_lines.append(clean_visual_cue(line))
+            index += 1
+            continue
+        visual = visual_cue_text(line)
+        if visual and not cue_lines:
+            cue_lines.append(visual)
+            index += 1
+        break
+    return cue_lines, index
 
 
 def is_collapsible_visual_cue_line(line: str) -> bool:
@@ -2634,6 +2649,7 @@ def validate_release_video_script(
         "hasVisual": any(visual_cue_text(line) for line in script.splitlines()),
         "hasNoModelWrapperText": not has_unstripped_model_wrapper_text(script),
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
+        "hasNoLabelOnlyVisualCues": not has_label_only_visual_cues(script),
         "hasNoMarkdownFences": not has_markdown_fence_line(script),
     }
     errors = [name for name, passed in checks.items() if not passed]
@@ -2662,6 +2678,11 @@ def has_duplicate_narrator_labels(script: str) -> bool:
         if line.strip():
             previous_pending_label = False
     return False
+
+
+def has_label_only_visual_cues(script: str) -> bool:
+    """Return whether the script still contains empty visual cue labels."""
+    return any(is_visual_label_only(line) for line in script.splitlines())
 
 
 def has_markdown_fence_line(script: str) -> bool:
