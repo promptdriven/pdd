@@ -1,5 +1,31 @@
 # PDD CLI Release Process
 
+## Release-Video PDS CLI
+
+Local release-video targets default to:
+
+```bash
+npx -y @promptdriven/pds@0.1.6 --timeout 120s
+```
+
+That avoids silently picking up an older globally installed `pds` binary and
+keeps the PDS wait path bounded before recovery/status metadata is needed. Run
+the local preflight before a release to print the redacted PDS command and the
+resolved CLI version:
+
+```bash
+make check-release-video-config
+```
+
+The release workflow also installs `@promptdriven/pds@0.1.6` by default when
+`PDS_CLI_PACKAGE` is unset and runs the same preflight before creating the
+video. If the GitHub repo variable is pinned below `0.1.6`, update it outside
+the PR:
+
+```bash
+gh variable set PDS_CLI_PACKAGE --repo promptdriven/pdd --body '@promptdriven/pds@0.1.6'
+```
+
 ## Release-Video Metadata Recovery
 
 When PDS reports a recoverable project metadata mismatch such as

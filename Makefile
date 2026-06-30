@@ -102,8 +102,9 @@ RELEASE_VIDEO_FORCE_REGENERATE ?= 0
 RELEASE_VIDEO_METADATA_CONFLICT ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
+RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 CLAUDE_CLI ?= claude
-PDS_CLI ?= pds
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.6 --timeout 120s
 PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
 SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
@@ -769,6 +770,8 @@ check-release-video-config:
 	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
 	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	RELEASE_VIDEO="$(RELEASE_VIDEO)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	python scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
@@ -856,6 +859,7 @@ release-video:
 	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
 	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
 	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	python scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
