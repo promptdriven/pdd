@@ -2294,8 +2294,8 @@ def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: 
     assert result.returncode == 1
     assert "secret-create-token" not in result.stderr
     assert "secret-create-auth" not in result.stderr
-    assert "--token [redacted]" in result.stderr
-    assert "--authorization [redacted]" in result.stderr
+    assert "--token '[redacted]'" in result.stderr
+    assert "--authorization '[redacted]'" in result.stderr
 
 
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):

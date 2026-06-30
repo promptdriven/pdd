@@ -786,7 +786,20 @@ def is_sensitive_artifact_field(key: Any) -> bool:
         return False
     if normalized in SENSITIVE_FIELD_NAMES:
         return True
-    return normalized.endswith("token") or normalized.endswith("secret")
+    return normalized.endswith(
+        (
+            "token",
+            "secret",
+            "credential",
+            "signature",
+            "accesskey",
+            "accesskeyid",
+            "apikey",
+            "password",
+            "signedurl",
+            "sig",
+        )
+    )
 
 
 def redact_secret_text(text: str) -> str:
@@ -1579,8 +1592,9 @@ def create_release_video(
             file=sys.stderr,
         )
     if completed.returncode != 0:
+        rendered_command = redact_command_text(shlex.join(command + pds_args))
         message = (
-            f"{shlex.join(command + pds_args)} failed: "
+            f"{rendered_command} failed: "
             f"{process_details(completed)}"
         )
         hint = pds_failure_hint(completed)
@@ -1739,8 +1753,8 @@ def add_parent_pds_context(
         "project_id",
         "id",
     )
-    parent_run_id = first_string(parent, "runId", "run_id")
-    if project_id and parent_run_id and "projectId" not in enriched:
+    nested_run_id = str(enriched.get("runId") or "").strip()
+    if project_id and nested_run_id and "projectId" not in enriched:
         enriched["projectId"] = project_id
     return enriched
 
@@ -1802,8 +1816,16 @@ def merge_pds_run_metadata_candidates(
         if run_id and run_id in run_indexes:
             existing = merged[run_indexes[run_id]]
             for key, value in candidate.items():
-                if value:
-                    existing[key] = value
+                if not value:
+                    continue
+                if (
+                    key == "status"
+                    and existing.get("status")
+                    and status_value_is_terminal(existing["status"])
+                    and not status_value_is_terminal(value)
+                ):
+                    continue
+                existing[key] = value
             continue
         merged.append(dict(candidate))
         if run_id:
