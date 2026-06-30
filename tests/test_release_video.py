@@ -4483,6 +4483,72 @@ def test_release_video_status_query_failure_redacts_stdout_authorization_details
     assert '"authorization": "[redacted]"' in sidecar_text
 
 
+def test_release_video_status_query_failure_redacts_embedded_stdout_json_authorization(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "authorization": 'Digest username="u", nonce="secret-mixed-json-nonce"',
+        "message": "Authorization: ApiKey secret-mixed-json-api-key",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=(
+                        "pds debug before json\n"
+                        f"{json.dumps(failure_response)}\n"
+                        "pds debug after json\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-mixed-json-nonce" not in combined_output
+    assert "secret-mixed-json-api-key" not in combined_output
+    assert '"authorization": "[redacted]"' in result.stdout
+    assert '"authorization": "[redacted]"' in sidecar_text
+    assert "Authorization: [redacted]" in sidecar_text
+
+
 def test_release_video_dry_run_does_not_require_youtube_url(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
