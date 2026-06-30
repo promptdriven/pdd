@@ -1685,9 +1685,14 @@ def parse_pds_create_response(stdout: str) -> dict[str, Any]:
                 return parsed
             raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
 
-    for value in iter_json_values(stripped):
-        if isinstance(value, dict):
-            return value
+    embedded_objects = [
+        value for value in iter_json_values(stripped) if isinstance(value, dict)
+    ]
+    if embedded_objects:
+        for value in reversed(embedded_objects):
+            if find_youtube_url(value):
+                return value
+        return embedded_objects[-1]
 
     output = truncate(redact_secret_text(stripped), 2000)
     if parse_error:
