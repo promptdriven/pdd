@@ -157,11 +157,10 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
 
     Returns the token string or None if the output is ambiguous.
     """
-    # Priority: VERIFICATION_FAILED overrides everything
-    if "VERIFICATION_FAILED" in output:
-        return "VERIFICATION_FAILED"
-
     if step_num == 3:
+        # Step 3 is a root-cause classifier. Its output often discusses prior
+        # Step 2 verifier failures, so Step 3's own status token must win over
+        # incidental VERIFICATION_FAILED text from the analysis body.
         # Check for positive tokens first — if CODE_BUG/TEST_BUG/BOTH is found,
         # return it so tier 4 NOT_A_BUG fallback is skipped (same fail-before-pass
         # pattern used for Steps 1/2/9). Case-sensitive substring match (consistent
@@ -177,6 +176,14 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
             if match.tier == "semantic":
                 console.print(f"[yellow]NOT_A_BUG detected via semantic fallback (pattern: {match.pattern})[/yellow]")
             return "NOT_A_BUG"
+
+        if "VERIFICATION_FAILED" in output:
+            return "VERIFICATION_FAILED"
+
+    # Priority: VERIFICATION_FAILED overrides pass/fail tokens on test-verifier
+    # steps, but not Step 3 root-cause status tokens handled above.
+    if "VERIFICATION_FAILED" in output:
+        return "VERIFICATION_FAILED"
 
     if step_num in (1, 2, 9):
         # Exact match for LOCAL_TESTS_PASS (not in shared SEMANTIC_PATTERNS)

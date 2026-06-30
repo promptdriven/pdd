@@ -3683,6 +3683,18 @@ class TestClassifyStepOutput:
         output = "VERIFICATION_FAILED: LLM claimed LOCAL_TESTS_PASS but pytest failed.\n5 tests failed."
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
 
+    def test_step3_not_a_bug_status_wins_over_prior_verification_failed_text(self):
+        """Step 3 may mention Step 2 verifier warnings while declaring NOT_A_BUG."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "## Step 3: Root Cause Analysis (Cycle 1)\n\n"
+            "**Status:** NOT_A_BUG\n\n"
+            "Step 2 reported `FAILED: VERIFICATION_FAILED ... FALLBACK_CAPPED`, "
+            "but every sampled test file passed. This is a coverage-cap warning, "
+            "not a real E2E failure."
+        )
+        assert _classify_step_output(output, step_num=3) == "NOT_A_BUG"
+
     def test_step1_all_tests_pass(self):
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
         output = "Verified with npx jest... both passed. All tests are passing."
@@ -10782,6 +10794,9 @@ class TestE2ESkipNotABugTerminalStop:
                         "There is no E2E/browser failure here — no Playwright "
                         "suite exists and the issue belongs to the Python "
                         "unit-test/code-fix path.\n"
+                        "Step 2 reported `FAILED: VERIFICATION_FAILED / "
+                        "FALLBACK_CAPPED`, but all sampled tests passed; that "
+                        "is only a coverage-cap warning.\n"
                         "**Status:** NOT_A_BUG"
                     ),
                     0.1,
