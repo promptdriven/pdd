@@ -456,6 +456,79 @@ zoom into release_video_script_validation.json highlighting checks.hasVisual tru
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_normalizes_wrapped_label_only_visual_cue_paragraph():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery auditable by preserving the raw model
+output, normalized script, validation JSON, and PDS run state before the
+publish command can hand the script to downstream video generation.
+
+VISUAL:
+show a split screen with release_video_script.raw.md on the left and the final
+release_video_script.md on the right, with callouts for raw output, collapsed
+visual cue paragraph, validation changes, and the PDS create command.
+
+## Recovery
+
+NARRATOR:
+The normalized script must keep the entire visual direction together so the
+video generator receives one complete storyboard cue instead of dropping the
+wrapped continuation text.
+
+VISUAL: show release_video_script_validation.json with checks.hasVisual true.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert (
+        "\nVISUAL: show a split screen with release_video_script.raw.md on the left "
+        "and the final release_video_script.md on the right, with callouts for raw "
+        "output, collapsed visual cue paragraph, validation changes, and the PDS "
+        "create command."
+        in artifacts["script"]
+    )
+    assert "\nrelease_video_script.md on the right" not in artifacts["script"]
+    assert "\nvisual cue paragraph, validation changes" not in artifacts["script"]
+    assert artifacts["validation"]["checks"]["hasVisual"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_validation_rejects_leftover_label_only_visual_cues():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+The release-video wrapper must not let empty storyboard labels reach PDS just
+because a later scene contains one valid visual cue. Empty visual labels can
+become blank scenes or parser failures downstream, so validation has to keep
+the normalized script contract strict before create runs.
+
+VISUAL:
+
+## Recovery
+
+NARRATOR:
+The recovery workflow still includes enough narration and a concrete valid
+visual later in the script to satisfy all other validation checks, isolating
+the failure to the leftover label-only visual cue.
+
+VISUAL: show the validation JSON with hasNoLabelOnlyVisualCues highlighted false.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nVISUAL:\n" in artifacts["script"]
+    assert artifacts["validation"]["checks"]["hasVisual"] is True
+    assert artifacts["validation"]["checks"]["hasNoLabelOnlyVisualCues"] is False
+    assert "hasNoLabelOnlyVisualCues" in artifacts["validation"]["errors"]
+
+
 def test_release_video_does_not_swallow_unsafe_label_only_visual_blocks():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
