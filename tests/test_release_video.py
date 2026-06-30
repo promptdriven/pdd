@@ -29,6 +29,10 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_METADATA_CONFLICT",
         "RELEASE_VIDEO_SCRIPT_PATH",
+        "PDS_API_URL",
+        "PDS_PROFILE",
+        "PDS_RELEASE_TOKEN",
+        "PDS_TOKEN",
         "CI",
         "GITHUB_ACTIONS",
     ):
@@ -108,6 +112,17 @@ import sys
 
 sys.stderr.write({stderr!r})
 raise SystemExit({exit_code})
+""",
+    )
+
+
+def claude_output_stub(tmp_path: Path, stdout: str) -> Path:
+    return write_executable(
+        tmp_path / "claude-output-stub.py",
+        f"""#!/usr/bin/env python3
+import sys
+
+sys.stdout.write({stdout!r})
 """,
     )
 
@@ -299,6 +314,777 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert pds_call[pds_call.index("--repo-name") + 1] == "promptdriven/pdd"
     idempotency_key = pds_call[pds_call.index("--idempotency-key") + 1]
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
+
+
+def test_release_video_sanitizes_generated_script_before_invoking_pds(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    raw_script = """Here is the release video script you asked for:
+
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+NARRATOR:
+PDD v1.1.0 turns the release notes into a short operator-ready video story that tells maintainers what shipped, why it matters, and how the release path changed.
+
+VISUAL: show the release tag, changelog excerpt, and terminal command side by side.
+
+## Reliability
+
+NARRATOR: NARRATOR: The release path now keeps generated assets, PDS run state, and publishing evidence together so recovery work can continue without guessing which artifact was sent downstream.
+
+VISUAL: show the PDS status JSON, the persisted run metadata, and the final YouTube receipt.
+
+Let me know if you want a punchier version.
+"""
+    pds = pds_stub(
+        tmp_path,
+        {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/sanitized"}},
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(claude_output_stub(tmp_path, raw_script)),
+            "--pds-cli",
+            str(pds),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    assert "https://youtu.be/sanitized" in result.stdout
+    output_dir = tmp_path / "videos" / "v1.1.0"
+    raw_artifact = (output_dir / "release_video_script.raw.md").read_text(encoding="utf8")
+    script_text = (output_dir / "release_video_script.md").read_text(encoding="utf8")
+    validation = json.loads(
+        (output_dir / "release_video_script_validation.json").read_text(encoding="utf8")
+    )
+    pds_call = pds_capture_argv(capture)
+    sent_script = Path(pds_call[pds_call.index("--script") + 1]).read_text(encoding="utf8")
+
+    assert "Here is the release video script" in raw_artifact
+    assert "Here is the release video script" not in script_text
+    assert "Let me know if you want" not in script_text
+    assert "NARRATOR: NARRATOR:" not in script_text
+    assert "\nNARRATOR:\n\nNARRATOR:\n" not in script_text
+    assert sent_script == script_text
+    assert validation["normalized"] is True
+    assert "stripped_model_wrapper_text" in validation["changes"]
+    assert "collapsed_duplicate_narrator_labels" in validation["changes"]
+    assert validation["checks"]["hasNoModelWrapperText"] is True
+    assert validation["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert validation["errors"] == []
+
+
+def test_release_video_preserves_exact_raw_claude_output_artifact(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    raw_script = """```markdown
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps exact raw script diagnostics while sending a normalized script
+to PDS, so release recovery can compare the generated content with the content
+that downstream systems received.
+
+VISUAL: show raw and normalized script artifacts side by side.
+
+## Recovery
+
+NARRATOR:
+Operators can inspect the raw Claude output, the final script, and validation
+metadata without guessing which transformation happened before PDS create.
+
+VISUAL: show the validation JSON and PDS create command.
+```
+"""
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(claude_output_stub(tmp_path, raw_script)),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/raw"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    output_dir = tmp_path / "videos" / "v1.1.0"
+    assert (output_dir / "release_video_script.raw.md").read_text(encoding="utf8") == raw_script
+    normalized = (output_dir / "release_video_script.md").read_text(encoding="utf8")
+    assert not normalized.startswith("```")
+    assert "PDD v1.1.0 keeps exact raw script diagnostics" in normalized
+
+
+def test_release_video_strips_wrapped_markdown_fence_from_final_script():
+    release_video = load_release_video_module()
+    script = """Here is the release video script:
+
+```markdown
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
+metadata, and validation evidence that helps maintainers recover failed
+publishes without guessing.
+
+VISUAL: show the release artifacts and PDS status side by side.
+
+## Close
+
+NARRATOR:
+Operators can query the persisted PDS run, inspect the final script sent
+downstream, and connect the YouTube receipt back to the release notes.
+
+VISUAL: show the terminal status and YouTube URL.
+```
+
+Let me know if you want a shorter version.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "```" not in artifacts["script"]
+    assert "Here is the release video script" not in artifacts["script"]
+    assert "Let me know if you want" not in artifacts["script"]
+    assert artifacts["validation"]["checks"]["hasNoMarkdownFences"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_rejects_mid_document_model_wrapper_text():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
+metadata, and validation evidence that helps maintainers recover failed
+publishes without guessing.
+
+VISUAL: show the release artifacts and PDS status side by side.
+
+Sure, here is the next section of the release-video script:
+
+## Close
+
+NARRATOR:
+Operators can query the persisted PDS run, inspect the final script sent
+downstream, and connect the YouTube receipt back to the release notes.
+
+VISUAL: show the terminal status and YouTube URL.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert artifacts["validation"]["checks"]["hasNoModelWrapperText"] is False
+    assert "hasNoModelWrapperText" in artifacts["validation"]["errors"]
+
+
+def test_release_video_strips_common_assistant_preamble():
+    release_video = load_release_video_module()
+    script = """Below is the release video script you requested:
+
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
+metadata, and validation evidence that helps maintainers recover failed
+publishes without guessing.
+
+VISUAL: show the release artifacts and PDS status side by side.
+
+## Close
+
+NARRATOR:
+Operators can query the persisted PDS run, inspect the final script sent
+downstream, and connect the YouTube receipt back to the release notes.
+
+VISUAL: show the terminal status and YouTube URL.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Below is the release video script" not in artifacts["script"]
+    assert artifacts["validation"]["changes"] == ["stripped_model_wrapper_text"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_strips_additional_assistant_preamble_variants():
+    release_video = load_release_video_module()
+    preambles = [
+        "I've drafted the release video script below:",
+        "I drafted the release video script below:",
+        "I prepared the release video script below:",
+        "I created the release video script below:",
+        "I wrote the release video script below:",
+        "Absolutely, here's the release video script:",
+        "Here\u2019s the release video script:",
+        "Below you'll find the release video script:",
+    ]
+
+    for preamble in preambles:
+        script = f"""{preamble}
+
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
+metadata, and validation evidence that helps maintainers recover failed
+publishes without guessing.
+
+VISUAL: show the release artifacts and PDS status side by side.
+
+## Close
+
+NARRATOR:
+Operators can query the persisted PDS run, inspect the final script sent
+downstream, and connect the YouTube receipt back to the release notes.
+
+VISUAL: show the terminal status and YouTube URL.
+"""
+
+        artifacts = release_video.prepare_release_video_script(script, source="test")
+
+        assert preamble not in artifacts["script"]
+        assert "stripped_model_wrapper_text" in artifacts["validation"]["changes"]
+        assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_rejects_wrapper_text_inside_narrator_block():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release-video recovery visible with durable scripts, status
+metadata, and validation evidence that helps maintainers recover failed
+publishes without guessing.
+
+VISUAL: show the release artifacts and PDS status side by side.
+
+## Close
+
+NARRATOR:
+Sure, here is the next section of the release-video script:
+Operators can query the persisted PDS run, inspect the final script sent
+downstream, and connect the YouTube receipt back to the release notes.
+
+VISUAL: show the terminal status and YouTube URL.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert artifacts["validation"]["checks"]["hasNoModelWrapperText"] is False
+    assert "hasNoModelWrapperText" in artifacts["validation"]["errors"]
+
+
+def test_release_video_preserves_valid_here_is_narration_line():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+Here is the command maintainers run after tagging a release, and the reason it
+matters for recovery: the release-video wrapper keeps PDS status, scripts, and
+validation evidence together.
+
+VISUAL: show make release-video-status output beside pds_run.json.
+
+## Close
+
+NARRATOR:
+The recovery artifacts stay readable and complete, so operators can reattach to
+the release run without depending on stale local profile state.
+
+VISUAL: show the refreshed terminal status and YouTube URL.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the command maintainers run" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_trailing_here_is_narration_line():
+    release_video = load_release_video_module()
+    script = "\n".join(
+        [
+            "# PDD v1.1.0 Release Video",
+            "",
+            "## Opening",
+            "",
+            "NARRATOR:",
+            "PDD v1.1.0 keeps release recovery visible with durable scripts and",
+            "status evidence for maintainers who need to debug failed video publishes.",
+            "",
+            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "",
+            "## Close",
+            "",
+            "NARRATOR:",
+            (
+                "Here is the takeaway: v1.1.0 gives maintainers a recoverable "
+                "release-video path with clear artifacts and durable PDS status."
+            ),
+        ]
+    )
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the takeaway" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_blank_after_label_trailing_here_is_narration():
+    release_video = load_release_video_module()
+    script = "\n".join(
+        [
+            "# PDD v1.1.0 Release Video",
+            "",
+            "## Opening",
+            "",
+            "NARRATOR:",
+            "PDD v1.1.0 keeps release recovery visible with durable scripts and",
+            "status evidence for maintainers who need to debug failed video publishes.",
+            "",
+            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "",
+            "## Close",
+            "",
+            "NARRATOR:",
+            "",
+            (
+                "Here is the takeaway: v1.1.0 gives maintainers a recoverable "
+                "release-video path with clear artifacts, validation evidence, "
+                "and durable PDS status."
+            ),
+        ]
+    )
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the takeaway" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_multiparagraph_trailing_here_is_narration():
+    release_video = load_release_video_module()
+    script = "\n".join(
+        [
+            "# PDD v1.1.0 Release Video",
+            "",
+            "## Opening",
+            "",
+            "NARRATOR:",
+            "PDD v1.1.0 keeps release recovery visible with durable scripts and",
+            "status evidence for maintainers who need to debug failed video publishes.",
+            "",
+            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "",
+            "## Close",
+            "",
+            "NARRATOR:",
+            "The closing paragraph summarizes the publish recovery path and why the",
+            "generated assets matter to maintainers during a release incident.",
+            "",
+            (
+                "Here is the takeaway: v1.1.0 gives maintainers a recoverable "
+                "release-video path with clear artifacts, validation evidence, "
+                "and durable PDS status after a failed PDS publish."
+            ),
+        ]
+    )
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "The closing paragraph summarizes" in artifacts["script"]
+    assert "Here is the takeaway" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_plain_narration_before_first_visual():
+    release_video = load_release_video_module()
+    script = """Hook: PDD v1.1.0 turns release-video recovery into an operator-visible
+path instead of a best-effort publish step that can fail without enough context.
+
+Narration: The release wrapper now keeps generated scripts, validation evidence,
+PDS run handles, status query diagnostics, and recovery commands together before
+the publish request reaches PDS. Maintainers can reattach to the same run, see
+whether a running sidecar is stale, and retry with a stable idempotency key
+without regenerating the release story or losing the incident trail.
+
+Visual direction: show the changelog, generated script, pds_run.json, status
+query output, and final YouTube receipt side by side.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Hook: PDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "Narration: The release wrapper now keeps generated scripts" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_plain_preamble_before_first_narrator_label():
+    release_video = load_release_video_module()
+    script = """Hook: PDD v1.1.0 makes release-video recovery explicit for
+maintainers before the first formal narrator block appears.
+
+NARRATOR:
+The release-video workflow now preserves enough diagnostics for operators to
+recover a failed publish without guessing. Generated scripts, validation
+evidence, PDS run handles, and status query diagnostics stay attached to the
+release attempt so maintainers can continue recovery with a stable audit trail.
+
+VISUAL: show release artifacts, pds_run.json, and a terminal status query.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Hook: PDD v1.1.0 makes release-video recovery explicit" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_strips_final_assistant_footer_after_narrator_block():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release recovery visible with durable scripts and status
+evidence for maintainers who need to debug failed video publishes.
+
+VISUAL: show the release context, normalized script, and pds_run.json.
+
+## Close
+
+NARRATOR:
+The closing paragraph summarizes the publish recovery path and why generated
+assets matter to maintainers during a release incident.
+
+Let me know if you want a punchier version.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "The closing paragraph summarizes" in artifacts["script"]
+    assert "Let me know if you want" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_collapses_empty_duplicate_narrator_label():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+NARRATOR: NARRATOR:
+The wrapper should collapse duplicate speaker labels even when the duplicated
+label line has no narration body, because the final script is what PDS receives
+for section specification and rendering.
+
+VISUAL: show a cleaned narrator block in the script artifact.
+
+## Recovery
+
+NARRATOR:
+The validation artifact records the normalization and the script stays free of
+duplicated speaker labels before the create command runs.
+
+VISUAL: show release_video_script_validation.json with no errors.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "NARRATOR: NARRATOR:" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_collapses_many_duplicate_narrator_labels():
+    release_video = load_release_video_module()
+    duplicated_labels = "NARRATOR:" + "\tNARRATOR:" * 40
+    script = f"""# PDD v1.1.0 Release Video
+
+## Opening
+
+{duplicated_labels}
+The wrapper should collapse a long repeated speaker-label run without relying
+on a backtracking-heavy regular expression, because generated scripts can echo
+speaker labels many times after a model formatting failure.
+
+VISUAL: show the duplicate labels collapsed into one narrator block.
+
+## Recovery
+
+NARRATOR:
+The final script remains readable, validation stays clean, and PDS receives one
+stable narrator block instead of repeated labels.
+
+VISUAL: show the validation JSON with no duplicate-label errors.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\tNARRATOR:" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_normalizes_standalone_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR:**
+Opening narration should follow the narrator label without an extra markdown
+marker in the spoken body, because generated scripts sometimes bold speaker
+labels while keeping them on their own line.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+## Close
+
+**NARRATOR:**
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Opening narration should follow the narrator label" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_normalizes_spaced_standalone_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR: **
+Opening narration should follow the narrator label without a literal markdown
+marker in the spoken body, even when generated scripts put whitespace before
+the closing bold marker.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+## Close
+
+**NARRATOR: **
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Opening narration should follow the narrator label" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert "\n** The workflow" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_wrapped_script_with_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """Here is the release video script you asked for:
+
+**NARRATOR:**
+Opening narration should be preserved because it explains the release value and
+recovery path for maintainers before the first visual direction appears.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+**NARRATOR:**
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the release video script" not in artifacts["script"]
+    assert "Opening narration should be preserved" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_normalizes_spaced_inline_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR: ** PDD v1.1.0 turns release-video recovery into a visible operator
+path, with generated scripts, validation artifacts, and PDS run metadata
+preserved before the publish step is allowed to continue.
+
+VISUAL: show the normalized script beside the raw Claude output artifact.
+
+## Recovery
+
+**NARRATOR: ** The wrapper keeps narration labels out of the spoken body while
+still providing the standalone narrator blocks PDS expects for scene generation
+and video rendering.
+
+VISUAL: show clean narrator blocks in the final script.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nNARRATOR:\nPDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "\n** PDD v1.1.0 turns release-video recovery" not in artifacts["script"]
+    assert "\n** The wrapper keeps narration labels" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_normalizes_inline_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR: PDD v1.1.0 turns release-video recovery into a visible operator path,
+with generated scripts, validation artifacts, and PDS run metadata preserved
+before the publish step is allowed to continue.
+
+VISUAL: show the normalized script beside the raw Claude output artifact.
+
+## Recovery
+
+NARRATOR: The wrapper keeps narration labels out of the spoken body while still
+providing the standalone narrator blocks PDS expects for scene generation and
+video rendering.
+
+VISUAL: show clean narrator blocks in the final script.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nNARRATOR:\nPDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "\nNARRATOR: PDD v1.1.0 turns release-video recovery" not in artifacts["script"]
+    assert "\nNARRATOR: The wrapper keeps narration labels" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_rejects_malformed_script_before_invoking_pds(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    malformed_script = tmp_path / "malformed_release_video_script.md"
+    malformed_script.write_text(
+        """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+This script is long enough to pass the old length check, but it never gives PDS
+any visual direction. That means the wrapper should stop before create rather
+than handing downstream systems an ambiguous narration-only artifact that an
+operator must diagnose during release recovery.
+
+## Details
+
+NARRATOR:
+The second section repeats the same problem with more words so the script
+remains realistic, but it still lacks any visual cue or storyboard line. The
+release-video wrapper must explain the missing contract field and keep
+diagnostics on disk.
+""",
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(malformed_script),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True})),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "release-video script validation failed" in result.stderr
+    assert not capture.exists()
+    validation = json.loads(
+        (output_dir / "v1.1.0" / "release_video_script_validation.json").read_text(
+            encoding="utf8"
+        )
+    )
+    assert validation["checks"]["hasVisual"] is False
+    assert "hasVisual" in validation["errors"]
 
 
 def test_release_video_default_idempotency_key_uses_tag_and_git_sha(tmp_path: Path):
@@ -1429,6 +2215,140 @@ def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     assert "did not return a YouTube URL" in result.stderr
 
 
+def test_release_video_accepts_noisy_create_stdout_json_without_leaking_secrets(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    stdout = (
+        "debug Authorization: Bearer secret-create-stdout-token\n"
+        + json.dumps({"youtubeUrl": "https://youtu.be/pdd-release"})
+        + "\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=stdout)),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "https://youtu.be/pdd-release" in result.stdout
+    assert "secret-create-stdout-token" not in result.stdout + result.stderr
+
+
+def test_release_video_prefers_final_create_response_after_json_diagnostic(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    stdout = "\n".join(
+        [
+            json.dumps({"debug": True, "message": "starting release-video create"}),
+            json.dumps({"youtubeUrl": "https://youtu.be/pdd-release"}),
+        ]
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=stdout + "\n")),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "https://youtu.be/pdd-release" in result.stdout
+    response = json.loads(
+        (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
+    )
+    assert response == {"youtubeUrl": "https://youtu.be/pdd-release"}
+
+
+def test_release_video_create_parse_failure_redacts_stdout_secrets(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=(
+                        "not json Authorization: Bearer "
+                        "secret-invalid-stdout-token\n"
+                    ),
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "secret-invalid-stdout-token" not in result.stdout + result.stderr
+    assert "Authorization: [redacted]" in result.stderr
+
+
 def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -1468,6 +2388,48 @@ def test_release_video_request_hash_mismatch_reports_idempotency_hint(tmp_path: 
     assert result.returncode == 1
     assert "request_hash_mismatch" in result.stderr
     assert "same idempotency key was reused with a different request body" in result.stderr
+
+
+def test_release_video_create_failure_redacts_pds_cli_command_secrets(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    pds_cli = (
+        f"{pds_output_stub(tmp_path, stderr='pds unavailable\\n', exit_code=1)} "
+        "--token secret-create-token --authorization secret-create-auth"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            pds_cli,
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "secret-create-token" not in result.stderr
+    assert "secret-create-auth" not in result.stderr
+    assert "--token '[redacted]'" in result.stderr
+    assert "--authorization '[redacted]'" in result.stderr
 
 
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):
@@ -1526,6 +2488,62 @@ def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path
         in persisted["recoverCommand"]
     )
     assert str(sidecar) in result.stderr
+
+
+def test_release_video_persists_parent_project_for_wrapped_run_metadata(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    wrapped_run = {
+        "ok": True,
+        "projectId": "pdd-v1-1-0-release",
+        "result": {
+            "runId": "agent_run_wrapped_project",
+            "status": "running",
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=json.dumps(wrapped_run) + "\n",
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    persisted = json.loads(sidecar.read_text(encoding="utf8"))
+    assert persisted["runId"] == "agent_run_wrapped_project"
+    assert persisted["projectId"] == "pdd-v1-1-0-release"
+    assert "--project pdd-v1-1-0-release" in persisted["recoverCommand"]
+    assert "--project pdd-v1-1-0-release" in persisted["watchCommand"]
 
 
 def test_release_video_persists_explicit_project_when_pds_run_lacks_project_id(
@@ -1633,6 +2651,170 @@ def test_release_video_persists_compatibility_run_handle_sidecar(tmp_path: Path)
     assert str(sidecar) in result.stderr
 
 
+def test_release_video_redacts_pds_supplied_recovery_commands(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    compat_output = (
+        "[pds] release-video run handle: "
+        "runId=agent_run_secret_line status=running\n"
+        "[pds] recover: pds --token secret-recover-token "
+        "release-video status --run-id agent_run_secret_line --json\n"
+        "[pds] watch: pds --pds-token secret-watch-token "
+        "jobs watch --run-id agent_run_secret_line --jsonl\n"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=compat_output,
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = (output_dir / "v1.1.0" / "pds_run.json").read_text(encoding="utf8")
+    persisted = json.loads(sidecar_text)
+    assert result.returncode == 1
+    assert "secret-recover-token" not in sidecar_text
+    assert "secret-watch-token" not in sidecar_text
+    assert "--token" not in persisted["recoverCommand"]
+    assert "--pds-token" not in persisted["watchCommand"]
+    assert "release-video status --run-id agent_run_secret_line --json" in persisted[
+        "recoverCommand"
+    ]
+    assert "jobs watch --run-id agent_run_secret_line --jsonl" in persisted["watchCommand"]
+
+
+def test_release_video_pds_metadata_prefers_terminal_json_status():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        "\n".join(
+            [
+                json.dumps({"runId": "agent_run_multi", "status": "running"}),
+                json.dumps(
+                    {
+                        "runId": "agent_run_multi",
+                        "projectId": "pdd-v1-1-0-release",
+                        "status": "failed",
+                    }
+                ),
+            ]
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_multi",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "failed",
+    }
+
+
+def test_release_video_pds_metadata_keeps_nested_project_context():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "run": {"runId": "agent_run_nested", "status": "running"},
+                "project": {"projectId": "pdd-v1-1-0-release"},
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_nested",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
+def test_release_video_pds_metadata_keeps_parent_project_for_nested_run_without_project():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "projectId": "pdd-v1-1-0-release",
+                "run": {"id": "agent_run_nested_parent", "status": "running"},
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_nested_parent",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
+def test_release_video_pds_metadata_keeps_current_run_over_nested_history():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "run": {"runId": "agent_run_current", "status": "running"},
+                "project": {"projectId": "pdd-v1-1-0-release"},
+                "history": [{"runId": "agent_run_old", "status": "failed"}],
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
+def test_release_video_pds_metadata_prefers_result_over_history():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "history": [{"runId": "agent_run_old", "status": "failed"}],
+                "result": {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                },
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
 def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     output_dir = tmp_path / "videos"
@@ -1673,9 +2855,51 @@ def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
 
     assert "agent_run_status789" in result.stdout
     assert (
-        "recover: pds release-video status --run-id agent_run_status789 --json"
+        "recover: pds --project pdd-v1-1-0-release release-video status "
+        "--run-id agent_run_status789 --json"
         in result.stdout
     )
+    assert result.stderr == ""
+
+
+def test_release_video_status_marks_running_sidecar_as_stale(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_stale",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env(),
+        check=True,
+    )
+
+    assert "agent_run_stale" in result.stdout
+    assert "stale" in result.stdout.lower()
+    assert "RELEASE_VIDEO_STATUS_QUERY=1" in result.stdout
     assert result.stderr == ""
 
 
@@ -1817,6 +3041,2184 @@ def test_release_video_status_query_uses_persisted_run_id(tmp_path: Path):
     ]
     assert '"status": "succeeded"' in result.stdout
     assert result.stderr == ""
+
+
+def test_release_video_status_query_refreshes_sidecar_with_terminal_status_and_context(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_terminal",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "ok": True,
+        "runId": "agent_run_terminal",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "failed",
+        "runError": {
+            "code": "provider_capacity",
+            "message": "Provider capacity failure",
+            "retryable": True,
+            "details": {"failedStage": "specs"},
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env(
+            {
+                "PDS_STUB_CAPTURE": str(capture),
+                "PDS_API_URL": "https://status.example.test",
+                "PDS_TOKEN": "secret-status-token",
+            }
+        ),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["status"] == "failed"
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["runStatus"] == "failed"
+    assert refreshed["lastStatusQuery"]["response"]["runError"]["details"] == {
+        "failedStage": "specs"
+    }
+    assert refreshed["pdsContext"]["apiUrl"] == "https://status.example.test"
+    assert refreshed["pdsContext"]["apiUrlSource"] == "PDS_API_URL"
+    assert refreshed["pdsContext"]["tokenSource"] == "PDS_TOKEN"
+    assert "secret-status-token" not in sidecar.read_text(encoding="utf8")
+    assert '"status": "failed"' in result.stdout
+    assert result.stderr == ""
+
+
+def test_release_video_status_query_nonzero_terminal_run_refreshes_sidecar(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_terminal_nonzero",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_terminal_nonzero",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "failed",
+        "error": {"code": "render_failed", "message": "render step failed"},
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(status_response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert result.returncode == 1
+    assert refreshed["runId"] == "agent_run_terminal_nonzero"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "failed"
+    assert refreshed["statusStale"] is False
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["runStatus"] == "failed"
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
+
+
+def test_release_video_status_query_keeps_terminal_status_over_duplicate_running_handle(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_terminal_duplicate",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(
+                        {
+                            "runId": "agent_run_terminal_duplicate",
+                            "projectId": "pdd-v1-1-0-release",
+                            "status": "succeeded",
+                        }
+                    )
+                    + "\n",
+                    stderr=json.dumps(
+                        {
+                            "runId": "agent_run_terminal_duplicate",
+                            "projectId": "pdd-v1-1-0-release",
+                            "status": "running",
+                        }
+                    )
+                    + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["status"] == "succeeded"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "succeeded"
+    assert refreshed["statusStale"] is False
+
+
+def test_release_video_status_query_redacts_secret_diagnostics(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_secret_diagnostics",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(
+                        {
+                            "ok": False,
+                            "error": {
+                                "code": "auth_required",
+                                "message": "Authorization: Bearer secret-status-token",
+                            },
+                            "signedUrl": "https://example.test/render?token=secret-url-token",
+                        }
+                    )
+                    + "\n",
+                    stderr="Authorization: Bearer secret-stderr-token\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    persisted_text = sidecar.read_text(encoding="utf8")
+    persisted = json.loads(persisted_text)
+    assert result.returncode == 1
+    assert "secret-status-token" not in persisted_text
+    assert "secret-stderr-token" not in persisted_text
+    assert "secret-url-token" not in persisted_text
+    assert "[redacted]" in persisted_text
+    assert persisted["lastStatusQuery"]["errorMessage"] == "Authorization: [redacted]"
+    assert "auth_required" in result.stderr
+
+
+def test_release_video_status_query_redacts_structured_signed_url_fields(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_signed_fields",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "X-Amz-Signature": "secret-structured-signature",
+        "X-Amz-Credential": "secret-structured-credential",
+        "error": {"message": "provider rejected signed upload"},
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    persisted = json.loads(sidecar_text)
+    assert result.returncode == 1
+    assert "secret-structured-signature" not in combined_output
+    assert "secret-structured-credential" not in combined_output
+    assert persisted["lastStatusQuery"]["response"]["X-Amz-Signature"] == "[redacted]"
+    assert persisted["lastStatusQuery"]["response"]["X-Amz-Credential"] == "[redacted]"
+
+
+def test_release_video_status_query_redacts_plaintext_access_key_diagnostics(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_plaintext_credentials",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=(
+                        "signature=secret-stdout-signature\n"
+                        "AWS_ACCESS_KEY_ID=secret-stdout-access-key\n"
+                    ),
+                    stderr=(
+                        "accessKeyId=secret-stderr-access-key\n"
+                        "aws_secret_access_key=secret-stderr-secret-key\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-stdout-signature" not in combined_output
+    assert "secret-stdout-access-key" not in combined_output
+    assert "secret-stderr-access-key" not in combined_output
+    assert "secret-stderr-secret-key" not in combined_output
+    assert combined_output.count("[redacted]") >= 4
+
+
+def test_release_video_redacts_access_key_command_options_in_status_diagnostics(
+    tmp_path: Path,
+):
+    release_video = load_release_video_module()
+    completed = subprocess.CompletedProcess(
+        ["pds"],
+        1,
+        stdout=(
+            "retry with pds --access-key-id AKIASTDOUT "
+            "--secret-access-key SECRETSTDOUT release-video status\n"
+        ),
+        stderr=(
+            "retry with pds --access-key-id=AKIASTDERR "
+            "--secret-access-key=SECRETSTDERR release-video status\n"
+        ),
+    )
+
+    process_details = release_video.redacted_process_details(completed)
+    status_stdout = release_video.redact_status_output_text(completed.stdout)
+    status_stderr = release_video.redact_status_output_text(completed.stderr)
+    sidecar = tmp_path / "pds_run.json"
+    release_video.persist_status_query_failure(
+        metadata={"runId": "agent_run_current", "status": "running"},
+        path=sidecar,
+        completed=completed,
+        pds_cli="pds",
+    )
+
+    combined = (
+        process_details
+        + status_stdout
+        + status_stderr
+        + sidecar.read_text(encoding="utf8")
+    )
+    assert "AKIASTDOUT" not in combined
+    assert "SECRETSTDOUT" not in combined
+    assert "AKIASTDERR" not in combined
+    assert "SECRETSTDERR" not in combined
+    assert combined.count("[redacted]") >= 8
+
+
+def test_release_video_redacts_status_query_output_and_command_secrets(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_secret_output",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "runId": "agent_run_secret_output",
+        "status": "running",
+        "message": (
+            "diagnostic at https://example.test/render?"
+            "X-Amz-Signature=secret-sig&token=secret-url-token"
+        ),
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    stderr=(
+                        "pds --token secret-token --pds-token secret-pds-token "
+                        "--api-key secret-api-key failed\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined_output = result.stdout + result.stderr
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    assert result.returncode == 1
+    for secret in (
+        "secret-token",
+        "secret-pds-token",
+        "secret-api-key",
+        "secret-sig",
+        "secret-url-token",
+    ):
+        assert secret not in combined_output
+        assert secret not in sidecar_text
+    assert "[redacted]" in combined_output
+    assert "[redacted]" in sidecar_text
+
+
+def test_release_video_status_query_redacts_pds_api_url_context(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_api_url",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(
+                        {
+                            "runId": "agent_run_api_url",
+                            "projectId": "pdd-v1-1-0-release",
+                            "status": "succeeded",
+                        }
+                    )
+                    + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env(
+            {
+                "PDS_STUB_CAPTURE": str(capture),
+                "PDS_API_URL": (
+                    "https://release-user:release-pass@status.example.test/status"
+                    "?token=secret-url-token&X-Amz-Signature=secret-sig"
+                ),
+            }
+        ),
+        check=True,
+    )
+
+    persisted_text = sidecar.read_text(encoding="utf8")
+    persisted = json.loads(persisted_text)
+    for secret in (
+        "release-user",
+        "release-pass",
+        "secret-url-token",
+        "secret-sig",
+    ):
+        assert secret not in persisted_text
+    assert "[redacted]" in persisted["pdsContext"]["apiUrl"]
+    assert persisted["pdsContext"]["apiUrlSource"] == "PDS_API_URL"
+
+
+def test_release_video_status_query_redacts_access_key_pds_cli_commands(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_access_key_cli",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {"runId": "agent_run_access_key_cli", "status": "succeeded"}
+    pds_cli = (
+        f"{pds_output_stub(tmp_path, stdout=json.dumps(status_response) + chr(10))} "
+        "--secret-access-key value-space-alpha "
+        "--aws-secret-access-key=value-equals-beta "
+        "--access-key-id value-id-gamma "
+        "--access-key=value-access-delta"
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            pds_cli,
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    for secret in (
+        "value-space-alpha",
+        "value-equals-beta",
+        "value-id-gamma",
+        "value-access-delta",
+    ):
+        assert secret not in combined_output
+    assert "[redacted]" in combined_output
+
+
+def test_release_video_status_query_ignores_historical_terminal_runs(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "run": {"runId": "agent_run_current", "status": "running"},
+        "project": {"projectId": "pdd-v1-1-0-release"},
+        "history": [{"runId": "agent_run_old", "status": "failed"}],
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_ignores_unrelated_terminal_json_values(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_stdout = "\n".join(
+        [
+            json.dumps({"runId": "agent_run_old", "status": "failed"}),
+            json.dumps(
+                {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                }
+            ),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=status_stdout + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_ignores_unscoped_terminal_json_after_current_run(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                }
+            ),
+            json.dumps({"status": "failed", "message": "old unrelated terminal event"}),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=status_stdout + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is False
+    assert refreshed["lastStatusQuery"]["response"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_prefers_wrapped_current_run_over_unscoped_terminal(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "ok": True,
+                    "result": {
+                        "runId": "agent_run_current",
+                        "projectId": "pdd-v1-1-0-release",
+                        "status": "succeeded",
+                    },
+                }
+            ),
+            json.dumps({"status": "failed", "message": "old unrelated terminal event"}),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=status_stdout + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "succeeded"
+    assert refreshed["statusStale"] is False
+    assert refreshed["lastStatusQuery"]["response"]["result"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "succeeded"
+
+
+def test_release_video_status_query_keeps_stale_for_unscoped_status_wrapper(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout='{"ok": true, "status": "success"}\n')),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_keeps_project_for_unscoped_project_response(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "projectId": "wrong-project",
+        "status": "succeeded",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_keeps_project_for_nested_run_wrapper_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "ok": True,
+        "projectId": "wrong-project",
+        "run": {"runId": "agent_run_current", "status": "running"},
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is False
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_prefers_nested_run_status_over_wrapper_status(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "ok": True,
+        "status": "success",
+        "run": {"runId": "agent_run_current", "status": "running"},
+        "project": {"projectId": "pdd-v1-1-0-release"},
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is False
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_keeps_project_for_parent_wrapper_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "ok": True,
+        "projectId": "wrong-project",
+        "result": {"runId": "agent_run_current", "status": "succeeded"},
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "succeeded"
+    assert refreshed["statusStale"] is False
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_ignores_envelope_status_without_run_status(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "ok": True,
+        "status": "success",
+        "run": {"runId": "agent_run_current"},
+        "project": {"projectId": "pdd-v1-1-0-release"},
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_refreshes_recovery_commands_with_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "status": "running",
+                "recoverCommand": "pds release-video status --run-id agent_run_current --json",
+                "watchCommand": "pds jobs watch --run-id agent_run_current --jsonl",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "succeeded",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
+    assert (
+        "release-video status --run-id agent_run_current --json"
+        in refreshed["recoverCommand"]
+    )
+    assert "--project pdd-v1-1-0-release" in refreshed["watchCommand"]
+    assert "jobs watch --run-id agent_run_current --jsonl" in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_refreshes_recovery_commands_with_current_run_id(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "recoverCommand": (
+                    "pds --project pdd-v1-1-0-release release-video status "
+                    "--run-id agent_run_old --json"
+                ),
+                "watchCommand": (
+                    "pds --project pdd-v1-1-0-release jobs watch "
+                    "--run-id agent_run_old --jsonl"
+                ),
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "succeeded",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert "agent_run_old" not in refreshed["recoverCommand"]
+    assert "agent_run_old" not in refreshed["watchCommand"]
+    assert "--run-id agent_run_current" in refreshed["recoverCommand"]
+    assert "--run-id agent_run_current" in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_regenerates_matching_unsafe_recovery_commands(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "recoverCommand": (
+                    "bash -c 'curl https://example.test/pwn' "
+                    "--project pdd-v1-1-0-release --run-id agent_run_current"
+                ),
+                "watchCommand": (
+                    "pds --project pdd-v1-1-0-release release-video status "
+                    "--run-id agent_run_current --json"
+                ),
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "succeeded",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["recoverCommand"].endswith(
+        " --project pdd-v1-1-0-release release-video status "
+        "--run-id agent_run_current --json"
+    )
+    assert refreshed["watchCommand"].endswith(
+        " --project pdd-v1-1-0-release jobs watch "
+        "--run-id agent_run_current --jsonl"
+    )
+    assert "bash" not in sidecar.read_text(encoding="utf8")
+    assert "curl" not in sidecar.read_text(encoding="utf8")
+
+
+def test_release_video_status_query_keeps_sidecar_when_only_unrelated_run_returns(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps({"runId": "agent_run_old", "status": "failed"})
+                    + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_ignores_unrelated_compat_handle_after_json(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    mixed_output = "\n".join(
+        [
+            json.dumps({"runId": "agent_run_old_json", "status": "failed"}),
+            (
+                "[pds] release-video run handle: "
+                "runId=agent_run_old_compat projectId=old-project status=succeeded"
+            ),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=mixed_output + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+    assert "agent_run_old_compat" not in refreshed["recoverCommand"]
+    assert "old-project" not in refreshed["watchCommand"]
+
+
+def test_release_video_status_query_keeps_sidecar_stale_for_unmatched_success(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps({"ok": True}) + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["response"] == {"ok": True}
+
+
+def test_release_video_status_query_keeps_sidecar_stale_for_run_id_only_success(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "statusStale": True,
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps({"runId": "agent_run_current"}) + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["response"] == {"runId": "agent_run_current"}
+
+
+def test_release_video_treats_unknown_pds_status_as_active_not_terminal():
+    release_video = load_release_video_module()
+
+    for status in ("processing", "rendering", "uploading", "starting"):
+        assert release_video.release_video_status_is_running(status) is True
+        assert release_video.status_value_is_terminal(status) is False
+
+    for status in ("succeeded", "completed", "failed", "cancelled"):
+        assert release_video.release_video_status_is_running(status) is False
+        assert release_video.status_value_is_terminal(status) is True
+
+
+def test_release_video_status_note_warns_when_stale_flag_survives_success():
+    release_video = load_release_video_module()
+    note = release_video.release_video_status_note(
+        {
+            "runId": "agent_run_current",
+            "status": "running",
+            "statusStale": True,
+            "lastStatusQuery": {"ok": True},
+        }
+    )
+
+    assert "create-time run metadata may be stale" in note
+
+
+def test_release_video_status_query_prints_refreshed_recovery_commands(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "recoverCommand": (
+                    "pds --project pdd-v1-1-0-release release-video status "
+                    "--run-id agent_run_old --json"
+                ),
+                "watchCommand": (
+                    "pds --project pdd-v1-1-0-release jobs watch "
+                    "--run-id agent_run_old --jsonl"
+                ),
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "succeeded",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    assert "agent_run_old" not in result.stdout
+    assert "recover: " in result.stdout
+    assert (
+        "--project pdd-v1-1-0-release release-video status "
+        "--run-id agent_run_current --json"
+    ) in result.stdout
+    assert "watch: " in result.stdout
+    assert (
+        "--project pdd-v1-1-0-release jobs watch "
+        "--run-id agent_run_current --jsonl"
+    ) in result.stdout
+
+
+def test_release_video_status_query_success_redacts_legacy_sidecar_secrets(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "token": "secret-persisted-token",
+                "recoverCommand": (
+                    "pds --token secret-command-token "
+                    "release-video status --run-id agent_run_current --json"
+                ),
+            }
+        ),
+        encoding="utf8",
+    )
+    status_response = {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "succeeded",
+    }
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    persisted = json.loads(sidecar_text)
+    assert "secret-persisted-token" not in sidecar_text
+    assert "secret-command-token" not in sidecar_text
+    assert persisted["token"] == "[redacted]"
+    assert persisted["recoverCommand"].endswith(
+        " --project pdd-v1-1-0-release release-video status "
+        "--run-id agent_run_current --json"
+    )
+
+
+def test_release_video_status_query_failure_records_diagnostic_without_refreshing(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "error": {
+            "code": "auth_required",
+            "message": "Invalid or expired PDS agent token",
+            "details": {},
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env(
+            {
+                "PDS_STUB_CAPTURE": str(capture),
+                "PDS_API_URL": "https://status.example.test",
+                "PDS_TOKEN": "secret-status-token",
+            }
+        ),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    persisted = json.loads(sidecar.read_text(encoding="utf8"))
+    assert persisted["status"] == "running"
+    assert persisted["statusStale"] is True
+    assert persisted["lastStatusQuery"]["ok"] is False
+    assert persisted["lastStatusQuery"]["errorCode"] == "auth_required"
+    assert persisted["lastStatusQuery"]["errorMessage"] == "Invalid or expired PDS agent token"
+    assert persisted["lastStatusQuery"]["pdsContext"]["apiUrl"] == "https://status.example.test"
+    assert "secret-status-token" not in sidecar.read_text(encoding="utf8")
+    assert "auth_required" in result.stderr
+
+
+def test_release_video_status_query_failure_redacts_sensitive_status_details(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "authorization": "secret-sidecar-authz",
+                "recoverCommand": (
+                    "pds --token secret-recover-token "
+                    "release-video status --run-id agent_run_auth_failed --json"
+                ),
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "credential": "secret-status-credential",
+        "authorization": "secret-status-authz",
+        "error": {
+            "code": "auth_required",
+            "message": "credential secret-status-credential expired",
+        },
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    persisted = json.loads(sidecar_text)
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-status-credential" not in combined_output
+    assert "secret-status-authz" not in combined_output
+    assert "secret-sidecar-authz" not in combined_output
+    assert "secret-recover-token" not in combined_output
+    assert persisted["authorization"] == "[redacted]"
+    assert persisted["lastStatusQuery"]["response"]["credential"] == "[redacted]"
+    assert persisted["lastStatusQuery"]["response"]["authorization"] == "[redacted]"
+    assert "[redacted]" in persisted["lastStatusQuery"]["details"]
+
+
+def test_release_video_status_query_failure_redacts_basic_authorization_details(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr="Authorization: Basic secret-basic-token\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    persisted = json.loads(sidecar_text)
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-basic-token" not in combined_output
+    assert "Authorization: [redacted]" in result.stderr
+    assert "Authorization: [redacted]" in persisted["lastStatusQuery"]["details"]
+
+
+def test_release_video_status_query_failure_redacts_arbitrary_authorization_details(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "message": "Authorization: ApiKey secret-api-key",
+        "authorization": 'Digest username="u", nonce="secret-json-nonce"',
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    stderr=(
+                        "Authorization: Custom secret-custom-token secret-tail\n"
+                        "Authorization: Digest username=\"u\", "
+                        "nonce=\"secret-nonce\", response=\"secret-response\"\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    for secret in (
+        "secret-api-key",
+        "secret-custom-token",
+        "secret-tail",
+        "secret-nonce",
+        "secret-response",
+        "secret-json-nonce",
+    ):
+        assert secret not in combined_output
+    assert "Authorization: [redacted]" in result.stdout
+    assert "Authorization: [redacted]" in result.stderr
+    assert "Authorization: [redacted]" in sidecar_text
+
+
+def test_release_video_status_query_failure_redacts_stdout_authorization_details(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "authorization": 'Digest username="u", nonce="secret-json-nonce"',
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps(failure_response) + "\n",
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-json-nonce" not in combined_output
+    assert '"authorization": "[redacted]"' in result.stdout
+    assert '"authorization": "[redacted]"' in sidecar_text
+
+
+def test_release_video_status_query_failure_redacts_embedded_stdout_json_authorization(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_auth_failed",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    failure_response = {
+        "ok": False,
+        "authorization": 'Digest username="u", nonce="secret-mixed-json-nonce"',
+        "message": "Authorization: ApiKey secret-mixed-json-api-key",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=(
+                        "pds debug before json\n"
+                        f"{json.dumps(failure_response)}\n"
+                        "pds debug after json\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    sidecar_text = sidecar.read_text(encoding="utf8")
+    combined_output = result.stdout + result.stderr + sidecar_text
+    assert result.returncode == 1
+    assert "secret-mixed-json-nonce" not in combined_output
+    assert "secret-mixed-json-api-key" not in combined_output
+    assert '"authorization": "[redacted]"' in result.stdout
+    assert '"authorization": "[redacted]"' in sidecar_text
+    assert "Authorization: [redacted]" in sidecar_text
 
 
 def test_release_video_dry_run_does_not_require_youtube_url(tmp_path: Path):
