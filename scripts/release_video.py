@@ -140,6 +140,21 @@ class ReleaseVideoError(RuntimeError):
     """Raised for actionable release-video failures."""
 
 
+class ReleaseVideoProcessTimeout(ReleaseVideoError):
+    """Raised when a release-video subprocess times out with captured output."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        completed: subprocess.CompletedProcess[str],
+        timeout: float | None,
+    ) -> None:
+        super().__init__(message)
+        self.completed = completed
+        self.timeout = timeout
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
@@ -1111,18 +1126,15 @@ def preflight_pds_cli(args: argparse.Namespace, repo: Path) -> None:
 
     version, diagnostic = probe_pds_cli_version(str(args.pds_cli or ""), repo)
     if diagnostic:
-        print(
+        raise ReleaseVideoError(
             "release-video preflight: could not determine PDS CLI version: "
-            f"{diagnostic}",
-            file=sys.stderr,
+            f"{diagnostic}. Use @promptdriven/pds@{MIN_PDS_CLI_VERSION_TEXT} "
+            f"or newer. Command: {redacted_command}"
         )
-        return
     if version is None:
-        print(
+        raise ReleaseVideoError(
             "release-video preflight: could not determine PDS CLI version.",
-            file=sys.stderr,
         )
-        return
 
     print(f"release-video preflight: PDS CLI version: {version}")
     if pds_cli_version_tuple(version) < MIN_PDS_CLI_VERSION:
@@ -1205,8 +1217,17 @@ def run(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ReleaseVideoError(
-            f"{rendered_command} timed out after {timeout:g} seconds"
+        timeout_text = f"{timeout:g}" if timeout is not None else "unknown"
+        completed = subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=timeout_output_text(getattr(exc, "stdout", None)),
+            stderr=timeout_output_text(getattr(exc, "stderr", None)),
+        )
+        raise ReleaseVideoProcessTimeout(
+            f"{rendered_command} timed out after {timeout_text} seconds",
+            completed=completed,
+            timeout=timeout,
         ) from exc
     except FileNotFoundError as exc:
         raise ReleaseVideoError(f"Executable not found: {command[0]}") from exc
@@ -1218,6 +1239,15 @@ def run(
             f"{rendered_command} failed: {redact_secret_text(details[:2000])}"
         )
     return completed
+
+
+def timeout_output_text(output: str | bytes | None) -> str:
+    """Return captured timeout output as text for metadata extraction."""
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf8", errors="replace")
+    return str(output)
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -1732,25 +1762,37 @@ def create_release_video(
     ]
     if project_name:
         pds_args[2:2] = ["--project-name", project_name]
-    changelog_full_path = repo / changelog_path
-    if changelog_full_path.exists():
-        pds_args.extend(["--changelog", str(changelog_full_path)])
-    if args.bootstrap_selected_project:
-        pds_args.append("--bootstrap-selected-project")
-    metadata_conflict = release_video_metadata_conflict(args)
-    if metadata_conflict:
-        pds_args.extend(["--metadata-conflict", metadata_conflict])
-    if args.force_regenerate:
-        pds_args.append("--force-regenerate")
-    if args.dry_run:
-        pds_args.append("--dry-run")
-
-    completed = run(
-        command + pds_args,
-        cwd=repo,
-        timeout=pds_create_process_timeout(args),
-        check=False,
+    add_optional_pds_create_args(
+        pds_args,
+        args,
+        repo,
+        changelog_path,
     )
+
+    try:
+        completed = run(
+            command + pds_args,
+            cwd=repo,
+            timeout=pds_create_process_timeout(args),
+            check=False,
+        )
+    except ReleaseVideoProcessTimeout as exc:
+        persisted_run_metadata_path = persist_timed_out_pds_run_metadata(
+            timeout=exc,
+            path=run_metadata_path,
+            args=args,
+            tag=tag,
+            idempotency_key=idempotency_key,
+            project_id=project_id,
+        )
+        message = str(exc)
+        if persisted_run_metadata_path:
+            print(
+                f"release-video: persisted PDS run metadata to {persisted_run_metadata_path}",
+                file=sys.stderr,
+            )
+            message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        raise ReleaseVideoError(message) from exc
     persisted_run_metadata_path = persist_pds_run_metadata_from_output(
         completed=completed,
         path=run_metadata_path,
@@ -1786,6 +1828,49 @@ def create_release_video(
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
         raise ReleaseVideoError(message) from exc
     return parsed
+
+
+def add_optional_pds_create_args(
+    pds_args: list[str],
+    args: argparse.Namespace,
+    repo: Path,
+    changelog_path: Path,
+) -> None:
+    """Append optional PDS release-video create flags in-place."""
+    changelog_full_path = repo / changelog_path
+    if changelog_full_path.exists():
+        pds_args.extend(["--changelog", str(changelog_full_path)])
+    if args.bootstrap_selected_project:
+        pds_args.append("--bootstrap-selected-project")
+    metadata_conflict = release_video_metadata_conflict(args)
+    if metadata_conflict:
+        pds_args.extend(["--metadata-conflict", metadata_conflict])
+    if args.force_regenerate:
+        pds_args.append("--force-regenerate")
+    if args.dry_run:
+        pds_args.append("--dry-run")
+
+
+def persist_timed_out_pds_run_metadata(
+    *,
+    timeout: ReleaseVideoProcessTimeout,
+    path: Path,
+    args: argparse.Namespace,
+    tag: str,
+    idempotency_key: str,
+    project_id: str | None,
+) -> Path | None:
+    """Persist a PDS run sidecar from partial output captured on timeout."""
+    return persist_pds_run_metadata_from_output(
+        completed=timeout.completed,
+        path=path,
+        pds_cli=args.pds_cli,
+        tag=tag,
+        idempotency_key=idempotency_key,
+        attempt_id=args.idempotency_attempt_id,
+        provenance=release_video_idempotency_provenance(args.idempotency_provenance),
+        project_id=project_id,
+    )
 
 
 def parse_pds_create_response(stdout: str) -> dict[str, Any]:
