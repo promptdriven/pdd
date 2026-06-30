@@ -2366,6 +2366,9 @@ def prepare_release_video_script(raw_script: str, *, source: str) -> dict[str, A
     candidate, visual_changed = collapse_label_only_visual_cues(candidate)
     if visual_changed:
         changes.append("collapsed_label_only_visual_cues")
+    candidate, wrapped_visual_changed = collapse_wrapped_visual_cues(candidate)
+    if wrapped_visual_changed:
+        changes.append("collapsed_wrapped_visual_cues")
     normalized = normalize_release_video_script(candidate)
     normalized, duplicate_changed_after = collapse_duplicate_narrator_labels(normalized)
     if duplicate_changed_after and "collapsed_duplicate_narrator_labels" not in changes:
@@ -2620,6 +2623,53 @@ def collect_visual_cue_paragraph(lines: list[str], start: int) -> tuple[list[str
             cue_lines.append(visual)
             index += 1
         break
+    return cue_lines, index
+
+
+def collapse_wrapped_visual_cues(script: str) -> tuple[str, bool]:
+    """Collapse safe continuation lines into their preceding VISUAL cue."""
+    lines = script.splitlines()
+    normalized: list[str] = []
+    changed = False
+    index = 0
+
+    while index < len(lines):
+        line = lines[index]
+        visual = visual_cue_text(line)
+        if visual:
+            continuation_lines, next_index = collect_visual_cue_continuation(
+                lines,
+                index + 1,
+            )
+            if continuation_lines:
+                cue = " ".join([visual, *continuation_lines])
+                append_spaced(normalized, f"VISUAL: {cue}")
+                index = next_index
+                changed = True
+                continue
+        normalized.append(line)
+        index += 1
+
+    if not changed:
+        return script, False
+    return trim_repeated_blank_lines(normalized), True
+
+
+def collect_visual_cue_continuation(
+    lines: list[str],
+    start: int,
+) -> tuple[list[str], int]:
+    """Collect safe visual cue continuation lines until the next block boundary."""
+    cue_lines: list[str] = []
+    index = start
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        if not is_collapsible_visual_cue_line(line):
+            break
+        cue_lines.append(clean_visual_cue(line))
+        index += 1
     return cue_lines, index
 
 
