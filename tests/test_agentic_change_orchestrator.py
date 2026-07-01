@@ -4491,6 +4491,23 @@ def test_check_hard_stop_step4_route_redirect_marker():
     assert result == "Runtime bug route needed: issue reports the generated CLI crashes with KeyError"
 
 
+def test_check_hard_stop_step4_route_redirect_marker_must_be_line_anchored():
+    """Negated prose mentioning ROUTE_REDIRECT must not stop valid change requests."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    output = (
+        "<step_report>\n"
+        "## Step 4: Requirements Clarity Check\n"
+        "\n"
+        "**Status:** Requirements Clear\n"
+        "\n"
+        "No ROUTE_REDIRECT: bug_fix is needed because this is a source-truth change.\n"
+        "</step_report>"
+    )
+
+    assert _check_hard_stop(4, output) is None
+
+
 def test_check_hard_stop_step4_runtime_route_stop_condition():
     """Step 4 also accepts the runtime-route STOP_CONDITION safety marker."""
     from pdd.agentic_change_orchestrator import _check_hard_stop

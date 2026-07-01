@@ -1221,9 +1221,17 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     if step_num == 2 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*already implemented", output_lower, re.MULTILINE):
         return "Already implemented"
     if step_num == 4:
-        route_redirect = re.search(r"ROUTE_REDIRECT:\s*bug_fix\b", output, re.IGNORECASE)
+        route_redirect = re.search(
+            r"^[ \t]*ROUTE_REDIRECT:[ \t]*bug_fix[ \t]*$",
+            output,
+            re.IGNORECASE | re.MULTILINE,
+        )
         if route_redirect:
-            rationale_match = re.search(r"ROUTE_RATIONALE:\s*(.+)", output, re.IGNORECASE)
+            rationale_match = re.search(
+                r"^[ \t]*ROUTE_RATIONALE:[ \t]*(.+)$",
+                output,
+                re.IGNORECASE | re.MULTILINE,
+            )
             rationale = rationale_match.group(1).strip() if rationale_match else ""
             if rationale:
                 return f"Runtime bug route needed: {rationale}"
