@@ -318,6 +318,27 @@ class TestLoopModeNoLogFile:
             "Loop mode handles errors internally and doesn't need ERROR_FILE."
         )
 
+    def test_step1_non_loop_fallback_supplies_error_file(self):
+        """Step 1's non-loop fallback must pass the required ERROR_FILE arg."""
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        assert 'pytest "$TEST_PATH" > "$ERROR_PATH" 2>&1 || true' in template
+        assert (
+            'pdd fix --manual {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" '
+            '"$TEST_PATH" "$ERROR_PATH"'
+        ) in template
+
+    def test_step1_verification_program_find_prints_examples(self):
+        """Step 1 should print both *_example.* and *_program.* matches."""
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        assert (
+            'find . -path ./.git -prune -o \\( -name "{{dev_unit}}_example.*" '
+            '-o -name "{{dev_unit}}_program.*" \\) -print | head -1'
+        ) in template
+
 
 class TestLoopModeLogFileE2E:
     """E2E tests for issue #360: Verify CLI behavior in loop mode.
@@ -537,6 +558,151 @@ def e2e_fix_default_args(tmp_path):
         "resume": False,
         "use_github_state": False,
     }
+
+
+class TestIssueUnitFixPreflight:
+    """Issue-url pdd fix should use pdd-bug unit tests before no-E2E fallback."""
+
+    def test_resolves_pdd_bug_unit_target_and_example(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _extract_issue_unit_test_files,
+            _resolve_issue_unit_fix_targets,
+        )
+
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "pdd" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "pdd" / "widget.py").write_text("def widget(): return 1\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "widget_python.prompt").write_text(
+            "Generate widget.py\n", encoding="utf-8"
+        )
+        (tmp_path / "examples" / "widget_example.py").write_text(
+            "from pdd.widget import widget\n", encoding="utf-8"
+        )
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "from pdd.widget import widget\n\n"
+            "def test_widget():\n"
+            "    assert widget() == 2\n",
+            encoding="utf-8",
+        )
+
+        issue_content = "FILES_CREATED: tests/test_widget.py"
+
+        test_files = _extract_issue_unit_test_files(issue_content, [], tmp_path)
+        targets = _resolve_issue_unit_fix_targets(tmp_path, test_files)
+
+        assert test_files == ["tests/test_widget.py"]
+        assert len(targets) == 1
+        assert targets[0].test_file == "tests/test_widget.py"
+        assert targets[0].prompt_file == "pdd/prompts/widget_python.prompt"
+        assert targets[0].code_file == "pdd/widget.py"
+        assert targets[0].verification_program == "examples/widget_example.py"
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_no_e2e_uses_unit_fix_before_agentic_steps(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.side_effect = [
+            (False, "tests/test_widget.py: 1 failure"),
+            (True, "tests/test_widget.py: 1 passed"),
+        ]
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program="examples/widget_example.py",
+            )
+        ]
+        mock_fix_main.return_value = (True, "", "fixed code", 1, 0.42, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["pdd/widget.py"],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True
+        assert "pdd-bug unit tests passed" in msg
+        assert cost == 0.42
+        assert model == "claude"
+        assert files == ["pdd/widget.py"]
+        mock_run.assert_not_called()
+        mock_fix_main.assert_called_once()
+        fix_kwargs = mock_fix_main.call_args.kwargs
+        assert fix_kwargs["loop"] is True
+        assert fix_kwargs["verification_program"] == "examples/widget_example.py"
+        assert fix_kwargs["output_code"] == "pdd/widget.py"
+        assert fix_kwargs["protect_tests"] is True
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_unit_fix_failure_does_not_fall_through_to_step8(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.return_value = (False, "tests/test_widget.py: 1 failure")
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program=None,
+            )
+        ]
+        mock_fix_main.return_value = (False, "", "", 3, 0.75, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "Unit/code pdd fix failed before E2E workflow" in msg
+        assert cost == 0.75
+        assert model == "claude"
+        assert files == []
+        mock_run.assert_not_called()
+        mock_fix_main.assert_called_once()
 
 
 class TestNotABugEarlyExit:
