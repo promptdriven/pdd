@@ -133,6 +133,45 @@ provenance (`.pdd/grounding_policy.yaml`, future grounding `pdd checkup gate`
 integration). Contract waivers appear under `contracts.waivers` when prompts
 include `<waivers>` blocks.
 
+### Policy Check Findings
+
+When `pdd checkup policy check` runs with `--evidence`, the manifest includes a
+top-level `policy_check` key storing normalized `PolicyFinding` results:
+
+```json
+"policy_check": {
+  "target": "python",
+  "contract": {
+    "capabilities_present": true,
+    "effect_count": 8
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "effect": {"action": "send", "resource": "email"},
+      "rule": "must_not_send_email",
+      "message": "Found forbidden email-sending call",
+      "location": {"file": "src/refund_payment.py", "line": 42, "symbol": "sendgrid.SendGridAPIClient"}
+    }
+  ]
+}
+```
+
+For unsupported targets the object is:
+
+```json
+"policy_check": {
+  "target": "typescript",
+  "status": "unsupported",
+  "message": "No policy backend registered for target: typescript"
+}
+```
+
+- `target` is always present and records which backend was used.
+- `policy_check` is omitted entirely when no policy check was performed
+  (backward-compatible — existing manifests without policy checks are unaffected).
+- `findings` is an empty array when the check passes with no violations.
+
 ## Verification
 
 For this feature, use the focused pytest gate (not full `pytest -q` collection
