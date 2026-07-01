@@ -1129,6 +1129,72 @@ def _base_refs_from_issue_content(issue_content: str, cwd: Path) -> List[str]:
     return refs
 
 
+def _git_ref_exists(cwd: Path, ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def _ensure_explicit_base_ref(cwd: Path, base: str) -> None:
+    """Fetch an explicit base branch into shallow/single-branch clones if absent."""
+    if not base:
+        return
+    if _git_ref_exists(cwd, base):
+        return
+
+    branch = base
+    if branch.startswith("refs/heads/"):
+        branch = branch[len("refs/heads/") :]
+    if branch.startswith("origin/"):
+        branch = branch[len("origin/") :]
+    if not branch or branch in {"main", "master"}:
+        return
+    if _git_ref_exists(cwd, f"origin/{branch}"):
+        return
+
+    try:
+        subprocess.run(
+            [
+                "git",
+                "fetch",
+                "--depth",
+                "50",
+                "origin",
+                f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        console.print(f"[yellow]Warning: git fetch for base ref {branch} timed out[/yellow]")
+
+
+def _diff_name_only(cwd: Path, base: str, head: str = "HEAD") -> Set[str]:
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", base, head],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {f for f in result.stdout.strip().splitlines() if f}
+
+
 def _extract_issue_unit_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -1609,7 +1675,11 @@ def _get_modified_and_untracked(cwd: Path, base_refs: Optional[List[str]] = None
             seen_base_refs.add(base)
             ordered_base_refs.append(base)
 
+    explicit_base_refs = set(base_refs or [])
+
     for base in ordered_base_refs:
+        if base in explicit_base_refs:
+            _ensure_explicit_base_ref(cwd, base)
         try:
             mb_result = subprocess.run(
                 ["git", "merge-base", base, "HEAD"],
@@ -1635,6 +1705,11 @@ def _get_modified_and_untracked(cwd: Path, base_refs: Optional[List[str]] = None
             if result.returncode == 0 and result.stdout.strip():
                 files.update(f for f in result.stdout.strip().splitlines() if f)
             break
+        if base in explicit_base_refs:
+            direct_diff_files = _diff_name_only(cwd, base)
+            if direct_diff_files:
+                files.update(direct_diff_files)
+                break
 
     # Note: no blanket `git ls-files` fallback here — returning ALL tracked
     # files would cause _commit_and_push to falsely detect unchanged files as
