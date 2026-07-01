@@ -1,0 +1,74 @@
+<pdd-reason>Implements pdd checkup policy check for target-neutral capabilities policy analysis.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "policy", "description": "Run capability policy checks against target-specific backends."},
+      {"name": "policy check", "description": "Check a prompt capabilities block against an artifact using the selected policy backend."}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>capability_ir_python.prompt</pdd-dependency>
+<pdd-dependency>policy_backends/__init___python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/policy.py` implementing the `pdd checkup policy` CLI group.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Provide `pdd checkup policy check PROMPT_FILE ARTIFACT_FILE [--target TARGET] [--json] [--evidence]` for checking a prompt's `<capabilities>` contract against generated code through a target-specific policy backend.
+
+% Requirements
+1. Define a Click group named `policy`. It must be importable as `from pdd.commands.policy import policy as policy_cmd`.
+2. Define a `check` subcommand with two required positional paths:
+   - `prompt_file`: an existing prompt path.
+   - `artifact_file`: an existing generated artifact path.
+3. `check` options:
+   - `--target TEXT` with default `"python"` and `show_default=True`.
+   - `--json` flag for machine-readable output.
+   - `--evidence` flag to write the policy result into the evidence manifest.
+4. Lazy-import `parse_capabilities_ir` from `pdd.capability_ir`, `get_backend` from `pdd.policy_backends`, and `write_evidence_manifest` from `pdd.evidence_manifest` inside the command implementation so `pdd checkup policy --help` still works before generated sibling modules are available.
+5. Read `prompt_file` as UTF-8 and call `parse_capabilities_ir(prompt_text)` to obtain a `ContractEffectIR`.
+6. Call `get_backend(target)`.
+   - If it returns a dict with `status == "unsupported"`, use that dict as the full result, emit it as JSON/text, optionally persist it via `policy_check`, and return exit code `0`.
+   - Otherwise, call `backend.analyze(str(artifact_file), contract_ir)`.
+7. Normalize each backend finding into a plain dict. Support dataclasses via `dataclasses.asdict`, objects with `to_dict()`, and already-dict findings. Each normalized finding MUST include `severity`, `effect`, `rule`, `message`, and `location`.
+8. For supported targets, emit exactly:
+   ```python
+   {
+       "target": target,
+       "contract": {
+           "capabilities_present": contract_ir.capabilities_present,
+           "effect_count": contract_ir.effect_count,
+       },
+       "findings": normalized_findings,
+   }
+   ```
+9. JSON output: `click.echo(json.dumps(result, indent=2, sort_keys=True))` and suppress all unrelated stdout.
+10. Text output:
+    - For unsupported targets, print the unsupported-target message.
+    - For clean supported targets, print `No policy findings.`
+    - For findings, print one line per finding: `[{severity}] {rule}: {message}`.
+11. Evidence output: when `--evidence` is passed, call `write_evidence_manifest(command="checkup policy check", prompt_file=prompt_file, output_files=[artifact_file], policy_check=result)`.
+12. Exit codes:
+    - `0` for clean supported results and unsupported targets.
+    - `1` when any normalized finding has severity `"error"` or `"blocker"`.
+    - `2` for unexpected internal errors. When `--json` is active, emit `{"target": target, "status": "error", "message": str(exc)}` before returning `2`; otherwise log/print a clear error.
+13. Do not run an LLM, execute the artifact, or inspect network resources. The command delegates all code analysis to the selected `PolicyBackend`.
+
+% Dependencies
+Sibling modules are declared through `<pdd-dependency>` tags above:
+- `capability_ir_python.prompt` provides `parse_capabilities_ir(text: str) -> ContractEffectIR`.
+- `policy_backends/__init___python.prompt` provides `get_backend(target: str) -> PolicyBackend | dict`.
+
+<pdd.evidence_manifest>
+    <include select="def:write_evidence_manifest">pdd/evidence_manifest.py</include>
+</pdd.evidence_manifest>
+
+% Deliverables
+- Code: `pdd/commands/policy.py`

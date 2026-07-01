@@ -8411,7 +8411,8 @@
       "agentic_checkup_python.prompt",
       "commands/prompt_python.prompt",
       "commands/contracts_python.prompt",
-      "commands/gate_python.prompt"
+      "commands/gate_python.prompt",
+      "commands/policy_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -9938,7 +9939,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, policy_findings: Optional[Mapping[str, Any]] = None) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, policy_check: Optional[Mapping[str, Any]] = None) -> Path",
             "returns": "Path"
           },
           {
@@ -10166,6 +10167,38 @@
           {
             "name": "replay",
             "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements pdd checkup policy check for target-neutral capabilities policy analysis.",
+    "description": "Defines the pdd checkup policy command group with a check subcommand that parses prompt capabilities, selects a target-specific policy backend, emits normalized JSON, and optionally records the result in an evidence manifest.",
+    "dependencies": [
+      "capability_ir_python.prompt",
+      "policy_backends/__init___python.prompt",
+      "evidence_manifest_python.prompt"
+    ],
+    "priority": 236,
+    "filename": "commands/policy_python.prompt",
+    "filepath": "pdd/commands/policy.py",
+    "tags": [
+      "command",
+      "python",
+      "policy"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "policy",
+            "description": "Run capability policy checks against target-specific backends."
+          },
+          {
+            "name": "policy check",
+            "description": "Check a prompt capabilities block against an artifact using the selected policy backend."
           }
         ]
       }
