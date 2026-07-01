@@ -54,7 +54,7 @@ You are working on step 1 of 11 in an agentic e2e fix workflow. This issue was t
      # Find test file
      TEST_PATH=$(find . -path ./.git -prune -o \( -name "test_{{dev_unit}}.*" -print \) | head -1)
      # Find verification program (example or program file)
-     VERIFY_PROG=$(find . -path ./.git -prune -o \( -name "{{dev_unit}}_example.*" -o -name "{{dev_unit}}_program.*" -print \) | head -1)
+     VERIFY_PROG=$(find . -path ./.git -prune -o \( -name "{{dev_unit}}_example.*" -o -name "{{dev_unit}}_program.*" \) -print | head -1)
      ```
    - If PROMPT_PATH or CODE_PATH or TEST_PATH is empty, skip this dev unit and log a warning
 
@@ -65,7 +65,9 @@ You are working on step 1 of 11 in an agentic e2e fix workflow. This issue was t
      ```
    - If NO verification program was found, run without `--loop` (graceful fallback):
      ```bash
-     pdd fix --manual {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" "$TEST_PATH"
+     ERROR_PATH=$(mktemp /tmp/pdd_fix_errors_{{dev_unit}}.XXXXXX.log)
+     pytest "$TEST_PATH" > "$ERROR_PATH" 2>&1 || true
+     pdd fix --manual {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" "$TEST_PATH" "$ERROR_PATH"
      ```
    - Run pdd fix sequentially, one dev unit at a time
    - Capture the output of each pdd fix run
