@@ -32,7 +32,8 @@ This module defines the `PolicyBackend` abstract base class, the `PolicyFinding`
    - Abstract method `analyze(self, artifact_path: str, contract_ir: ContractEffectIR) -> list[PolicyFinding]`
 3. Import `ContractEffectIR` from `..capability_ir` (the sibling module generated from `capability_ir_python.prompt`).
 4. Implement `get_backend(target: str) -> PolicyBackend | dict`:
-   - Return `PythonAstPolicyBackend()` when `target == "python"`.
+   - Normalize `target` with `str(target or "").strip().lower()` before lookup.
+   - Return `PythonAstPolicyBackend()` when normalized target is `"python"`.
    - For any unrecognized target, return a plain dict: `{"target": target, "status": "unsupported", "message": f"No policy backend registered for target: {target}"}`. MUST NOT raise an exception.
    - To avoid circular imports, concrete backend classes (e.g., `PythonAstPolicyBackend`) MUST be imported lazily inside `get_backend()` using local imports, NOT at module level.
 5. Export `__all__` containing `PolicyFinding`, `PolicyBackend`, `get_backend`.
