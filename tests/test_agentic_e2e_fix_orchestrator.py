@@ -599,6 +599,58 @@ class TestIssueUnitFixPreflight:
         assert targets[0].code_file == "pdd/widget.py"
         assert targets[0].verification_program == "examples/widget_example.py"
 
+    def test_extracts_committed_unit_test_from_explicit_replay_base(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _extract_issue_unit_test_files
+
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+        (tmp_path / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "main"], cwd=tmp_path, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "replay/prod-base-1776"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "module.py").write_text("def value(): return 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "pdd/module.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "prod base"], cwd=tmp_path, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "fix/issue-1776"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_module.py").write_text(
+            "from pdd.module import value\n\n"
+            "def test_value():\n"
+            "    assert value() == 2\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "tests/test_module.py"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "test: add pdd bug tests"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+
+        issue_content = "Base branch: replay/prod-base-1776\n"
+
+        assert _extract_issue_unit_test_files(issue_content, [], tmp_path) == [
+            "tests/test_module.py"
+        ]
+
     @patch("pdd.fix_main.fix_main")
     @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
     @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")

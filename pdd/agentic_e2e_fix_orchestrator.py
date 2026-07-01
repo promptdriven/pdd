@@ -1076,6 +1076,59 @@ def _workflow_state_marker_files(issue_content: str) -> List[str]:
     return marker_files
 
 
+def _add_base_ref_variants(ref: str, refs: List[str], seen: Set[str]) -> None:
+    ref = ref.strip().strip("`'\"").rstrip(".,")
+    if not ref or ref.upper() == "TBD":
+        return
+    if ref.startswith("refs/heads/"):
+        ref = ref[len("refs/heads/") :]
+    if not ref:
+        return
+
+    candidates = [ref]
+    if ref.startswith("origin/"):
+        candidates.append(ref[len("origin/") :])
+    else:
+        candidates.append(f"origin/{ref}")
+
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            refs.append(candidate)
+
+
+def _base_refs_from_issue_content(issue_content: str, cwd: Path) -> List[str]:
+    """Return explicit PR/base refs mentioned by an issue or linked PR URL."""
+    refs: List[str] = []
+    seen: Set[str] = set()
+
+    for line in issue_content.splitlines():
+        match = _re.match(
+            r"^\s*(?:base branch|base ref|pr base|pull request base)\s*:\s*(\S+)",
+            line,
+            _re.IGNORECASE,
+        )
+        if match:
+            _add_base_ref_variants(match.group(1), refs, seen)
+
+    pr_urls = _re.findall(r"https://github\.com/[^\s)]+/[^\s)]+/pull/\d+", issue_content)
+    for pr_url in pr_urls:
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", pr_url, "--json", "baseRefName", "--jq", ".baseRefName"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            _add_base_ref_variants(result.stdout.strip(), refs, seen)
+
+    return refs
+
+
 def _extract_issue_unit_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -1104,7 +1157,10 @@ def _extract_issue_unit_test_files(
         _add(path)
     for path in changed_files:
         _add(path)
-    for path in _get_modified_and_untracked(cwd):
+    for path in _get_modified_and_untracked(
+        cwd,
+        base_refs=_base_refs_from_issue_content(issue_content, cwd),
+    ):
         _add(path)
 
     return test_files
@@ -1505,7 +1561,7 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
         console.print("[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]")
 
 
-def _get_modified_and_untracked(cwd: Path) -> Set[str]:
+def _get_modified_and_untracked(cwd: Path, base_refs: Optional[List[str]] = None) -> Set[str]:
     """Returns set of modified tracked files, untracked files, and files committed on the branch.
 
     Includes files added in commits since the branch diverged from the base branch
@@ -1546,7 +1602,14 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
     # nor untracked — they're committed and clean, but new relative to the base.
     # Try merge-base first (feature branch vs main/master), then fall back to
     # origin/ refs for shallow clones where local main/master don't exist (Issue #1010).
-    for base in ("main", "master", "origin/main", "origin/master"):
+    ordered_base_refs: List[str] = []
+    seen_base_refs: Set[str] = set()
+    for base in list(base_refs or []) + ["main", "master", "origin/main", "origin/master"]:
+        if base and base not in seen_base_refs:
+            seen_base_refs.add(base)
+            ordered_base_refs.append(base)
+
+    for base in ordered_base_refs:
         try:
             mb_result = subprocess.run(
                 ["git", "merge-base", base, "HEAD"],
