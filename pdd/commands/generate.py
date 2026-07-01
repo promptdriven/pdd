@@ -21,6 +21,7 @@ from ..evidence_manifest import (
 )
 from ..prompt_gate import maybe_run_workflow_prompt_gate
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
+from ..story_test_generator import generate_story_test
 
 # Initialize console
 console = Console(file=sys.stdout)
@@ -721,6 +722,13 @@ def example(
 @click.option("--no-github-state", is_flag=True, help="Disable GitHub issue comment-based state persistence (Agentic mode).")
 @click.option("--clean-restart", is_flag=True, help="Discard saved agentic test state and start from step 1 (Agentic mode).")
 @click.option("--output", help="Specify where to save the generated test file.")
+@click.option(
+    "--from-story",
+    "from_story",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Generate deterministic pytest regression tests from a user story contract.",
+)
 @click.option("--language", help="Specify the programming language.")
 @click.option("--coverage-report", type=click.Path(exists=True), help="Path to the coverage report file.")
 @click.option("--existing-tests", type=click.Path(exists=True), multiple=True, help="Path(s) to existing unit test file(s).")
@@ -752,6 +760,7 @@ def test(
     no_github_state: bool,
     clean_restart: bool,
     output: Optional[str],
+    from_story: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
     existing_tests: Tuple[str, ...],
@@ -763,21 +772,44 @@ def test(
     """
     Generate or enhance unit tests, or link story prompt metadata.
 
-    Supports four modes:
+    Supports five modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
     3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
     4. Story Metadata Linking: pdd test user_stories/story__my_story.md
+    5. Story Regression Generation: pdd test --from-story user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
     from ..agentic_test import run_agentic_test
 
     try:
+        estimate_mode = _estimate_mode_active(ctx)
+        if from_story:
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
+            result = generate_story_test(
+                Path(from_story),
+                Path(output) if output else None,
+            )
+            obj = ctx.obj or {}
+            if not obj.get("quiet", False):
+                console.print(
+                    "[bold green]Story regression generated:[/bold green] "
+                    f"{result.output_path} ({result.test_count} tests)"
+                )
+            return {
+                "success": True,
+                "story_file": from_story,
+                "test_file": str(result.output_path),
+                "test_count": result.test_count,
+                "story_id": result.story_id,
+                "story_hash": result.story_hash,
+            }, 0.0, "deterministic"
+
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
-        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 

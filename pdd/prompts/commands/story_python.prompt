@@ -71,9 +71,11 @@ modified `.prompt` files in the repository and use them as the resolved prompt l
 It MUST fail with a descriptive error if the working directory is not a git repository
 or if no changed `.prompt` files are found.
 
-R8 - Regression generation stub
+R8 - Regression generation handoff
 When `--generate-regression` is supplied, the command MUST print a human-readable message
-indicating the feature is not yet available (referencing issue #1700) and exit 0 without error.
+referencing issue #1700 and the follow-up `pdd test --from-story <story-file> --output ...`
+command. The story command MUST NOT run pytest generation inline; deterministic test generation
+belongs to `pdd test --from-story`.
 
 R9 - Story list rendering
 `story list` MUST render a formatted table with columns: story-id, file path, and linked prompts.

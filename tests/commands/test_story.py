@@ -354,6 +354,86 @@ class TestCrossDevUnitLink:
         assert str(prompt_explicit) in passed_prompts
 
 
+class TestStoryAddWorkflowOptions:
+    """Workflow options that shape story generation inputs."""
+
+    def test_title_controls_output_story_slug(self, runner: CliRunner, tmp_path: Path) -> None:
+        """--title is passed through as the generated story output path."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_gen.return_value = _STORY_SUCCESS
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--title", "Export PDF Report",
+                        "--prompt", "prompts/export_python.prompt",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+        assert result.exit_code == 0, result.output
+        assert mock_gen.call_args.kwargs["output"].endswith(
+            "user_stories/story__export_pdf_report.md"
+        )
+
+    def test_from_changed_files_uses_git_status_prompts(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """--from-changed-files discovers modified/untracked .prompt files."""
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir(parents=True)
+        changed_prompt = prompts_dir / "changed_python.prompt"
+        changed_prompt.write_text("% changed prompt\n", encoding="utf-8")
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with patch("pdd.commands.story._changed_prompt_files") as mock_changed, \
+                 patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_changed.return_value = [str(changed_prompt)]
+                mock_gen.return_value = _STORY_SUCCESS
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--from-changed-files",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+
+        assert result.exit_code == 0, result.output
+        assert str(changed_prompt) in mock_gen.call_args.kwargs["prompt_files"]
+
+    def test_generate_regression_prints_from_story_handoff(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """--generate-regression points users to deterministic pdd test --from-story."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            with patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_gen.return_value = (
+                    True,
+                    "Generated story file: user_stories/story__export_pdf.md.",
+                    0.0,
+                    "deterministic",
+                    "user_stories/story__export_pdf.md",
+                    ["prompts/export_python.prompt"],
+                )
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--prompt", "prompts/export_python.prompt",
+                        "--generate-regression",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+
+        assert result.exit_code == 0, result.output
+        assert "Issue #1700" in result.output
+        assert "pdd test --from-story user_stories/story__export_pdf.md" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Scenario 5: Duplicate detection
 # ---------------------------------------------------------------------------
@@ -424,6 +504,40 @@ class TestDuplicateDetection:
                     obj={"quiet": True, "verbose": False},
                 )
         assert result.exit_code == 0, result.output
+
+    def test_update_existing_title_merges_metadata_without_regenerating(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """--update relinks an existing titled story instead of rewriting its body."""
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            existing = stories_dir / "story__my_feature.md"
+            existing.write_text("old content\n", encoding="utf-8")
+            with patch("pdd.commands.story.cache_story_prompt_links") as mock_link, \
+                 patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_link.return_value = (
+                    True,
+                    "Story prompt metadata linked.",
+                    0.0,
+                    "",
+                    ["prompts/x_python.prompt"],
+                )
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--title", "My Feature",
+                        "--prompt", "prompts/x_python.prompt",
+                        "--update",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+
+        assert result.exit_code == 0, result.output
+        mock_link.assert_called_once()
+        mock_gen.assert_not_called()
 
     def test_case_insensitive_slug_collision_detected(
         self, runner: CliRunner, tmp_path: Path
@@ -714,4 +828,25 @@ class TestStoryLink:
                 ],
                 obj={"quiet": True, "verbose": False},
             )
+        assert result.exit_code != 0
+
+    def test_link_rejects_story_outside_user_stories(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Linking a markdown file outside user_stories is rejected."""
+        story_file = tmp_path / "story__checkout_refund.md"
+        story_file.write_text("## Story\nAs a user, I want refunds.\n", encoding="utf-8")
+        prompt_file = tmp_path / "prompts" / "refund_payment_python.prompt"
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text("% refund prompt\n", encoding="utf-8")
+
+        result = runner.invoke(
+            story,
+            [
+                "link",
+                str(story_file),
+                "--prompt", str(prompt_file),
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
         assert result.exit_code != 0

@@ -352,7 +352,7 @@ class TestMarkerRegistration:
     def test_pytest_ini_registers_story_marker(self):
         ini = Path(__file__).resolve().parents[1] / "pytest.ini"
         text = ini.read_text(encoding="utf-8")
-        assert "story(story_id):" in text
+        assert "story(story_id, story_hash):" in text
 
 
 class TestMarkerSelection:
