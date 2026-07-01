@@ -7661,9 +7661,10 @@
   },
   {
     "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, the canonical two-layer final PR gate, or the --agentic-review-loop fallback/mirror wrapper. The mirror wrapper keeps canonical pdd checkup/final-gate authoritative, runs a non-authoritative mirror only after canonical pass or unknown infrastructure/provider/parser failure, and writes pdd.checkup.agentic.v1 JSON for hosted checkup.",
     "dependencies": [
       "agentic_common_python.prompt",
+      "checkup_agentic_artifact_python.prompt",
       "checkup_review_loop_python.prompt",
       "ci_validation_python.prompt",
       "prompt_repair_python.prompt"
@@ -7682,7 +7683,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0, adversarial_prompt: Optional[str] = None, agentic_review_loop: bool = False, fresh_final_review_role: Optional[str] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, agentic_review_loop: bool = False, adversarial_prompt: Optional[str] = None, fresh_final_review_role: Optional[str] = None, as_json: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           }
         ]
@@ -8348,7 +8349,7 @@
   },
   {
     "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected. Supports --agentic-review-loop for standalone adversarial PR checkup (implies --review-loop and --json, permits --no-fix, cannot combine with --final-gate), --adversarial-prompt TEXT for the adversarial reviewer instruction, and --fresh-final-review ROLE for the fresh final review in a new context/session.",
+    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected. Supports --agentic-review-loop as a hosted-checkup fallback/mirror artifact wrapper around canonical pdd checkup/final-gate, --adversarial-prompt TEXT for the mirror lens, and --fresh-final-review ROLE as a compatibility hook. The mirror sets JSON output, allows --final-gate, and cannot be combined with --review-loop.",
     "dependencies": [
       "agentic_checkup_python.prompt",
       "commands/prompt_python.prompt",
@@ -8371,7 +8372,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup, PR review loop, or local diagnostics including lint; supports --agentic-review-loop for standalone adversarial PR review"
+            "description": "Run agentic health checkup, PR review loop, canonical final gate, or local diagnostics including lint; supports --agentic-review-loop as a fallback/mirror JSON artifact wrapper around canonical checkup"
           }
         ]
       }
@@ -10717,8 +10718,8 @@
     }
   },
   {
-    "reason": "Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.",
-    "description": "Accepts loop state, config, and context from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact. Provides Pydantic v2 models (AgenticLayer1, AgenticReviewer, AgenticFinding, AgenticFixAttempt, AgenticValidationResult, AgenticFreshFinalReview, AgenticVerdict, AgenticBudget, AgenticV1Artifact), finding normalization via _normalize_findings (best-effort parser, returns [] on failure setting reviewer status to degraded), deduplication via _deduplicate_findings, and the public build_agentic_v1_artifact assembler. All free-text fields are routed through _scrub_secrets and capped at FINDING_TEXT_MAX_CHARS. Nofix mode guarantees fix_attempts is empty. Budget booleans are computed fresh at artifact-build time from config caps vs actual elapsed values.",
+    "reason": "Pure data-assembly module for the bounded/redacted pdd.checkup.agentic.v1 fallback/mirror artifact.",
+    "description": "Builds a JSON-serializable pdd.checkup.agentic.v1 fallback/mirror artifact from canonical checkup/final-gate output plus optional non-authoritative mirror review-loop final state. Exposes classify_canonical_result to map canonical pass/fail/unknown and build_agentic_mirror_artifact to emit the exact hosted-checkup statuses canonical_pass_agentic_mirror_clean, canonical_pass_agentic_mirror_blocking, canonical_unknown_agentic_fallback_pass, canonical_unknown_agentic_fallback_blocking, and canonical_fail_agentic_not_authoritative. The artifact redacts and bounds free text, treats the mirror as authoritative=false, and never lets mirror output overrule a canonical content failure.",
     "dependencies": [
       "checkup_review_loop_python.prompt"
     ],
@@ -10736,19 +10737,14 @@
       "module": {
         "functions": [
           {
-            "name": "build_agentic_v1_artifact",
-            "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact",
-            "returns": "AgenticV1Artifact"
+            "name": "classify_canonical_result",
+            "signature": "(*, success: bool, message: str, final_state: Optional[Mapping[str, Any]] = None) -> str",
+            "returns": "str"
           },
           {
-            "name": "_normalize_findings",
-            "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]",
-            "returns": "List[AgenticFinding]"
-          },
-          {
-            "name": "_deduplicate_findings",
-            "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]",
-            "returns": "List[AgenticFinding]"
+            "name": "build_agentic_mirror_artifact",
+            "signature": "(*, owner: str, repo: str, pr_number: int, pr_url: str, issue_url: str, canonical_success: bool, canonical_message: str, canonical_final_state: Optional[Mapping[str, Any]], mirror_final_state: Optional[Mapping[str, Any]], mirror_prompt: str, reviewers: Mapping[str, str], mode: str, total_cost: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }

@@ -725,6 +725,10 @@ class ReviewLoopConfig:
     # loop accepts ``reviewer == fixer`` for non-review-only runs and keeps
     # reviewer status/reporting distinct from fixer artifacts.
     allow_same_reviewer_fixer: bool = False
+    # APPENDED — optional non-authoritative agentic mirror lens (#1788 scope
+    # correction). This does not create a new ship gate; callers use it to
+    # constrain fallback/mirror reviewers to canonical checkup criteria.
+    adversarial_prompt: Optional[str] = None
 
 
 @dataclass
@@ -2012,6 +2016,23 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
     return tuple(reviewers or DEFAULT_REVIEWERS)
 
 
+def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]:
+    """Parse optional ``role:/slash-command`` annotations from reviewer roles."""
+    if value is None:
+        raw_items: Sequence[str] = DEFAULT_REVIEWERS
+    elif isinstance(value, str):
+        raw_items = value.split(",")
+    else:
+        raw_items = list(value)
+    commands: Dict[str, str] = {}
+    for raw in raw_items:
+        role_token, command = _split_reviewer_command_token(raw)
+        roles = _normalize_reviewers([role_token])
+        if roles and roles[0] not in commands:
+            commands[roles[0]] = command
+    return commands
+
+
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
@@ -2084,7 +2105,8 @@ def parse_state_list(
 def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     normalized: List[str] = []
     for reviewer in reviewers:
-        item = str(reviewer or "").strip().lower()
+        item, _command = _split_reviewer_command_token(reviewer)
+        item = item.lower()
         if not item:
             continue
         if item == "chatgpt":
@@ -2100,6 +2122,16 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
         if item not in normalized:
             normalized.append(item)
     return normalized
+
+
+def _split_reviewer_command_token(value: object) -> Tuple[str, str]:
+    item = str(value or "").strip()
+    command = ""
+    if ":/" in item:
+        item, raw_command = item.split(":/", 1)
+        item = item.strip()
+        command = "/" + raw_command.strip().lstrip("/")
+    return item, command
 
 
 def _run_trusted_gate_git(
@@ -3717,6 +3749,15 @@ def _review_prompt(
             "\n\nLayer 1 Step 5 shell-first evidence:\n"
             f"{context.layer1_step5_evidence}\n"
         )
+    mirror_lens = ""
+    if config.adversarial_prompt:
+        mirror_lens = (
+            "\n\n## Canonical Checkup Mirror Lens\n"
+            f"{config.adversarial_prompt}\n"
+            "This is a non-authoritative mirror/fallback review. Use the same "
+            "criteria as canonical `pdd checkup`; do not introduce new merge "
+            "criteria, and report only verifiable blockers or material risks.\n"
+        )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
@@ -3911,7 +3952,7 @@ Architecture context:
 
 Prior normalized findings:
 {prior_findings}
-{verify_block}
+{verify_block}{mirror_lens}
 {fix_block}{static_analysis_block}{companion_block}
 
 Return ONLY JSON with this shape:

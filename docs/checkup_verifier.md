@@ -36,39 +36,34 @@ pdd checkup --pr https://github.com/org/repo/pull/123
 
 These modes are unchanged from the agentic checkup workflow.
 
-### Agentic review loop (`--agentic-review-loop`)
+### Agentic mirror artifact (`--agentic-review-loop`)
 
-Standalone adversarial PR checkup with dual independent reviewers, optional
-bounded fixer, and a structured machine-readable verdict:
+Fallback/mirror PR checkup for hosted consumption. Canonical `pdd checkup`
+or `pdd checkup --final-gate` remains the authoritative verdict; the agentic
+mirror only runs after a canonical pass or an unknown canonical infrastructure
+failure (provider/parser/timeout/malformed output). It never overrides a
+canonical content failure.
 
 ```bash
-# Fix mode
-pdd checkup --pr <PR_URL> \
+# Canonical final gate plus non-authoritative mirror artifact
+pdd checkup --pr <PR_URL> --issue <ISSUE_URL> \
+  --final-gate \
   --agentic-review-loop \
   --reviewers codex:/review,claude:/code-review \
-  --adversarial-prompt "find reasons not to merge the PR" \
-  --fixer claude \
-  --fresh-final-review codex \
-  --max-review-rounds 5 --max-review-minutes 50 --max-review-cost 15.00 \
-  --json
+  --adversarial-prompt "mirror canonical checkup criteria only"
 
-# Report-only mode (no file edits, commits, or pushes)
+# Report-only mirror around canonical PR merit review
 pdd checkup --pr <PR_URL> \
   --agentic-review-loop \
   --reviewers codex:/review,claude:/code-review \
-  --no-fix \
-  --adversarial-prompt "find reasons not to merge the PR" \
-  --fresh-final-review codex \
-  --json
+  --no-fix
 ```
 
-Emits a bounded/redacted `pdd.checkup.agentic.v1` JSON artifact containing
-Layer 1 gate results, structured `findings[]`, `fix_attempts[]`,
-`validation_after_fix`, `fresh_final_review`, `verdict`, and `budget` blocks.
-The artifact is written to stdout (with `--json`) and to
-`./pdd-checkup-agentic-{pr_number}.json` for hosted (`pdd_cloud`) consumption.
-Exit 0 only when verdict is `pass`; non-zero for `failed`, `needs_human`,
-`error`, `timeout`, or `budget_exhausted` outcomes.
-
-The `pdd.checkup.final_gate.v1` artifact is also emitted alongside for
-backwards-compatible hosted consumers.
+The command emits bounded/redacted `pdd.checkup.agentic.v1` JSON to stdout
+and writes the same artifact to `./pdd-checkup-agentic-{pr_number}.json`.
+Stable statuses are:
+`canonical_pass_agentic_mirror_clean`,
+`canonical_pass_agentic_mirror_blocking`,
+`canonical_unknown_agentic_fallback_pass`,
+`canonical_unknown_agentic_fallback_blocking`, and
+`canonical_fail_agentic_not_authoritative`.

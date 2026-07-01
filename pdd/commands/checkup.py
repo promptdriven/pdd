@@ -171,6 +171,37 @@ def _forward_subcommand_json(
     help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
 )
 @click.option(
+    "--agentic-review-loop",
+    "agentic_review_loop",
+    is_flag=True,
+    default=False,
+    help=(
+        "PR mode fallback/mirror: run canonical checkup/final-gate as the "
+        "authoritative source of truth, then emit a non-authoritative "
+        "agentic mirror artifact for hosted checkup consumption."
+    ),
+)
+@click.option(
+    "--adversarial-prompt",
+    "adversarial_prompt",
+    type=str,
+    default=None,
+    help=(
+        "Optional canonical-checkup mirror instruction for --agentic-review-loop. "
+        "It constrains mirror reviewers and never creates a new merge criterion."
+    ),
+)
+@click.option(
+    "--fresh-final-review",
+    "fresh_final_review_role",
+    type=str,
+    default=None,
+    help=(
+        "Compatibility hook for --agentic-review-loop callers. The canonical "
+        "final gate still owns fresh final review semantics."
+    ),
+)
+@click.option(
     "--final-gate",
     "final_gate",
     is_flag=True,
@@ -517,6 +548,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     test_scope: str,
     full_suite_source: str,
     review_loop: bool,
+    agentic_review_loop: bool,
+    adversarial_prompt: Optional[str],
+    fresh_final_review_role: Optional[str],
     final_gate: bool,
     review_only: bool,
     reviewers: str,
@@ -1050,6 +1084,30 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # ``--issue`` (no ``--pr``) is rejected — a standalone issue belongs in
     # default issue mode as the positional TARGET, not the ``--pr`` companion.
     pr_mode = pr_url is not None
+    if adversarial_prompt is not None and not agentic_review_loop:
+        raise click.BadParameter(
+            "--adversarial-prompt is only valid with --agentic-review-loop.",
+            param_hint="'--adversarial-prompt'",
+        )
+    if fresh_final_review_role is not None and not agentic_review_loop:
+        raise click.BadParameter(
+            "--fresh-final-review is only valid with --agentic-review-loop.",
+            param_hint="'--fresh-final-review'",
+        )
+    if agentic_review_loop:
+        if not pr_mode:
+            raise click.BadParameter(
+                "--agentic-review-loop requires --pr.",
+                param_hint="'--agentic-review-loop'",
+            )
+        if review_loop:
+            raise click.BadParameter(
+                "--agentic-review-loop owns its mirror review pass; do not also "
+                "pass --review-loop.",
+                param_hint="'--agentic-review-loop'",
+            )
+        # The artifact contract is machine-readable JSON for hosted checkup.
+        as_json = True
     if test_scope == "targeted" and not pr_mode:
         raise click.BadParameter(
             "--test-scope targeted requires --pr (PR mode).",
@@ -1134,9 +1192,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--start-step applies to the legacy checkup workflow, not --review-loop.",
             param_hint="'--start-step'",
         )
-    if review_only and not review_loop:
+    if review_only and not (review_loop or agentic_review_loop):
         raise click.BadParameter(
-            "--review-only requires --review-loop.",
+            "--review-only requires --review-loop or --agentic-review-loop.",
             param_hint="'--review-only'",
         )
     if review_loop and no_fix and not review_only:
@@ -1147,19 +1205,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # The final gate runs the review loop as Layer 2, so its budget knobs must
     # be valid there too — otherwise the canonical gate could terminate via a
     # runtime cap path (e.g. "Max review rounds reached: 0").
-    if (review_loop or final_gate) and max_review_rounds < 1:
+    if (review_loop or final_gate or agentic_review_loop) and max_review_rounds < 1:
         raise click.BadParameter(
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",
         )
-    if (review_loop or final_gate) and (
+    if (review_loop or final_gate or agentic_review_loop) and (
         not math.isfinite(max_review_cost) or max_review_cost <= 0
     ):
         raise click.BadParameter(
             "--max-review-cost must be a finite value > 0.",
             param_hint="'--max-review-cost'",
         )
-    if (review_loop or final_gate) and (
+    if (review_loop or final_gate or agentic_review_loop) and (
         not math.isfinite(max_review_minutes) or max_review_minutes <= 0
     ):
         raise click.BadParameter(
@@ -1250,6 +1308,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
+            agentic_review_loop=agentic_review_loop,
+            adversarial_prompt=adversarial_prompt,
+            fresh_final_review_role=fresh_final_review_role,
+            as_json=as_json,
             final_gate=final_gate,
             review_only=review_only,
             reviewers=reviewers,
@@ -1276,7 +1338,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             max_prompt_repair_seconds=effective_max_repair_seconds,
         )
 
-        if not quiet:
+        if not quiet and agentic_review_loop and as_json:
+            click.echo(message)
+        elif not quiet:
             status = "Success" if success else "Failed"
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")

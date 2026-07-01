@@ -582,6 +582,114 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context",
+        return_value="PR context for mirror",
+    )
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root")
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_agentic_review_loop_wraps_canonical_then_non_authoritative_mirror(
+        self,
+        mock_gh_cli,
+        mock_orchestrator,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        tmp_path,
+    ):
+        import pdd.agentic_checkup as mod
+
+        mock_find_root.return_value = tmp_path
+        mock_orchestrator.return_value = (True, "canonical passed", 0.20, "codex")
+        mock_review_loop.return_value = (True, "mirror report", 0.10, "codex")
+        mirror_state = {
+            "reviewer_status": {"codex": "clean"},
+            "fresh_final_status": "clean",
+            "findings": [],
+        }
+
+        with patch.object(mod, "load_final_state", return_value=mirror_state), patch.object(
+            mod, "clear_final_state"
+        ):
+            success, message, cost, model = run_agentic_checkup(
+                None,
+                quiet=True,
+                pr_url="https://github.com/owner/repo/pull/2",
+                agentic_review_loop=True,
+                reviewers="codex:/review,claude:/code-review",
+                adversarial_prompt="mirror canonical checkup only",
+                as_json=True,
+                use_github_state=False,
+            )
+
+        artifact = json.loads(message)
+        assert success is True
+        assert cost == pytest.approx(0.30)
+        assert model == "codex"
+        assert artifact["status"] == "canonical_pass_agentic_mirror_clean"
+        assert artifact["agentic_mirror"]["authoritative"] is False
+        assert artifact["agentic_mirror"]["reviewers"] == [
+            {"name": "codex", "command": "/review"},
+            {"name": "claude", "command": "/code-review"},
+        ]
+        assert (tmp_path / "pdd-checkup-agentic-2.json").exists()
+
+        config = mock_review_loop.call_args.kwargs["config"]
+        context = mock_review_loop.call_args.kwargs["context"]
+        assert config.review_only is True
+        assert config.adversarial_prompt == "mirror canonical checkup only"
+        assert context.issue_number == 0
+        assert mock_review_loop.call_args.kwargs["use_github_state"] is False
+
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch("pdd.agentic_checkup._fetch_pr_context")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root")
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_agentic_review_loop_does_not_mirror_over_canonical_content_failure(
+        self,
+        mock_gh_cli,
+        mock_orchestrator,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        tmp_path,
+    ):
+        mock_find_root.return_value = tmp_path
+        mock_orchestrator.return_value = (False, "tests failed", 0.20, "codex")
+
+        success, message, cost, model = run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            as_json=True,
+            use_github_state=False,
+        )
+
+        artifact = json.loads(message)
+        assert success is False
+        assert cost == 0.20
+        assert artifact["status"] == "canonical_fail_agentic_not_authoritative"
+        assert artifact["verdict"]["decision"] == "fail"
+        mock_review_loop.assert_not_called()
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(
