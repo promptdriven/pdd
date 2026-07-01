@@ -4730,6 +4730,61 @@ def test_step4_route_redirect_stops_change_workflow(mock_dependencies, temp_cwd)
     assert mocks["run"].call_count == 4
 
 
+def test_step4_source_truth_route_continues_end_to_end_with_negated_redirect_marker(
+    mock_dependencies,
+    temp_cwd,
+):
+    """A source-truth change mentioning no redirect needed must reach PR creation."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, **kwargs):
+        if label == "step4":
+            return (
+                True,
+                "<step_report>\n"
+                "## Step 4: Requirements Clarity Check\n"
+                "\n"
+                "**Status:** Requirements Clear\n"
+                "\n"
+                "No ROUTE_REDIRECT: bug_fix is needed because this is a "
+                "source-truth requirement with no current runtime failure.\n"
+                "</step_report>",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/source_truth_python.prompt", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/o/r/pull/901", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/902",
+        issue_content="Add a new prompt requirement so future generated code supports JSON output.",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=902,
+        issue_author="user",
+        issue_title="Add source truth requirement",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    labels = [call.kwargs.get("label") for call in mocks["run"].call_args_list]
+    assert success is True
+    assert "PR Created: https://github.com/o/r/pull/901" in msg
+    assert "prompts/source_truth_python.prompt" in files
+    assert "step13" in labels
+
+
 def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):
     """When step 4 stops for clarification, last_completed_step should be 3 (step-1)."""
     mocks = mock_dependencies
