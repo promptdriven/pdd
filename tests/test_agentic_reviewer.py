@@ -13,7 +13,8 @@ Test plan (one section per spec requirement):
       pyproject.toml ([project.dependencies]), go.mod (require block); skips
       missing files silently
  R5.  LLM classifier call: invoked with strength=0.0, temperature=0.1,
-      output_schema; exception is swallowed (not propagated)
+      output_schema; target is a language string; exception is swallowed and
+      produces no agentic findings
  R6.  _extract_last_json: iterates from every [ and { position, captures arrays
       AND objects, returns last valid one; returns None when no JSON present
  R7.  Finding normalization: every finding has source, severity, confidence,
@@ -21,8 +22,8 @@ Test plan (one section per spec requirement):
       agent_steps; breadcrumb format ("Read file X", "Found symbol Y at line N",
       "Followed import to Z")
  R8.  Insufficient-evidence sentinel: returned when observed_evidence==0 or all
-      confidence<0.5; never return [] when artifacts were inspected; sentinel
-      schema matches spec
+      confidence<0.5; classifier outage/invalid JSON returns [] so it does not
+      become a user-visible policy finding
  R9.  Path safety: _resolve_local_import rejects paths escaping project root;
       UnicodeDecodeError files skipped silently
  R10. _detect_language: py→python, ts/tsx→typescript, js/jsx/cjs/mjs→javascript,
@@ -32,7 +33,8 @@ Test plan (one section per spec requirement):
  R12. _build_classifier_input: returns dict with keys contract_effects, target,
       observed_evidence, deterministic_findings
  R13. Regression: pyproject.toml regex was broken (?(: vs (?:) — verify parse works
- R14. Regression: exception handler returned [] not sentinel when artifacts inspected
+ R14. Regression: wrapper following reaches sibling project directories and
+      exception handler returns [] for classifier failures after evidence collection
 """
 from __future__ import annotations
 
@@ -197,6 +199,18 @@ class TestExtractSymbols:
         logs = [s for s in syms if s["kind"] == "log"]
         assert len(logs) >= 1
 
+    def test_chained_method_call_extracted(self):
+        code = "await notificationClient.sendRefundNotice(refund.customer_email);\n"
+        syms = _extract_symbols(Path("x.ts"), code)
+        calls = [s for s in syms if s["kind"] == "call"]
+        assert any("notificationClient.sendRefundNotice(" in s["symbol"] for s in calls)
+
+    def test_nested_chained_method_call_extracted(self):
+        code = "return resend.emails.send({ to: email });\n"
+        syms = _extract_symbols(Path("x.ts"), code)
+        calls = [s for s in syms if s["kind"] == "call"]
+        assert any("resend.emails.send(" in s["symbol"] for s in calls)
+
     def test_symbol_dict_keys(self):
         code = "import os\n"
         syms = _extract_symbols(Path("x.py"), code)
@@ -282,7 +296,7 @@ class TestBuildClassifierInput:
 
     def test_target_language(self):
         result = _build_classifier_input([], [], "typescript")
-        assert result["target"]["language"] == "typescript"
+        assert result["target"] == "typescript"
 
     def test_effects_and_evidence_passed_through(self):
         effects = [{"action": "write", "resource": "fs"}]
@@ -306,6 +320,7 @@ class TestBuildClassifierInput:
 # ---------------------------------------------------------------------------
 
 from pdd.agentic_reviewer import _resolve_local_import
+from pdd.agentic_reviewer import _derive_project_root
 
 
 class TestResolveLocalImport:
@@ -374,6 +389,19 @@ class TestResolveLocalImport:
         target.write_text("")
         result = _resolve_local_import(src, "../shared", tmp_path)
         assert result == target
+
+    def test_derive_project_root_lifts_src_directory(self, tmp_path):
+        src = tmp_path / "src" / "billing.ts"
+        src.parent.mkdir()
+        src.write_text("")
+        assert _derive_project_root([src]) == tmp_path
+
+    def test_derive_project_root_prefers_manifest_ancestor(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}")
+        src = tmp_path / "packages" / "billing" / "src" / "billing.ts"
+        src.parent.mkdir(parents=True)
+        src.write_text("")
+        assert _derive_project_root([src]) == tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -591,8 +619,8 @@ class TestRunAgenticReviewer:
         assert result[0]["confidence"] == 0.0
         assert result[0]["source"] == "agentic_reviewer"
 
-    def test_llm_exception_returns_sentinel_not_empty(self, tmp_path):
-        """Regression: exception handler must return sentinel not [] (req 8)."""
+    def test_llm_exception_returns_empty_findings(self, tmp_path):
+        """Classifier failures should not become user-visible findings."""
         target = tmp_path / "app.py"
         target.write_text("import os\n")
         with patch("pdd.agentic_reviewer.llm_invoke", side_effect=RuntimeError("LLM down")):
@@ -600,10 +628,7 @@ class TestRunAgenticReviewer:
                 contract_effects=[{"action": "write", "resource": "fs"}],
                 artifact_paths=[str(target)],
             )
-        # Must NOT return [] when artifacts were inspected
-        assert len(result) == 1
-        assert result[0]["source"] == "agentic_reviewer"
-        assert result[0]["judgment"] == "unknown"
+        assert result == []
 
     def test_llm_exception_not_propagated(self, tmp_path):
         target = tmp_path / "app.py"
@@ -628,6 +653,7 @@ class TestRunAgenticReviewer:
         call_kwargs = mock_llm.call_args
         kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
         assert kwargs.get("strength") == 0.0
+        assert kwargs["input_json"]["target"] == "python"
 
     def test_llm_invoked_with_temperature_01(self, tmp_path):
         target = tmp_path / "app.py"
@@ -750,6 +776,17 @@ class TestRunAgenticReviewer:
         assert len(result) >= 1
         assert result[0]["source"] == "agentic_reviewer"
 
+    def test_invalid_llm_json_returns_empty_findings(self, tmp_path):
+        """Invalid classifier output should not emit an unknown warning finding."""
+        target = tmp_path / "app.py"
+        target.write_text("import os\n")
+        with patch("pdd.agentic_reviewer.llm_invoke", return_value={"result": "not json"}):
+            result = run_agentic_reviewer(
+                contract_effects=[{"action": "read", "resource": "env"}],
+                artifact_paths=[str(target)],
+            )
+        assert result == []
+
     def test_path_escape_in_import_rejected(self, tmp_path):
         """Import to path outside project root must be rejected (req 9)."""
         src = tmp_path / "app.py"
@@ -802,6 +839,52 @@ class TestRunAgenticReviewer:
         assert result[0]["effect"]["action"] == "write"
         assert result[0]["effect"]["resource"] == "filesystem"
 
+    def test_sibling_wrapper_chain_evidence_is_collected(self, tmp_path):
+        """Acceptance workflow: src target import follows sibling clients wrapper."""
+        billing = tmp_path / "src" / "billing.ts"
+        notification = tmp_path / "clients" / "notificationClient.ts"
+        billing.parent.mkdir()
+        notification.parent.mkdir()
+        billing.write_text(
+            'import { notificationClient } from "../clients/notificationClient";\n\n'
+            "export async function refundPayment(refund) {\n"
+            "  await notificationClient.sendRefundNotice(refund.customer_email);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        notification.write_text(
+            'import { Resend } from "resend";\n'
+            "const resend = new Resend(process.env.RESEND_API_KEY);\n"
+            "export const notificationClient = {\n"
+            "  async sendRefundNotice(email: string) {\n"
+            "    return resend.emails.send({ to: email });\n"
+            "  }\n"
+            "};\n",
+            encoding="utf-8",
+        )
+        llm_findings = [{
+            "action": "send",
+            "resource": "email",
+            "judgment": "likely_violation",
+            "confidence": 0.93,
+            "message": "Wrapper resolves to resend email sending.",
+        }]
+        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result(llm_findings)) as mock_llm:
+            result = run_agentic_reviewer(
+                contract_effects=[{"modal": "MUST_NOT", "action": "send", "resource": "email"}],
+                artifact_paths=[str(billing)],
+                bounds={"max_follow_depth": 2},
+            )
+
+        evidence = mock_llm.call_args.kwargs["input_json"]["observed_evidence"]
+        excerpts = [item["excerpt"] for item in evidence]
+        assert any("notificationClient.sendRefundNotice" in excerpt for excerpt in excerpts)
+        assert any("resend.emails.send" in excerpt for excerpt in excerpts)
+        assert result[0]["confidence"] == 0.93
+        result_excerpts = [item["excerpt"] for item in result[0]["evidence"]]
+        assert any("notificationClient.sendRefundNotice" in excerpt for excerpt in result_excerpts)
+        assert any("resend.emails.send" in excerpt for excerpt in result_excerpts)
+
 
 # ---------------------------------------------------------------------------
 # R13: Regression — pyproject.toml regex fix
@@ -820,12 +903,12 @@ class TestPyprojectTomlRegression:
 
 
 # ---------------------------------------------------------------------------
-# R14: Regression — exception handler returned [] not sentinel
+# R14: Regression — wrapper root and classifier failure behavior
 # ---------------------------------------------------------------------------
 
 class TestExceptionHandlerRegression:
-    def test_exception_handler_never_returns_empty_list_when_artifacts_inspected(self, tmp_path):
-        """Regression: exception handler must return sentinel not [] per req 8."""
+    def test_exception_handler_returns_empty_list_when_classifier_fails(self, tmp_path):
+        """Regression: classifier failures after evidence collection return no findings."""
         target = tmp_path / "app.py"
         target.write_text("import os\nos.environ.get('KEY')\n")
         with patch("pdd.agentic_reviewer.llm_invoke", side_effect=Exception("boom")):
@@ -833,10 +916,4 @@ class TestExceptionHandlerRegression:
                 contract_effects=[{"action": "read", "resource": "env"}],
                 artifact_paths=[str(target)],
             )
-        # Must NOT be []
-        assert result != []
-        # Must be the sentinel
-        assert len(result) == 1
-        assert result[0]["source"] == "agentic_reviewer"
-        assert result[0]["judgment"] == "unknown"
-        assert result[0]["severity"] == "warning"
+        assert result == []

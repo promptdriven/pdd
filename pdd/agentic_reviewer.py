@@ -32,6 +32,7 @@ def _extract_symbols(path: Path, content: str) -> List[Dict[str, Any]]:
     # Combined regexes for different kinds of operations
     patterns = {
         "import": re.compile(r"^(?:import|from)\s+.*|require\s*\("),
+        "call": re.compile(r"\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*\("),
         "env": re.compile(r"process\.env\.[a-zA-Z0-9_]+|os\.environ(?:\.get|\[)"),
         "write": re.compile(r"open\s*\(\s*[^,]+,\s*['\"]w['\"]|fs\.write(?:FileSync|File)?\s*\("),
         "network": re.compile(r"fetch\s*\(|requests\.(?:get|post|put|delete|patch)|axios|urllib"),
@@ -69,8 +70,9 @@ def _resolve_local_import(current_file: Path, import_path: str, project_root: Pa
     # Path safety: reject if it escapes project root
     try:
         project_root_resolved = project_root.resolve()
-        if not str(resolved_base).startswith(str(project_root_resolved)):
-            return None
+        resolved_base.relative_to(project_root_resolved)
+    except ValueError:
+        return None
     except Exception:
         return None
 
@@ -85,12 +87,35 @@ def _resolve_local_import(current_file: Path, import_path: str, project_root: Pa
         resolved_base / "index.js",
         resolved_base / "__init__.py"
     ]
-    
+
     for candidate in candidates:
+        try:
+            candidate.resolve().relative_to(project_root_resolved)
+        except (ValueError, OSError):
+            return None
         if candidate.is_file():
             return candidate
             
     return None
+
+def _derive_project_root(artifact_paths: List[Union[str, Path]]) -> Path:
+    """Derive a bounded local project root for import following and manifests."""
+    resolved_paths = [Path(p).resolve() for p in artifact_paths]
+    existing_dirs = [p.parent if p.is_file() else p for p in resolved_paths]
+    common = Path(os.path.commonpath([str(p) for p in existing_dirs]))
+
+    root_markers = ("package.json", "pyproject.toml", "requirements.txt", "go.mod", ".git")
+    cursor = common
+    while True:
+        if any((cursor / marker).exists() for marker in root_markers):
+            return cursor
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+
+    if common.name in {"src", "lib", "app", "tests", "test"} and common.parent != common:
+        return common.parent
+    return common
 
 def _inspect_manifests(project_root: Path) -> Dict[str, List[str]]:
     """Read dependency manifests and return a mapping of manager to package name lists."""
@@ -162,9 +187,7 @@ def _build_classifier_input(contract_effects: List[Dict], observed_evidence: Lis
     """Build the structured JSON input for the LLM classifier."""
     return {
         "contract_effects": contract_effects,
-        "target": {
-            "language": target_language
-        },
+        "target": target_language,
         "observed_evidence": observed_evidence,
         "deterministic_findings": []
     }
@@ -220,7 +243,7 @@ def run_agentic_reviewer(
     if not artifact_paths:
         return []
 
-    project_root = Path(artifact_paths[0]).parent.resolve()
+    project_root = _derive_project_root(artifact_paths)
     
     visited_files: Set[str] = set()
     queue: List[Tuple[Path, int]] = [(Path(p).resolve(), 0) for p in artifact_paths]
@@ -387,14 +410,4 @@ def run_agentic_reviewer(
     except Exception as e:
         if console:
             console.print(f"[yellow]LLM classifier call failed or was invalid: {e}[/yellow]")
-        # Per spec req 8: never return empty list when artifacts were inspected.
-        # Emit no LLM-derived findings but return the insufficient-evidence sentinel.
-        return [{
-            "judgment": "unknown",
-            "confidence": 0.0,
-            "source": "agentic_reviewer",
-            "message": "Insufficient evidence to determine effect",
-            "severity": "warning",
-            "evidence": [],
-            "agent_steps": agent_steps
-        }]
+        return []

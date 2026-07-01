@@ -5,7 +5,8 @@ Demonstrates:
   - How to call run_agentic_reviewer with contract effects and artifact paths
   - The structure of the returned findings list
   - Using bounds to limit file traversal
-  - The insufficient-evidence sentinel returned when LLM is unavailable
+  - The insufficient-evidence sentinel returned when no local evidence is found
+  - Classifier failures returning no agentic findings
   - Helper functions: _detect_language, _extract_symbols, _inspect_manifests,
     _build_classifier_input, _extract_last_json, _resolve_local_import
 
@@ -124,7 +125,7 @@ def demo_build_classifier_input() -> None:
     ]
     result = _build_classifier_input(contract_effects, observed_evidence, "python")
     print(f"  Keys: {list(result.keys())}")
-    print(f"  target.language: {result['target']['language']!r}")
+    print(f"  target: {result['target']!r}")
     print(f"  contract_effects count: {len(result['contract_effects'])}")
     print(f"  observed_evidence count: {len(result['observed_evidence'])}")
     print(f"  deterministic_findings: {result['deterministic_findings']}")
