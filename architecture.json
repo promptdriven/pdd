@@ -1,5 +1,51 @@
 [
   {
+    "reason": "Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.",
+    "description": "Deterministic (no-LLM) emitter that collects the executable @pytest.mark.story regression suite via pytest --collect-only, joins it with story->test traceability (#1699) and gate pass/stale verdicts (#1702), computes story count, story-backed test count, coverage %, and pass-rate with zero-story guards, and writes a schema-versioned JSON artifact under .pdd/evidence/stories/ (latest + per-run snapshot), degrading to status=not_applicable when upstream pieces are absent.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "user_story_tests_python.prompt",
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "story_coverage_python.prompt",
+    "filepath": "pdd/story_coverage.py",
+    "tags": [
+      "story",
+      "evidence",
+      "checkup",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "compute_story_coverage",
+            "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> StoryCoverage",
+            "returns": "StoryCoverage"
+          },
+          {
+            "name": "write_story_coverage",
+            "signature": "(coverage: StoryCoverage, project_root: Path, *, run_id: Optional[str] = None) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "format_summary_line",
+            "signature": "(coverage: StoryCoverage) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "emit_story_coverage",
+            "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None, run_id: Optional[str] = None) -> StoryCoverage",
+            "returns": "StoryCoverage"
+          }
+        ]
+      }
+    },
+    "position": null
+  },
+  {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
