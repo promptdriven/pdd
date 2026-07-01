@@ -39,6 +39,15 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
+Choose `pdd bug` before `pdd change` when an issue reports a current runtime
+symptom, even if it says the prompt or spec should be updated. Stack traces,
+failing commands, wrong CLI/API/UI output, regressions, crashes, and incorrect
+generated behavior should run through `pdd bug <issue-url>` followed by
+`pdd fix <issue-url>` (`bug → fix`) so the failure is reproduced and covered by
+a behavioral test. Use `pdd change` for explicit source-truth/spec/product
+changes with no current runtime failure to reproduce (`change → sync` after
+the source-truth change lands).
+
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
@@ -2528,6 +2537,13 @@ pdd [GLOBAL OPTIONS] split --legacy --output-sub prompts/sub_data_processing.pro
 ### 8. change
 
 Implement a change request from a GitHub issue using a 13-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
+
+Do not use `pdd change` as the first step for a reported runtime defect. If an
+issue says "the prompt should be updated because the generated CLI crashes" or
+includes a stack trace, failing command, wrong runtime output, or regression,
+start with `pdd bug <issue-url>` and then run `pdd fix <issue-url>`. `pdd change`
+is for source-truth/spec/product changes that do not require reproducing a
+current failure.
 
 **Agentic Mode (default):**
 ```
