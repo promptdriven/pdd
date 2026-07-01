@@ -221,7 +221,7 @@ jobs:
       #                                with vars.RELEASE_VIDEO_PROJECT_ID set to
       #                                that same authorized fixed project.
       #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
-      #                                CLI. Defaults to @promptdriven/pds@0.1.6
+      #                                CLI. Defaults to @promptdriven/pds@0.1.7
       #                                so release-video recovery/status support
       #                                is available even when the repo variable
       #                                is unset.
@@ -244,7 +244,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
           PDS_API_URL: ${{ vars.PDS_API_URL || 'https://video.promptdriven.ai' }}
-          PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.6' }}
+          PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.7' }}
           PDS_CLI: ${{ vars.PDS_CLI || 'pds --timeout 120s' }}
           CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}
           CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}

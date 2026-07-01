@@ -103,8 +103,9 @@ RELEASE_VIDEO_METADATA_CONFLICT ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
+RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
 CLAUDE_CLI ?= claude
-PDS_CLI ?= npx -y @promptdriven/pds@0.1.6 --timeout 120s
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.7 --timeout 120s
 PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
 SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
@@ -775,6 +776,7 @@ check-release-video-config:
 	python scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
 
 check-release-claude-oauth-config:
@@ -865,6 +867,7 @@ release-video:
 		--claude-cli "$(CLAUDE_CLI)" \
 		--script-path "$(RELEASE_VIDEO_SCRIPT_PATH)" \
 		--pds-cli "$(PDS_CLI)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)" \
 		--preset "$(RELEASE_VIDEO_PRESET)" \
 		--target "$(RELEASE_VIDEO_TARGET)" \
