@@ -742,6 +742,7 @@ class TestIssueUnitFixPreflight:
         mock_verify.side_effect = [
             (False, "tests/test_widget.py: 1 failure"),
             (True, "tests/test_widget.py: 1 passed"),
+            (True, "tests/test_widget.py: 1 passed"),
         ]
         mock_resolve.return_value = [
             _IssueUnitFixTarget(
@@ -781,6 +782,59 @@ class TestIssueUnitFixPreflight:
     @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
     @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
     @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_unit_fix_trusts_workspace_pytest_over_fix_main_temp_validation(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.side_effect = [
+            (False, "tests/test_widget.py: 1 failure"),
+            (True, "tests/test_widget.py: 1 passed in workspace"),
+            (True, "tests/test_widget.py: 1 passed in final verification"),
+        ]
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program=None,
+            )
+        ]
+        mock_fix_main.return_value = (False, "", "fixed code", 1, 0.42, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["pdd/widget.py"],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True
+        assert "pdd-bug unit tests passed" in msg
+        assert cost == 0.42
+        assert model == "claude"
+        assert files == ["pdd/widget.py"]
+        mock_run.assert_not_called()
+        mock_fix_main.assert_called_once()
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
     def test_unit_fix_failure_does_not_fall_through_to_step8(
         self,
         mock_verify,
@@ -804,7 +858,7 @@ class TestIssueUnitFixPreflight:
                 verification_program=None,
             )
         ]
-        mock_fix_main.return_value = (False, "", "", 3, 0.75, "claude")
+        mock_fix_main.return_value = (False, "", "", 1, 0.25, "claude")
 
         with patch(
             "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
@@ -823,7 +877,7 @@ class TestIssueUnitFixPreflight:
         assert model == "claude"
         assert files == []
         mock_run.assert_not_called()
-        mock_fix_main.assert_called_once()
+        assert mock_fix_main.call_count == 3
 
 
 class TestNotABugEarlyExit:

@@ -1506,57 +1506,91 @@ def _run_issue_unit_fix_preflight(
 
     for target in targets:
         log_path = _unit_fix_log_path(cwd, issue_number, target.test_file)
-        log_path.write_text(initial_output, encoding="utf-8")
         loop = bool(target.verification_program)
+        retry_limit = 1 if loop else 3
+        target_attempts = 0
+        target_output = initial_output
+        target_fixed = False
 
-        try:
-            fixed, _fixed_test, _fixed_code, attempts, cost, model = fix_main(
-                ctx=ctx,
-                prompt_file=target.prompt_file,
-                code_file=target.code_file,
-                unit_test_file=target.test_file,
-                error_file=str(log_path),
-                output_test=target.test_file,
-                output_code=target.code_file,
-                output_results=str(log_path),
-                loop=loop,
-                verification_program=target.verification_program,
-                max_attempts=3,
-                budget=5.0,
-                auto_submit=False,
-                agentic_fallback=True,
-                strength=None,
-                temperature=None,
-                protect_tests=True,
-                failure_aware_retries=True,
-                compress_test_context=None,
-                context_compression=None,
-                compression_fallback=None,
+        for preflight_attempt in range(1, retry_limit + 1):
+            log_path.write_text(target_output, encoding="utf-8")
+
+            try:
+                fixed, _fixed_test, _fixed_code, attempts, cost, model = fix_main(
+                    ctx=ctx,
+                    prompt_file=target.prompt_file,
+                    code_file=target.code_file,
+                    unit_test_file=target.test_file,
+                    error_file=str(log_path),
+                    output_test=target.test_file,
+                    output_code=target.code_file,
+                    output_results=str(log_path),
+                    loop=loop,
+                    verification_program=target.verification_program,
+                    max_attempts=3 if loop else 1,
+                    budget=5.0,
+                    auto_submit=False,
+                    agentic_fallback=True,
+                    strength=None,
+                    temperature=None,
+                    protect_tests=True,
+                    failure_aware_retries=True,
+                    compress_test_context=None,
+                    context_compression=None,
+                    compression_fallback=None,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                return _IssueUnitFixResult(
+                    attempted=True,
+                    success=False,
+                    message=(
+                        "Unit/code pdd fix failed before E2E workflow: "
+                        f"{target.test_file} -> {target.code_file}: {exc}"
+                    ),
+                    cost=total_cost,
+                    model=model_used,
+                    changed_files=_detect_changed_files(cwd, initial_file_hashes),
+                )
+
+            total_cost += cost
+            model_used = model or model_used
+            target_attempts += attempts or 1
+
+            # The single-pass fix validator runs copied temp files, which can be
+            # wrong for package-style tests that import the real workspace module.
+            # Trust the same independent pytest path used by the orchestrator.
+            target_passed, target_output = _verify_tests_independently([target.test_file], cwd)
+            if target_passed:
+                target_fixed = True
+                summary_lines.append(
+                    f"{target.test_file} -> {target.code_file}: "
+                    f"fixed ({target_attempts} attempt(s))"
+                )
+                break
+
+            if not quiet and preflight_attempt < retry_limit:
+                console.print(
+                    "[yellow]Issue unit fix attempt "
+                    f"{preflight_attempt}/{retry_limit} did not pass "
+                    f"{target.test_file}; retrying with fresh pytest output.[/yellow]"
+                )
+
+            if fixed and loop:
+                break
+
+        if not target_fixed:
+            summary_lines.append(
+                f"{target.test_file} -> {target.code_file}: "
+                f"failed ({target_attempts} attempt(s))"
             )
-        except Exception as exc:  # pylint: disable=broad-except
             return _IssueUnitFixResult(
                 attempted=True,
                 success=False,
                 message=(
-                    "Unit/code pdd fix failed before E2E workflow: "
-                    f"{target.test_file} -> {target.code_file}: {exc}"
+                    "Unit/code pdd fix failed before E2E workflow.\n"
+                    + "\n".join(summary_lines)
+                    + f"\n{target_output}"
                 ),
-                cost=total_cost,
-                model=model_used,
-                changed_files=_detect_changed_files(cwd, initial_file_hashes),
-            )
-
-        total_cost += cost
-        model_used = model or model_used
-        summary_lines.append(
-            f"{target.test_file} -> {target.code_file}: "
-            f"{'fixed' if fixed else 'failed'} ({attempts} attempt(s))"
-        )
-        if not fixed:
-            return _IssueUnitFixResult(
-                attempted=True,
-                success=False,
-                message="Unit/code pdd fix failed before E2E workflow.\n" + "\n".join(summary_lines),
                 cost=total_cost,
                 model=model_used,
                 changed_files=_detect_changed_files(cwd, initial_file_hashes),
