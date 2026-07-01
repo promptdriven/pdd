@@ -25,13 +25,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pdd.capability_ir import parse_capabilities_ir, EffectItem, ContractEffectIR
 
 # ---------------------------------------------------------------------------
-# Example 1: Full <capabilities> block with both MAY and MUST NOT bullets
+# Example 1: Full <capabilities> block with canonical capability phrasing
 # ---------------------------------------------------------------------------
 full_block = """<capabilities>
-- MAY read payment_records
-- MAY send email
-- MUST NOT write secrets
-- MUST NOT call external_api
+- MAY read payment records.
+- MAY write refund records.
+- MAY call the payment provider refund endpoint.
+- MAY write audit events.
+- MUST NOT send emails.
+- MUST NOT log provider secrets, bearer tokens, card PAN, or CVV.
 </capabilities>"""
 
 result1 = parse_capabilities_ir(full_block)
@@ -43,11 +45,13 @@ for item in result1.effects:
 print()
 
 assert result1.capabilities_present is True
-assert result1.effect_count == 4
+assert result1.effect_count == 6
 assert result1.effects[0] == EffectItem(modal='MAY', action='read', resource='payment_records')
-assert result1.effects[1] == EffectItem(modal='MAY', action='send', resource='email')
-assert result1.effects[2] == EffectItem(modal='MUST_NOT', action='write', resource='secrets')
-assert result1.effects[3] == EffectItem(modal='MUST_NOT', action='call', resource='external_api')
+assert result1.effects[1] == EffectItem(modal='MAY', action='write', resource='refund_records')
+assert result1.effects[2] == EffectItem(modal='MAY', action='call', resource='payment_provider_refund_endpoint')
+assert result1.effects[3] == EffectItem(modal='MAY', action='write', resource='audit_events')
+assert result1.effects[4] == EffectItem(modal='MUST_NOT', action='send', resource='email')
+assert result1.effects[5] == EffectItem(modal='MUST_NOT', action='log', resource='secrets')
 
 # ---------------------------------------------------------------------------
 # Example 2: Plain inner text (no XML wrapper)
@@ -100,7 +104,7 @@ assert result3.effects[2].resource == 'database'
 assert result3.effects[3].resource == 'temp_files'
 
 # ---------------------------------------------------------------------------
-# Example 4: Empty / no-bullet input → capabilities_present=False
+# Example 4: Empty / no-bullet / full prompt without tag → capabilities_present=False
 # ---------------------------------------------------------------------------
 result4a = parse_capabilities_ir("")
 print("=== Example 4a: Empty string ===")
@@ -116,6 +120,19 @@ print(f"capabilities_present : {result4b.capabilities_present}")
 print(f"effect_count         : {result4b.effect_count}")
 print()
 assert result4b == ContractEffectIR(capabilities_present=False, effect_count=0, effects=[])
+
+full_prompt_without_tag = """# Refund module
+
+## Requirements
+- MAY read payment records.
+- MUST NOT send emails.
+"""
+result4c = parse_capabilities_ir(full_prompt_without_tag)
+print("=== Example 4c: Full prompt without <capabilities> tag ===")
+print(f"capabilities_present : {result4c.capabilities_present}")
+print(f"effect_count         : {result4c.effect_count}")
+print()
+assert result4c == ContractEffectIR(capabilities_present=False, effect_count=0, effects=[])
 
 # ---------------------------------------------------------------------------
 # Example 5: Unrecognized modal silently skipped

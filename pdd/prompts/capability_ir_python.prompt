@@ -30,17 +30,28 @@
 - Expose `parse_capabilities_ir(text: str) -> ContractEffectIR`:
   - Accept the full `<capabilities>…</capabilities>` block **or** its inner text.
   - Strip the outer XML tag if present before processing.
-  - Iterate bullet lines (lines starting with `-` or `*`); skip blank lines and `#` comment lines.
+  - If the outer tag is absent, treat the input as inner text only when every non-blank,
+    non-comment line is a bullet line. Treat single-`#` lines as parser comments, but do
+    not treat Markdown headings like `## Requirements` as comments. This preserves support
+    for standalone capability bullet lists while preventing a full prompt without a
+    `<capabilities>` tag from producing false capability effects from ordinary prose.
+  - Iterate bullet lines (lines starting with `-` or `*`); skip blank lines and single-`#`
+    comment lines.
   - Recognize exactly two modals: `MAY` (maps to `'MAY'`) and `MUST NOT` (maps to `'MUST_NOT'`).
     Silently skip lines whose leading modal is unrecognized.
   - Extract the first word after the modal as `action` (lowercased).
   - Extract and normalize the remainder as `resource`:
     - Lowercase the phrase.
     - Strip trailing period.
+    - Strip a leading article (`the`, `a`, `an`).
     - Split on the first occurrence of `, `, ` or `, or ` and `; take only the first segment.
+    - Normalize common semantic plurals:
+      - phrases containing `email` or `emails` become `email`.
+      - phrases containing `secret` or `secrets` become `secrets`.
     - Replace internal spaces with `_`.
   - Return `ContractEffectIR(capabilities_present=False, effect_count=0, effects=[])` when
-    the `<capabilities>` tag is absent or the inner text contains no parseable bullet lines.
+    the input is empty, the tagless input is not valid inner capability text, or the selected
+    inner text contains no parseable bullet lines.
   - Set `capabilities_present=True` and `effect_count=len(effects)` when at least one bullet was parsed.
 - Use **only** stdlib imports: `re`, `dataclasses`, `typing`. MUST NOT import `ast`, `pylint`,
   or any code-analysis / code-inspection library.

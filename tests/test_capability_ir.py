@@ -29,6 +29,8 @@ Requirements from spec:
  R24. Sets effect_count=len(effects) accurately
  R25. Only stdlib imports (re, dataclasses, typing) — no ast, pylint, or code-analysis libs
  R26. Exports EffectItem, ContractEffectIR, parse_capabilities_ir at module level
+ R27. Full prompts without a <capabilities> tag return the false/empty sentinel
+ R28. Canonical capability examples normalize common semantic resources predictably
 
 Regression tests:
  RG1. Non-bullet lines (no leading - or *) are skipped
@@ -133,6 +135,13 @@ class TestAcceptsPlainText:
         text = "- MAY send notifications\n- MUST NOT access secrets"
         result = parse_capabilities_ir(text)
         assert result.effect_count == 2
+
+    def test_plain_text_with_unknown_modal_still_skips_line(self):
+        """R5/R13: Tagless inner bullet text can still skip unknown modals."""
+        text = "- SHOULD log events\n- MAY read logs"
+        result = parse_capabilities_ir(text)
+        assert result.effect_count == 1
+        assert result.effects[0] == EffectItem(modal='MAY', action='read', resource='logs')
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +311,21 @@ class TestResourceNormalization:
         result = parse_capabilities_ir("- MAY write temp file storage")
         assert result.effects[0].resource == 'temp_file_storage'
 
+    def test_resource_leading_article_stripped(self):
+        """R28: Leading articles do not become part of the normalized resource."""
+        result = parse_capabilities_ir("- MAY call the payment provider refund endpoint")
+        assert result.effects[0].resource == 'payment_provider_refund_endpoint'
+
+    def test_resource_plural_email_normalized(self):
+        """R28: Email/email plural variants normalize to the semantic email resource."""
+        result = parse_capabilities_ir("- MUST NOT send emails.")
+        assert result.effects[0] == EffectItem(modal='MUST_NOT', action='send', resource='email')
+
+    def test_resource_provider_secrets_normalized(self):
+        """R28: Compound secret phrases normalize to the semantic secrets resource."""
+        result = parse_capabilities_ir("- MUST NOT log provider secrets, bearer tokens, card PAN, or CVV.")
+        assert result.effects[0] == EffectItem(modal='MUST_NOT', action='log', resource='secrets')
+
 
 # ---------------------------------------------------------------------------
 # R21/R22: Empty / no-bullets → capabilities_present=False
@@ -328,6 +352,17 @@ class TestEmptyAndNoBullets:
         """R22: Non-bullet lines only → no effects."""
         result = parse_capabilities_ir("<capabilities>\nsome text\n</capabilities>")
         assert result.capabilities_present is False
+
+    def test_full_prompt_without_capabilities_tag_ignored(self):
+        """R27: Full prompts without the capabilities tag are not parsed as inner text."""
+        text = """# Refund module
+
+## Requirements
+- MAY read payment records.
+- MUST NOT send emails.
+"""
+        result = parse_capabilities_ir(text)
+        assert result == ContractEffectIR(capabilities_present=False, effect_count=0, effects=[])
 
 
 # ---------------------------------------------------------------------------
@@ -415,3 +450,29 @@ class TestRegressions:
         assert result.effects[1] == EffectItem(modal='MAY', action='send', resource='email')
         assert result.effects[2] == EffectItem(modal='MUST_NOT', action='write', resource='secrets')
         assert result.effects[3] == EffectItem(modal='MUST_NOT', action='call', resource='external_api')
+
+    def test_epic_capabilities_sample_normalizes_expected_resources(self):
+        """R28: The epic's canonical sample produces stable target-neutral resources."""
+        text = """<capabilities>
+- MAY read payment records.
+- MAY write refund records.
+- MAY call the payment provider refund endpoint.
+- MAY write audit events.
+- MUST NOT send emails.
+- MUST NOT modify customer profile records.
+- MUST NOT read unrelated environment variables.
+- MUST NOT log provider secrets, bearer tokens, card PAN, or CVV.
+</capabilities>"""
+        result = parse_capabilities_ir(text)
+        assert result.capabilities_present is True
+        assert result.effect_count == 8
+        assert result.effects == [
+            EffectItem(modal='MAY', action='read', resource='payment_records'),
+            EffectItem(modal='MAY', action='write', resource='refund_records'),
+            EffectItem(modal='MAY', action='call', resource='payment_provider_refund_endpoint'),
+            EffectItem(modal='MAY', action='write', resource='audit_events'),
+            EffectItem(modal='MUST_NOT', action='send', resource='email'),
+            EffectItem(modal='MUST_NOT', action='modify', resource='customer_profile_records'),
+            EffectItem(modal='MUST_NOT', action='read', resource='unrelated_environment_variables'),
+            EffectItem(modal='MUST_NOT', action='log', resource='secrets'),
+        ]

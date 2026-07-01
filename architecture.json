@@ -10169,7 +10169,7 @@
     }
   },
   {
-    "reason": "Parses <capabilities> tag text into a target-neutral effect IR (EffectItem / ContractEffectIR).",
+    "reason": "Parses capabilities tag text into a target-neutral effect IR (EffectItem / ContractEffectIR).",
     "description": "Compiles raw <capabilities> block text into a language-neutral effect IR, exposing EffectItem and ContractEffectIR dataclasses independent of any Python AST or code-analysis libraries.",
     "dependencies": [],
     "priority": 249,
