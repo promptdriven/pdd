@@ -48,6 +48,105 @@ def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
     assert kwargs["blocking_severities"] == "blocker,critical,medium"
 
 
+def test_checkup_agentic_review_loop_cli_forwards_contract_options() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.25, "codex")
+
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/org/repo/pull/7",
+                "--agentic-review-loop",
+                "--no-fix",
+                "--reviewers",
+                "codex:/review,claude:/code-review",
+                "--adversarial-prompt",
+                "find reasons this PR should not merge",
+                "--fresh-final-review",
+                "claude",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0, result.output
+    kwargs = run_checkup.call_args.kwargs
+    assert kwargs["issue_url"] is None
+    assert kwargs["pr_url"] == "https://github.com/org/repo/pull/7"
+    assert kwargs["review_loop"] is True
+    assert kwargs["agentic_review_loop"] is True
+    assert kwargs["no_fix"] is True
+    assert kwargs["as_json"] is True
+    assert kwargs["reviewers"] == "codex:/review,claude:/code-review"
+    assert kwargs["adversarial_prompt"] == "find reasons this PR should not merge"
+    assert kwargs["fresh_final_review_role"] == "claude"
+
+
+def test_checkup_agentic_review_loop_supplies_default_adversarial_prompt() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+        run_checkup.return_value = (True, "clean", 0.25, "codex")
+
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr",
+                "https://github.com/org/repo/pull/7",
+                "--agentic-review-loop",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        run_checkup.call_args.kwargs["adversarial_prompt"]
+        == "find reasons not to merge the PR"
+    )
+
+
+def test_checkup_agentic_review_loop_rejects_final_gate_conflict() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        [
+            "--pr",
+            "https://github.com/org/repo/pull/7",
+            "--issue",
+            "https://github.com/org/repo/issues/6",
+            "--agentic-review-loop",
+            "--final-gate",
+        ],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 2
+    assert "--agentic-review-loop cannot be combined with --final-gate" in result.output
+
+
+def test_checkup_agentic_review_loop_scoped_flags_require_agentic_mode() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        [
+            "--pr",
+            "https://github.com/org/repo/pull/7",
+            "--issue",
+            "https://github.com/org/repo/issues/6",
+            "--adversarial-prompt",
+            "probe",
+        ],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 2
+    assert "--adversarial-prompt requires --agentic-review-loop" in result.output
+
+
 def test_checkup_review_loop_cli_forwards_same_role_flag() -> None:
     runner = CliRunner()
 

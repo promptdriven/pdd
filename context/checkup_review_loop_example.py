@@ -152,8 +152,10 @@ class ReviewLoopConfig:
     # contract.
     allow_same_reviewer_fixer: bool = False
     # APPENDED: agentic-review-loop knobs — issue #1788
+    no_fix: bool = False
     adversarial_prompt: Optional[str] = None
     agentic_mode: bool = False
+    reviewer_commands: Dict[str, str] = field(default_factory=dict)
     fresh_final_review_role: Optional[str] = None
 
 

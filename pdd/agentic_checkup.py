@@ -45,6 +45,7 @@ from .checkup_review_loop import (
     ReviewLoopContext,
     clear_final_state,
     load_final_state,
+    parse_reviewer_commands,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
@@ -709,6 +710,10 @@ def run_agentic_checkup(
     test_scope: str = "full",
     full_suite_source: str = "local",
     review_loop: bool = False,
+    agentic_review_loop: bool = False,
+    adversarial_prompt: Optional[str] = None,
+    fresh_final_review_role: Optional[str] = None,
+    as_json: bool = False,
     final_gate: bool = False,
     review_only: bool = False,
     reviewers: str = "codex,claude",
@@ -755,6 +760,12 @@ def run_agentic_checkup(
             is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
+        agentic_review_loop: Standalone PR review-loop contract for hosted
+            agentic checkup. Requires PR mode, allows no-fix/no-issue review,
+            emits the ``pdd.checkup.agentic.v1`` artifact, and routes the
+            adversarial/fresh-final options into the review-loop.
+        as_json: When true with ``agentic_review_loop``, return the structured
+            artifact JSON as the message so the CLI can print machine output.
         full_suite_source: Final-gate full-suite source. ``local`` preserves
             the historical contract: Layer 1 must run the full local suite.
             ``github-checks`` makes Layer 1 run targeted local checks and then
@@ -1033,8 +1044,13 @@ def run_agentic_checkup(
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
+            no_fix=no_fix if agentic_review_loop else False,
+            agentic_mode=agentic_review_loop,
+            adversarial_prompt=adversarial_prompt,
+            reviewer_commands=parse_reviewer_commands(reviewers),
+            fresh_final_review_role=fresh_final_review_role,
         )
-        return run_checkup_review_loop(
+        success, report, cost, model = run_checkup_review_loop(
             context=loop_context,
             config=loop_config,
             cwd=project_root,
@@ -1042,6 +1058,26 @@ def run_agentic_checkup(
             quiet=quiet,
             use_github_state=use_github_state,
         )
+        if not agentic_review_loop:
+            return success, report, cost, model
+
+        artifact_path = project_root / f"pdd-checkup-agentic-{pr_number}.json"
+        try:
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return (
+                False,
+                f"Agentic checkup artifact missing or unreadable: {artifact_path}: {exc}",
+                cost,
+                model,
+            )
+        decision = str((artifact.get("verdict") or {}).get("decision") or "")
+        message = (
+            json.dumps(artifact, indent=2, sort_keys=True)
+            if as_json
+            else report + f"\n\nAgentic artifact: {artifact_path}"
+        )
+        return decision == "pass", message, cost, model
 
     pr_context_ready = (
         pr_url is not None
@@ -1050,11 +1086,42 @@ def run_agentic_checkup(
         and pr_number is not None
     )
 
+    if agentic_review_loop and final_gate:
+        return (
+            False,
+            "--agentic-review-loop cannot be combined with --final-gate.",
+            0.0,
+            "",
+        )
+
     if final_gate and (not pr_context_ready or not has_issue):
         # The final gate is the two-layer PR-readiness path; it is PR-scoped,
         # issue-resolution gate, so it never runs in plain issue mode or
         # PR-only merit-review mode.
         return False, "--final-gate requires --pr and --issue.", 0.0, ""
+
+    if agentic_review_loop:
+        budget_errors = []
+        if (
+            isinstance(max_review_rounds, bool)
+            or not isinstance(max_review_rounds, int)
+            or max_review_rounds < 1
+        ):
+            budget_errors.append("max_review_rounds must be a positive integer")
+        if not math.isfinite(max_review_cost) or max_review_cost <= 0:
+            budget_errors.append("max_review_cost must be a finite value > 0")
+        if not math.isfinite(max_review_minutes) or max_review_minutes <= 0:
+            budget_errors.append("max_review_minutes must be a finite value > 0")
+        if budget_errors:
+            return (
+                False,
+                f"--agentic-review-loop review budget invalid: {'; '.join(budget_errors)}.",
+                0.0,
+                "",
+            )
+        adversarial_prompt = (
+            adversarial_prompt or "find reasons not to merge the PR"
+        )
 
     if final_gate:
         # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
@@ -1124,10 +1191,24 @@ def run_agentic_checkup(
                 "",
             )
 
+    if agentic_review_loop:
+        review_loop = True
+
     if review_loop and not final_gate:
         if not pr_context_ready:
             # Review-loop is issue-coupled; review-loop-without-issue is a
             # deferred follow-up (#1292).
+            return (
+                False,
+                (
+                    "--agentic-review-loop requires --pr."
+                    if agentic_review_loop
+                    else "--review-loop requires --pr and --issue."
+                ),
+                0.0,
+                "",
+            )
+        if not has_issue and not agentic_review_loop:
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
         return _run_review_loop_layer()
 

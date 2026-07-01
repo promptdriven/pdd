@@ -22,6 +22,7 @@
 <pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_agentic_artifact_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
 % Goal
@@ -272,8 +273,10 @@ The four bugs filed in gltanaka/pdd#1433 expose specific reliability gaps in `ru
 % Issue #2047 — source-of-truth-aware repair
 
 The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically refuses a push when generated code changed without its owning prompt. Refusing and stopping is correct when nothing can be safely repaired, but for the common `drift` case (a registered code file changed while its present, unedited owning prompt was left behind) PDD's own contract says the durable fix is to repair the prompt and regenerate — not to dead-end. Implement the following, all gated behind `ReviewLoopConfig.enable_source_of_truth_repair: bool = True` (kept in the appended dataclass field block for positional-construction stability; set False to restore the legacy refuse-and-stop behavior). `ReviewLoopConfig.allow_same_reviewer_fixer: bool = False` is appended after `enable_source_of_truth_repair`. The following fields are further appended in order, each with safe defaults preserving positional-construction stability for all existing callers:
+- `no_fix: bool = False` — when set by standalone agentic checkup, produce a report/artifact without invoking a fixer, committing, pushing, or posting GitHub state.
 - `adversarial_prompt: Optional[str] = None` — when set, injected into every reviewer, verifier, and fresh-final-reviewer prompt as `Adversarial instruction: {adversarial_prompt}`.
-- `agentic_mode: bool = False` — when `True`, calls `build_agentic_v1_artifact()` from `pdd.checkup_agentic_artifact` after the final report is assembled and writes the artifact to `./pdd-checkup-agentic-{pr_number}.json`; the path is echoed to stderr.
+- `agentic_mode: bool = False` — when `True`, runs deterministic gates before reviewer budget, permits secondary independent reviewers from `reviewers`, calls `build_agentic_v1_artifact()` from `pdd.checkup_agentic_artifact` after the final report is assembled, and writes both `.pdd/checkup-review-loop/.../agentic-v1.json` and `./pdd-checkup-agentic-{pr_number}.json`.
+- `reviewer_commands: Dict[str, str] = field(default_factory=dict)` — parsed `role:/slash-command` annotations for reviewers, surfaced in prompt artifacts and `pdd.checkup.agentic.v1`.
 - `fresh_final_review_role: Optional[str] = None` — role override for the fresh final review in agentic mode; normalized via the existing role-alias table.
 
 2047-A. **Structured offenders.** Factor the guard's per-offender disk-state classification into `_prompt_source_offenders(worktree, changed_files, head_ref="HEAD") -> List[Dict[str,str]]` returning `{code_path, prompt_path, kind}` where `kind` ∈ `{"drift"` (both files present, prompt unedited — repairable), `"missing_prompt"` (code present, owning prompt deleted), `"rename_drift"` (registered code moved/deleted, prompt left behind)`}`. `_check_prompt_source_guard` MUST consume this helper so the deterministic refusal string and the repair input never disagree. The refusal string is unchanged: `"generated-code-only fix refused: <code> is generated from <prompt>; ... Update the prompt source or run the proper PDD sync path before re-running the review loop."`.
@@ -290,8 +293,6 @@ The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically r
 <pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
 <pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
 <pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../pdd/list_drift_detection.py</include></pdd.list_drift_detection>
-
-<pdd-dependency>checkup_agentic_artifact_python.prompt</pdd-dependency>
 
 % Deliverables
 - Code: `pdd/checkup_review_loop.py`
