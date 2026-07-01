@@ -1,0 +1,79 @@
+<pdd-reason>Implements pdd checkup policy check: runs deterministic contract checks then optional agentic semantic review.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "policy", "description": "Run policy checks including optional agentic semantic review."},
+      {"name": "policy check", "description": "Run deterministic contract IR checks then optional agentic semantic review against target artifacts."}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_gates_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_reviewer_python.prompt</pdd-dependency>
+<pdd-dependency>capability_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/policy.py` implementing the `pdd checkup policy` CLI group with a `check` subcommand.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Provide `pdd checkup policy check PROMPT_FILE ARTIFACT_FILE [--target LANG] [--semantic-review MODE] [--json]` — a two-phase policy checker that (1) always runs deterministic contract IR checks first, then (2) optionally invokes `agentic_reviewer.run_agentic_reviewer` for semantic findings, merging results and recording evidence-manifest metadata.
+
+% Requirements
+1. Click group `policy` with a single `check` subcommand. The group entry point is importable as `from pdd.commands.policy import policy as policy_cmd`.
+2. `check` positional args: `prompt_file` (required path), `artifact_file` (required path).
+3. `check` options:
+   - `--target TEXT` (default `"python"`) — language/target hint forwarded to contract IR checks.
+   - `--semantic-review [off|llm|agentic]` (default `"off"`) — semantic review mode.
+   - `--semantic-review-severity [warning|error|info]` (default `"warning"`) — severity used to classify agentic findings.
+   - `--max-agent-files INT` (default `20`) — forwarded to `run_agentic_reviewer` inside the `bounds` dict as `max_files`.
+   - `--max-agent-depth INT` (default `2`) — forwarded to `run_agentic_reviewer` inside the `bounds` dict as `max_follow_depth`.
+   - `--json` flag — emit results as a JSON array to stdout.
+   - `--evidence` flag — write an evidence manifest via `write_evidence_manifest`.
+4. Execution order (non-negotiable — deterministic checks ALWAYS run first):
+   a. Build contract effects from `prompt_file`: prefer lazy-importing `parse_capabilities_ir` from `pdd.capability_ir`, reading the full prompt text, and converting `contract_ir.effects` into a list of plain dicts with `modal`, `action`, and `resource`. If the target-neutral capability parser is unavailable, fall back to an empty list and log a warning rather than blocking deterministic checks.
+   b. Run deterministic checks against `artifact_file` — collect a list of finding dicts with `source: "deterministic"`.
+   c. If `--semantic-review` is `"agentic"` or `"llm"`, call `run_agentic_reviewer(contract_effects, [artifact_file], bounds={"max_files": max_agent_files, "max_follow_depth": max_agent_depth})`. Treat `"llm"` as a compatibility alias for the bounded LLM-assisted agentic reviewer in v1, preserving the requested mode in output and evidence metadata. If `agentic_reviewer` is unavailable (`ImportError`) or raises any exception, emit a `logging.warning` and continue with deterministic-only results (never fail deterministic checks due to agentic failure).
+   d. Call `normalize_agentic_findings(raw_agentic, semantic_review_severity=semantic_review_severity)` from `pdd.checkup_gates` to convert raw findings.
+   e. Merge: deterministic findings first, then normalized agentic findings.
+5. Output (`--json`): print a JSON array of all findings. Each finding dict MUST include at minimum `source`, `severity`, `message`, and `confidence` (use `0.0` for deterministic findings that have no confidence score).
+6. Output (text mode): print one line per finding: `[{severity}] {source}: {message}`.
+7. Evidence manifest (`--evidence`): call `write_evidence_manifest(command="checkup policy check", prompt_file=prompt_file, output_files=[artifact_file], policy_check=policy_check_meta)` where `policy_check_meta` is:
+   ```python
+   {
+     "semantic_review": {
+       "enabled": semantic_review != "off",
+       "mode": semantic_review,
+       "max_files": max_agent_files,
+       "max_follow_depth": max_agent_depth,
+       "finding_count": len(agentic_findings),
+       "max_confidence": max((f.get("confidence", 0.0) for f in raw_agentic), default=None),
+     }
+   }
+   ```
+   When `semantic_review == "off"`, only `enabled: false` and `mode: "off"` are required; other keys may be omitted.
+8. Exit code: `0` when no error-severity findings; `1` when any finding has `severity` in `{"error", "blocker"}`; `2` on unexpected internal error (always after printing findings).
+9. Never raises to the caller — catch all exceptions, log at ERROR level, and return exit code `2`.
+
+% Dependencies
+<pdd.checkup_gates>
+    <include select="def:normalize_agentic_findings">../pdd/checkup_gates.py</include>
+</pdd.checkup_gates>
+<pdd.evidence_manifest>
+    <include select="def:write_evidence_manifest">../pdd/evidence_manifest.py</include>
+</pdd.evidence_manifest>
+Sibling modules are declared through `<pdd-dependency>` tags above:
+- `agentic_reviewer_python.prompt` provides `run_agentic_reviewer(contract_effects, artifact_paths, bounds=None) -> List[Dict]`.
+- `capability_ir_python.prompt` provides `parse_capabilities_ir(text: str) -> ContractEffectIR`.
+
+<commands.checkup_example>
+    <include>context/commands/checkup_example.py</include>
+</commands.checkup_example>
+
+% Deliverables
+- Code: `pdd/commands/policy.py`

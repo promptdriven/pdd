@@ -120,6 +120,7 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
 - **Contract coverage:** `pdd checkup coverage`.
 - **Waiver policy gate:** `pdd checkup gate` (see below).
+- **Semantic policy check:** `pdd checkup policy check PROMPT ARTIFACT [--semantic-review agentic]` — runs deterministic contract IR checks then an optional agentic semantic review; findings from `agentic_reviewer` appear with `source: agentic_reviewer` and are advisory warnings by default (escalate with `--semantic-review-severity error`).
 
 ## Waiver policy gate (`pdd checkup gate`)
 
