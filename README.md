@@ -719,6 +719,9 @@ Story prompt linkage:
 - If metadata is missing, `pdd detect --stories` validates against the full prompt set.
 - `pdd test --issue ... <*.prompt>` links the prompt files passed on the command line directly in story metadata; it does not run `detect_change` during story authoring.
 - In `--stories` mode, existing story metadata scopes validation; when metadata is missing, validation falls back to the full prompt set.
+- **Cross-dev-unit stories:** When ≥2 prompt files are passed to `pdd test --issue`, a second metadata comment is also written alongside `pdd-story-prompts`:
+  `<!-- pdd-story-dev-units: basename1.prompt, basename2.prompt -->`
+  This marks the story as spanning multiple dev units (cross-unit). Single-prompt stories do not receive a `pdd-story-dev-units` comment. Cross-unit traceability is exposed via `get_cross_unit_stories_for_prompt` (forward lookup: which cross-unit stories include a given prompt) and `story_is_cross_unit` (returns `True` when either `pdd-story-prompts` or `pdd-story-dev-units` lists ≥2 entries). `pdd checkup coverage` reports cross-unit stories separately and counts each story once globally to prevent double-counting.
 
 Template:
 - See `user_stories/story__template.md` for a starter format.

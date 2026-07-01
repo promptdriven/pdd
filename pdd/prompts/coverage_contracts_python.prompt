@@ -1,20 +1,23 @@
-<pdd-reason>Deterministic static contract-rule coverage matrix for prompts, plus an orthogonal per-story has_regression_test dimension.</pdd-reason>
+<pdd-reason>Deterministic static contract-rule coverage matrix for prompts, with story-regression test traceability and cross-dev-unit story attribution.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
   "module": {
-    "functions": [
-      {"name": "build_coverage", "signature": "(path, stories_dir=None, tests_dir=None)", "returns": "CoverageResult"},
-      {"name": "build_coverage_directory", "signature": "(directory, stories_dir=None, tests_dir=None)", "returns": "list[CoverageResult]"}
+    "classes": [
+      {"name": "RuleCoverage", "kind": "dataclass"},
+      {"name": "CoverageResult", "kind": "dataclass"}
     ],
-    "dataclasses": [
-      {"name": "RuleCoverage"},
-      {"name": "CoverageResult"}
+    "functions": [
+      {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult", "returns": "CoverageResult"},
+      {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
     ]
   }
 }
 </pdd-interface>
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 <pdd-dependency>story_regression_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer implementing deterministic contract coverage analysis for PDD.
 % The generated module is pdd/coverage_contracts.py and is exposed through `pdd checkup coverage`.
 
@@ -31,23 +34,40 @@
   test-only > unchecked`.
 - Treat prompts without `<contract_rules>` as legacy-safe: return no rules and no error.
 - Directory scans must recurse over `*.prompt` files and skip `*_LLM.prompt`.
-- Expose `build_coverage(path, stories_dir=None, tests_dir=None) -> CoverageResult`
+- Expose `build_coverage(path, stories_dir=None, tests_dir=None, global_story_registry: Optional[set[str]] = None) -> CoverageResult`
   and `build_coverage_directory(directory, stories_dir=None, tests_dir=None) -> list[CoverageResult]`.
-- Surface a new **story-keyed** `has_regression_test` dimension per discovered user
-  story: `true` when >=1 collected pytest test claims the story via
-  `@pytest.mark.story(story_id="<slug>")`, else `false`. Compute it by **querying
-  the `story_regression` traceability API** (`tests_for_story` / `has_regression_test`),
+- Surface a story-keyed `has_regression_test` dimension per discovered user
+  story: `true` when at least one collected pytest test claims the story via
+  `@pytest.mark.story(story_id="<slug>")`, else `false`. Compute it by querying
+  the `story_regression` traceability API (`tests_for_story` / `has_regression_test`),
   not by re-implementing pytest collection here.
 - This dimension MUST be orthogonal and additive: it MUST NOT alter the rule-keyed
   statuses or their `test_R<n>`-derived priority
   (`waived > failed > checked > story-only > test-only > unchecked`).
 - Report the two orphan directions as diagnostics: a story with no claiming test
-  (`has_regression_test: false`, the headline gap) and a test claiming a
-  nonexistent story (a `story_id` with no matching `story__<slug>.md`, surfaced as
-  a validation warning) — kept distinct from each other.
-- `CoverageResult` (and `as_dict()` / `summary`) MUST carry the per-**story**
+  (`has_regression_test: false`) and a test claiming a nonexistent story (a
+  `story_id` with no matching `story__<slug>.md`, surfaced as a validation warning).
+- `CoverageResult` (and `as_dict()` / `summary`) MUST carry the per-story
   `has_regression_test` boolean alongside the rule list as a new per-story
   structure. Do NOT bolt it onto `RuleCoverage`, which stays rule-keyed.
+- Cross-dev-unit support (issue #1769):
+  - Add two fields to `RuleCoverage`: `is_cross_unit: bool = False` and
+    `cross_unit_partners: list[str]` (default empty list). Include both in
+    `as_dict()` output.
+  - `build_coverage_directory` initializes a shared `global_story_registry: set[str]`
+    (story slugs already counted globally) and passes it to every `build_coverage`
+    call via the new `global_story_registry` kwarg.
+  - Inside `build_coverage`: for each linked story, compute its slug
+    (`story_path.stem[len("story__"):]`). If `global_story_registry` is provided and
+    the slug is already in the registry, attribute the story to the rule's `stories`
+    list so the link is visible, but do NOT count it as additional coverage evidence.
+    If the slug is not yet in the registry, add it and count normally.
+  - When `global_story_registry` is `None` (single-file mode), skip deduplication
+    entirely to preserve backward compatibility for direct `build_coverage` calls.
+  - After attributing stories, lazily import `story_is_cross_unit` and
+    `get_all_dev_units_for_story` from `pdd.user_story_tests` to populate
+    `is_cross_unit` and `cross_unit_partners` on each `RuleCoverage` whose
+    `stories` list contains at least one cross-unit story.
 </requirements>
 
 <contract_rules>
@@ -73,13 +93,25 @@ MUST classify that rule as `failed` and include the failure detail.
 R6 - Orthogonal story-regression dimension
 The per-story `has_regression_test` dimension MUST be reported alongside, and MUST
 NOT change, the rule-keyed `status` values or their priority order.
-</contract_rules>
 
-<dependencies>
-- `from .story_regression import tests_for_story` (and/or `has_regression_test`) —
-  the deterministic marker traceability API used to compute the per-story
-  `has_regression_test` dimension.
-</dependencies>
+R7 - Cross-unit story attribution
+When a story is cross-unit (two or more entries in either `pdd-story-prompts` or
+`pdd-story-dev-units` metadata), the analyzer MUST set `is_cross_unit=True` and
+populate `cross_unit_partners` with all dev-unit names for that story. The story
+filename MUST still appear in the `stories` list so the link remains visible.
+
+R8 - No double-counting in directory mode
+When `build_coverage_directory` is used, a story slug that has already been counted
+for a previous prompt in the same directory scan MUST NOT be counted again as
+independent coverage evidence for subsequent prompts. The story remains attributed
+and visible in `stories`, but the coverage classification MUST NOT change due to the
+already-counted story.
+
+R9 - Single-file mode bypasses deduplication
+When `build_coverage` is called directly without a `global_story_registry`
+(i.e. `global_story_registry` is `None`), deduplication MUST be skipped entirely.
+This preserves backward compatibility for existing callers.
+</contract_rules>
 
 <acceptance_tests>
 - `pytest tests/test_coverage_contracts.py tests/commands/test_coverage.py -q` MUST pass.
@@ -87,4 +119,10 @@ NOT change, the rule-keyed `status` values or their priority order.
 - `pdd checkup coverage prompts/example_python.prompt` MUST render one row per rule.
 - `pdd checkup coverage <prompt>` MUST report, per user story, whether an executable
   regression test exists (`has_regression_test`).
+- `test_rule_coverage_is_cross_unit_default_false`: `RuleCoverage` default has `is_cross_unit=False` and `cross_unit_partners=[]`.
+- `test_rule_coverage_as_dict_includes_cross_unit_fields`: `as_dict()` always includes `is_cross_unit` and `cross_unit_partners`.
+- `test_build_coverage_sets_cross_unit_flag`: when a cross-unit story is linked, `build_coverage` returns a `RuleCoverage` with `is_cross_unit=True` and non-empty `cross_unit_partners`.
+- `test_build_coverage_directory_deduplicates_cross_unit_story`: a cross-unit story linked to two prompts is counted once globally; the second prompt's rule does not gain independent coverage from the already-counted story.
+- `test_build_coverage_single_file_no_deduplication`: calling `build_coverage` directly (no `global_story_registry`) counts the story normally without deduplication.
+- `test_build_coverage_directory_story_slug_key`: deduplication uses the story filename stem after `story__` as the slug key, not the full path.
 </acceptance_tests>
