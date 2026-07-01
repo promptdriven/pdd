@@ -75,7 +75,8 @@ SENSITIVE_FIELD_NAMES = {
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
-MIN_PDS_CLI_VERSION = (0, 1, 6)
+DEFAULT_PDS_CLAUDE_MODEL = "glm-5.2"
+MIN_PDS_CLI_VERSION = (0, 1, 7)
 MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
 PDS_VERSION_PROBE_TIMEOUT_SECONDS = 10.0
@@ -278,6 +279,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
     parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
+    parser.add_argument(
+        "--pds-claude-model",
+        default=os.environ.get(
+            "RELEASE_VIDEO_PDS_CLAUDE_MODEL",
+            DEFAULT_PDS_CLAUDE_MODEL,
+        ),
+        help=(
+            "Claude Code model passed to PDS for non-vision release-video "
+            "pipeline stages. Set RELEASE_VIDEO_PDS_CLAUDE_MODEL='' to use "
+            "the server default."
+        ),
+    )
     parser.add_argument(
         "--claude-tools",
         default=os.environ.get("RELEASE_VIDEO_CLAUDE_TOOLS", ""),
@@ -1845,6 +1858,9 @@ def add_optional_pds_create_args(
     metadata_conflict = release_video_metadata_conflict(args)
     if metadata_conflict:
         pds_args.extend(["--metadata-conflict", metadata_conflict])
+    pds_claude_model = str(getattr(args, "pds_claude_model", "") or "").strip()
+    if pds_claude_model:
+        pds_args.extend(["--claude-model", pds_claude_model])
     if args.force_regenerate:
         pds_args.append("--force-regenerate")
     if args.dry_run:
