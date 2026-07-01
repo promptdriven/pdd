@@ -171,37 +171,6 @@ def _forward_subcommand_json(
     help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
 )
 @click.option(
-    "--agentic-review-loop",
-    is_flag=True,
-    default=False,
-    help=(
-        "Standalone agentic PR checkup v1. Requires --pr, allows --no-fix "
-        "and PR-only review, routes adversarial/fresh-final review options, "
-        "and writes pdd.checkup.agentic.v1."
-    ),
-)
-@click.option(
-    "--adversarial-prompt",
-    type=str,
-    default=None,
-    show_default=False,
-    help=(
-        "With --agentic-review-loop: adversarial objective injected into "
-        "reviewer/fixer prompts. Default: find reasons not to merge the PR."
-    ),
-)
-@click.option(
-    "--fresh-final-review",
-    "fresh_final_review_role",
-    type=str,
-    default=None,
-    show_default=False,
-    help=(
-        "With --agentic-review-loop: optional distinct reviewer role for a "
-        "fresh final review pass, e.g. codex or claude."
-    ),
-)
-@click.option(
     "--final-gate",
     "final_gate",
     is_flag=True,
@@ -548,9 +517,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     test_scope: str,
     full_suite_source: str,
     review_loop: bool,
-    agentic_review_loop: bool,
-    adversarial_prompt: Optional[str],
-    fresh_final_review_role: Optional[str],
     final_gate: bool,
     review_only: bool,
     reviewers: str,
@@ -1095,43 +1061,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "TARGET (e.g., `pdd checkup <issue-url>`).",
             param_hint="'--issue'",
         )
-    if not agentic_review_loop:
-        if adversarial_prompt is not None:
-            raise click.BadParameter(
-                "--adversarial-prompt requires --agentic-review-loop.",
-                param_hint="'--adversarial-prompt'",
-            )
-        if fresh_final_review_role is not None:
-            raise click.BadParameter(
-                "--fresh-final-review requires --agentic-review-loop.",
-                param_hint="'--fresh-final-review'",
-            )
-    if agentic_review_loop:
-        if review_loop:
-            raise click.BadParameter(
-                "--agentic-review-loop already runs the review loop; do not "
-                "also pass --review-loop.",
-                param_hint="'--agentic-review-loop'",
-            )
-        if final_gate:
-            raise click.BadParameter(
-                "--agentic-review-loop cannot be combined with --final-gate.",
-                param_hint="'--agentic-review-loop'",
-            )
-        if not pr_mode:
-            raise click.BadParameter(
-                "--agentic-review-loop requires --pr.",
-                param_hint="'--agentic-review-loop'",
-            )
-        review_loop = True
-        as_json = True
-        adversarial_prompt = adversarial_prompt or "find reasons not to merge the PR"
     # ``--review-loop`` still requires BOTH ``--pr`` and ``--issue``: the
     # reviewer/report path is issue-coupled, so review-loop-without-issue is
     # deferred as a follow-up (#1292 sanctions deferring it).
-    if review_loop and not agentic_review_loop and (
-        not pr_mode or issue_url_opt is None
-    ):
+    if review_loop and (not pr_mode or issue_url_opt is None):
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
@@ -1206,7 +1139,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-only requires --review-loop.",
             param_hint="'--review-only'",
         )
-    if review_loop and no_fix and not review_only and not agentic_review_loop:
+    if review_loop and no_fix and not review_only:
         raise click.BadParameter(
             "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
             param_hint="'--review-loop'",
@@ -1317,10 +1250,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
-            agentic_review_loop=agentic_review_loop,
-            adversarial_prompt=adversarial_prompt,
-            fresh_final_review_role=fresh_final_review_role,
-            as_json=as_json,
             final_gate=final_gate,
             review_only=review_only,
             reviewers=reviewers,
@@ -1347,9 +1276,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             max_prompt_repair_seconds=effective_max_repair_seconds,
         )
 
-        if not quiet and agentic_review_loop and as_json:
-            click.echo(message)
-        elif not quiet:
+        if not quiet:
             status = "Success" if success else "Failed"
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")

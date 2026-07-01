@@ -366,60 +366,6 @@ class TestRunAgenticCheckup:
         assert model == "anthropic"
         mock_orchestrator.assert_called_once()
 
-    def test_agentic_review_loop_maps_artifact_verdict_to_success_and_json(
-        self, tmp_path, monkeypatch
-    ):
-        captured = {}
-
-        def fake_run_review_loop(*, context, config, cwd, verbose, quiet, use_github_state):
-            captured["context"] = context
-            captured["config"] = config
-            artifact = {
-                "schema": "pdd.checkup.agentic.v1",
-                "verdict": {
-                    "decision": "fail",
-                    "reason": "open findings remain",
-                },
-            }
-            (tmp_path / f"pdd-checkup-agentic-{context.pr_number}.json").write_text(
-                json.dumps(artifact),
-                encoding="utf-8",
-            )
-            return True, "markdown report", 0.25, "codex"
-
-        monkeypatch.setattr("pdd.agentic_checkup._check_gh_cli", lambda: True)
-        monkeypatch.setattr("pdd.agentic_checkup._find_project_root", lambda cwd=None: tmp_path)
-        monkeypatch.setattr(
-            "pdd.agentic_checkup._load_architecture_json",
-            lambda project_root: (None, tmp_path / "architecture.json"),
-        )
-        monkeypatch.setattr("pdd.agentic_checkup._load_pddrc_content", lambda root: "")
-        monkeypatch.setattr("pdd.agentic_checkup._fetch_pr_context", lambda *args: "")
-        monkeypatch.setattr(
-            "pdd.agentic_checkup.run_checkup_review_loop",
-            fake_run_review_loop,
-        )
-
-        success, msg, cost, model = run_agentic_checkup(
-            pr_url="https://github.com/owner/repo/pull/7",
-            agentic_review_loop=True,
-            no_fix=True,
-            reviewers="codex:/review,claude:/code-review",
-            as_json=True,
-            quiet=True,
-        )
-
-        assert success is False
-        assert json.loads(msg)["schema"] == "pdd.checkup.agentic.v1"
-        assert cost == pytest.approx(0.25)
-        assert model == "codex"
-        assert captured["config"].agentic_mode is True
-        assert captured["config"].no_fix is True
-        assert captured["config"].reviewer_commands == {
-            "codex": "/review",
-            "claude": "/code-review",
-        }
-
     @patch("pdd.agentic_checkup._post_error_comment")
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")

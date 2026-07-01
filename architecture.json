@@ -7658,7 +7658,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, agentic_review_loop: bool = False, adversarial_prompt: Optional[str] = None, fresh_final_review_role: Optional[str] = None, as_json: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0, adversarial_prompt: Optional[str] = None, agentic_review_loop: bool = False, fresh_final_review_role: Optional[str] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           }
         ]
@@ -7678,7 +7678,6 @@
       "agentic_checkup_orchestrator_python.prompt",
       "agentic_e2e_fix_orchestrator_python.prompt",
       "architecture_registry_python.prompt",
-      "checkup_agentic_artifact_python.prompt",
       "git_porcelain_python.prompt"
     ],
     "priority": 217.5,
@@ -10695,7 +10694,7 @@
   },
   {
     "reason": "Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.",
-    "description": "Accepts review-loop context, in-memory state, and final-state payload from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact as a plain dictionary. The artifact includes top-level owner/repo/pr/status/layer1/reviewers/findings/fix_attempts/validation_after_fix/fresh_final_review/verdict/budget fields plus compatibility PR/issue blocks. It deduplicates already-normalized ReviewFinding objects from loop state, never stores raw reviewer/fixer transcripts, routes free-text fields through _scrub_secrets, caps text, guarantees fix_attempts is empty in nofix mode, and preserves budget booleans from final-state/state.",
+    "description": "Accepts loop state, config, and context from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact. Provides Pydantic v2 models (AgenticLayer1, AgenticReviewer, AgenticFinding, AgenticFixAttempt, AgenticValidationResult, AgenticFreshFinalReview, AgenticVerdict, AgenticBudget, AgenticV1Artifact), finding normalization via _normalize_findings (best-effort parser, returns [] on failure setting reviewer status to degraded), deduplication via _deduplicate_findings, and the public build_agentic_v1_artifact assembler. All free-text fields are routed through _scrub_secrets and capped at FINDING_TEXT_MAX_CHARS. Nofix mode guarantees fix_attempts is empty. Budget booleans are computed fresh at artifact-build time from config caps vs actual elapsed values.",
     "dependencies": [
       "checkup_review_loop_python.prompt"
     ],
@@ -10714,8 +10713,18 @@
         "functions": [
           {
             "name": "build_agentic_v1_artifact",
-            "signature": "(*, context: Any, state: Any, final_state: Mapping[str, Any]) -> Dict[str, Any]",
-            "returns": "Dict[str, Any>"
+            "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact",
+            "returns": "AgenticV1Artifact"
+          },
+          {
+            "name": "_normalize_findings",
+            "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_deduplicate_findings",
+            "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]",
+            "returns": "List[AgenticFinding]"
           }
         ]
       }
