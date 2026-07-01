@@ -4478,6 +4478,29 @@ def test_check_hard_stop_step4_requires_stop_condition_tag():
     )
 
 
+def test_check_hard_stop_step4_route_redirect_marker():
+    """Step 4 ROUTE_REDIRECT: bug_fix is a hard stop even without STOP_CONDITION."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    output = (
+        "ROUTE_REDIRECT: bug_fix\n"
+        "ROUTE_RATIONALE: issue reports the generated CLI crashes with KeyError"
+    )
+
+    result = _check_hard_stop(4, output)
+    assert result == "Runtime bug route needed: issue reports the generated CLI crashes with KeyError"
+
+
+def test_check_hard_stop_step4_runtime_route_stop_condition():
+    """Step 4 also accepts the runtime-route STOP_CONDITION safety marker."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert (
+        _check_hard_stop(4, "STOP_CONDITION: Runtime bug route needed")
+        == "Runtime bug route needed: use pdd bug followed by pdd fix"
+    )
+
+
 def test_check_hard_stop_step7_requires_stop_condition_tag():
     """
     _check_hard_stop should only trigger for Step 7 when the output contains
@@ -4571,6 +4594,19 @@ def test_step4_prompt_has_stop_condition_instruction():
     assert "CRITICAL" in prompt_content
 
 
+def test_step4_prompt_redirects_runtime_symptoms_to_bug_fix():
+    """Step 4 prompt must redirect runtime bugs away from change/sync."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step4_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    assert "Route safety check before clarity analysis" in prompt_content
+    assert "structural runtime signals > behavioral runtime" in prompt_content
+    assert "ROUTE_REDIRECT: bug_fix" in prompt_content
+    assert "ROUTE_RATIONALE:" in prompt_content
+    assert "STOP_CONDITION: Runtime bug route needed" in prompt_content
+    assert "`pdd bug {issue_url}` followed by `pdd fix {issue_url}`" in prompt_content
+
+
 def test_change_step_prompts_do_not_post_github_comments_directly():
     """Successful step progress comments are orchestrator-owned."""
     prompts_dir = Path(__file__).parent.parent / "pdd" / "prompts"
@@ -4637,6 +4673,43 @@ def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
 
     assert success is False
     assert "Stopped at step 4" in msg
+    assert mocks["run"].call_count == 4
+
+
+def test_step4_route_redirect_stops_change_workflow(mock_dependencies, temp_cwd):
+    """A runtime-bug redirect at Step 4 must stop before change implementation."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, **kwargs):
+        if label == "step4":
+            return (
+                True,
+                "ROUTE_REDIRECT: bug_fix\n"
+                "ROUTE_RATIONALE: issue reports the generated CLI crashes",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/901",
+        issue_content="The prompt should be updated because the generated CLI crashes.",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=901,
+        issue_author="user",
+        issue_title="Generated CLI crashes",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert "Runtime bug route needed" in msg
     assert mocks["run"].call_count == 4
 
 

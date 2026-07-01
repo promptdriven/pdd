@@ -246,7 +246,7 @@ The orchestrator must parse step output to detect stop conditions. Use `_check_h
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | Already implemented | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*already implemented` with `re.MULTILINE`. Accepts both bold (`**Status:**`) and plain (`Status:`) formats. Must be at start of line to avoid matching quoted instructions or discussion prose. |
 | 3 | Research complete | (no stop condition - continues to step 4) |
-| 4 | Clarification needed | Requires explicit `STOP_CONDITION:` tag with "clarification" |
+| 4 | Clarification needed or wrong workflow | Requires explicit `STOP_CONDITION:` tag with "clarification", or `ROUTE_REDIRECT: bug_fix` when Step 4 detects the issue is a runtime bug that belongs in `pdd bug` followed by `pdd fix` |
 | 5 | Docs analysis complete | (no stop condition - continues to step 6) |
 | 6 | No dev units found | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no dev units found` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
 | 7 | Architectural decision needed | Requires explicit `STOP_CONDITION:` tag with "architectural" |
@@ -255,7 +255,7 @@ The orchestrator must parse step output to detect stop conditions. Use `_check_h
 | 10 | Architecture update complete | (no stop condition - continues to step 11) |
 | 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
 
-**STOP_CONDITION tag**: A `STOP_CONDITION: <reason>` tag is recognized as a fallback only on stop-capable steps that do not have a stricter handler. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose. Step 8 MUST ignore `STOP_CONDITION` and continue to Step 9 because no prompt edits can still leave documentation changes or scoped Direct Edit Candidates to apply.
+**STOP_CONDITION tag**: A `STOP_CONDITION: <reason>` tag is recognized as a fallback only on stop-capable steps that do not have a stricter handler. Steps 4 and 7 (clarification steps) ONLY stop via explicit machine-readable markers (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose. For Step 4, also recognize `ROUTE_REDIRECT: bug_fix` as a hard stop and include `ROUTE_RATIONALE:` in the returned stop reason when present; this prevents runtime bug symptoms from continuing through the change -> sync workflow because the issue used prompt-change phrasing. Step 8 MUST ignore `STOP_CONDITION` and continue to Step 9 because no prompt edits can still leave documentation changes or scoped Direct Edit Candidates to apply.
 
 **Hard stop behavior:**
 - Call `post_step_comment()` to post findings to GitHub
