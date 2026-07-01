@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import logging
 import os
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional, Set, NamedTuple
 
+import click
 from rich.console import Console
 
 import re as _re
@@ -47,6 +49,7 @@ from .ci_validation import (
     run_ci_validation_loop,
 )
 from .pre_checkup_gate import run_pre_checkup_gate
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Constants
 STEP_NAMES = {
@@ -1006,6 +1009,471 @@ def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identif
                     current_states[unit]["fixed"] = False
     
     return current_states
+
+
+class _IssueUnitFixTarget(NamedTuple):
+    test_file: str
+    prompt_file: str
+    code_file: str
+    verification_program: Optional[str]
+
+
+class _IssueUnitFixResult(NamedTuple):
+    attempted: bool
+    success: bool
+    message: str
+    cost: float
+    model: str
+    changed_files: List[str]
+
+
+def _relpath(path: Path, cwd: Path) -> str:
+    try:
+        return str(path.relative_to(cwd))
+    except ValueError:
+        return str(path)
+
+
+def _is_hidden_or_ignored_path(path: Path) -> bool:
+    ignored_parts = {
+        ".git",
+        ".pdd",
+        "__pycache__",
+        ".pytest_cache",
+        "node_modules",
+        ".tox",
+        ".venv",
+        "venv",
+    }
+    return any(part in ignored_parts or part.startswith(".") for part in path.parts)
+
+
+def _workflow_state_marker_files(issue_content: str) -> List[str]:
+    marker_files: List[str] = []
+    search_start = 0
+    while True:
+        idx = issue_content.find(GITHUB_STATE_MARKER_START, search_start)
+        if idx == -1:
+            break
+        json_start = issue_content.find("\n", idx)
+        if json_start == -1:
+            break
+        json_start += 1
+        end_idx = issue_content.find(GITHUB_STATE_MARKER_END, json_start)
+        if end_idx == -1:
+            break
+        search_start = end_idx + len(GITHUB_STATE_MARKER_END)
+        try:
+            state = json.loads(issue_content[json_start:end_idx].strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        step_outputs = state.get("step_outputs", {})
+        if not isinstance(step_outputs, dict):
+            continue
+        for output in step_outputs.values():
+            if isinstance(output, str):
+                marker_files.extend(_extract_marker_files(output))
+    return marker_files
+
+
+def _extract_issue_unit_test_files(
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+) -> List[str]:
+    """Return targeted pdd-bug test files without falling back to the whole suite."""
+    global _fallback_scan_was_capped
+    _fallback_scan_was_capped = False
+
+    test_files: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(path: str) -> None:
+        path = path.strip()
+        if not path or path in seen or not _is_test_file(path):
+            return
+        if not path.endswith(".py"):
+            return
+        if (cwd / path).exists():
+            seen.add(path)
+            test_files.append(path)
+
+    for path in _extract_marker_files(issue_content):
+        _add(path)
+    for path in _workflow_state_marker_files(issue_content):
+        _add(path)
+    for path in changed_files:
+        _add(path)
+    for path in _get_modified_and_untracked(cwd):
+        _add(path)
+
+    return test_files
+
+
+def _dev_unit_names_from_test_file(test_file: str) -> List[str]:
+    stem = Path(test_file).stem
+    names: List[str] = []
+    if stem.startswith("test_") and len(stem) > len("test_"):
+        names.append(stem[len("test_"):])
+    if stem.endswith("_test") and len(stem) > len("_test"):
+        names.append(stem[: -len("_test")])
+    names.append(stem)
+
+    deduped: List[str] = []
+    for name in names:
+        if name and name not in deduped:
+            deduped.append(name)
+    return deduped
+
+
+def _module_to_path(cwd: Path, dotted: str) -> Optional[Path]:
+    if not dotted or any(part.startswith("_pytest") for part in dotted.split(".")):
+        return None
+    module_path = cwd / (dotted.replace(".", "/") + ".py")
+    if module_path.is_file():
+        return module_path
+    package_init = cwd / dotted.replace(".", "/") / "__init__.py"
+    if package_init.is_file():
+        return package_init
+    return None
+
+
+def _imported_python_modules_from_test(cwd: Path, test_file: str) -> Set[str]:
+    test_path = cwd / test_file
+    try:
+        tree = ast.parse(test_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return set()
+
+    modules: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                path = _module_to_path(cwd, alias.name)
+                if path is not None:
+                    modules.add(_relpath(path, cwd))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level != 0 or not node.module:
+                continue
+            path = _module_to_path(cwd, node.module)
+            if path is not None:
+                modules.add(_relpath(path, cwd))
+            for alias in node.names:
+                child_path = _module_to_path(cwd, f"{node.module}.{alias.name}")
+                if child_path is not None:
+                    modules.add(_relpath(child_path, cwd))
+    return modules
+
+
+def _prompt_score_for_code(prompt_path: Path, code_file: str) -> int:
+    code_path = Path(code_file)
+    code_parent = list(code_path.parent.parts)
+    if code_parent and code_parent[0] in {"pdd", "src", "lib", "app"}:
+        code_parent = code_parent[1:]
+
+    parts = list(prompt_path.parts)
+    try:
+        prompts_index = parts.index("prompts")
+    except ValueError:
+        prompt_parent: List[str] = []
+    else:
+        prompt_parent = parts[prompts_index + 1 : -1]
+
+    score = 0
+    if prompt_parent == code_parent:
+        score += 50
+    if prompt_path.stem.startswith(f"{code_path.stem}_"):
+        score += 20
+    if prompt_path.name == f"{code_path.stem}.prompt":
+        score += 10
+    return score
+
+
+def _find_prompt_for_code(cwd: Path, code_file: str) -> Optional[str]:
+    stem = Path(code_file).stem
+    candidates: List[Path] = []
+    for pattern in (f"{stem}_*.prompt", f"{stem}.prompt"):
+        for path in cwd.rglob(pattern):
+            rel_parts = path.relative_to(cwd).parts if path.is_absolute() else path.parts
+            if "prompts" not in rel_parts:
+                continue
+            if _is_hidden_or_ignored_path(path.relative_to(cwd)):
+                continue
+            candidates.append(path)
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda path: (
+            _prompt_score_for_code(path.relative_to(cwd), code_file),
+            -len(path.parts),
+        ),
+        reverse=True,
+    )
+    return _relpath(candidates[0], cwd)
+
+
+def _is_code_candidate(path: Path) -> bool:
+    if path.name.startswith("test_") or path.suffix != ".py":
+        return False
+    rel_parts = path.parts
+    excluded = {"tests", "__tests__", "__test__", "prompts", "examples", "context"}
+    return not any(part in excluded for part in rel_parts)
+
+
+def _find_code_for_test(cwd: Path, test_file: str) -> Optional[str]:
+    dev_unit_names = _dev_unit_names_from_test_file(test_file)
+    imported_modules = _imported_python_modules_from_test(cwd, test_file)
+    candidates: Set[str] = set()
+
+    for name in dev_unit_names:
+        for path in cwd.rglob(f"{name}.py"):
+            rel = path.relative_to(cwd)
+            if not _is_hidden_or_ignored_path(rel) and _is_code_candidate(rel):
+                candidates.add(str(rel))
+
+    for rel in imported_modules:
+        rel_path = Path(rel)
+        if _is_code_candidate(rel_path):
+            candidates.add(rel)
+
+    scored: List[Tuple[int, str]] = []
+    for rel in candidates:
+        prompt = _find_prompt_for_code(cwd, rel)
+        if not prompt:
+            continue
+        score = 0
+        if Path(rel).stem in dev_unit_names:
+            score += 100
+        if rel in imported_modules:
+            score += 60
+        score += _prompt_score_for_code(cwd / prompt, rel)
+        scored.append((score, rel))
+
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return scored[0][1]
+
+
+def _find_verification_program_for_code(cwd: Path, code_file: str) -> Optional[str]:
+    stem = Path(code_file).stem
+    candidates: List[Tuple[int, Path]] = []
+    for pattern in (f"{stem}_example.*", f"{stem}_program.*"):
+        for path in cwd.rglob(pattern):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(cwd)
+            if _is_hidden_or_ignored_path(rel):
+                continue
+            if any(part in {"tests", "prompts"} for part in rel.parts):
+                continue
+            score = 0
+            if "examples" in rel.parts:
+                score += 30
+            if "context" in rel.parts:
+                score += 20
+            if path.name.startswith(f"{stem}_example."):
+                score += 10
+            candidates.append((score, path))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], -len(item[1].parts)), reverse=True)
+    return _relpath(candidates[0][1], cwd)
+
+
+def _resolve_issue_unit_fix_targets(cwd: Path, test_files: List[str]) -> List[_IssueUnitFixTarget]:
+    targets: List[_IssueUnitFixTarget] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    for test_file in test_files:
+        code_file = _find_code_for_test(cwd, test_file)
+        if not code_file:
+            continue
+        prompt_file = _find_prompt_for_code(cwd, code_file)
+        if not prompt_file:
+            continue
+        key = (test_file, code_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(
+            _IssueUnitFixTarget(
+                test_file=test_file,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                verification_program=_find_verification_program_for_code(cwd, code_file),
+            )
+        )
+
+    return targets
+
+
+def _build_issue_unit_fix_context(*, quiet: bool, verbose: bool) -> click.Context:
+    ctx = click.Context(click.Command("fix"))
+    ctx.obj = {
+        "force": True,
+        "quiet": quiet,
+        "strength": DEFAULT_STRENGTH,
+        "temperature": 0.0,
+        "verbose": verbose,
+        "time": DEFAULT_TIME,
+        "context": None,
+        "confirm_callback": None,
+        "local": False,
+    }
+    return ctx
+
+
+def _unit_fix_log_path(cwd: Path, issue_number: int, test_file: str) -> Path:
+    safe_stem = _re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(test_file).stem)
+    log_dir = cwd / ".pdd" / "e2e-fix" / f"issue-{issue_number}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"{safe_stem}_unit_fix.log"
+
+
+def _run_issue_unit_fix_preflight(
+    *,
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+    issue_number: int,
+    initial_file_hashes: Dict[str, Optional[str]],
+    quiet: bool,
+    verbose: bool,
+) -> Optional[_IssueUnitFixResult]:
+    """Run pdd-bug unit tests deterministically before the E2E-only path."""
+    if _has_playwright_config(cwd):
+        return None
+
+    test_files = _extract_issue_unit_test_files(issue_content, changed_files, cwd)
+    if not test_files:
+        return None
+
+    initial_passed, initial_output = _verify_tests_independently(test_files, cwd)
+    if initial_passed and not _fallback_scan_was_capped:
+        return _IssueUnitFixResult(
+            attempted=True,
+            success=True,
+            message="Issue unit tests already pass (pdd-bug unit path, no E2E suite).",
+            cost=0.0,
+            model="",
+            changed_files=_detect_changed_files(cwd, initial_file_hashes),
+        )
+
+    targets = _resolve_issue_unit_fix_targets(cwd, test_files)
+    if not targets:
+        if not quiet:
+            console.print(
+                "[yellow]Issue unit tests failed, but no prompt/code target could "
+                "be resolved; falling back to the existing E2E workflow.[/yellow]"
+            )
+        return None
+
+    from .fix_main import fix_main
+
+    total_cost = 0.0
+    model_used = ""
+    ctx = _build_issue_unit_fix_context(quiet=quiet, verbose=verbose)
+    summary_lines = [
+        "Detected pdd-bug unit tests on a repo without an E2E suite; running "
+        "the deterministic unit/code fix path."
+    ]
+
+    for target in targets:
+        log_path = _unit_fix_log_path(cwd, issue_number, target.test_file)
+        log_path.write_text(initial_output, encoding="utf-8")
+        loop = bool(target.verification_program)
+
+        try:
+            fixed, _fixed_test, _fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=target.prompt_file,
+                code_file=target.code_file,
+                unit_test_file=target.test_file,
+                error_file=str(log_path),
+                output_test=target.test_file,
+                output_code=target.code_file,
+                output_results=str(log_path),
+                loop=loop,
+                verification_program=target.verification_program,
+                max_attempts=3,
+                budget=5.0,
+                auto_submit=False,
+                agentic_fallback=True,
+                strength=None,
+                temperature=None,
+                protect_tests=True,
+                failure_aware_retries=True,
+                compress_test_context=None,
+                context_compression=None,
+                compression_fallback=None,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            return _IssueUnitFixResult(
+                attempted=True,
+                success=False,
+                message=(
+                    "Unit/code pdd fix failed before E2E workflow: "
+                    f"{target.test_file} -> {target.code_file}: {exc}"
+                ),
+                cost=total_cost,
+                model=model_used,
+                changed_files=_detect_changed_files(cwd, initial_file_hashes),
+            )
+
+        total_cost += cost
+        model_used = model or model_used
+        summary_lines.append(
+            f"{target.test_file} -> {target.code_file}: "
+            f"{'fixed' if fixed else 'failed'} ({attempts} attempt(s))"
+        )
+        if not fixed:
+            return _IssueUnitFixResult(
+                attempted=True,
+                success=False,
+                message="Unit/code pdd fix failed before E2E workflow.\n" + "\n".join(summary_lines),
+                cost=total_cost,
+                model=model_used,
+                changed_files=_detect_changed_files(cwd, initial_file_hashes),
+            )
+
+    verified, verify_output = _verify_tests_independently(test_files, cwd)
+    if _fallback_scan_was_capped and verified:
+        verified = False
+        verify_output += (
+            f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially hundreds "
+            "of test files were verified; cannot confirm full suite pass."
+        )
+
+    changed = _detect_changed_files(cwd, initial_file_hashes)
+    if verified:
+        return _IssueUnitFixResult(
+            attempted=True,
+            success=True,
+            message=(
+                "pdd-bug unit tests passed after deterministic unit/code fix "
+                "(no E2E suite detected)."
+            ),
+            cost=total_cost,
+            model=model_used,
+            changed_files=changed,
+        )
+
+    return _IssueUnitFixResult(
+        attempted=True,
+        success=False,
+        message=(
+            "Unit/code pdd fix ran, but issue tests still fail; not entering "
+            f"the no-E2E fallback.\n{verify_output}"
+        ),
+        cost=total_cost,
+        model=model_used,
+        changed_files=changed,
+    )
+
 
 def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
     """Checks if files have changed since state was saved."""
@@ -2629,12 +3097,39 @@ def run_agentic_e2e_fix_orchestrator(
                 f"as terminal.[/yellow]"
             )
 
+    unit_fix_terminal_failure = False
+
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
 
-        while current_cycle <= max_cycles and not success:
+        if not resumed_from_state and not success:
+            unit_fix_result = _run_issue_unit_fix_preflight(
+                issue_content=issue_content,
+                changed_files=changed_files,
+                cwd=cwd,
+                issue_number=issue_number,
+                initial_file_hashes=initial_file_hashes,
+                quiet=quiet,
+                verbose=verbose,
+            )
+            if unit_fix_result is not None and unit_fix_result.attempted:
+                total_cost += unit_fix_result.cost
+                if unit_fix_result.model:
+                    model_used = unit_fix_result.model
+                if unit_fix_result.changed_files:
+                    changed_files = unit_fix_result.changed_files
+                last_completed_step = max(last_completed_step, 1)
+                step_outputs["1"] = unit_fix_result.message
+                if unit_fix_result.success:
+                    success = True
+                    final_message = unit_fix_result.message
+                else:
+                    unit_fix_terminal_failure = True
+                    final_message = unit_fix_result.message
+
+        while current_cycle <= max_cycles and not success and not unit_fix_terminal_failure:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
             # Snapshot file hashes at cycle start for convergence detection (5b).
