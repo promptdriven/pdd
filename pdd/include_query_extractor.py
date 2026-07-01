@@ -63,6 +63,44 @@ EXTRACTION_STRENGTH = 1.0
 _ENV_EXTRACTION_STRENGTH = "PDD_EXTRACTS_STRENGTH"
 _ENV_CACHE_ENABLE = "EXTRACTS_CACHE_ENABLE"
 
+# Maximum number of LLM extractions allowed for a single (file, query) pair
+# within one session (issue #1711). pdd sync mutates referenced source files
+# between operations (generate/fix/update), invalidating the disk cache on
+# every iteration and re-issuing the same retrieval query unbounded. This
+# caps the damage and fails fast instead of looping.
+MAX_SESSION_EXTRACTIONS = 2
+_ENV_MAX_SESSION_EXTRACTIONS = "PDD_MAX_SESSION_EXTRACTIONS"
+
+
+def _max_session_extractions() -> int:
+    """Return the per-(file, query) session extraction cap (issue #1711).
+
+    Defaults to ``MAX_SESSION_EXTRACTIONS`` but can be raised via the
+    ``PDD_MAX_SESSION_EXTRACTIONS`` environment variable for workflows that
+    legitimately re-extract a frequently-changing file more than the default
+    cap within a single run. Non-positive or non-integer values fall back to
+    the default.
+    """
+    raw = os.environ.get(_ENV_MAX_SESSION_EXTRACTIONS)
+    if raw is None:
+        return MAX_SESSION_EXTRACTIONS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return MAX_SESSION_EXTRACTIONS
+    return value if value > 0 else MAX_SESSION_EXTRACTIONS
+
+
+class RepeatedRetrievalQueryError(RuntimeError):
+    """Raised when the same (file, query) retrieval is attempted more than
+    ``MAX_SESSION_EXTRACTIONS`` times within a single session.
+
+    Indicates a stuck retrieval loop (issue #1711): the referenced source file
+    keeps changing between iterations, so the extract cache is never reused and
+    an identical query is re-issued with no forward progress. Call
+    :meth:`IncludeQueryExtractor.reset_session` to begin a new session.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,6 +174,23 @@ class IncludeQueryExtractor:
     subsequent builds are reproducible and token-efficient.
     """
 
+    # Class-level (session-wide) counter of LLM extractions per (file, query)
+    # pair. Class-level — not instance-level — because ``process_include_tags``
+    # creates a new ``IncludeQueryExtractor()`` on every call (preprocess.py),
+    # so an instance counter would never survive the sync loop. Keyed on the
+    # resolved absolute path so distinct files never share a counter.
+    _session_extraction_counts: dict[str, int] = {}
+
+    @classmethod
+    def reset_session(cls) -> None:
+        """Clear the session-level extraction counters.
+
+        ``pdd sync`` (and tests) call this at the start of a top-level run so
+        each run gets a fresh ``MAX_SESSION_EXTRACTIONS`` quota per (file, query)
+        pair.
+        """
+        cls._session_extraction_counts.clear()
+
     def extract(self, file_path: str, query: str) -> str:
         """Return the extracted content for *query* against *file_path*.
 
@@ -183,6 +238,30 @@ class IncludeQueryExtractor:
                 # Corrupted cache entry – remove and re-extract.
                 md_path.unlink(missing_ok=True)
                 meta_path.unlink(missing_ok=True)
+
+        # ----- session-level extraction guard (issue #1711) ----------------
+        # Bound the number of LLM (re-)extractions for a single (file, query)
+        # pair within one session. The disk-cache hit path above returns early
+        # for unchanged files, so reaching this point means a genuine cache
+        # miss. When pdd sync mutates the source file between iterations the
+        # cache is invalidated every time, which previously re-issued the same
+        # query unbounded (~$1.70, exit 1). This guard lives in the
+        # unconditional path so it applies even when the disk cache is disabled.
+        session_key = f"{resolved}\n{query}"
+        max_extractions = _max_session_extractions()
+        prior_extractions = self._session_extraction_counts.get(session_key, 0)
+        if prior_extractions >= max_extractions:
+            raise RepeatedRetrievalQueryError(
+                f"Refusing to re-issue retrieval query={query!r} for "
+                f"'{resolved.name}': reached the session limit of "
+                f"{max_extractions} extractions for this (file, query) "
+                "pair without forward progress. The source file changed between "
+                "iterations, invalidating the extract cache each time (issue "
+                "#1711). Raise PDD_MAX_SESSION_EXTRACTIONS if this run "
+                "legitimately needs more, or call "
+                "IncludeQueryExtractor.reset_session() to start a new session."
+            )
+        self._session_extraction_counts[session_key] = prior_extractions + 1
 
         # ----- LLM extraction ---------------------------------------------
         _console.print(

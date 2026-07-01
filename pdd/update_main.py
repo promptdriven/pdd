@@ -36,6 +36,11 @@ from .sync_determine_operation import calculate_sha256, extract_include_deps, re
 from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
 
+# Issue #1714: bound the PRD-sync agentic step below the 600s
+# DEFAULT_TIMEOUT_SECONDS so a silent provider hang fails fast instead of
+# burning the full per-step budget.
+PRD_SYNC_TIMEOUT_SECONDS: float = 240.0
+
 # Config/data files that should not get prompts in repo-scan mode.
 # Users can still target these explicitly with single-file mode.
 _SKIP_EXTENSIONS = {
@@ -1561,6 +1566,7 @@ def update_main(
                         verbose=ctx.obj.get("verbose", False),
                         quiet=True,
                         label="prd-sync",
+                        timeout=PRD_SYNC_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
                     )
 
                     if llm_cost:

@@ -53,7 +53,8 @@ jobs:
       contents: write
       id-token: write
     env:
-      HAS_CLAUDE_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
+      HAS_CLAUDE_OAUTH: ${{ (secrets.CLAUDE_CODE_OAUTH_TOKEN_1 != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN_2 != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN_3 != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '') && 'true' || 'false' }}
+      HAS_CLAUDE_OAUTH_SLOTS: ${{ (secrets.CLAUDE_CODE_OAUTH_TOKEN_1 != '' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2 != '' && secrets.CLAUDE_CODE_OAUTH_TOKEN_3 != '') && 'true' || 'false' }}
       HAS_PDS: ${{ secrets.PDS_TOKEN != '' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v6
@@ -89,6 +90,11 @@ jobs:
             gh release create "$tag" --generate-notes --verify-tag --target main
           fi
 
+      - name: Audit Claude Code OAuth rotation slots
+        if: env.HAS_CLAUDE_OAUTH == 'true' && env.HAS_CLAUDE_OAUTH_SLOTS != 'true'
+        run: |
+          echo "::warning::Only a partial Claude Code OAuth rotation is configured. Set CLAUDE_CODE_OAUTH_TOKEN_1, CLAUDE_CODE_OAUTH_TOKEN_2, and CLAUDE_CODE_OAUTH_TOKEN_3 in repo secrets."
+
       - name: Setup Node for Claude Code
         if: env.HAS_CLAUDE_OAUTH == 'true'
         uses: actions/setup-node@v6
@@ -99,6 +105,9 @@ jobs:
         if: env.HAS_CLAUDE_OAUTH == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
+          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_3 }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
@@ -159,12 +168,12 @@ jobs:
           } >"$prompt_file"
 
           notes_file=$(mktemp --suffix=.md)
-          if ! claude -p \
+          if ! scripts/claude_code_oauth_retry.sh "$notes_file" claude -p \
                 --model sonnet \
                 --tools "" \
                 --no-session-persistence \
                 --output-format text \
-                <"$prompt_file" >"$notes_file"; then
+                <"$prompt_file"; then
             echo "Claude Code failed; keeping auto-generated notes."
             exit 0
           fi
@@ -212,8 +221,10 @@ jobs:
       #                                with vars.RELEASE_VIDEO_PROJECT_ID set to
       #                                that same authorized fixed project.
       #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
-      #                                CLI, for example @promptdriven/pds@latest
-      #                                or a pinned version.
+      #                                CLI. Defaults to @promptdriven/pds@0.1.7
+      #                                so release-video recovery/status support
+      #                                is available even when the repo variable
+      #                                is unset.
       #   vars.PDS_CLI                 optional pds command. Defaults to a
       #                                longer timeout because release-video
       #                                create can exceed the CLI's 30s default
@@ -233,12 +244,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
           PDS_API_URL: ${{ vars.PDS_API_URL || 'https://video.promptdriven.ai' }}
-          PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE }}
+          PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.7' }}
           PDS_CLI: ${{ vars.PDS_CLI || 'pds --timeout 120s' }}
+          CLAUDE_CODE_OAUTH_TOKEN_1: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_1 }}
+          CLAUDE_CODE_OAUTH_TOKEN_2: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
+          CLAUDE_CODE_OAUTH_TOKEN_3: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_3 }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RELEASE_VIDEO_PROJECT_ID: ${{ vars.RELEASE_VIDEO_PROJECT_ID }}
           RELEASE_VIDEO_SCRIPT_PATH: ${{ vars.RELEASE_VIDEO_SCRIPT_PATH }}
           RELEASE_VIDEO_IDEMPOTENCY_KEY: ${{ vars.RELEASE_VIDEO_IDEMPOTENCY_KEY }}
+          RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE: ${{ vars.RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE || 'github-actions' }}
           RELEASE_VIDEO_ATTEMPT_ID: ${{ vars.RELEASE_VIDEO_ATTEMPT_ID }}
           RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT: ${{ vars.RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT }}
           RELEASE_VIDEO_FORCE_REGENERATE: ${{ vars.RELEASE_VIDEO_FORCE_REGENERATE }}
@@ -259,6 +274,11 @@ jobs:
             echo "::warning::pds CLI install from PDS_CLI_PACKAGE failed; skipping release video."
             exit 0
           fi
+          if ! make check-release-video-config \
+              ${RELEASE_VIDEO_PROJECT_ID:+RELEASE_VIDEO_PROJECT_ID="$RELEASE_VIDEO_PROJECT_ID"}; then
+            echo "::warning::release video preflight failed; skipping release video."
+            exit 0
+          fi
           if ! command -v claude >/dev/null 2>&1; then
             npm install -g @anthropic-ai/claude-code@2.1.150 \
               || { echo "::warning::claude-code install failed; skipping release video."; exit 0; }
@@ -268,12 +288,22 @@ jobs:
               RELEASE_TAG="$tag" \
               RELEASE_GIT_SHA="${{ github.sha }}" \
               ${RELEASE_VIDEO_PROJECT_ID:+RELEASE_VIDEO_PROJECT_ID="$RELEASE_VIDEO_PROJECT_ID"}; then
+            run_sidecar=".pdd/release-videos/${tag}/pds_run.json"
+            if [ -s "$run_sidecar" ]; then
+              echo "::notice::release-video PDS recovery metadata saved at $run_sidecar"
+              cat "$run_sidecar"
+            fi
             echo "::warning::release video step failed; see diagnostics above for Claude script generation vs PDS publish. Release notes left unchanged."
             exit 0
           fi
           resp=".pdd/release-videos/${tag}/pds_response.json"
+          run_sidecar=".pdd/release-videos/${tag}/pds_run.json"
           youtube_url=$(grep -oE 'https?://(www\.)?(youtube\.com|youtu\.be)/[^"]+' "$resp" 2>/dev/null | head -1 || true)
           if [ -z "$youtube_url" ]; then
+            if [ -s "$run_sidecar" ]; then
+              echo "::notice::release-video PDS recovery metadata saved at $run_sidecar"
+              cat "$run_sidecar"
+            fi
             echo "No YouTube URL in PDS response ($resp); release notes unchanged."
             exit 0
           fi
@@ -294,6 +324,14 @@ jobs:
                 echo "::warning::failed to update release notes with video link."
               fi ;;
           esac
+
+      - name: Upload release video recovery artifacts
+        if: env.HAS_PDS == 'true' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-video-${{ github.ref_name }}
+          path: .pdd/release-videos/${{ github.ref_name }}/
+          if-no-files-found: ignore
 
       - name: Post release notes to Discord
         env:

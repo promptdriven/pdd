@@ -11,7 +11,9 @@ import pytest
 
 from pdd.ci_validation import (
     _classify_check_result,
+    _classify_external_ci_failure,
     _collect_failure_logs,
+    _configured_manual_trigger_comment,
     _poll_check_runs_for_head,
     _poll_required_checks,
     detect_ci_system,
@@ -60,7 +62,7 @@ def test_post_ci_failure_comment_uses_shared_helper(tmp_path: Path) -> None:
 
 
 def test_poll_required_checks_waits_for_matching_head(tmp_path: Path) -> None:
-    """Polling should ignore stale checks until GitHub reports the new PR head SHA."""
+    """Polling should wait for passing checks on the expected PR head SHA."""
     check_result = subprocess.CompletedProcess(
         args=[],
         returncode=0,
@@ -90,7 +92,107 @@ def test_poll_required_checks_waits_for_matching_head(tmp_path: Path) -> None:
             "link": "https://example.test/lint",
         }
     ]
-    assert mock_run_gh.call_count == 1
+    assert mock_run_gh.call_count == 2
+
+
+def test_poll_required_checks_reads_terminal_failure_on_stale_live_head(tmp_path: Path) -> None:
+    """A stale expected head must not hide terminal live-head check failures."""
+    check_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=(
+            '[{"name":"unit tests","state":"FAILURE",'
+            '"bucket":"fail","link":"https://example.test/tests"}]'
+        ),
+        stderr="",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead"), \
+         patch("pdd.ci_validation._run_gh", return_value=check_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="stalehead",
+            quiet=True,
+        )
+
+    assert status == "failed"
+    assert checks == [
+        {
+            "name": "unit tests",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://example.test/tests",
+        }
+    ]
+
+
+def test_poll_required_checks_reports_stale_head_after_timeout(tmp_path: Path) -> None:
+    """If the expected head never becomes live, return an actionable diagnostic."""
+    check_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout='[{"name":"lint","state":"SUCCESS","bucket":"pass","link":"https://example.test/lint"}]',
+        stderr="",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead"), \
+         patch("pdd.ci_validation._run_gh", return_value=check_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="stalehead",
+            quiet=True,
+        )
+
+    assert status == "stale_head"
+    summary = checks[0]["state"]
+    assert "PR #42 head did not match" in summary
+    assert "stalehead" in summary
+    assert "livehead" in summary
+    assert "lint" in summary
+
+
+def test_poll_required_checks_does_not_accept_action_required_on_stale_head(
+    tmp_path: Path,
+) -> None:
+    """ACTION_REQUIRED on the wrong live head must not satisfy an expected-head poll."""
+    check_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=(
+            '[{"name":"auto-heal-pr","state":"ACTION_REQUIRED",'
+            '"bucket":"fail","link":"https://example.test/manual"}]'
+        ),
+        stderr="",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead"), \
+         patch("pdd.ci_validation._run_gh", return_value=check_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="expectedhead",
+            quiet=True,
+        )
+
+    assert status == "stale_head"
+    summary = checks[0]["state"]
+    assert "expectedhead" in summary
+    assert "livehead" in summary
+    assert "auto-heal-pr" in summary
 
 
 def test_collect_failure_logs_uses_zip_api_fallback(tmp_path: Path) -> None:
@@ -311,6 +413,36 @@ def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
     assert "unknown check states" in message
 
 
+def test_github_checks_gate_fails_action_required_check(tmp_path: Path) -> None:
+    """Manual-action checks are inconclusive for fix, but fail the strict gate."""
+    action_required_checks = [
+        {
+            "name": "manual trigger",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        }
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("action_required", action_required_checks),
+         ):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert head_sha == "sha123"
+    assert "manual action" in message
+    assert "manual trigger" in message
+
+
 def test_github_checks_gate_required_only_uses_required_pr_checks(tmp_path: Path) -> None:
     """The required-only legacy path still uses `gh pr checks --required`."""
     passing_checks = [
@@ -404,6 +536,71 @@ def test_poll_check_runs_for_head_fails_completed_failure(tmp_path: Path) -> Non
 
     assert status == "failed"
     assert checks[0]["bucket"] == "fail"
+
+
+def test_poll_check_runs_for_head_action_required_is_manual_action(
+    tmp_path: Path,
+) -> None:
+    """REST action_required conclusions should not be normalized as code failures."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "auto-heal-pr",
+                "status": "completed",
+                "conclusion": "action_required",
+                "html_url": "https://example.test/manual-trigger",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "action_required"
+    assert checks == [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual-trigger",
+        }
+    ]
+
+
+def test_poll_check_runs_for_head_fails_unknown_conclusion(tmp_path: Path) -> None:
+    """Unknown completed check conclusions are not passing evidence."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "full-suite",
+                "status": "completed",
+                "conclusion": "unexpected_new_state",
+                "html_url": "https://example.test/check",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "failed"
+    assert checks[0]["bucket"] == ""
 
 
 def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
@@ -540,6 +737,501 @@ def test_run_ci_validation_loop_requires_ci_fix_marker(tmp_path: Path) -> None:
     mock_comment.assert_called_once()
 
 
+def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
+    tmp_path: Path,
+) -> None:
+    """Opted-in CI setup/auth failures are external action, not code-fix failures."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    failing_checks = [
+        {
+            "name": "build_and_preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\"! If you are specifying input via secrets, "
+        "ensure the secret is being injected into the environment."
+    )
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert cost == 0.0
+    assert "external ci setup" in message.lower()
+    assert "inconclusive" in message.lower()
+    assert not fix_was_called
+    mock_commit.assert_not_called()
+    failure_comment.assert_not_called()
+    info_comment.assert_called_once()
+
+
+def test_run_ci_validation_loop_fail_closed_for_external_setup_without_opt_in(
+    tmp_path: Path,
+) -> None:
+    """External setup/auth failures remain code-fix-loop failures by default."""
+    failing_checks = [
+        {
+            "name": "build_and_preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\" because the configured secret is empty."
+    )
+    fix_was_called = False
+
+    def fake_fix(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "No code changes made", 0.1, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="Checks:\n{ci_check_results}\nLogs:\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_fix,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is False
+    assert message == "CI fix task did not apply an actionable fix"
+    assert cost == pytest.approx(0.1)
+    assert fix_was_called
+    mock_commit.assert_not_called()
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
+
+
+def test_run_ci_validation_loop_inconclusive_for_generic_build_auth_failure(
+    tmp_path: Path,
+) -> None:
+    """Opted-in generic build/ci names can be pure external setup failures."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    failing_checks = [
+        {
+            "name": "build",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\" because the configured secret is empty."
+    )
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert "external ci setup" in message.lower()
+    assert cost == 0.0
+    assert not fix_was_called
+    mock_commit.assert_not_called()
+    failure_comment.assert_not_called()
+    info_comment.assert_called_once()
+
+
+def test_run_ci_validation_loop_does_not_hide_mixed_failure_with_external_logs(
+    tmp_path: Path,
+) -> None:
+    """External setup logs must not mask another failed required check."""
+    failing_checks = [
+        {
+            "name": "deploy preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        },
+        {
+            "name": "unit tests",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/456",
+        },
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\"."
+    )
+    fix_was_called = False
+
+    def fake_fix(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "No code changes made", 0.1, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="Checks:\n{ci_check_results}\nLogs:\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_fix,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is False
+    assert message == "CI fix task did not apply an actionable fix"
+    assert cost == pytest.approx(0.1)
+    assert fix_was_called
+    mock_commit.assert_not_called()
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
+
+
+def test_configured_manual_trigger_comment_matches_check_name(tmp_path: Path) -> None:
+    """Per-check manual triggers should win over the global fallback comment."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/fallback"\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    checks = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "",
+        }
+    ]
+
+    assert _configured_manual_trigger_comment(tmp_path, checks) == "/gcbrun"
+
+
+def test_run_ci_validation_loop_ignores_passed_check_manual_trigger_for_fallback(
+    tmp_path: Path,
+) -> None:
+    """Passed checks must not consume manual triggers for ACTION_REQUIRED checks."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        '  manual_triggers:\n'
+        '    lint: "/lint-rerun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    checks = [
+        {
+            "name": "lint",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/lint",
+        },
+        {
+            "name": "manual-ci",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        },
+    ]
+    passing = [
+        {"name": "lint", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "manual-ci", "state": "SUCCESS", "bucket": "pass", "link": ""},
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[("action_required", checks), ("passed", passing)],
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert [call.kwargs["body"] for call in info_comment.call_args_list] == ["/gcbrun"]
+    failure_comment.assert_not_called()
+
+
+def test_run_ci_validation_loop_posts_multiple_configured_manual_triggers(
+    tmp_path: Path,
+) -> None:
+    """Multiple ACTION_REQUIRED checks should each get their configured trigger."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        '    deploy-preview: "/deployrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    action_required = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        },
+        {
+            "name": "deploy-preview",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/deploy",
+        },
+    ]
+    passing = [
+        {
+            "name": "auto-heal-pr",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/manual",
+        },
+        {
+            "name": "deploy-preview",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/deploy",
+        },
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[
+                 ("action_required", action_required),
+                 ("action_required", action_required),
+                 ("passed", passing),
+             ],
+         ) as poll_checks, \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert poll_checks.call_count == 3
+    assert [call.kwargs["body"] for call in info_comment.call_args_list] == [
+        "/gcbrun",
+        "/deployrun",
+    ]
+    failure_comment.assert_not_called()
+
+
+def test_run_ci_validation_loop_posts_configured_manual_trigger_then_repolls(
+    tmp_path: Path,
+) -> None:
+    """A configured ACTION_REQUIRED trigger should be posted once before repolling."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    action_required = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        }
+    ]
+    passing = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/manual",
+        }
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[("action_required", action_required), ("passed", passing)],
+         ) as poll_checks, \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert poll_checks.call_count == 2
+    assert info_comment.call_args.kwargs["body"] == "/gcbrun"
+    failure_comment.assert_not_called()
+
+
 def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_path: Path) -> None:
     """Exhausting retries should return the remaining failure summary and comment on the PR."""
     failing_checks = [
@@ -549,6 +1241,7 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
     with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
          patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
          patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value="flake8: unused import"), \
          patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as mock_comment, \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         success, message, cost = run_ci_validation_loop(
@@ -574,11 +1267,10 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
 # ---------------------------------------------------------------------------
 # Codex round-4 Finding 1: expected_head_sha_override
 #
-# The post-CI final-checkup gate pushes from a SEPARATE worktree
-# (``.pdd/worktrees/checkup-pr-N``). Without an override, the loop would
-# compare the remote PR head to ``_get_head_sha(cwd)`` — the pdd-issue
-# worktree's local HEAD, which is stale. The override forces the loop to
-# wait for the actual post-checkup remote head SHA.
+# When the head being validated was pushed from a SEPARATE worktree, the
+# loop must not compare the remote PR head to ``_get_head_sha(cwd)`` — that
+# worktree's local HEAD is stale. The override forces the loop to wait for
+# the exact remote head SHA the caller supplies.
 # ---------------------------------------------------------------------------
 
 
@@ -617,7 +1309,7 @@ def test_run_ci_validation_loop_uses_override_when_provided(tmp_path: Path) -> N
     )
 
 
-def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
+def test_run_ci_validation_loop_uses_live_pr_head_without_override(
     tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
@@ -629,6 +1321,7 @@ def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
     with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
          patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
          patch("pdd.ci_validation._get_head_sha", return_value="local_cwd_head"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="live_pr_head"), \
          patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll), \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         run_ci_validation_loop(
@@ -643,9 +1336,55 @@ def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
             quiet=True,
         )
 
-    assert captured["expected_head_sha"] == "local_cwd_head", (
-        "Existing callers without the override must see the local-HEAD behavior"
+    assert captured["expected_head_sha"] == "live_pr_head", (
+        "Without an explicit override, CI validation must follow the live PR head "
+        "instead of a stale local worktree HEAD."
     )
+
+
+def test_run_ci_validation_loop_reports_stale_expected_head_override(
+    tmp_path: Path,
+) -> None:
+    stale_check = {
+        "name": "PR head mismatch",
+        "state": (
+            "PR #42 head did not match the expected CI validation head.\n"
+            "- expected head: `expectedsha`\n"
+            "- live PR head: `livesha`\n"
+            "- last known checks:\n- lint: bucket=pass, state=SUCCESS"
+        ),
+        "bucket": "fail",
+        "link": "",
+    }
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value="local_cwd_head"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("stale_head", [stale_check]),
+         ), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as mock_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+            expected_head_sha_override="expectedsha",
+        )
+
+    assert success is False
+    assert cost == 0.0
+    assert "expectedsha" in message
+    assert "livesha" in message
+    assert "Timed out waiting for required CI checks" not in message
+    assert mock_comment.call_args.kwargs["attempts"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +1401,145 @@ def test_classify_failed_checks_exit_code_1_returns_failed() -> None:
     """Real failures with a 'fail' bucket must still be detected."""
     checks = [{"name": "lint", "state": "FAILURE", "bucket": "fail", "link": ""}]
     assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_external_ci_failure_from_google_auth_secret_log() -> None:
+    """Missing GitHub Actions auth secrets should be classified before LLM repair."""
+    checks = [{"name": "build_and_preview", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or "
+        "credentials_json because the secret is empty."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is not None
+    assert _classify_external_ci_failure(checks, "flake8: unused import") is None
+
+
+def test_classify_external_ci_failure_accepts_generic_build_check_name() -> None:
+    """Generic build/ci check names do not make missing-secret failures repairable."""
+    checks = [{"name": "build", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or "
+        "credentials_json because the secret is empty."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is not None
+
+
+def test_classify_external_ci_failure_does_not_mask_actionable_logs() -> None:
+    """Mixed external setup and code/test failures must remain repairable."""
+    checks = [
+        {"name": "deploy", "state": "FAILURE", "bucket": "fail", "link": ""},
+        {"name": "unit tests", "state": "FAILURE", "bucket": "fail", "link": ""},
+    ]
+    logs = (
+        "google-github-actions/auth failed because credentials_json is not supplied\n"
+        "pytest tests/test_widget.py::test_widget FAILED\n"
+        "AssertionError: expected 2 got 1"
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
+def test_classify_external_ci_failure_does_not_mask_frontend_module_error() -> None:
+    """Common frontend module-resolution build errors stay actionable."""
+    checks = [{"name": "deploy preview", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: credentials_json is not supplied\n"
+        "Module not found: Can't resolve '@/components/Button'"
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
+def test_classify_external_ci_failure_does_not_mask_unlogged_failed_check() -> None:
+    """A second non-external failed check keeps CI fail-closed even if logs are auth-only."""
+    checks = [
+        {"name": "deploy preview", "state": "FAILURE", "bucket": "fail", "link": ""},
+        {"name": "unit tests", "state": "FAILURE", "bucket": "fail", "link": ""},
+    ]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or credentials_json."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
+def test_classify_action_required_check_is_manual_action() -> None:
+    """ACTION_REQUIRED is terminal, but it is not a code failure to repair."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "fail",
+            "link": "https://example.test/manual-trigger",
+        }
+    ]
+    assert _classify_check_result(1, checks) == "action_required"
+
+
+def test_classify_action_required_state_wins_with_missing_bucket() -> None:
+    """GitHub can report ACTION_REQUIRED with an empty bucket; keep it manual."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "",
+            "link": "https://example.test/manual-trigger",
+        }
+    ]
+    assert _classify_check_result(1, checks) == "action_required"
+
+
+def test_classify_real_failure_wins_over_action_required() -> None:
+    """A real failing check must still fail closed even if another check needs action."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "fail",
+            "link": "https://example.test/manual-trigger",
+        },
+        {"name": "unit tests", "state": "FAILURE", "bucket": "fail", "link": ""},
+    ]
+    assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_pending_wins_over_action_required() -> None:
+    """Do not fail open while another required check is still running."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "fail",
+            "link": "https://example.test/manual-trigger",
+        },
+        {"name": "github-app-ci", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
+    ]
+    assert _classify_check_result(8, checks) == "pending"
+
+
+def test_classify_failure_state_wins_even_with_missing_bucket() -> None:
+    """Malformed/missing buckets must not hide a real failed state."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "fail",
+            "link": "https://example.test/manual-trigger",
+        },
+        {"name": "unit tests", "state": "FAILURE", "bucket": "", "link": ""},
+    ]
+    assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_unknown_bucket_fails_closed() -> None:
+    """A non-empty check set with unknown buckets must not pass via all([])."""
+    checks = [{"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}]
+    assert _classify_check_result(0, checks) == "failed"
 
 
 def test_classify_passing_checks_exit_code_0_returns_passed() -> None:
@@ -1250,16 +2128,20 @@ def test_loop_ready_when_no_required_and_live_head_genuinely_has_no_checks(
 
 # --- Test 4: required poll no_checks + live head PENDING (checks present but not
 # completed within the poll window) -> fail closed. ---
-def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
+def test_loop_inconclusive_when_required_no_checks_but_live_head_pending(
     tmp_path: Path,
 ) -> None:
-    """If the ``--required`` poll returns ``no_checks`` but the live head's real
-    check runs are still pending / not yet reported (the REST cross-check reports
-    ``timeout`` because the checks never completed), the loop must fail closed —
-    not treat the PR as ready.
+    """When the ``--required`` poll returns ``no_checks`` and the
+    live head's real check runs are still pending / not yet reported (the REST
+    cross-check reports ``timeout`` because the checks never completed within the
+    window), the loop must treat CI as INCONCLUSIVE and fail OPEN — the bot
+    cannot trigger a manually-run / external required check, and a pending check
+    is not a failing one. It must NOT post a CI-failure comment and must NOT
+    drive the LLM fix loop.
 
-    On the buggy code the loop returns ``(True, "No CI checks detected")`` without
-    ever consulting the live head.
+    This reverses the prior fail-closed-on-pending behavior. FAILING live
+    heads still fail closed (covered by the failing-head tests above), because a
+    failing cross-check returns ``failed`` and never reaches the timeout branch.
     """
     pending_run = {
         "name": "pr-tests (prompt-driven-development-stg)",
@@ -1267,6 +2149,12 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
         "bucket": "pending",
         "link": "https://github.com/promptdriven/pdd_cloud/runs/1",
     }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
 
     with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
          patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
@@ -1274,7 +2162,8 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
          patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
          patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
          patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("timeout", [pending_run])), \
-         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         success, message, _cost = run_ci_validation_loop(
             cwd=tmp_path,
@@ -1283,19 +2172,22 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
             issue_number=2107,
             max_retries=1,
             step_template="unused",
-            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            run_agentic_task_fn=fail_if_called,
             timeout=60.0,
             quiet=True,
         )
 
-    assert success is False, (
-        "The live head still has pending/not-yet-completed checks; the loop must "
-        f"fail closed rather than treat the PR as ready. Got success={success!r}, "
+    assert success is True, (
+        "A pending (non-failing) live head the bot cannot advance must be "
+        f"inconclusive (fail-open), not a hard failure. Got success={success!r}, "
         f"message={message!r}."
     )
-    assert "No CI checks detected" not in message, (
-        "Loop claimed 'No CI checks detected' while the live head had pending checks."
+    assert "inconclusive" in message.lower()
+    assert "No CI checks detected" not in message
+    assert not fix_was_called, (
+        "An inconclusive pending head must not drive the LLM CI-fix loop."
     )
+    failure_comment.assert_not_called()
 
 
 # --- Test 5: caller-boundary — the loop must route the no_checks case through
@@ -1427,6 +2319,56 @@ def test_loop_cross_check_respects_explicit_expected_head_override(
     assert message == "No CI checks detected"
 
 
+def test_loop_inconclusive_when_live_head_cross_check_needs_manual_action(
+    tmp_path: Path,
+) -> None:
+    """Manual-action live-head check runs must not drive the CI-fix loop."""
+    action_required_run = {
+        "name": "auto-heal-pr (prompt-driven-development-stg)",
+        "state": "ACTION_REQUIRED",
+        "bucket": "action_required",
+        "link": "https://console.cloud.google.com/cloud-build/triggers/example",
+    }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=STALE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("action_required", [action_required_run]),
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=1740,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert cost == 0.0
+    assert "manual action" in message.lower()
+    assert "inconclusive" in message.lower()
+    assert not fix_was_called
+    info_comment.assert_called_once()
+    failure_comment.assert_not_called()
+
+
 def test_loop_not_ready_when_live_head_cross_check_is_unreadable(
     tmp_path: Path,
 ) -> None:
@@ -1454,3 +2396,160 @@ def test_loop_not_ready_when_live_head_cross_check_is_unreadable(
     assert success is False
     assert "unreadable" in message
     assert "No CI checks detected" not in message
+
+
+# ---------------------------------------------------------------------------
+# A required CI check that never completes within the poll window
+# (manually-triggered / external CI the bot structurally cannot run, e.g.
+# pdd_cloud's /gcbrun-gated build, or simply a slow check) is INCONCLUSIVE, not
+# a failure. The fix is already committed to the PR; a pending required check
+# must not retroactively hard-fail an otherwise-correct fix. A genuine check
+# FAILURE returns "failed" and never reaches the timeout branch, so failing
+# open here cannot mask a real CI failure.
+# ---------------------------------------------------------------------------
+def test_loop_inconclusive_when_required_checks_time_out(tmp_path: Path) -> None:
+    """A poll timeout on still-pending required checks must fail OPEN as
+    inconclusive (success=True with a best-effort note), not hard-fail the run,
+    and must not drive the LLM CI-fix loop or post a CI-failure comment."""
+    pending_run = {
+        "name": "build (manual /gcbrun)",
+        "state": "PENDING",
+        "bucket": "pending",
+        "link": "https://github.com/promptdriven/pdd_cloud/runs/1",
+    }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("timeout", [pending_run]),
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True, (
+        "A pending/timed-out required check the bot cannot trigger must be "
+        f"treated as inconclusive (fail-open), not a hard failure. Got "
+        f"success={success!r}, message={message!r}."
+    )
+    assert "inconclusive" in message.lower(), (
+        f"The message must signal the result is inconclusive, got {message!r}."
+    )
+    assert not fix_was_called, (
+        "An inconclusive timeout must not drive the LLM CI-fix loop."
+    )
+    assert "Timed out waiting for required CI checks to complete" not in message, (
+        "The inconclusive-timeout path must not reuse the old hard-fail message."
+    )
+    failure_comment.assert_not_called()
+
+
+def test_loop_inconclusive_when_required_check_needs_manual_action(
+    tmp_path: Path,
+) -> None:
+    """ACTION_REQUIRED required checks need an external/manual trigger, not LLM repair."""
+    action_required = {
+        "name": "auto-heal-pr (prompt-driven-development-stg)",
+        "state": "ACTION_REQUIRED",
+        "bucket": "fail",
+        "link": "https://console.cloud.google.com/cloud-build/triggers/example",
+    }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=2459), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("action_required", [action_required]),
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert cost == 0.0
+    assert "manual action" in message.lower()
+    assert "inconclusive" in message.lower()
+    assert not fix_was_called, "ACTION_REQUIRED must not drive the LLM CI-fix loop."
+    info_comment.assert_called_once()
+    failure_comment.assert_not_called()
+
+
+def test_loop_fails_closed_when_timeout_without_any_checks_read(tmp_path: Path) -> None:
+    """Guard (the other half of fail-open): a poll timeout where NO
+    required checks were ever read — the PR head never matched the expected SHA,
+    or the rollup was unreadable for the whole window, so ``_poll_required_checks``
+    returns ``("timeout", [])`` — must FAIL CLOSED, not fail open. With an empty
+    check set we cannot prove the checks are merely pending rather than failing,
+    so we must not green-light a head whose real status was never observed."""
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=STALE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("timeout", [])), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is False, (
+        "A timeout where no required checks were ever read must fail closed "
+        f"(real status unknown), not fail open. Got success={success!r}, "
+        f"message={message!r}."
+    )
+    assert "inconclusive" not in message.lower(), (
+        "The unread-checks timeout is a real fail-closed, not an inconclusive "
+        f"fail-open. Got message={message!r}."
+    )
+    # The inconclusive best-effort note is for the pending-checks case only;
+    # the unread case posts a CI-failure comment instead.
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
