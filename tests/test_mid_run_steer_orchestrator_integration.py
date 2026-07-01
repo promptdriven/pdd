@@ -173,6 +173,8 @@ def test_drain_filters_bot_state_and_progress_comments(
     assert len(steers) == 1
     assert steers[0].comment_id == "201"
     assert steers[0].body == "Please use pytest markers"
+    assert state["last_steered_comment_id"] == "205"
+    assert state["last_steer_at"] == "2026-06-02T10:04:00Z"
 
 
 def test_env_steer_injected_once_on_resume(mock_cwd):
