@@ -58,7 +58,7 @@
   - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
   - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
-  - For `target == "policy"`, delegate remaining args to `policy_cmd.main(...)` with `prog_name="pdd checkup policy"`; do not register a top-level `pdd policy` command.
+  - For `target == "policy"`, delegate remaining args to `policy_cmd.main(...)` with `prog_name="pdd checkup policy"`; include `"policy"` in the show-help bypass set alongside `"lint"`, `"contract"`, `"contracts"`, `"coverage"`, `"gate"`, and `"snapshot"` so that `pdd checkup policy check --help` renders subcommand help and exits 0. Do not register a top-level `pdd policy` command.
   - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.

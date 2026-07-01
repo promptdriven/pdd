@@ -8410,10 +8410,13 @@
     }
   },
   {
-    "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "reason": "Registers the pdd checkup CLI command for project health checks, local utilities, and policy dispatch.",
+    "description": "Defines the checkup Click command including pdd checkup lint, contract, coverage, gate, and policy dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
       "agentic_checkup_python.prompt",
+      "commands/prompt_python.prompt",
+      "commands/contracts_python.prompt",
+      "commands/gate_python.prompt",
       "commands/policy_python.prompt"
     ],
     "priority": 236,
@@ -10179,7 +10182,9 @@
     "description": "CLI command group for pdd checkup policy. The check subcommand runs deterministic contract IR checks first, then optionally invokes agentic_reviewer for semantic findings, merges results, and records evidence manifest metadata.",
     "dependencies": [
       "checkup_gates_python.prompt",
-      "evidence_manifest_python.prompt"
+      "evidence_manifest_python.prompt",
+      "agentic_reviewer_python.prompt",
+      "capability_ir_python.prompt"
     ],
     "priority": 237,
     "filename": "commands/policy_python.prompt",

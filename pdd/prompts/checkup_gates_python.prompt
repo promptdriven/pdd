@@ -156,6 +156,7 @@ loop refuses to ship and the fixer addresses the failure.
 % Agentic findings adapter
 36. `normalize_agentic_findings(raw_findings: List[dict], *, semantic_review_severity: str = "warning") -> List[ReviewFinding]` — convert raw `agentic_reviewer` findings (each a dict with `source`, `severity`, `confidence`, `effect`, `message`, `evidence`, `agent_steps`) into `ReviewFinding` objects. Rules:
     - By default (`semantic_review_severity="warning"`), all agentic findings are tagged `severity="warning"` and treated as advisory (non-blocking) regardless of the raw `severity` field.
+    - When `semantic_review_severity="info"`, all agentic findings are tagged `severity="info"` and treated as advisory.
     - When `semantic_review_severity="error"`, agentic findings whose `confidence >= 0.85` are escalated to `severity="blocker"` (gate-failing); those below the threshold retain `severity="warning"`.
     - `reviewer` is always set to `"agentic_reviewer"`.
     - `area` is set to `"semantic-review"`.
