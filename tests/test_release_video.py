@@ -29,6 +29,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
         "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_METADATA_CONFLICT",
+        "RELEASE_VIDEO_PDS_CLAUDE_MODEL",
         "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
         "RELEASE_VIDEO_SCRIPT_PATH",
         "PDS_API_URL",
@@ -337,6 +338,7 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert pds_call[pds_call.index("--privacy") + 1] == "unlisted"
     assert pds_call[pds_call.index("--release-tag") + 1] == "v1.1.0"
     assert pds_call[pds_call.index("--repo-name") + 1] == "promptdriven/pdd"
+    assert pds_call[pds_call.index("--claude-model") + 1] == "glm-5.2"
     idempotency_key = pds_call[pds_call.index("--idempotency-key") + 1]
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
 
