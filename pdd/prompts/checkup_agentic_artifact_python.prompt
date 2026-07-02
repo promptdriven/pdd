@@ -1,4 +1,4 @@
-<pdd-reason>Pure data-assembly module for the bounded/redacted pdd.checkup.agentic.v1 fallback/mirror artifact.</pdd-reason>
+<pdd-reason>Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state.</pdd-reason>
 
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
@@ -7,60 +7,63 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "classify_canonical_result", "signature": "(*, success: bool, message: str, final_state: Optional[Mapping[str, Any]] = None) -> str", "returns": "str"},
-      {"name": "build_agentic_mirror_artifact", "signature": "(*, owner: str, repo: str, pr_number: int, pr_url: str, issue_url: str, canonical_success: bool, canonical_message: str, canonical_final_state: Optional[Mapping[str, Any]], mirror_final_state: Optional[Mapping[str, Any]], mirror_prompt: str, reviewers: Mapping[str, str], mode: str, total_cost: float) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+      {"name": "build_agentic_v1_artifact", "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact", "returns": "AgenticV1Artifact"},
+      {"name": "_normalize_findings", "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
+      {"name": "_deduplicate_findings", "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"}
     ]
   }
 }
 </pdd-interface>
 
-% Write `pdd/checkup_agentic_artifact.py`, the bounded/redacted `pdd.checkup.agentic.v1` fallback/mirror artifact builder.
+% Write `pdd/checkup_agentic_artifact.py`, the bounded/redacted `pdd.checkup.agentic.v1` artifact builder.
 
 <include>context/python_preamble.prompt</include>
 
 % Goal
-Build a stable JSON-serializable dict for hosted checkup (`pdd_cloud`) that records canonical checkup/final-gate output plus a non-authoritative agentic mirror review. This module has no subprocess calls, no GitHub API calls, no filesystem writes, and no Pydantic dependency.
+Pure data-assembly module: accepts loop state, config, and context from `run_checkup_review_loop` and emits a bounded, redacted `pdd.checkup.agentic.v1` JSON artifact. No subprocess calls, no GitHub API calls, no side effects beyond building the artifact.
 
-% Constants
+% Role & Scope
+Responsible for: Pydantic v2 model definitions, finding normalization/deduplication, and the `build_agentic_v1_artifact` public function.
+Not responsible for: running the review loop, posting to GitHub, calling subprocesses, or scrubbing logic (reuse `_scrub_secrets` from `checkup_review_loop`).
+
+% Module Constants
 - `AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"`
-- `DEFAULT_MIRROR_PROMPT = "Using the same criteria as canonical `pdd checkup`, find concrete reasons this PR should not merge. Do not introduce new merge criteria. Report only verifiable blockers or material risks."`
-- Status constants:
-  - `CANONICAL_PASS_AGENTIC_MIRROR_CLEAN = "canonical_pass_agentic_mirror_clean"`
-  - `CANONICAL_PASS_AGENTIC_MIRROR_BLOCKING = "canonical_pass_agentic_mirror_blocking"`
-  - `CANONICAL_UNKNOWN_AGENTIC_FALLBACK_PASS = "canonical_unknown_agentic_fallback_pass"`
-  - `CANONICAL_UNKNOWN_AGENTIC_FALLBACK_BLOCKING = "canonical_unknown_agentic_fallback_blocking"`
-  - `CANONICAL_FAIL_AGENTIC_NOT_AUTHORITATIVE = "canonical_fail_agentic_not_authoritative"`
-- `TEXT_LIMIT = 2000`
+- `FINDING_TEXT_MAX_CHARS = 2000`
 
 % Requirements
-1. `classify_canonical_result(...) -> str` returns one of `"pass"`, `"fail"`, or `"unknown"`.
-   - `success=True` is `"pass"`.
-   - A `final_state` with failed/degraded/missing reviewer statuses, budget caps, or failed/degraded/missing `fresh_final_status` is `"unknown"` unless it also has concrete open findings proving content failure.
-   - Open `findings[]` entries with `status == "open"` are `"fail"`.
-   - Messages containing infrastructure/provider/parser/timeout/auth/rate/malformed/empty-output style markers are `"unknown"`.
-   - All other failures are `"fail"`.
-2. `build_agentic_mirror_artifact(...) -> Dict[str, Any]` must assemble:
-   - top-level `schema`, `owner`, `repo`, `pr_number`, `pr_url`, `issue_url`, `mode`, `status`
-   - `canonical`: `source`, `classification`, `success`, bounded/redacted `reason`, bounded selected `final_state`
-   - `agentic_mirror`: `authoritative: False`, `status` (`clean`, `blocking`, `unknown`, or `skipped`), bounded `prompt`, `reviewers`, and open findings from mirror final-state
-   - `verdict`: `decision` and bounded/redacted reason
-   - `budget`: total cost plus canonical max-rounds/max-minutes/max-cost booleans from final-state
-3. Status mapping is exact:
-   - canonical pass + mirror blocking => `canonical_pass_agentic_mirror_blocking`
-   - canonical pass + no mirror blockers => `canonical_pass_agentic_mirror_clean`
-   - canonical unknown + mirror blocking => `canonical_unknown_agentic_fallback_blocking`
-   - canonical unknown + no mirror blockers => `canonical_unknown_agentic_fallback_pass`
-   - canonical fail => `canonical_fail_agentic_not_authoritative`
-4. Verdict mapping:
-   - canonical `"fail"` is always `decision: "fail"`; the mirror is non-authoritative and must not overrule it.
-   - canonical `"pass"` returns `decision: "pass"` unless the mirror has blocking findings.
-   - canonical `"unknown"` may return `decision: "pass"` only when the mirror is clean/non-blocking; otherwise fail or require human review.
-5. All free text must be passed through `_scrub_secrets` from `pdd.checkup_review_loop` when importable, then bounded to `TEXT_LIMIT`. Import lazily inside the scrub helper so partial imports cannot cycle.
-6. Be defensive: malformed or missing final-state returns safe defaults and must not raise.
+
+1. **Pydantic v2 models** (all importable from this module):
+   - `AgenticLayer1(status: str, blockers: List[str])`
+   - `AgenticReviewer(name: str, command: str, status: str, finding_count: int, blocking_count: int)`
+   - `AgenticFinding(reviewer: str, severity: str, blocking: bool, path: Optional[str] = None, line: Optional[int] = None, summary: str = "", suggested_fix: str = "")`
+   - `AgenticFixAttempt(provider: str, status: str, changed_files: List[str], commit_sha: Optional[str] = None)`
+   - `AgenticValidationResult(status: str, evidence: List[str])`
+   - `AgenticFreshFinalReview(provider: str, status: str, finding_count: int)`
+   - `AgenticVerdict(decision: str, reason: str)`
+   - `AgenticBudget(max_rounds_reached: bool, max_minutes_reached: bool, max_cost_reached: bool)`
+   - `AgenticV1Artifact` — top-level artifact with fields: `schema: str` (constant `AGENTIC_V1_SCHEMA`), `owner: str`, `repo: str`, `pr_number: int`, `head_sha: str`, `mode: str` (`"fix"` or `"nofix"`), `status: str`, `layer1: AgenticLayer1`, `reviewers: List[AgenticReviewer]`, `findings: List[AgenticFinding]`, `fix_attempts: List[AgenticFixAttempt]`, `validation_after_fix: AgenticValidationResult`, `fresh_final_review: AgenticFreshFinalReview`, `verdict: AgenticVerdict`, `budget: AgenticBudget`.
+
+2. **`_normalize_findings(text: str, reviewer_name: str) -> List[AgenticFinding]`**: best-effort parser that extracts structured findings from reviewer output text. On parse failure returns `[]` (caller sets reviewer status to `degraded`). All free-text fields (`summary`, `suggested_fix`) are trimmed to `FINDING_TEXT_MAX_CHARS` and routed through `_scrub_secrets` (imported from `pdd.checkup_review_loop`).
+
+3. **`_deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding]`**: deduplicates on `(reviewer, path, line, severity)` key; prose-only findings (no path/line) dedup on the first 64 characters of `summary`.
+
+4. **`build_agentic_v1_artifact(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact`**: assembles all blocks from loop state. Maps `mode` (`"nofix"` when `no_fix=True`, else `"fix"`), `status`, `layer1`, `reviewers`, `findings` (via `_normalize_findings` + `_deduplicate_findings`), `fix_attempts`, `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget`. All free-text fields routed through `_scrub_secrets` and capped at `FINDING_TEXT_MAX_CHARS`. Graceful degradation: extraction failures log WARNING and use safe defaults; never crash the caller.
+
+5. **Budget booleans**: computed at artifact-build time by comparing actual elapsed rounds/minutes/cost vs configured caps (`config.max_review_rounds`, `config.max_review_minutes`, `config.max_review_cost`).
+
+6. **R1 — Schema stability**: `AgenticV1Artifact.schema` MUST always be `AGENTIC_V1_SCHEMA`; never derive it from runtime state.
+
+7. **R2 — No raw secrets**: all free-text fields (`summary`, `suggested_fix`, `verdict.reason`, `layer1.blockers[]`) MUST be routed through `_scrub_secrets` before inclusion.
+
+8. **R3 — Nofix no-write guarantee**: when `mode == "nofix"`, `fix_attempts` MUST be an empty list; never populate it from loop state in nofix mode.
+
+9. **R4 — Fail-closed on normalization failure**: when `_normalize_findings` returns `[]` for a reviewer (parse failure), the corresponding `AgenticReviewer.status` MUST be set to `"degraded"`; never report it as `"clean"`.
+
+10. **R5 — Budget booleans at artifact time**: budget booleans are computed fresh from config caps vs actual elapsed values each time `build_agentic_v1_artifact` is called; they MUST NOT be read from persisted loop state.
 
 % Dependencies
 <pdd.checkup_review_loop>
-<include select="def:_scrub_secrets">context/checkup_review_loop_example.py</include>
+<include select="def:_scrub_secrets,def:parse_reviewer_commands">context/checkup_review_loop_example.py</include>
 </pdd.checkup_review_loop>
 
 % Deliverables

@@ -45,16 +45,10 @@ from .checkup_review_loop import (
     ReviewLoopContext,
     clear_final_state,
     load_final_state,
-    parse_reviewer_commands,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
     run_checkup_review_loop,
-)
-from .checkup_agentic_artifact import (
-    DEFAULT_MIRROR_PROMPT,
-    build_agentic_mirror_artifact,
-    classify_canonical_result,
 )
 from .ci_validation import run_github_checks_gate
 from .agentic_sync import _find_project_root, _load_architecture_json
@@ -715,10 +709,6 @@ def run_agentic_checkup(
     test_scope: str = "full",
     full_suite_source: str = "local",
     review_loop: bool = False,
-    agentic_review_loop: bool = False,
-    adversarial_prompt: Optional[str] = None,
-    fresh_final_review_role: Optional[str] = None,
-    as_json: bool = False,
     final_gate: bool = False,
     review_only: bool = False,
     reviewers: str = "codex,claude",
@@ -765,9 +755,6 @@ def run_agentic_checkup(
             is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
-        agentic_review_loop: When true, run canonical checkup/final-gate as
-            the authoritative source of truth and emit a non-authoritative
-            agentic fallback/mirror artifact.
         full_suite_source: Final-gate full-suite source. ``local`` preserves
             the historical contract: Layer 1 must run the full local suite.
             ``github-checks`` makes Layer 1 run targeted local checks and then
@@ -999,21 +986,13 @@ def run_agentic_checkup(
     def _run_review_loop_layer(
         pr_content: Optional[str] = None,
         layer1_step5_evidence: str = "",
-        issue_number_override: Optional[int] = None,
-        review_only_override: Optional[bool] = None,
-        use_github_state_override: Optional[bool] = None,
-        adversarial_prompt_override: Optional[str] = None,
     ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
             issue_content=_truncate_issue_context(raw_full_content, 60000),
             repo_owner=owner,
             repo_name=repo,
-            issue_number=(
-                issue_number
-                if issue_number_override is None
-                else issue_number_override
-            ),
+            issue_number=issue_number,
             issue_title=raw_title,
             architecture_json=_truncate_context(raw_arch_json_str, 40000),
             pddrc_content=raw_pddrc_content,
@@ -1038,11 +1017,7 @@ def run_agentic_checkup(
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
             fixer_fallback=fixer_fallback,
-            review_only=(
-                review_only
-                if review_only_override is None
-                else review_only_override
-            ),
+            review_only=review_only,
             max_rounds=max_review_rounds,
             max_cost=max_review_cost,
             max_minutes=max_review_minutes,
@@ -1058,7 +1033,6 @@ def run_agentic_checkup(
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
-            adversarial_prompt=adversarial_prompt_override,
         )
         return run_checkup_review_loop(
             context=loop_context,
@@ -1066,11 +1040,7 @@ def run_agentic_checkup(
             cwd=project_root,
             verbose=verbose,
             quiet=quiet,
-            use_github_state=(
-                use_github_state
-                if use_github_state_override is None
-                else use_github_state_override
-            ),
+            use_github_state=use_github_state,
         )
 
     pr_context_ready = (
@@ -1079,112 +1049,6 @@ def run_agentic_checkup(
         and pr_repo is not None
         and pr_number is not None
     )
-
-    if agentic_review_loop:
-        if not pr_context_ready:
-            return False, "--agentic-review-loop requires --pr.", 0.0, ""
-        mirror_prompt = adversarial_prompt or DEFAULT_MIRROR_PROMPT
-        canonical_final_gate = bool((final_gate or has_issue) and not no_fix)
-        canonical_success, canonical_message, canonical_cost, canonical_model = (
-            run_agentic_checkup(
-                issue_url if has_issue else None,
-                verbose=verbose,
-                quiet=quiet,
-                no_fix=(no_fix if not canonical_final_gate else False),
-                timeout_adder=timeout_adder,
-                use_github_state=(use_github_state and not no_fix),
-                reasoning_time=reasoning_time,
-                pr_url=pr_url,
-                test_scope=test_scope,
-                full_suite_source=full_suite_source,
-                review_loop=False,
-                final_gate=canonical_final_gate,
-                review_only=False,
-                reviewers=reviewers,
-                reviewer=reviewer,
-                fixer=fixer,
-                reviewer_fallback=reviewer_fallback,
-                fixer_fallback=fixer_fallback,
-                max_review_rounds=max_review_rounds,
-                max_review_cost=max_review_cost,
-                max_review_minutes=max_review_minutes,
-                require_all_reviewers_clean=require_all_reviewers_clean,
-                continue_on_reviewer_limit=continue_on_reviewer_limit,
-                require_final_fresh_review=require_final_fresh_review,
-                blocking_severities=blocking_severities,
-                clean_reviewer_states=clean_reviewer_states,
-                fallback_reviewer_on_failure=fallback_reviewer_on_failure,
-                allow_same_reviewer_fixer=allow_same_reviewer_fixer,
-                enable_gates=enable_gates,
-                gate_timeout=gate_timeout,
-                gate_allow=gate_allow,
-                start_step_override=start_step_override,
-                cwd=project_root,
-                prompt_repair=prompt_repair,
-                max_prompt_repair_rounds=max_prompt_repair_rounds,
-                max_prompt_token_growth=max_prompt_token_growth,
-                max_prompt_repair_seconds=max_prompt_repair_seconds,
-            )
-        )
-        canonical_final_state = (
-            load_final_state(project_root, issue_number, pr_number)
-            if canonical_final_gate
-            else None
-        )
-        canonical_class = classify_canonical_result(
-            success=canonical_success,
-            message=canonical_message,
-            final_state=canonical_final_state,
-        )
-        mirror_final_state: Optional[Dict[str, Any]] = None
-        mirror_cost = 0.0
-        mirror_model = ""
-        if canonical_class in {"pass", "unknown"}:
-            mirror_issue_number = 0
-            clear_final_state(project_root, mirror_issue_number, pr_number)
-            _mirror_success, _mirror_message, mirror_cost, mirror_model = (
-                _run_review_loop_layer(
-                    pr_content=_fetch_pr_context(pr_owner, pr_repo, pr_number),
-                    issue_number_override=mirror_issue_number,
-                    review_only_override=True,
-                    use_github_state_override=False,
-                    adversarial_prompt_override=mirror_prompt,
-                )
-            )
-            mirror_final_state = load_final_state(
-                project_root, mirror_issue_number, pr_number
-            )
-
-        artifact = build_agentic_mirror_artifact(
-            owner=pr_owner or owner,
-            repo=pr_repo or repo,
-            pr_number=pr_number,
-            pr_url=pr_url or "",
-            issue_url=issue_url or "",
-            canonical_success=canonical_success,
-            canonical_message=canonical_message,
-            canonical_final_state=canonical_final_state,
-            mirror_final_state=mirror_final_state,
-            mirror_prompt=mirror_prompt,
-            reviewers=parse_reviewer_commands(reviewers),
-            mode="nofix" if no_fix else "fix",
-            total_cost=canonical_cost + mirror_cost,
-        )
-        artifact_path = project_root / f"pdd-checkup-agentic-{pr_number}.json"
-        artifact_path.write_text(
-            json.dumps(artifact, indent=2, sort_keys=True), encoding="utf-8"
-        )
-        message = (
-            json.dumps(artifact, indent=2, sort_keys=True)
-            if as_json
-            else f"{canonical_message}\n\nAgentic mirror artifact: {artifact_path}"
-        )
-        return (
-            artifact.get("verdict", {}).get("decision") == "pass",
-            message,
-            canonical_cost + mirror_cost,
-            mirror_model or canonical_model,
-        )
 
     if final_gate and (not pr_context_ready or not has_issue):
         # The final gate is the two-layer PR-readiness path; it is PR-scoped,

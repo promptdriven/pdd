@@ -204,18 +204,6 @@ class TestCheckupReviewLoopCli:
         assert result.exit_code != 0
         assert "cannot be combined with --no-fix" in result.output
 
-    def test_parse_reviewer_commands_keeps_role_normalization(self) -> None:
-        from pdd.checkup_review_loop import parse_reviewer_commands, parse_reviewers
-
-        assert parse_reviewers("chatgpt:/review,anthropic:/code-review") == (
-            "codex",
-            "claude",
-        )
-        assert parse_reviewer_commands("chatgpt:/review,anthropic:/code-review") == {
-            "codex": "/review",
-            "claude": "/code-review",
-        }
-
     def test_review_only_reaches_agentic_checkup_and_allows_no_fix(self) -> None:
         runner = CliRunner()
         with patch(

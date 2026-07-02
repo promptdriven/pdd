@@ -151,10 +151,10 @@ class ReviewLoopConfig:
     # mode. Off by default so reviewer/fixer independence remains the normal
     # contract.
     allow_same_reviewer_fixer: bool = False
-    # APPENDED: optional non-authoritative agentic mirror lens — issue #1788.
-    # This only constrains mirror reviewers to canonical checkup criteria; it
-    # does not create a new ship gate or make review-loop output authoritative.
+    # APPENDED: agentic-review-loop knobs — issue #1788
     adversarial_prompt: Optional[str] = None
+    agentic_mode: bool = False
+    fresh_final_review_role: Optional[str] = None
 
 
 @dataclass
@@ -258,13 +258,13 @@ def parse_reviewer_commands(value) -> Dict[str, str]:
     """Parse ``role:/slash-command`` reviewer spec into a mapping.
 
     Accepts a comma-separated string or list of ``role:/command`` pairs and
-    returns a normalized ``{role: command}`` dict.  For example::
+    returns a ``{role: command}`` dict.  For example::
 
         parse_reviewer_commands("codex:/review,claude:/code-review")
         # -> {"codex": "/review", "claude": "/code-review"}
 
-    Plain role names are retained with an empty command string so the hosted
-    artifact can report the exact reviewers that participated.
+    Unknown or malformed entries are dropped. An empty result means no
+    reviewer commands were resolved.
     """
     return {}
 
