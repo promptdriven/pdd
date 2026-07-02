@@ -12457,10 +12457,13 @@ class TestStep9VerifierRejectionVisibleComment:
 
     def test_rejection_comment_header_matches_steer_status_filter(self):
         """The rejection comment can be posted by a User-type token (not a
-        GitHub-App Bot), so drain_issue_steers only skips it via the
-        status-comment body filter `^## Step \\d+/\\d+:` (MULTILINE). If the
-        header stops matching, the orchestrator re-ingests its own rejection
-        comment as a human steer on the next drain (self-steering loop)."""
+        GitHub-App Bot), so steer ingestion only skips it via the shared
+        status-comment body predicate (used by BOTH the GitHub poll and the
+        PDD_STEER_JSON env handoff). If the header stops matching, the
+        orchestrator re-ingests its own rejection comment as a human steer
+        on the next drain (self-steering loop). Pinned against the REAL
+        production predicate, not a regex copy."""
+        from pdd.agentic_common import _is_pdd_status_comment_body
         from pdd.agentic_e2e_fix_orchestrator import (
             _build_step9_verifier_rejection_comment,
         )
@@ -12469,9 +12472,9 @@ class TestStep9VerifierRejectionVisibleComment:
             body = _build_step9_verifier_rejection_comment(
                 3, ["tests/test_widget.py"], "detail", resumed=resumed
             )
-            assert re.search(r"^## Step \d+/\d+:", body, re.MULTILINE), (
-                "rejection comment header must match drain_issue_steers' "
-                f"status-comment filter; got header: {body.splitlines()[0]!r}"
+            assert _is_pdd_status_comment_body(body), (
+                "rejection comment must be recognized by the shared steer "
+                f"status filter; got header: {body.splitlines()[0]!r}"
             )
 
     @staticmethod
