@@ -1488,6 +1488,22 @@
             ]
           },
           {
+            "name": "derive_code_file_stem",
+            "signature": "(prompt_filename: str, default_language: str) -> Tuple[str, str, bool]",
+            "returns": "Tuple[str, str, bool]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "resolve_code_path",
+            "signature": "(prompt_name: str, resolved_prompt_path: str, csv_file: str, code_directory: str, input_code_filename: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Reads filesystem metadata for candidate code paths"
+            ]
+          },
+          {
             "name": "process_csv_change",
             "signature": "(csv_file: str, strength: float, temperature: float, code_directory: str, language: str, extension: str, budget: float, time: float = DEFAULT_TIME) -> Tuple[bool, List[Dict[str, str]], float, Optional[str]]",
             "returns": "Tuple[bool, List[Dict[str, str]], float, Optional[str]]",

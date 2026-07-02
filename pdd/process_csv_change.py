@@ -63,6 +63,83 @@ def resolve_prompt_path(prompt_name: str, csv_file: str, code_directory: str) ->
     # If we get here, file was not found
     return None
 
+def derive_code_file_stem(prompt_filename: str, default_language: str) -> Tuple[str, str, bool]:
+    """
+    Derive the generated code stem and language from a prompt filename.
+
+    Returns:
+        Tuple[file_stem, actual_language, language_from_suffix]
+    """
+    base_name, _ = os.path.splitext(prompt_filename)
+
+    if '_' not in base_name:
+        return base_name, default_language, False
+
+    parts = base_name.rsplit('_', 1)
+    if len(parts) == 2 and parts[1].isalpha():
+        return parts[0], parts[1].capitalize(), True
+
+    return base_name, default_language, False
+
+def resolve_code_path(
+    prompt_name: str,
+    resolved_prompt_path: str,
+    csv_file: str,
+    code_directory: str,
+    input_code_filename: str,
+) -> str:
+    """
+    Resolve the code path paired with a CSV prompt row.
+
+    Prefer the prompt's relative subpath under the CSV directory or code
+    directory, then fall back to the historical flat code_directory lookup.
+    """
+    abs_code_directory = os.path.abspath(code_directory)
+    abs_csv_dir = os.path.abspath(os.path.dirname(csv_file))
+    abs_prompt_path = os.path.abspath(resolved_prompt_path)
+
+    candidate_dirs: List[str] = []
+    for root in (abs_csv_dir, abs_code_directory):
+        try:
+            rel_prompt = os.path.relpath(abs_prompt_path, root)
+        except ValueError:
+            continue
+        if rel_prompt.startswith(os.pardir + os.sep) or rel_prompt == os.pardir:
+            continue
+        rel_dir = os.path.dirname(rel_prompt)
+        if rel_dir:
+            candidate_dirs.append(os.path.join(abs_code_directory, rel_dir))
+
+    prompt_dir_from_csv = os.path.dirname(prompt_name)
+    if prompt_dir_from_csv and not os.path.isabs(prompt_dir_from_csv):
+        candidate_dirs.append(os.path.join(abs_code_directory, prompt_dir_from_csv))
+
+    candidate_dirs.append(abs_code_directory)
+
+    def _inside_code_directory(path: str) -> bool:
+        try:
+            return (
+                os.path.commonpath([abs_code_directory, os.path.abspath(path)])
+                == abs_code_directory
+            )
+        except ValueError:
+            return False
+
+    checked_dirs = set()
+    fallback_path = os.path.join(abs_code_directory, input_code_filename)
+    for directory in candidate_dirs:
+        normalized_dir = os.path.abspath(directory)
+        if normalized_dir in checked_dirs:
+            continue
+        if not _inside_code_directory(normalized_dir):
+            continue
+        checked_dirs.add(normalized_dir)
+        candidate = os.path.join(normalized_dir, input_code_filename)
+        if os.path.exists(candidate) and os.path.isfile(candidate):
+            return candidate
+
+    return fallback_path
+
 def process_csv_change(
     csv_file: str,
     strength: float,
@@ -215,22 +292,16 @@ def process_csv_change(
                              console.print(f"[bold yellow]Warning:[/bold yellow] Prompt file '{prompt_filename}' does not end with '.prompt'. Attempting to parse language anyway (row {row_num}).")
                              # Keep base_name as is, don't assume .prompt was the only extension part
 
-                        file_stem = base_name
-                        actual_language = language # Default language
-                        language_from_suffix = False # Track if language came from suffix
+                        file_stem, actual_language, language_from_suffix = derive_code_file_stem(
+                            prompt_filename,
+                            language
+                        )
 
-                        # Check for _language suffix
-                        if '_' in base_name:
+                        if language_from_suffix:
+                            console.print(f"    [dim]Inferred language from filename:[/dim] {actual_language}")
+                        elif '_' in base_name:
                             parts = base_name.rsplit('_', 1)
-                            # Check if the suffix looks like a language identifier (simple check: alpha only)
-                            if len(parts) == 2 and parts[1].isalpha():
-                                file_stem = parts[0]
-                                # Use capitalize for consistency, matching get_extension examples
-                                actual_language = parts[1].capitalize()
-                                language_from_suffix = True # Set flag
-                                console.print(f"    [dim]Inferred language from filename:[/dim] {actual_language}")
-                            else:
-                                console.print(f"    [dim]Suffix '_{parts[1]}' not recognized as language, using default:[/dim] {language}")
+                            console.print(f"    [dim]Suffix '_{parts[1]}' not recognized as language, using default:[/dim] {language}")
                         else:
                             console.print(f"    [dim]Using default language:[/dim] {language}")
 
@@ -259,10 +330,15 @@ def process_csv_change(
                         # iii. add the suffix extension to the prompt_name (stem)
                         input_code_filename = file_stem + code_extension
 
-                        # iv. Construct code file path: place it directly in code_directory.
-                        input_code_path = os.path.join(code_directory, input_code_filename)
+                        # iv. Construct code file path, preserving prompt subdirectories when present.
+                        input_code_path = resolve_code_path(
+                            prompt_name=prompt_name_from_csv,
+                            resolved_prompt_path=resolved_prompt_path,
+                            csv_file=csv_file,
+                            code_directory=code_directory,
+                            input_code_filename=input_code_filename,
+                        )
                         console.print(f"  [dim]Derived target code path:[/dim] {input_code_path}")
-                        print(f"DEBUG: Attempting to access code file path: '{input_code_path}'") # Added log
 
 
                         # Read the input code from the input_code_path

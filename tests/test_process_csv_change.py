@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock, call
 
 # Assuming the package is named 'pdd' and the module is 'process_csv_change.py'
-from pdd.process_csv_change import process_csv_change, resolve_prompt_path
+from pdd.process_csv_change import process_csv_change, resolve_code_path, resolve_prompt_path
 
 # Add the helper function for the open side effect (place it at module level):
 def create_open_side_effect(file_map):
@@ -870,6 +870,91 @@ def test_correct_prompt_path_resolution_integration(mock_change_fixture, tmp_pat
     # Check that language was inferred correctly
     assert "Inferred language from filename: Python" in captured.out
     assert "Overall Success Status: True" in captured.out
+
+def test_csv_change_resolves_code_path_from_prompt_subdirectory(
+    mock_change_fixture,
+    tmp_path,
+    capsys,
+):
+    """
+    CSV change should preserve the prompt's relative subdirectory when locating
+    the paired code file under code_directory.
+    """
+    prompts_dir = tmp_path / "prompts" / "pkg"
+    code_dir = tmp_path / "code"
+    nested_code_dir = code_dir / "prompts" / "pkg"
+    prompts_dir.mkdir(parents=True)
+    nested_code_dir.mkdir(parents=True)
+
+    prompt_rel = Path("prompts") / "pkg" / "widget_python.prompt"
+    prompt_path = tmp_path / prompt_rel
+    code_path = nested_code_dir / "widget.py"
+    csv_path = tmp_path / "changes.csv"
+
+    prompt_path.write_text("Original prompt content", encoding="utf-8")
+    code_path.write_text("def widget():\n    return 1\n", encoding="utf-8")
+    csv_path.write_text(
+        f"prompt_name,change_instructions\n{prompt_rel.as_posix()},Do the change\n",
+        encoding="utf-8",
+    )
+
+    mock_change_fixture.return_value = ("Modified prompt", 0.01, "test_model")
+
+    with patch("pdd.process_csv_change.get_extension", return_value=".py"):
+        success, list_of_jsons, total_cost, model_name = process_csv_change(
+            csv_file=str(csv_path),
+            strength=0.5,
+            temperature=0.5,
+            code_directory=str(code_dir),
+            language="python",
+            extension=".py",
+            budget=1.0,
+        )
+
+    assert success
+    assert list_of_jsons == [
+        {
+            "file_name": prompt_rel.as_posix(),
+            "modified_prompt": "Modified prompt",
+        }
+    ]
+    assert total_cost == 0.01
+    assert model_name == "test_model"
+    assert mock_change_fixture.call_args.kwargs["input_code"] == code_path.read_text(
+        encoding="utf-8"
+    )
+
+    captured = capsys.readouterr()
+    assert "Overall Success Status: True" in captured.out
+
+def test_csv_change_does_not_resolve_code_outside_code_directory(
+    tmp_path,
+):
+    """
+    CSV prompt paths with parent-directory components must not let paired code
+    resolution escape code_directory.
+    """
+    code_dir = tmp_path / "code"
+    outside_dir = tmp_path / "outside"
+    code_dir.mkdir()
+    outside_dir.mkdir()
+
+    resolved_prompt_path = outside_dir / "widget_python.prompt"
+    resolved_prompt_path.write_text("Prompt", encoding="utf-8")
+    unsafe_code_path = outside_dir / "widget.py"
+    unsafe_code_path.write_text("def widget(): return 'unsafe'\n", encoding="utf-8")
+    safe_code_path = code_dir / "widget.py"
+    safe_code_path.write_text("def widget(): return 'safe'\n", encoding="utf-8")
+
+    resolved_code_path = resolve_code_path(
+        prompt_name="../outside/widget_python.prompt",
+        resolved_prompt_path=str(resolved_prompt_path),
+        csv_file=str(tmp_path / "changes.csv"),
+        code_directory=str(code_dir),
+        input_code_filename="widget.py",
+    )
+
+    assert resolved_code_path == str(safe_code_path)
 
 def test_extension_fallback_bug(mock_change_fixture, capsys):
     """
