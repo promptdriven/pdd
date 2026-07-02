@@ -62,6 +62,12 @@ TOP_FLOW_STORIES = {
         "covers": {"R1", "R2", "R3", "R4"},
         "must_contain": ("project-wide/global synchronization", "single-module"),
     },
+    "pdd_update": {
+        "metadata_prompt": "prompts/commands/modify_python.prompt",
+        "package_prompt": "commands/modify_python.prompt",
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": ("Repository-wide update", "fingerprint finalization"),
+    },
 }
 
 
