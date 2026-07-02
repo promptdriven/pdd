@@ -22,6 +22,7 @@ more than one dev unit:
 - PRD-backed `pdd generate` output handed to `pdd sync`
 - Feature-request `pdd change` output carried through story/contract artifacts
   and reviewable PR creation
+- Bug-report `pdd bug` reproduction handed to `pdd fix` verification
 
 Cross-dev-unit stories use both `pdd-story-prompts` and `pdd-story-dev-units`
 metadata so the same story is attributed to every linked dev unit while still
