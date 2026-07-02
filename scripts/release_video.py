@@ -746,10 +746,12 @@ def print_pending_release_video_response(response: dict[str, Any]) -> None:
 
 
 def pending_release_video_status_command(tag: str) -> str:
+    """Return the Make target that refreshes persisted PDS run status."""
     return f"make release-video-status RELEASE_TAG={tag} RELEASE_VIDEO_STATUS_QUERY=1"
 
 
 def pending_release_video_backfill_command(tag: str) -> str:
+    """Return the Make target used after the pending run publishes to YouTube."""
     return (
         "make release-video-discord-backfill "
         f"RELEASE_TAG={tag} RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
@@ -757,6 +759,7 @@ def pending_release_video_backfill_command(tag: str) -> str:
 
 
 def load_persisted_pds_run_metadata(path: Path | None) -> dict[str, Any]:
+    """Load a persisted PDS run sidecar, returning an empty dict on failure."""
     if path is None:
         return {}
     try:
@@ -777,6 +780,7 @@ def pending_pds_create_response_from_sidecar(
     reason: str,
     message: str,
 ) -> dict[str, Any] | None:
+    """Build a nonfatal pending response when sidecar status is still active."""
     metadata = load_persisted_pds_run_metadata(path)
     if not metadata or not release_video_status_is_running(metadata.get("status")):
         return None
@@ -807,6 +811,7 @@ def pending_pds_create_response_from_sidecar(
 
 
 def pds_create_has_project_exists_conflict(completed: subprocess.CompletedProcess[str]) -> bool:
+    """Return True when PDS create failed because the release project exists."""
     combined = f"{completed.stderr}\n{completed.stdout}".lower()
     return (
         "release_video_existing_project_metadata_mismatch" in combined
@@ -818,6 +823,7 @@ def pds_create_has_project_exists_conflict(completed: subprocess.CompletedProces
 
 
 def pds_create_has_timeout_failure(completed: subprocess.CompletedProcess[str]) -> bool:
+    """Return True when PDS create failed through a timeout-shaped exit."""
     combined = f"{completed.stderr}\n{completed.stdout}".lower()
     return (
         completed.returncode == 124
