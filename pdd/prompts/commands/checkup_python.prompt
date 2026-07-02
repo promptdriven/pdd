@@ -1,5 +1,16 @@
 <pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "checkup", "description": "Run agentic health checkup or local diagnostics including lint; PR mode supports --agentic-review-loop fallback/mirror pass"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
 <pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
 <pdd-dependency>commands/contracts_python.prompt</pdd-dependency>

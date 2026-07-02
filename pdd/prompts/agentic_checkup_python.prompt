@@ -1,5 +1,18 @@
 <include>context/python_preamble.prompt</include>
 <pdd-reason>Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_checkup", "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, agentic_review_loop: bool = False, adversarial_prompt: Optional[str] = None, fresh_final_review_role: Optional[str] = None, as_json: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "parse_reviewer_commands", "signature": "(reviewers: str) -> Dict[str, str]", "returns": "Dict[str, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 <pdd-dependency>ci_validation_python.prompt</pdd-dependency>

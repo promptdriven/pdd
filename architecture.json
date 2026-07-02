@@ -7681,7 +7681,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, test_scope: str = \"full\", full_suite_source: str = \"local\", review_loop: bool = False, agentic_review_loop: bool = False, adversarial_prompt: Optional[str] = None, fresh_final_review_role: Optional[str] = None, as_json: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, allow_same_reviewer_fixer: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Fetches the GitHub issue (when provided) and PR context via gh api",
@@ -7737,6 +7737,14 @@
             "sideEffects": [
               "None"
             ]
+          },
+          {
+            "name": "parse_reviewer_commands",
+            "signature": "(reviewers: str) -> Dict[str, str]",
+            "returns": "Dict[str, str]",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -7755,7 +7763,8 @@
       "agentic_checkup_orchestrator_python.prompt",
       "agentic_e2e_fix_orchestrator_python.prompt",
       "architecture_registry_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "checkup_agentic_artifact_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",
@@ -7864,6 +7873,48 @@
     },
     "position": {
       "x": 15600,
+      "y": 3200
+    }
+  },
+  {
+    "reason": "Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state; encodes the canonical × agentic verdict matrix via five Literal status strings.",
+    "description": "Accepts loop state, config, context, and an optional upstream canonical gate report from run_checkup_review_loop and emits a bounded, redacted pdd.checkup.agentic.v1 JSON artifact. Implements five-way status derivation (canonical_pass_agentic_mirror_clean, canonical_pass_agentic_mirror_blocking, canonical_unknown_agentic_fallback_pass, canonical_unknown_agentic_fallback_blocking, canonical_fail_agentic_not_authoritative), finding normalization and deduplication, text bounding/redaction via _scrub_secrets, and the build_agentic_v1_artifact public function. No subprocess calls, no GitHub API calls, no side effects beyond building the artifact.",
+    "dependencies": [
+      "checkup_review_loop_python.prompt"
+    ],
+    "priority": 217.52,
+    "filename": "checkup_agentic_artifact_python.prompt",
+    "filepath": "pdd/checkup_agentic_artifact.py",
+    "tags": [
+      "agentic",
+      "checkup",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_agentic_v1_artifact",
+            "signature": "(*, context: Any, state: Any, final_state: Mapping[str, Any], final_gate_report: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "None — pure data assembly; no subprocess calls, no GitHub API calls, no file writes"
+            ]
+          }
+        ],
+        "models": [
+          "AgenticV1Artifact"
+        ],
+        "constants": [
+          "AGENTIC_V1_SCHEMA",
+          "TEXT_LIMIT",
+          "SUMMARY_LIMIT"
+        ]
+      }
+    },
+    "position": {
+      "x": 15800,
       "y": 3200
     }
   },
@@ -8495,7 +8546,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup or local diagnostics including lint"
+            "description": "Run agentic health checkup or local diagnostics including lint; PR mode supports --agentic-review-loop fallback/mirror pass"
           }
         ]
       }
