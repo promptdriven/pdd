@@ -42,6 +42,27 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 CROSS_UNIT_STORIES = {
+    "pdd_bug_fix_verification": {
+        "metadata_prompts": [
+            "prompts/commands/analysis_python.prompt",
+            "prompts/agentic_bug_orchestrator_python.prompt",
+            "prompts/commands/fix_python.prompt",
+            "prompts/agentic_e2e_fix_orchestrator_python.prompt",
+            "prompts/agentic_common_python.prompt",
+        ],
+        "dev_units": [
+            "analysis_python.prompt",
+            "agentic_bug_orchestrator_python.prompt",
+            "fix_python.prompt",
+            "agentic_e2e_fix_orchestrator_python.prompt",
+            "agentic_common_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5", "R6"},
+        "must_contain": (
+            "bug-to-fix workflow",
+            "failing tests",
+        ),
+    },
     "pdd_feature_change_pr": {
         "metadata_prompts": [
             "prompts/commands/modify_python.prompt",
