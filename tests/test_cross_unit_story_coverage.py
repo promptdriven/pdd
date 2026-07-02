@@ -366,10 +366,6 @@ class TestCoverageResultCrossUnitField:
         _make_story(stories_dir, _CROSS_UNIT_2_STORY, name="story__cross.md")
         return prompt_path, stories_dir, tests_dir
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: CoverageResult.cross_unit_stories field not yet added",
-    )
     def test_cross_unit_story_listed_in_cross_unit_stories_field(self, tmp_path):
         """build_coverage must set CoverageResult.cross_unit_stories for cross-unit stories."""
         prompt_path, stories_dir, tests_dir = self._setup(tmp_path)
@@ -380,10 +376,6 @@ class TestCoverageResultCrossUnitField:
         )
         assert "story__cross.md" in result.cross_unit_stories
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: CoverageResult.cross_unit_stories field not yet added",
-    )
     def test_single_unit_story_absent_from_cross_unit_stories(self, tmp_path):
         """A single-unit story must NOT appear in CoverageResult.cross_unit_stories."""
         stories_dir = tmp_path / "stories"
@@ -400,10 +392,6 @@ class TestCoverageResultCrossUnitField:
         )
         assert "story__single.md" not in result.cross_unit_stories
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: CoverageResult.as_dict() does not yet emit cross_unit_stories key",
-    )
     def test_as_dict_includes_cross_unit_stories_key(self, tmp_path):
         """CoverageResult.as_dict() must include a 'cross_unit_stories' key."""
         prompt_path, stories_dir, tests_dir = self._setup(tmp_path)
@@ -428,10 +416,6 @@ class TestCoverageResultCrossUnitField:
             f"Got: {counted}"
         )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: CoverageResult.cross_unit_stories field not yet added",
-    )
     def test_empty_cross_unit_stories_when_no_cross_unit_stories_present(self, tmp_path):
         """When only single-unit stories exist, cross_unit_stories must be an empty list."""
         stories_dir = tmp_path / "stories"
@@ -703,10 +687,6 @@ class TestCLICrossUnitOutput:
             "results array must have one entry per prompt file, not one per story link"
         )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: JSON output does not yet include cross_unit_stories per result item",
-    )
     def test_json_output_includes_cross_unit_stories_key(self, tmp_path):
         """Each result item in --json must include 'cross_unit_stories' (issue #1769)."""
         prompt_alpha, stories_dir, tests_dir = self._setup_cli(tmp_path)
@@ -729,10 +709,6 @@ class TestCLICrossUnitOutput:
                 f"Keys found: {list(item.keys())}"
             )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Pending implementation of issue #1769: CLI Rich table does not yet render a cross-dev-unit section",
-    )
     def test_rich_table_shows_cross_dev_unit_section_when_applicable(self, tmp_path):
         """Rich table output must label cross-dev-unit coverage distinctly (issue #1769)."""
         prompt_alpha, stories_dir, tests_dir = self._setup_cli(tmp_path)
