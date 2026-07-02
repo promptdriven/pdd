@@ -1,0 +1,115 @@
+% You are an expert Python engineer. Implement the validate_upload module.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Validates file uploads before writing to storage: checks type, size, and duplicate hash.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_upload", "signature": "(file_obj, tenant_id, config) -> ValidationResult", "returns": "ValidationResult"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Role & Scope
+
+This module is the entry point for all file upload validation in the ingestion pipeline. It enforces type allowlists, size limits, and duplicate detection before any storage write occurs. It does not authenticate callers or authorize tenant-level quotas.
+
+% Background
+
+The ingestion pipeline receives files from multiple client surfaces (web upload, API, bulk import). Historically, validation was scattered across three call sites with inconsistent rules. This module centralises validation as a single authoritative gate.
+
+Duplicate detection uses a normalized SHA-256 hash of the file content combined with the tenant ID. The same file uploaded by two different tenants is NOT considered a duplicate.
+
+% Vocabulary
+
+- Allowed type: a MIME type present in `config.allowed_mime_types`.
+- File size: the byte length of the raw file content before any transformation.
+- Duplicate upload: an upload whose normalized SHA-256 hash and tenant ID match a previously accepted upload record in the store.
+- Normalized hash: SHA-256 of the file content with no leading/trailing whitespace normalization (binary files are hashed as-is).
+
+<responsibility>
+Validate file uploads: MIME type, size limit, and duplicate detection. Return a structured ValidationResult.
+</responsibility>
+
+<non_responsibilities>
+- Does not authenticate the caller.
+- Does not authorize tenant-level quotas or billing checks.
+- Does not write to storage; validation only.
+- Does not send notifications.
+- Does not perform virus scanning.
+</non_responsibilities>
+
+<contract_rules>
+R1 - Type allowlist
+For every upload, the system MUST reject the request when the file's detected MIME type is not in config.allowed_mime_types.
+This rule is violated if a file with a disallowed MIME type reaches the storage write path.
+
+R2 - Size limit
+For every upload, the system MUST reject the request when the file size in bytes exceeds config.max_file_bytes.
+This rule is violated if an over-limit file is accepted.
+
+R3 - Duplicate rejection
+For every upload, the system MUST reject the request when the normalized SHA-256 hash and tenant_id match an existing accepted record.
+This rule is violated if a duplicate file is accepted a second time.
+
+R4 - No storage write before validation
+The system MUST NOT call the storage write path for any request rejected by R1, R2, or R3.
+This rule is violated if a rejected upload triggers a storage write.
+
+R5 - Structured result
+For every upload, the system MUST return a ValidationResult with is_valid (bool), error_code (str or None), and error_detail (str or None).
+This rule is violated if the function raises an unhandled exception for expected invalid inputs.
+</contract_rules>
+
+<capabilities>
+- MAY read file content (bytes) from the provided file object.
+- MAY read duplicate records from the provided store interface.
+- MAY compute SHA-256 hash of file content.
+- MUST NOT write to storage.
+- MUST NOT send emails or notifications.
+- MUST NOT read environment variables not provided via config.
+- MUST NOT log raw file content or tenant secrets.
+</capabilities>
+
+<output_files>
+pdd/validate_upload.py
+</output_files>
+
+<verifier>
+pytest tests/test_validate_upload.py -v
+</verifier>
+
+% Requirements
+
+1. Function: `validate_upload(file_obj, tenant_id, config) -> ValidationResult`
+2. `file_obj` exposes `.read() -> bytes` and `.content_type: str`.
+3. `config` exposes `.allowed_mime_types: list[str]` and `.max_file_bytes: int`.
+4. Reject (R1) if `file_obj.content_type` not in `config.allowed_mime_types`.
+5. Reject (R2) if `len(file_obj.read()) > config.max_file_bytes`.
+6. Reject (R3) if `store.exists(sha256_hash, tenant_id)` returns True.
+7. Accept: return `ValidationResult(is_valid=True, error_code=None, error_detail=None)`.
+8. Reject: return `ValidationResult(is_valid=False, error_code=<CODE>, error_detail=<MSG>)`.
+9. Error codes: `"TYPE_NOT_ALLOWED"`, `"FILE_TOO_LARGE"`, `"DUPLICATE_UPLOAD"`.
+10. Do not raise exceptions for expected invalid inputs; only for programming errors (e.g., missing required config fields).
+
+% Dependencies
+
+<store_interface>
+<include mode="interface">pdd/upload_store.py</include>
+</store_interface>
+
+% Instructions
+
+- Implement only `validate_upload.py`.
+- Do not implement the store or config classes; they are injected dependencies.
+- Keep the module stateless; all state is passed in via arguments.
+
+% Deliverables
+
+Generate the implementation only.
+Executable tests are generated separately by `pdd test prompts/validate_upload_python.prompt pdd/validate_upload.py`.

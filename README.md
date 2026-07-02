@@ -4072,7 +4072,23 @@ To refresh scores, use a PDD agent to inspect the current public DeepSWE and Are
 
 `--refresh-elo` is intentionally not a live Python fetch path. It exits with an instruction to perform the agentic manifest refresh of both manifests instead of silently producing a stale refresh.
 
+### Lean Prompt Mode Research Harness (`research/lean-prompt-mode/`)
 
+A publishable research harness for measuring and reducing PDD prompt token overhead without dropping source-truth semantics (issue [#1473](https://github.com/promptdriven/pdd/issues/1473)).
+
+**Usage:**
+
+```bash
+python research/lean-prompt-mode/lean_prompt.py --mode lean prompts/your_module.prompt
+python research/lean-prompt-mode/lean_prompt.py --mode current prompts/your_module.prompt  # default, unchanged
+```
+
+When `--mode lean` is selected the harness deterministically prunes non-essential workflow framing and boilerplate while preserving the five required field groups: source-truth content, output-file list, verifier command, output delimiters, and safety constraints. Two audit artifacts are emitted:
+
+- **`prompt_policy.json`** — mode, removed sections with reasons and token deltas, preserved contract fields, and source input hashes (`schema_version: "1.0"`).
+- **`prompt_token_audit.json`** — tokenizer declaration, per-task current vs. lean token counts and ratios, and the structural floor (minimum tokens achievable without violating required fields) (`schema_version: "1.0"`).
+
+The default mode is `current`, which leaves prompts unchanged; all existing generation paths are unaffected. See `research/lean-prompt-mode/README.md` for design details, fixture descriptions, and benchmark usage.
 
 ## Patents
 

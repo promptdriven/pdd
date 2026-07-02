@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "tokenizer": "litellm/cl100k_base",
+  "approximation": true,
+  "model": "claude-sonnet-4-20250514",
+  "tasks": [
+    {
+      "task_id": "current_prompt",
+      "current_tokens": 612,
+      "lean_tokens": 446,
+      "ratio": 0.729
+    }
+  ],
+  "aggregate": {
+    "total_current_tokens": 612,
+    "total_lean_tokens": 446,
+    "aggregate_ratio": 0.729,
+    "structural_floor_tokens": 378,
+    "structural_floor_ratio": 0.617
+  }
+}

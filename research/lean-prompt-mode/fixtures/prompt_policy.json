@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "mode": "lean",
+  "compression_method": "deterministic_section_pruning",
+  "policy_version": "1.0",
+  "removed_sections": [
+    {
+      "section_id": "pct_role_and_scope",
+      "reason": "workflow_narrative",
+      "token_delta": 62
+    },
+    {
+      "section_id": "pct_background",
+      "reason": "explanatory_boilerplate",
+      "token_delta": 71
+    },
+    {
+      "section_id": "pct_instructions",
+      "reason": "workflow_narrative",
+      "token_delta": 28
+    },
+    {
+      "section_id": "include_preamble",
+      "reason": "shared_preamble_boilerplate",
+      "token_delta": 5
+    }
+  ],
+  "preserved_contract_fields": [
+    "contract_rules",
+    "vocabulary",
+    "responsibility",
+    "non_responsibilities",
+    "capabilities",
+    "output_files",
+    "verifier",
+    "pdd_reason",
+    "pdd_interface"
+  ],
+  "source_inputs": [
+    {
+      "path": "research/lean-prompt-mode/fixtures/current_prompt.txt",
+      "sha256": "baadb09fcf72699474a5d47041036ca35009107c024a108c0fb06fd8620ae52d"
+    }
+  ]
+}
