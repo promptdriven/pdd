@@ -1,0 +1,81 @@
+<pdd-reason>Pure data-assembly module that builds the bounded/redacted pdd.checkup.agentic.v1 JSON artifact from review-loop state; encodes the canonical × agentic verdict matrix via five Literal status strings.</pdd-reason>
+
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "build_agentic_v1_artifact", "signature": "(*, context: Any, state: Any, final_state: Mapping[str, Any], final_gate_report: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/checkup_agentic_artifact.py`, the bounded/redacted `pdd.checkup.agentic.v1` artifact builder.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Pure data-assembly module: accepts loop state, config, context, and an optional upstream canonical gate report from `run_checkup_review_loop` and emits a bounded, redacted `pdd.checkup.agentic.v1` JSON artifact. No subprocess calls, no GitHub API calls, no side effects beyond building the artifact.
+
+% Role & Scope
+Responsible for: deterministic dict assembly, finding deduplication, text bounding/redaction, five-way status derivation from the canonical × agentic verdict matrix, and the `build_agentic_v1_artifact` public function.
+Not responsible for: running the review loop, posting to GitHub, calling subprocesses, or scrubbing logic (reuse `_scrub_secrets` from `checkup_review_loop`).
+
+% Module Constants
+- `AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"`
+- `TEXT_LIMIT = 2000`
+- `SUMMARY_LIMIT = 1000`
+
+% Requirements
+
+1. **`AgenticV1Artifact` Pydantic model** (v2): the top-level model that callers validate the artifact against. `status` field MUST be typed as:
+   `status: Literal["canonical_pass_agentic_mirror_clean", "canonical_pass_agentic_mirror_blocking", "canonical_unknown_agentic_fallback_pass", "canonical_unknown_agentic_fallback_blocking", "canonical_fail_agentic_not_authoritative"]`
+   This enforces the wire contract at Pydantic validation time; any caller that writes a freeform string outside these five values raises a `ValidationError`.
+
+2. **`build_agentic_v1_artifact(*, context, state, final_state, final_gate_report=None) -> Dict[str, Any]`**: assembles a stable `pdd.checkup.agentic.v1` dict from the review-loop context, in-memory state, canonical `final-state.json` payload, and optional upstream canonical gate report.
+
+3. **Top-level schema shape**: include `schema`, `owner`, `repo`, `pr_number`, `head_sha`, `mode`, `status`, `layer1`, `reviewers`, `findings`, `fix_attempts`, `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget`. Compatibility nested `pr` and `issue` blocks MAY also be included.
+
+4. **Five-way status derivation** (priority-ordered; evaluate top-to-bottom and take the first matching branch):
+   - `final_gate_report` encodes a canonical **failure** (e.g. `final_gate_report["status"] in {"failed", "fail"}` or `final_gate_report.get("final-gate-status") in {"failed", "fail"}`) → `status = "canonical_fail_agentic_not_authoritative"`. **Short-circuit**: skip `_normalize_findings` and `_deduplicate_findings` entirely — the agentic result is non-authoritative and MUST NOT surface as a positive gate verdict.
+   - `final_gate_report` encodes a canonical **pass** (e.g. status is `"passed"` or `"pass"` or `final_gate_report.get("final-gate-status") in {"passed", "pass"}`) AND agentic reviewers produced at least one blocking finding → `status = "canonical_pass_agentic_mirror_blocking"`.
+   - `final_gate_report` encodes a canonical **pass** AND no agentic blocking findings → `status = "canonical_pass_agentic_mirror_clean"`.
+   - `final_gate_report` is `None` or absent or encodes an **unknown/infra-failure** verdict AND agentic reviewers produced at least one blocking finding → `status = "canonical_unknown_agentic_fallback_blocking"`.
+   - `final_gate_report` is `None` or absent or encodes an **unknown/infra-failure** verdict AND no agentic blocking findings → `status = "canonical_unknown_agentic_fallback_pass"`.
+
+   A finding is blocking when its `severity` is in `{"blocker", "critical"}` and its `status` is `"open"`.
+
+5. **Findings**: read already-normalized `ReviewFinding` objects from `state.findings`; do not parse raw reviewer transcripts. Deduplicate findings by key, cap at `MAX_FINDINGS`, include reviewer/severity/blocking/path/line/summary/suggested_fix, and preserve the original `finding`, `required_fix`, `evidence`, `location`, and `status` fields for existing consumers.
+
+6. **Reviewers and commands**: render reviewers from `final_state["reviewer_status"]`, excluding fixer-only sentinel rows. Include both `name` and `role`, the parsed slash command from `state.agentic_reviewer_commands`, normalized status (`findings` -> `blocking`, `failed` -> `error`), `finding_count`, and `blocking_count`.
+
+7. **Fix attempts**: when `state.agentic_no_fix` is true, `fix_attempts` MUST be `[]`. Otherwise render bounded fix attempts from `final_state["fixes"]` with provider/status/changed_files/commit_sha plus trust-boundary fields (`fixer_result`, `push_status`, `round_number`).
+
+8. **Validation and fresh final review**: derive `validation_after_fix.status` from `verification_status_by_round` (`verified`, `stale`, `unverified`, `skipped`, or `missing`). Render `fresh_final_review.provider`, `status`, `finding_count`, and `new_context` based on `state.agentic_fresh_final_review_role` and final-state status.
+
+9. **Budget**: include max caps copied from state plus `total_cost`, `max_rounds_reached`, `max_minutes_reached`, `max_cost_reached`, and the legacy `max_duration_reached` alias.
+
+% Contract Rules
+
+R1 — Schema stability: `schema` MUST always be `AGENTIC_V1_SCHEMA`; never derive it from runtime state.
+
+R2 — Redaction and bounding: all free-text fields (`summary`, `suggested_fix`, `evidence`, `verdict.reason`, layer1 blockers, stop reasons) MUST be routed through `_scrub_secrets` before inclusion and capped with a clear truncation marker.
+
+R3 — No raw transcripts: never include raw reviewer/fixer output or mutable conversation transcripts in the artifact.
+
+R4 — Fail-closed verdict: budget exhaustion, degraded/missing/error reviewers, missing fresh-final review, or open findings MUST NOT produce a `canonical_*_pass` or `canonical_*_clean` top-level status when `final_gate_report` is absent or unknown.
+
+R5 — No-fix write guarantee: when `state.agentic_no_fix` is `True`, `fix_attempts` MUST be `[]` and no commit or push information is included.
+
+R6 — Fallback authority contract: `"canonical_fail_agentic_not_authoritative"` MUST be set whenever `final_gate_report` encodes a canonical failure, regardless of what agentic reviewers found. Callers that omit `final_gate_report` (pass `None`) always receive a `canonical_unknown_*` status — the agentic path alone is never authoritative over the canonical gate.
+
+% Dependencies
+<pdd.checkup_review_loop>
+<include select="def:_scrub_secrets">context/checkup_review_loop_example.py</include>
+</pdd.checkup_review_loop>
+
+% Deliverables
+- Code: `pdd/checkup_agentic_artifact.py`
