@@ -1,147 +1,112 @@
-import json
+from __future__ import annotations
+
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from rich.console import Console
 
-# Ensure the parent directory is in the sys.path so we can import from the 'pdd' package
-current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-project_root = current_dir.parent
+# Dynamically configure the import path to locate 'pdd' relative to this script
+script_dir = Path(__file__).resolve().parent
+project_root = script_dir.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
-
-def setup_mock_environment(temp_dir: Path) -> None:
-    """Initializes a temporary git repository with mock files for the checkup."""
-    temp_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize Git repository
-    subprocess.run(["git", "init"], cwd=temp_dir, capture_output=True, check=True)
-    subprocess.run(["git", "config", "user.name", "Test Bot"], cwd=temp_dir, check=True)
-    subprocess.run(["git", "config", "user.email", "bot@example.com"], cwd=temp_dir, check=True)
-
-    # Create a basic codebase file
-    code_file = temp_dir / "main.py"
-    code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
-
-    # Create a basic test file
-    test_file = temp_dir / "test_main.py"
-    test_file.write_text("def test_add():\n    from main import add\n    assert add(1, 2) == 3\n", encoding="utf-8")
-
-    # Commit initial repository structure
-    subprocess.run(["git", "add", "."], cwd=temp_dir, check=True)
-    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=temp_dir, check=True)
-
+console = Console()
 
 def main() -> None:
-    """Demonstrates executing the agentic checkup orchestrator."""
-    output_dir = current_dir / "output"
-    repo_dir = output_dir / "mock_repo"
-
-    # Clean up any stale output directories
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-
-    setup_mock_environment(repo_dir)
-
-    # Mock inputs for the orchestrator
-    issue_url = "https://github.com/example-owner/example-repo/issues/101"
-    issue_content = "Fix addition logic in main.py"
-    repo_owner = "example-owner"
-    repo_name = "example-repo"
-    issue_number = 101
-    issue_title = "Fix add function"
+    """
+    Concise example of invoking the agentic checkup orchestrator in non-interactive PR mode.
     
-    # Define simple mock project metadata
-    architecture_json = json.dumps({
-        "modules": {"main": {"dependencies": []}}
-    })
-    pddrc_content = "[pdd]\nlang = python\n"
-
-    print(f"[Orchestrator] Starting checkup in mock repo: {repo_dir}")
-
-    # Mock the run_agentic_task function to simulate successful LLM responses for each step.
-    # This prevents real LLM pricing cost and API key dependency during the run.
-    def mock_run_agentic_task(*args, **kwargs):
-        label = kwargs.get("label", "unknown_step")
-        print(f"  -> [LLM Mock] Running task for: {label}")
+    Parameters of `run_agentic_checkup_orchestrator`:
+      - issue_url: URL to the source issue (or empty string/"null" for merit-only PR verification)
+      - issue_content: Raw text content describing the target issue
+      - repo_owner: Owner of the repository (e.g. "pdd-org")
+      - repo_name: Name of the repository (e.g. "pdd-core")
+      - issue_number: Number of the issue or PR (used for state-comment threads)
+      - issue_title: Headline of the issue
+      - architecture_json: Serialized structural metadata of the project modules
+      - pddrc_content: Raw text content of the project configuration (.pddrc)
+      
+      Keyword-Only Parameters:
+        - cwd: Path to the local repository checkout root (Path)
+        - verbose: Enable detailed execution logs (bool)
+        - quiet: Disable standard output logs (bool)
+        - no_fix: Run in analysis/verification mode only (no automatic git commits/pushes) (bool)
+        - timeout_adder: Extra time in seconds to add to per-step ceilings (float)
+        - use_github_state: Persist workflow checkpoint markers as GitHub issue comments (bool)
+        - reasoning_time: Optional reasoning model budget setting (float)
+        - pr_url: URL of the associated Pull Request (str)
+        - pr_owner: Repository owner of the PR branch (str)
+        - pr_repo: Repository name of the PR branch (str)
+        - pr_number: Number of the Pull Request (int)
+        - test_scope: Testing depth limit ("full" or "targeted") (str)
+        - start_step_override: Force workflow entry at a specific step (float/int)
         
-        # Step 7 (Verify) requires a specific structured report to pass the gate
-        if "step7" in label:
-            step7_output = """<step_report>
-Verification Summary:
-All tests passed successfully!
-</step_report>
-```json
-{
-  "success": true,
-  "issue_aligned": true,
-  "issues": []
-}
-```"""
-            return True, step7_output, 0.0015, "mock-gpt-4o"
-        
-        # Default success report with expected XML tag wrapping
-        success_report = """<step_report>
-Step completed successfully.
-</step_report>
-"""
-        return True, success_report, 0.0005, "mock-gpt-4o"
+    Returns:
+      - Tuple[bool, str, float, str]:
+        1. success (bool): True if the code successfully verified or was repaired cleanly.
+        2. message (str): Explanation of the terminal status or gate outcome.
+        3. total_cost (float): Total cumulative cost of downstream LLM API invocations (in USD).
+        4. model_used (str): Name of the highest-order model utilized in the run.
+    """
+    console.print("[bold blue]--- Running Agentic Checkup Orchestrator Example ---")
 
-    # Patch the per-step LLM runner so the example never makes real API calls.
-    # `use_github_state=False` skips state read/write, but the orchestrator still
-    # posts trusted per-step / PR comments and seeds the steering cursor, which
-    # hit the GitHub API. With fake repo metadata those calls 404, so we also
-    # stub the comment-posting and steer-seed helpers to keep the example fully
-    # offline. The orchestrator still drives its real 8-step state machine
-    # against the local mock git repository created above.
-    with patch(
-        "pdd.agentic_checkup_orchestrator.run_agentic_task",
-        side_effect=mock_run_agentic_task,
-    ), patch(
-        "pdd.agentic_checkup_orchestrator.post_step_comment_once", return_value=None
-    ), patch(
-        "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
-    ), patch(
-        "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
-    ), patch(
-        "pdd.agentic_checkup_orchestrator.ensure_issue_steer_cursor_seeded",
-        return_value=True,
-    ):
-        success, _message, _cost, _model = run_agentic_checkup_orchestrator(
-            issue_url=issue_url,
-            issue_content=issue_content,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            issue_title=issue_title,
-            architecture_json=architecture_json,
-            pddrc_content=pddrc_content,
-            cwd=repo_dir,
-            verbose=True,
-            quiet=False,
-            no_fix=True,            # Report only — do not generate/push fixes
-            use_github_state=False,  # Stay offline: no GitHub state posting
-        )
+    # Guard against missing essential environment variables (e.g., GitHub tokens or LLM credentials)
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        console.print("[yellow]GITHUB_TOKEN environment variable is not set. Real API calls will fail.[/yellow]")
+        console.print("Set GITHUB_TOKEN to execute this orchestrator against real repository targets. Exiting gracefully.")
+        sys.exit(0)
 
-    # The orchestrator returns (success, message, total_cost, model_used). The
-    # message/model/cost values can echo repo output, model identifiers, and
-    # other run context that static analysis treats as potentially sensitive,
-    # so this example does not print them as clear text. In real usage, route
-    # them through your logging/redaction layer instead of stdout. Here we only
-    # report a static pass/fail summary derived from the boolean result.
-    print("\n--- Checkup Result ---")
-    print("Checkup run completed successfully." if success
-          else "Checkup run completed with a non-passing result.")
+    # Setup mock input variables and mock workspace in './output'
+    workspace_dir = Path("./output/example-sandbox")
+    workspace_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clean up the generated output directory.
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
+    # Initialize a dummy git repository in the workspace to satisfy git repository checking
+    import subprocess
+    try:
+        subprocess.run(["git", "init"], cwd=workspace_dir, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.name", "pdd-bot"], cwd=workspace_dir, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "bot@promptdriven.dev"], cwd=workspace_dir, capture_output=True, check=True)
+        # Write a placeholder file to commit
+        (workspace_dir / "README.md").write_text("# Example Sandbox Project\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=workspace_dir, capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "initial commit"], cwd=workspace_dir, capture_output=True, check=True)
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        console.print(f"[red]Could not initialize mock git repository: {e}[/red]")
+        sys.exit(0)
 
+    # Formulate mock architecture and configurations
+    architecture_json = "{\"modules\": {\"core\": {\"path\": \"src/core.py\"}}}"
+    pddrc_content = "[pdd]\ntest_command = \"python -m pytest\""
+
+    # Trigger the checkup pipeline
+    # Using --no-fix and local-only settings for safe demonstration
+    success, final_message, cost, model = run_agentic_checkup_orchestrator(
+        issue_url="",
+        issue_content="Verify module boundaries and interface compatibility.",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=42,
+        issue_title="Verify API Interfaces",
+        architecture_json=architecture_json,
+        pddrc_content=pddrc_content,
+        cwd=workspace_dir,
+        verbose=True,
+        quiet=False,
+        no_fix=True,  # Run validation without writing back or creating PRs
+        use_github_state=False,  # Local workflow files state tracking only
+        test_scope="targeted",
+        start_step_override=1,  # Begin immediately at Step 1 (Discovery)
+    )
+
+    console.print("\n[bold green]--- Orchestration Completed ---")
+    console.print(f"Success Status: [bold]{success}[/bold]")
+    console.print(f"Final Outcome Message: {final_message}")
+    console.print(f"Downstream API Cost: ${cost:.6f} USD")
+    console.print(f"Primary LLM Model Used: [blue]{model}[/bold]")
 
 if __name__ == "__main__":
     main()
