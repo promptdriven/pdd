@@ -13710,7 +13710,7 @@ class TestReviewLoopFailureCategory2047:
 
 
 class TestRegenMultiFilePasteGuard:
-    """Issue #1802: regeneration must never write a concatenated multi-file
+    """Issue #1823: regeneration must never write a concatenated multi-file
     blob (module + ``# tests/...`` + test content) into the module file, and a
     rejected blob must restore the pre-regeneration module so the fixer's
     cleanup is not clobbered (the paste/re-paste thrash loop)."""

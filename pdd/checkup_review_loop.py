@@ -6407,7 +6407,7 @@ Required actions:
 Report the prompt files you edited. Do not open a PR or run git push."""
 
 
-# Issue #1802: a comment line naming a path (e.g. ``# tests/test_x.py``) that
+# Issue #1823: a comment line naming a path (e.g. ``# tests/test_x.py``) that
 # is not the module being regenerated marks a multi-file generation response
 # that the extraction stage concatenated into one blob. Writing that blob to
 # the module file pastes foreign files (typically the test file) into
@@ -6450,7 +6450,7 @@ def _regenerate_module_from_prompt(
     code_abs = worktree / code_path
     if not prompt_abs.is_file():
         return {"ok": False, "cost": 0.0, "model": "", "error": "prompt missing"}
-    # Issue #1802: snapshot the pre-regeneration module so a rejected
+    # Issue #1823: snapshot the pre-regeneration module so a rejected
     # multi-file blob can be rolled back instead of clobbering the fixer's
     # last committed edit.
     pre_regen_code: Optional[str] = None
@@ -6484,7 +6484,7 @@ def _regenerate_module_from_prompt(
             except OSError:
                 written = str(code or "")
             if _regen_output_names_foreign_file(written, code_path):
-                # Issue #1802: the extraction stage concatenated a multi-file
+                # Issue #1823: the extraction stage concatenated a multi-file
                 # generation response; writing it would paste foreign files
                 # (e.g. the test module) into this module. Restore the
                 # snapshot and fail soft — the caller proceeds on the
