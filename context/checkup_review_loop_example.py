@@ -151,6 +151,10 @@ class ReviewLoopConfig:
     # mode. Off by default so reviewer/fixer independence remains the normal
     # contract.
     allow_same_reviewer_fixer: bool = False
+    # APPENDED: agentic-review-loop knobs — issue #1788
+    adversarial_prompt: Optional[str] = None
+    agentic_mode: bool = False
+    fresh_final_review_role: Optional[str] = None
 
 
 @dataclass
@@ -237,6 +241,32 @@ class ReviewLoopState:
 # ---------------------------------------------------------------------------
 # Public API (signature contract)
 # ---------------------------------------------------------------------------
+
+
+def _scrub_secrets(text: str) -> str:
+    """Redact tokens and secrets from free-text before storing or logging.
+
+    Applies pattern-based redaction for bearer tokens, API keys, OAuth
+    payloads, and other known secret patterns. Returns the redacted string.
+    The caller MUST use this before persisting any raw reviewer/fixer output
+    to disk or emitting it in the structured JSON artifact.
+    """
+    return text
+
+
+def parse_reviewer_commands(value) -> Dict[str, str]:
+    """Parse ``role:/slash-command`` reviewer spec into a mapping.
+
+    Accepts a comma-separated string or list of ``role:/command`` pairs and
+    returns a ``{role: command}`` dict.  For example::
+
+        parse_reviewer_commands("codex:/review,claude:/code-review")
+        # -> {"codex": "/review", "claude": "/code-review"}
+
+    Unknown or malformed entries are dropped. An empty result means no
+    reviewer commands were resolved.
+    """
+    return {}
 
 
 def parse_reviewers(value):

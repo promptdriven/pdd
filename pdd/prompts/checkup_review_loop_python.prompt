@@ -10,7 +10,8 @@
   "module": {
     "functions": [
       {"name": "run_checkup_review_loop", "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
-      {"name": "parse_reviewers", "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]", "returns": "Tuple[str, ...]"}
+      {"name": "parse_reviewers", "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]", "returns": "Tuple[str, ...]"},
+      {"name": "parse_reviewer_commands", "signature": "(value: str | Sequence[str] | None) -> Dict[str, str]", "returns": "Dict[str, str]"}
     ]
   }
 }
@@ -27,7 +28,8 @@
 Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 
 % Public API
-1. `parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]`.
+1. `parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]`. Accepts plain role tokens (e.g. `"codex,claude"`) and `role:/slash-command` tokens (e.g. `"codex:/review,claude:/code-review"`). Strips the `:/slash-command` suffix before role normalization; plain-role tokens continue to work unchanged.
+1a. `parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]`. Parses `role:/slash-command` tokens and returns a mapping of normalized role → slash command (e.g. `{"codex": "/review", "claude": "/code-review"}`). Roles without a slash-command suffix map to `""`.
 2. `run_checkup_review_loop(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]`.
 3. Dataclasses (all dataclasses must be importable from this module): `ReviewLoopContext`, `ReviewLoopConfig`, `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, `FixResult`.
    - `FixResult` MUST carry the additive verification-boundary fields: `fixer_result: Optional[str] = None` (`"attempted" | "skipped" | "failed"`), `push_status: Optional[str] = None` (`"pushed" | "push_failed" | "not_attempted"`), `local_fixer_commit_sha: Optional[str] = None`, and `pushed_head_sha: Optional[str] = None`. These are populated by the loop around `_commit_and_push_if_changed` so the final report can render fixer evidence without conflating "fixer subprocess returned success" with "fix landed on the PR head". The legacy `success: bool` field remains and means only "fixer subprocess completed without provider/parse failure"; it MUST NOT be rendered as a bare `success`/`fixed` token in the user-facing report (see R-V7).
@@ -269,7 +271,10 @@ The four bugs filed in gltanaka/pdd#1433 expose specific reliability gaps in `ru
 
 % Issue #2047 — source-of-truth-aware repair
 
-The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically refuses a push when generated code changed without its owning prompt. Refusing and stopping is correct when nothing can be safely repaired, but for the common `drift` case (a registered code file changed while its present, unedited owning prompt was left behind) PDD's own contract says the durable fix is to repair the prompt and regenerate — not to dead-end. Implement the following, all gated behind `ReviewLoopConfig.enable_source_of_truth_repair: bool = True` (kept in the appended dataclass field block for positional-construction stability; set False to restore the legacy refuse-and-stop behavior). `ReviewLoopConfig.allow_same_reviewer_fixer: bool = False` is the final appended config field after `enable_source_of_truth_repair`, preserving the same positional-construction contract while adding explicit single-role review/fix opt-in.
+The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically refuses a push when generated code changed without its owning prompt. Refusing and stopping is correct when nothing can be safely repaired, but for the common `drift` case (a registered code file changed while its present, unedited owning prompt was left behind) PDD's own contract says the durable fix is to repair the prompt and regenerate — not to dead-end. Implement the following, all gated behind `ReviewLoopConfig.enable_source_of_truth_repair: bool = True` (kept in the appended dataclass field block for positional-construction stability; set False to restore the legacy refuse-and-stop behavior). `ReviewLoopConfig.allow_same_reviewer_fixer: bool = False` is appended after `enable_source_of_truth_repair`. The following fields are further appended in order, each with safe defaults preserving positional-construction stability for all existing callers:
+- `adversarial_prompt: Optional[str] = None` — when set, injected into every reviewer, verifier, and fresh-final-reviewer prompt as `Adversarial instruction: {adversarial_prompt}`.
+- `agentic_mode: bool = False` — when `True`, calls `build_agentic_v1_artifact()` from `pdd.checkup_agentic_artifact` after the final report is assembled and writes the artifact to `./pdd-checkup-agentic-{pr_number}.json`; the path is echoed to stderr.
+- `fresh_final_review_role: Optional[str] = None` — role override for the fresh final review in agentic mode; normalized via the existing role-alias table.
 
 2047-A. **Structured offenders.** Factor the guard's per-offender disk-state classification into `_prompt_source_offenders(worktree, changed_files, head_ref="HEAD") -> List[Dict[str,str]]` returning `{code_path, prompt_path, kind}` where `kind` ∈ `{"drift"` (both files present, prompt unedited — repairable), `"missing_prompt"` (code present, owning prompt deleted), `"rename_drift"` (registered code moved/deleted, prompt left behind)`}`. `_check_prompt_source_guard` MUST consume this helper so the deterministic refusal string and the repair input never disagree. The refusal string is unchanged: `"generated-code-only fix refused: <code> is generated from <prompt>; ... Update the prompt source or run the proper PDD sync path before re-running the review loop."`.
 
@@ -285,6 +290,8 @@ The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically r
 <pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
 <pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
 <pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../pdd/list_drift_detection.py</include></pdd.list_drift_detection>
+
+<pdd-dependency>checkup_agentic_artifact_python.prompt</pdd-dependency>
 
 % Deliverables
 - Code: `pdd/checkup_review_loop.py`
