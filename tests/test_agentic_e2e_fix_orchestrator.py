@@ -12473,3 +12473,147 @@ class TestStep9VerifierRejectionVisibleComment:
                 "rejection comment header must match drain_issue_steers' "
                 f"status-comment filter; got header: {body.splitlines()[0]!r}"
             )
+
+    @staticmethod
+    def _faithful_post_once(recorded_posts):
+        """Side effect reproducing post_step_comment_once's dedup contract:
+        already-posted keys return True without a new post; new keys are
+        recorded and added to posted_steps (mutated in place)."""
+
+        def _side_effect(**kwargs):
+            posted = kwargs["posted_steps"]
+            if kwargs["step_num"] in posted:
+                return True
+            posted.add(kwargs["step_num"])
+            recorded_posts.append(kwargs)
+            return True
+
+        return _side_effect
+
+    def test_final_cycle_rejection_persists_comment_key(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Reviewer P2: on a FINAL-cycle rejection the rollover save is skipped
+        (current_cycle > max_cycles), so the comment key must be persisted by
+        an immediate save at the post site — otherwise the non-success exit
+        leaves pre-verify ALL_TESTS_PASS state on disk without the key and a
+        resume duplicates the comment."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        assert any(kw["step_num"] == reject_key for kw in recorded)
+
+        # The mocked save_workflow_state must have seen the key AFTER the post
+        # (immediate persist), despite the skipped rollover save.
+        _, _, _, mock_save_state = (None, None, None, None)  # readability
+        from unittest.mock import ANY  # noqa: F401  (documenting intent)
+        import pdd.agentic_e2e_fix_orchestrator as _orch_mod
+
+        saved_with_key = [
+            c
+            for c in _orch_mod.save_workflow_state.call_args_list
+            if reject_key in (c.args[3].get("step_comments") or [])
+        ]
+        assert saved_with_key, (
+            "final-cycle rejection must persist the rejection-comment key via "
+            "an immediate save (rollover save is skipped when the budget is "
+            "exhausted)"
+        )
+
+    def test_resume_does_not_repost_rejection_when_key_persisted(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Cross-resume dedup: when the loaded state already contains the
+        cycle's rejection-comment key, the resume-time re-verification must
+        NOT post a second rejection comment."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "9": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "step_comments": [10009, reject_key],
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        # The rejection key was already persisted — no new rejection post.
+        assert not any(kw["step_num"] == reject_key for kw in recorded), (
+            "resume must not duplicate a rejection comment whose key is "
+            "already in the loaded step_comments state"
+        )
