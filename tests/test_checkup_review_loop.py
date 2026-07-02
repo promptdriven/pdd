@@ -13707,3 +13707,75 @@ class TestReviewLoopFailureCategory2047:
             _review_loop_failure_category(ReviewLoopState(), True, [sot])
             == FINAL_GATE_CATEGORY_PASSED
         )
+
+
+class TestRegenMultiFilePasteGuard:
+    """Issue #1802: regeneration must never write a concatenated multi-file
+    blob (module + ``# tests/...`` + test content) into the module file, and a
+    rejected blob must restore the pre-regeneration module so the fixer's
+    cleanup is not clobbered (the paste/re-paste thrash loop)."""
+
+    def test_foreign_file_header_detection(self):
+        from pdd.checkup_review_loop import _regen_output_names_foreign_file
+
+        pasted = (
+            "# app/async_helpers.py\n"
+            "async def fetch_data(url):\n"
+            "    return None\n"
+            "\n"
+            "# tests/test_async_helpers.py\n"
+            "import pytest\n"
+        )
+        assert _regen_output_names_foreign_file(pasted, "app/async_helpers.py")
+        own_only = "# app/async_helpers.py\nasync def fetch_data(url):\n    return None\n"
+        assert not _regen_output_names_foreign_file(own_only, "app/async_helpers.py")
+        plain = "# helper module\nx = 1\n# see notes.txt for details? no slash\n"
+        assert not _regen_output_names_foreign_file(plain, "app/mod.py")
+
+    def _run_regen(self, tmp_path, generated_blob):
+        import pdd.checkup_review_loop as mod
+
+        (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/prompts").mkdir(parents=True, exist_ok=True)
+        code = tmp_path / "app/async_helpers.py"
+        code.write_text("# app/async_helpers.py\nCLEAN = True\n", encoding="utf-8")
+        (tmp_path / "pdd/prompts/async_helpers_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+
+        def fake_generator(ctx, *, prompt_file, output, **kwargs):
+            Path(output).write_text(generated_blob, encoding="utf-8")
+            return generated_blob, False, 0.1, "test-model"
+
+        import pdd.code_generator_main as cgm
+        import pdd.sync_orchestration as so
+
+        with patch.object(cgm, "code_generator_main", fake_generator), \
+                patch.object(so, "_create_mock_context", lambda **k: object()):
+            result = mod._regenerate_module_from_prompt(
+                tmp_path, "app/async_helpers.py", "pdd/prompts/async_helpers_python.prompt"
+            )
+        return result, code.read_text(encoding="utf-8")
+
+    def test_multi_file_blob_rejected_and_module_restored(self, tmp_path):
+        blob = (
+            "# app/async_helpers.py\n"
+            "async def fetch_data(url):\n"
+            "    return None\n"
+            "\n"
+            "# tests/test_async_helpers.py\n"
+            "import pytest\n"
+            "def test_x():\n"
+            "    assert True\n"
+        )
+        result, on_disk = self._run_regen(tmp_path, blob)
+        assert result["ok"] is False
+        assert "multiple files" in result["error"]
+        assert on_disk == "# app/async_helpers.py\nCLEAN = True\n"
+
+    def test_single_file_output_accepted(self, tmp_path):
+        blob = "# app/async_helpers.py\nasync def fetch_data(url):\n    return {}\n"
+        result, on_disk = self._run_regen(tmp_path, blob)
+        assert result["ok"] is True
+        assert result["error"] == ""
+        assert on_disk == blob
