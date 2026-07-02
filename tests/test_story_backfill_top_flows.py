@@ -38,6 +38,12 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 TOP_FLOW_STORIES = {
+    "pdd_change": {
+        "metadata_prompt": "prompts/commands/modify_python.prompt",
+        "package_prompt": "commands/modify_python.prompt",
+        "covers": {"R1", "R2", "R3", "R4"},
+        "must_contain": ("agentic change", "contract sidecar"),
+    },
     "pdd_fix": {
         "metadata_prompt": "prompts/commands/fix_python.prompt",
         "package_prompt": "commands/fix_python.prompt",
