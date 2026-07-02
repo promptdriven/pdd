@@ -38,6 +38,12 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 TOP_FLOW_STORIES = {
+    "pdd_fix": {
+        "metadata_prompt": "prompts/commands/fix_python.prompt",
+        "package_prompt": "commands/fix_python.prompt",
+        "covers": {"R1", "R2", "R3", "R4"},
+        "must_contain": ("agentic E2E fix workflow", "user-story-driven prompt fixes"),
+    },
     "pdd_sync": {
         "metadata_prompt": "prompts/commands/maintenance_python.prompt",
         "package_prompt": "commands/maintenance_python.prompt",
