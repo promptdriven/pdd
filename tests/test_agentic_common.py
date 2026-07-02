@@ -13817,3 +13817,85 @@ def test_drain_step_steers_surfaces_human_steer_after_bot_cursor_advance(
 
     # Poll 3: idempotent — the human steer is not re-surfaced.
     assert drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True) == []
+
+
+# Issue #1792: the PDD_STEER_JSON env handoff must apply the same
+# status-comment filter as the GitHub poll, so orchestrator-posted step /
+# verifier-rejection comments handed over by cloud runners are never
+# re-ingested as human steers.
+# ---------------------------------------------------------------------------
+
+
+def test_drain_issue_steers_env_filters_status_comments(mock_cwd):
+    """A `## Step N/M:` status body arriving via PDD_STEER_JSON is dropped
+    while a genuine human steer in the same payload still passes."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "pdd-orchestrator",
+            "body": (
+                "## Step 9/11: ⚠️ Independent Verification REJECTED the "
+                "claimed pass (Cycle 2)\n\nDetail here."
+            ),
+        },
+        {"comment_id": "102", "author": "charlie", "body": "Try approach B"},
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "charlie"
+        assert steers[0].comment_id == "102"
+        assert "REJECTED" not in steers[0].body
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_env_filters_state_and_progress_markers(mock_cwd):
+    """PDD_WORKFLOW_STATE / PDD-INCREMENTAL-STATUS bodies via the env handoff
+    are dropped, matching the GitHub-poll filters."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "201",
+            "author": "bot",
+            "body": "<!-- PDD_WORKFLOW_STATE:e2e_fix:issue-55\n{}\n-->",
+        },
+        {
+            "comment_id": "202",
+            "author": "bot",
+            "body": "PDD-INCREMENTAL-STATUS: cycle 2 running",
+        },
+        {"comment_id": "203", "author": "dana", "body": "Real feedback"},
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert [s.comment_id for s in steers] == ["203"]
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_is_pdd_status_comment_body_matches_rejection_comment():
+    """The orchestrator's Issue #1792 rejection comment must be recognized by
+    the shared predicate (pins the header against BOTH ingestion paths)."""
+    from pdd.agentic_common import _is_pdd_status_comment_body
+    from pdd.agentic_e2e_fix_orchestrator import (
+        _build_step9_verifier_rejection_comment,
+    )
+
+    for resumed in (False, True):
+        body = _build_step9_verifier_rejection_comment(
+            3, ["tests/test_widget.py"], "detail", resumed=resumed
+        )
+        assert _is_pdd_status_comment_body(body), (
+            "rejection comment must be filtered from steer ingestion; "
+            f"header: {body.splitlines()[0]!r}"
+    )
+    # And a genuine human comment is NOT filtered.
+    assert not _is_pdd_status_comment_body("Please also check the login flow")
