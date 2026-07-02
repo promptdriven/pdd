@@ -2863,6 +2863,96 @@ def test_valid_resume_when_issue_unchanged(mock_dependencies, temp_cwd):
     # The key indicator is that steps 1-4 were skipped (workflow resumed, not restarted).
 
 
+def test_bot_only_updated_at_drift_resumes_without_clearing(mock_dependencies, temp_cwd):
+    """#1738 end-to-end: when the issue ``updated_at`` drifted only because of
+    PDD's own bot/progress/state comments, the orchestrator must RESUME the saved
+    workflow (skip steps 1-4) instead of clearing and restarting from step 1.
+
+    Drives the real ``issue_update_should_clear_workflow_state`` ->
+    ``drain_issue_steers`` path with the GitHub comment fetch mocked to return
+    only ignored PDD comments — including a hidden state comment whose edit
+    ``updated_at`` (12:05:00Z) is later than the issue ``updated_at`` (11:59:30Z),
+    exactly the shape observed on promptdriven/pdd_cloud#2516.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+
+    stored_ts = "2024-01-01T10:00:00Z"
+    initial_state = {
+        "issue_number": 555,
+        "last_completed_step": 4,
+        "step_outputs": {"1": "out1", "2": "out2", "3": "out3", "4": "out4"},
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "issue_updated_at": stored_ts,
+        "last_steered_comment_id": "1000",
+        "last_steer_at": stored_ts,
+        "steer_cursor_seeded": True,
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    bot_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 5/13: Implement fix",
+            "created_at": "2024-01-02T11:59:00Z",
+            "updated_at": "2024-01-02T11:59:00Z",
+        },
+        {
+            # Hidden state comment edited after posting: its updated_at is ahead
+            # of the issue updated_at (comment edits don't bump issue.updated_at).
+            "id": 1002,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2024-01-02T11:59:30Z",
+            "updated_at": "2024-01-02T12:05:00Z",
+        },
+    ]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/test/repo/pull/789", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # issue.updated_at drifted to the last new bot comment's created_at.
+    current_ts = "2024-01-02T11:59:30Z"
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/bin/gh"), \
+         patch(
+             "pdd.agentic_common._fetch_issue_comments_via_gh",
+             return_value=(bot_comments, None),
+         ):
+        success, _, cost, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=555,
+            issue_author="me",
+            issue_title="Bot Drift Test",
+            issue_updated_at=current_ts,
+            cwd=temp_cwd,
+        )
+
+    assert success is True
+
+    # Resumed from the cached step: steps 1-4 skipped (NOT restarted at step 1).
+    labels_called = [call.kwargs.get("label") for call in mock_run.call_args_list]
+    assert "step1" not in labels_called, "bot-only drift must not restart from step 1"
+    assert "step4" not in labels_called, "bot-only drift must not re-run cached steps"
+    assert "step5" in labels_called, "workflow should resume from the cached step"
+
+
 def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_cwd):
     """
     Test that old state without issue_updated_at field still works

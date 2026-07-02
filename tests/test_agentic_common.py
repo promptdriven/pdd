@@ -6613,6 +6613,177 @@ def test_issue_update_should_not_clear_when_pending_steers(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_issue_update_should_not_clear_for_new_bot_comment_drift(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:08:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:08:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "101"
+    assert state["last_steer_at"] == "2026-01-01T00:08:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_not_clear_for_edited_existing_state_comment(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import (
+        GITHUB_STATE_MARKER_END,
+        GITHUB_STATE_MARKER_START,
+        issue_update_should_clear_workflow_state,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 50,
+                "user": {"login": "human", "type": "User"},
+                "body": f"{GITHUB_STATE_MARKER_START}\n{{}}\n{GITHUB_STATE_MARKER_END}",
+                "created_at": "2026-01-01T00:00:30Z",
+                "updated_at": "2026-01-01T00:05:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:05:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "100"
+    assert state["last_steer_at"] == "2026-01-01T00:05:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_not_clear_when_ignored_drift_already_recorded(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:08:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "101",
+        "last_steer_at": "2026-01-01T00:08:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:08:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "101"
+    assert state["last_steer_at"] == "2026-01-01T00:08:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_clear_for_real_edit_with_older_ignored_comment(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:05:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:10:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is True
+    assert state["last_steered_comment_id"] == "100"
+    assert state["last_steer_at"] == "2026-01-01T00:00:00Z"
+
+
 def test_issue_update_should_clear_when_no_pending_steers(mock_cwd):
     from pdd.agentic_common import issue_update_should_clear_workflow_state
 
@@ -6729,18 +6900,21 @@ def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shut
             "user": {"login": "user1", "type": "User"},
             "body": "User feedback",
             "created_at": "2026-06-01T12:00:00Z",
+            "updated_at": "2026-06-01T12:00:00Z",
         },
         {
             "id": 1002,
             "user": {"login": "pdd-bot", "type": "Bot"},
             "body": "Bot message",
             "created_at": "2026-06-01T12:01:00Z",
+            "updated_at": "2026-06-01T12:03:00Z",
         },
         {
             "id": 1003,
             "user": {"login": "user2", "type": "User"},
             "body": "## Step 1/13: ...",
             "created_at": "2026-06-01T12:02:00Z",
+            "updated_at": "2026-06-01T12:04:00Z",
         },
     ]
 
@@ -6754,7 +6928,8 @@ def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shut
     assert len(steers) == 1
     assert steers[0].author == "user1"
     assert steers[0].comment_id == "1001"
-    assert state["last_steered_comment_id"] == "1001"
+    assert state["last_steered_comment_id"] == "1003"
+    assert state["last_steer_at"] == "2026-06-01T12:04:00Z"
     assert state["steer_generation"] == 1
 
     cmd = mock_subprocess_run.call_args[0][0]
@@ -6803,7 +6978,7 @@ def test_drain_issue_steers_github_since_uses_get(
     cmd = mock_subprocess_run.call_args[0][0]
     assert cmd[cmd.index("--method") + 1] == "GET"
     assert "-f" in cmd
-    assert "since=2026-06-01T11:00:00Z" in cmd
+    assert "since=2026-06-01T10:59:59Z" in cmd
 
 
 def test_drain_issue_steers_without_cursor_skips_github_poll(
@@ -13276,3 +13451,369 @@ def test_openai_codex_spool_caps_peak_rss(tmp_path):
         f"128 MiB transcript inflated peak RSS by {delta_mib:.1f} MiB "
         f"(small={small_mib:.1f}, large={large_mib:.1f}); spool not bounding heap"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1738: bot-only ``issue.updated_at`` drift must not wipe workflow state
+#
+# When the only new GitHub activity since the saved steer cursor is PDD's own
+# bot / ``## Step N/M:`` progress / hidden ``PDD_WORKFLOW_STATE`` comments,
+# ``issue_update_should_clear_workflow_state(...)`` must return False and the
+# cached ``step_outputs`` must be preserved (no restart from Step 0).
+#
+# Root cause (CROSS_CUTTING, pdd/agentic_common.py):
+#   - ``drain_issue_steers`` skips ignored bot/state/progress comments with bare
+#     ``continue``s and only persists the cursor inside ``if new_steers:``, so
+#     bot-only drift yields ``[]`` and freezes the cursor.
+#   - ``issue_update_should_clear_workflow_state`` then cannot tell "no new
+#     comments" apart from "only ignored PDD bot comments" and returns True.
+#
+# These tests drive the GitHub-poll path (the env path does not filter bot
+# comments) using the shared ``mock_subprocess_run`` / ``mock_shutil_which``
+# fixtures, matching the existing ``test_drain_issue_steers_from_github`` style.
+# ---------------------------------------------------------------------------
+
+
+def test_bot_only_updated_at_drift_does_not_clear_workflow_state(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Primary repro (#1738 / pdd_cloud#2516): updated_at drift caused only by
+    PDD's own bot ``## Step`` + hidden ``PDD_WORKFLOW_STATE`` comments must NOT
+    clear state, and existing ``step_outputs`` must be preserved.
+
+    Fails on buggy code: ``drain_issue_steers`` returns ``[]`` for bot-only
+    activity, so the helper returns True -> caller wipes state -> Step 0.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    # Cursor sits at the incident's Step 7 bot comment id.
+    cursor_id = 4812173117
+    preserved_outputs = {"7": "## Step 7/13: Review architecture\nDONE"}
+    state = {
+        "step_outputs": dict(preserved_outputs),
+        "last_completed_step": 7,
+        "last_steered_comment_id": str(cursor_id),
+        "last_steer_at": "2026-06-26T18:08:29Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:08:29Z",
+    }
+
+    # The only new activity since the cursor: PDD's own bot/progress/state
+    # comments (taken from the real incident timeline).
+    bot_comments = [
+        {
+            "id": cursor_id + 1,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 0/13: Workflow Startup",
+            "created_at": "2026-06-26T18:16:29Z",
+        },
+        {
+            "id": cursor_id + 2,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 1/13: Search for duplicate issues",
+            "created_at": "2026-06-26T18:16:47Z",
+        },
+        {
+            # The hidden state comment is *edited* each step. A comment edit
+            # bumps the comment's ``updated_at`` (18:17:13Z) but NOT the parent
+            # issue's ``updated_at`` (which stays at the last new comment, 18:16:59Z) —
+            # the exact shape observed on pdd_cloud#2516.
+            "id": cursor_id + 3,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: eyJzdGF0ZSI6IDF9 -->",
+            "created_at": "2026-06-26T18:16:58Z",
+            "updated_at": "2026-06-26T18:17:13Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(bot_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:08:29Z",   # stored issue_updated_at (A)
+        "2026-06-26T18:16:59Z",   # current issue_updated_at (B) — bot drift only
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is False
+    assert state["step_outputs"] == preserved_outputs
+    # The drift was recorded as harmless: the steer cursor advanced over the
+    # ignored bot comments so the next resume won't reprocess them.
+    assert int(state["last_steered_comment_id"]) >= cursor_id + 3
+
+
+def test_drain_issue_steers_advances_cursor_over_ignored_bot_comments(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Centralized mechanism: ``drain_issue_steers`` must advance the steer
+    cursor past ignored bot/progress/state comments (recording the drift as
+    harmless) even though it returns no human steers, and stay idempotent.
+
+    Fails on buggy code: the cursor is only persisted inside ``if new_steers:``,
+    so bot-only activity leaves ``last_steered_comment_id`` frozen at "1000".
+    """
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "last_steered_comment_id": "1000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+    bot_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 0/13: Workflow Startup",
+            "created_at": "2026-06-26T18:16:29Z",
+        },
+        {
+            "id": 1002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2026-06-26T18:16:58Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(bot_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    # Bot-only activity produces no human steers (that part is correct)...
+    assert steers == []
+    # ...but the cursor MUST advance past the ignored comments so the drift is
+    # recorded as harmless and the next staleness check can explain it.
+    assert int(state["last_steered_comment_id"]) >= 1002
+
+    # Re-polling the same comments is idempotent and does not regress.
+    steers_again = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert steers_again == []
+    assert int(state["last_steered_comment_id"]) >= 1002
+
+
+def test_human_comment_among_bot_comments_preserves_state_and_applies_steer(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Intended behavior preserved (issue Case 2): when a genuine human comment
+    is mixed in with PDD bot comments, the helper still returns False AND the
+    human steer is applied (cursor advances to the human comment, generation
+    bumps). Guards against the fix over-correcting away real steering.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "step_outputs": {"7": "WIP"},
+        "last_steered_comment_id": "4812173117",
+        "last_steer_at": "2026-06-26T18:08:29Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:08:29Z",
+    }
+    comments = [
+        {
+            "id": 4812269998,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 8/13: Implement fix",
+            "created_at": "2026-06-26T18:20:00Z",
+        },
+        {
+            "id": 4812269999,
+            "user": {"login": "Serhan-Asad", "type": "User"},
+            "body": "please also handle the null case",
+            "created_at": "2026-06-26T18:21:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:08:29Z",
+        "2026-06-26T18:21:30Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is False
+    # The human steer was merged back into state (issue's Case 2 evidence:
+    # last_steered_comment_id=4812269999, steer_generation=1).
+    assert state["last_steered_comment_id"] == "4812269999"
+    assert state.get("steer_generation") == 1
+
+
+def test_external_edit_without_new_comments_still_clears_state(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Guard / no over-correction: an ``updated_at`` drift with NO new comments
+    is a real external edit (title/body/label) and MUST still clear state. The
+    fix must only treat drift as harmless when it is explained by ignored PDD
+    comments — not blanket-return False.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "step_outputs": {"7": "WIP"},
+        "last_steered_comment_id": "5000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:00:00Z",
+    }
+    # No comments after the cursor -> nothing explains the drift.
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = "[]"
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:00:00Z",
+        "2026-06-26T19:30:00Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is True
+
+
+def test_body_filtered_pdd_marker_comments_count_as_harmless_drift(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Each body-based ignored PDD category (``## Step``, ``PDD_WORKFLOW_STATE``
+    state marker, ``PDD-INCREMENTAL-STATUS``) must count as harmless drift even
+    when the comment author is NOT typed as a Bot — exercising the body filters
+    distinct from the ``user.type == "Bot"`` branch. Driven exactly as the
+    change orchestrator calls the helper (clarification step set passed).
+
+    Fails on buggy code: these comments are skipped via bare ``continue``s, so
+    no steer is produced and the helper returns True (clear).
+    """
+    from pdd.agentic_common import (
+        GITHUB_STATE_MARKER_END,
+        GITHUB_STATE_MARKER_START,
+        issue_update_should_clear_workflow_state,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    preserved_outputs = {"5": "partial work"}
+    state = {
+        "step_outputs": dict(preserved_outputs),
+        "last_completed_step": 5,
+        "last_steered_comment_id": "7000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:00:00Z",
+    }
+    state_marker_body = (
+        f"{GITHUB_STATE_MARKER_START} eyJzdGF0ZSI6IDF9 {GITHUB_STATE_MARKER_END}"
+    )
+    comments = [
+        {
+            "id": 7001,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": "## Step 6/13: Diagnose root cause",
+            "created_at": "2026-06-26T18:10:00Z",
+        },
+        {
+            "id": 7002,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": state_marker_body,
+            "created_at": "2026-06-26T18:11:00Z",
+        },
+        {
+            "id": 7003,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": "PDD-INCREMENTAL-STATUS: running step 7",
+            "created_at": "2026-06-26T18:12:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:00:00Z",
+        # issue.updated_at tracks the last *new* comment's created_at (18:12:00Z);
+        # the drift is fully explained by the ignored PDD comments above.
+        "2026-06-26T18:12:00Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+        clarification_step_numbers={3, 7},
+    )
+
+    assert should_clear is False
+    assert state["step_outputs"] == preserved_outputs
+    assert int(state["last_steered_comment_id"]) >= 7003
+
+
+def test_drain_step_steers_surfaces_human_steer_after_bot_cursor_advance(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """No-regression for the e2e-fix / checkup consumers that reach
+    ``drain_issue_steers`` via ``drain_step_steers``: after the cursor advances
+    over bot-only comments, a genuine human steer arriving later must still be
+    surfaced exactly once (and not be skipped by the cursor advancement).
+    """
+    # Scope addition: covers expansion items
+    # "agentic_e2e_fix_orchestrator.py:2279 / agentic_checkup_orchestrator.py:3243
+    #  drain_step_steers cursor advancement must not regress" identified by
+    # Step 6 — distinct shared-helper entry point.
+    from pdd.agentic_common import drain_step_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "last_steered_comment_id": "8000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+
+    # Poll 1: only bot/state comments -> cursor advances, no steers surfaced.
+    first_comments = [
+        {
+            "id": 8001,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 2/13: Plan",
+            "created_at": "2026-06-26T18:05:00Z",
+        },
+        {
+            "id": 8002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2026-06-26T18:06:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(first_comments)
+    mock_subprocess_run.return_value.stderr = ""
+    assert drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True) == []
+
+    # Poll 2: a real human comment after the advanced cursor must surface once.
+    second_comments = first_comments + [
+        {
+            "id": 8003,
+            "user": {"login": "human", "type": "User"},
+            "body": "tweak the retry budget",
+            "created_at": "2026-06-26T18:07:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.stdout = json.dumps(second_comments)
+    steers = drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True)
+    assert [s.comment_id for s in steers] == ["8003"]
+    assert steers[0].body == "tweak the retry budget"
+
+    # Poll 3: idempotent — the human steer is not re-surfaced.
+    assert drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True) == []
