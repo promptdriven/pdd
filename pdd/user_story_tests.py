@@ -784,6 +784,20 @@ def _slug_from_story_path(story_path: Path) -> str:
     return name
 
 
+def story_id(path: "str | Path") -> str:
+    """Return the canonical ``story_id`` (the ``<slug>``) for a story file path.
+
+    This is the single, public identity helper shared across PDD: a
+    ``user_stories/story__<slug>.md`` path maps to ``<slug>``. Accepts either a
+    ``str`` or a :class:`pathlib.Path`. The mapping is byte-identical to the
+    internal :func:`_slug_from_story_path` implementation, which this helper
+    wraps; both the ``@pytest.mark.story`` marker mechanism (see
+    ``pdd.story_regression``) and the on-disk story files therefore share one
+    identity space.
+    """
+    return _slug_from_story_path(Path(path))
+
+
 def _contract_path_for_story(story_path: Path) -> Path:
     """Return the sibling contract path for a human story file.
 

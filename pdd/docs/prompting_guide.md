@@ -734,6 +734,35 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 - Existing tests are included as context during code generation
 - This creates a "ratchet effect" where each new test permanently constrains future generations
 
+### Choosing the Right Issue Workflow
+
+When an issue is supplied to an agentic command, choose the workflow from the
+reported user-visible behavior, not from surface wording alone. In PDD it is
+common for users to describe a runtime defect as "the prompt should handle X";
+that can be true while the immediate workflow still needs reproduction, a
+failing behavioral test, and a repair loop.
+
+Use this signal priority before starting a workflow:
+
+| Signal | Examples | Recommended route |
+| :--- | :--- | :--- |
+| **Structural runtime evidence** | Stack traces, exception names, traceback blocks, assertion failures, failing tests, crash logs | `pdd bug <issue-url>` then `pdd fix <issue-url>` |
+| **Behavioral runtime evidence** | Wrong output, failing command, bad CLI/API/UI result, incorrect generated behavior, regression, "used to work" | `pdd bug <issue-url>` then `pdd fix <issue-url>` |
+| **Source-truth/spec/product change** | Add a new prompt/spec requirement for future behavior, update docs, change product behavior with no current failure to reproduce | `pdd change <issue-url>` then `pdd sync` for affected modules |
+| **Ambiguous wording** | "The prompt should handle edge cases better" with no failure, expected output, or new requirement | Ask for clarification before choosing a route |
+
+Runtime evidence outranks prompt/spec phrasing. For example, an issue saying
+"the prompt should be updated because the generated CLI crashes" should start
+with `pdd bug` and continue with `pdd fix` (`bug → fix`), not `pdd change`
+and `pdd sync` (`change → sync`).
+If the bug investigation later proves the prompt specification is the defect,
+the `pdd bug` prompt-classification step can still fix the prompt source.
+
+Use `pdd change` only when the issue is explicitly a source-truth/spec/product
+change and does not require reproducing a current runtime failure. If both
+runtime symptoms and prompt/source-truth wording appear, prefer `pdd bug` unless
+concrete investigation has already shown the prompt spec is the only defect.
+
 ### Workflow Cheatsheet: Features vs. Bugs
 
 | Task Type | Where to Start | The Workflow |
