@@ -336,6 +336,27 @@ Pair it with the related quality gates: prompt and story quality
 ([`docs/contract_check.md`](contract_check.md)), and the rule-to-story/test
 coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 
+## Story regression suite (executable oracles)
+
+`pdd detect --stories` catches prompt *drift* against the live prompts. The story
+**regression suite** is the complementary, fully executable layer: a story can
+carry a generated `@pytest.mark.story` test that runs in a public-safe lane with
+no secrets and no LLM/cloud credentials.
+
+- **Generate** a regression test from a story with
+  `pdd test --from-story user_stories/story__<slug>.md`.
+- **Run** the suite with `make regression-stories` (equivalent to `pytest -m story`).
+  It runs inside the no-secrets `regression-public` lane, so it is safe on forks/CI.
+- **Backfill from fixed bugs.** To make a previously-fixed bug permanently guarded,
+  author `user_stories/story__<slug>.md` from the *closed issue* (independent
+  oracle — never reverse-engineered from the prompt or code), set its `## Oracle`
+  to "the reported symptom no longer occurs", and generate the test. A good
+  bug-regression test **fails on the pre-fix behavior** and passes on `main` — that
+  is what proves it guards the fix.
+- Seed coverage ships for the top flows (`generate`, `sync`, `fix`, `change`,
+  `update`) plus an initial batch of bug regressions. Extend the suite by adding a
+  story and generating its test; the running count feeds the story-metrics report.
+
 ## Quick reference
 
 | Goal | Command |

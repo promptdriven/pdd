@@ -98,6 +98,10 @@ pytest tests/ -m "not integration and not e2e and not real" --timeout=60
 - Location: put tests in `tests/` using `pytest` style (`test_*.py`).
 - Red/green: commit a failing test first, then the fix that makes it pass.
 - Regression focus: ensure the test fails without your change and passes with it.
+- Story regressions: for a user-visible bug fix, add a `user_stories/story__*.md`
+  authored from the issue and generate its `@pytest.mark.story` test
+  (`pdd test --from-story ...`). Run the lane with `make regression-stories`;
+  confirm the test fails on the pre-fix behavior and passes with your fix.
 - Coverage: exercise public APIs and edge cases related to your change.
 
 ## Building the Package
