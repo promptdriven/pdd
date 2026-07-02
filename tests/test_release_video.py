@@ -2,6 +2,7 @@ import builtins
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -3004,6 +3005,7 @@ def test_release_video_main_timeout_with_active_project_run_reports_pending(
     )
 
     combined_output = result.stdout + result.stderr
+    make_prefix = f"make RELEASE_VIDEO_OUTPUT_DIR={shlex.quote(str(output_dir))}"
     response = json.loads(
         (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
     )
@@ -3019,11 +3021,11 @@ def test_release_video_main_timeout_with_active_project_run_reports_pending(
     assert "runId=agent_run_timeout_cli" in combined_output
     assert "status=running" in combined_output
     assert (
-        "make release-video-status RELEASE_TAG=v1.1.0 "
+        f"{make_prefix} release-video-status RELEASE_TAG=v1.1.0 "
         "RELEASE_VIDEO_STATUS_QUERY=1"
     ) in combined_output
     assert (
-        "make release-video-discord-backfill RELEASE_TAG=v1.1.0 "
+        f"{make_prefix} release-video-discord-backfill RELEASE_TAG=v1.1.0 "
         "RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
     ) in combined_output
     assert "did not return a YouTube URL" not in combined_output

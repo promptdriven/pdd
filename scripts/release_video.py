@@ -76,6 +76,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 DEFAULT_PDS_CLAUDE_MODEL = "glm-5.2"
+DEFAULT_RELEASE_VIDEO_OUTPUT_DIR = ".pdd/release-videos"
 MIN_PDS_CLI_VERSION = (0, 1, 7)
 MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
@@ -278,7 +279,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--changelog", default="CHANGELOG.md", help="Changelog file to attach.")
     parser.add_argument(
         "--output-dir",
-        default=".pdd/release-videos",
+        default=DEFAULT_RELEASE_VIDEO_OUTPUT_DIR,
         help="Directory for generated release-video artifacts.",
     )
     parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
@@ -745,16 +746,29 @@ def print_pending_release_video_response(response: dict[str, Any]) -> None:
             print(f"{label}: {command}")
 
 
-def pending_release_video_status_command(tag: str) -> str:
+def pending_release_video_make_prefix(output_dir: Any) -> str:
+    """Return a Make invocation prefix that preserves custom artifact roots."""
+    output_dir_text = str(output_dir or "").strip()
+    if not output_dir_text or output_dir_text == DEFAULT_RELEASE_VIDEO_OUTPUT_DIR:
+        return "make"
+    return f"make RELEASE_VIDEO_OUTPUT_DIR={shlex.quote(output_dir_text)}"
+
+
+def pending_release_video_status_command(tag: str, output_dir: Any) -> str:
     """Return the Make target that refreshes persisted PDS run status."""
-    return f"make release-video-status RELEASE_TAG={tag} RELEASE_VIDEO_STATUS_QUERY=1"
+    return (
+        f"{pending_release_video_make_prefix(output_dir)} "
+        f"release-video-status RELEASE_TAG={shlex.quote(tag)} "
+        "RELEASE_VIDEO_STATUS_QUERY=1"
+    )
 
 
-def pending_release_video_backfill_command(tag: str) -> str:
+def pending_release_video_backfill_command(tag: str, output_dir: Any) -> str:
     """Return the Make target used after the pending run publishes to YouTube."""
     return (
-        "make release-video-discord-backfill "
-        f"RELEASE_TAG={tag} RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
+        f"{pending_release_video_make_prefix(output_dir)} "
+        "release-video-discord-backfill "
+        f"RELEASE_TAG={shlex.quote(tag)} RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
     )
 
 
@@ -779,6 +793,7 @@ def pending_pds_create_response_from_sidecar(
     tag: str,
     reason: str,
     message: str,
+    output_dir: Any,
 ) -> dict[str, Any] | None:
     """Build a nonfatal pending response when sidecar status is still active."""
     metadata = load_persisted_pds_run_metadata(path)
@@ -796,8 +811,8 @@ def pending_pds_create_response_from_sidecar(
         "tag": tag,
         "status": status,
         "pdsRun": metadata,
-        "statusCommand": pending_release_video_status_command(tag),
-        "backfillCommand": pending_release_video_backfill_command(tag),
+        "statusCommand": pending_release_video_status_command(tag, output_dir),
+        "backfillCommand": pending_release_video_backfill_command(tag, output_dir),
     }
     if run_id:
         response["runId"] = run_id
@@ -1935,6 +1950,7 @@ def create_release_video(
             tag=tag,
             reason="pds_create_timeout_active_run",
             message=message,
+            output_dir=getattr(args, "output_dir", DEFAULT_RELEASE_VIDEO_OUTPUT_DIR),
         )
         if pending_response:
             return pending_response
@@ -1978,6 +1994,7 @@ def create_release_video(
                 tag=tag,
                 reason=reason,
                 message=message,
+                output_dir=getattr(args, "output_dir", DEFAULT_RELEASE_VIDEO_OUTPUT_DIR),
             )
             if pending_response:
                 return pending_response
