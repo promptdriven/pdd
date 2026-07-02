@@ -3098,6 +3098,71 @@ def test_release_video_project_exists_conflict_with_active_run_reports_pending(
     assert "did not return a YouTube URL" not in combined_output
 
 
+def test_release_video_pds_cli_timeout_with_active_run_reports_pending(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    active_run = {
+        "runId": "agent_run_cli_timeout",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=(
+                        "release-video create timed out after 120s; "
+                        "run is still active\n"
+                        f"{json.dumps(active_run)}\n"
+                    ),
+                    exit_code=124,
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined_output = result.stdout + result.stderr
+    response = json.loads(
+        (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
+    )
+    persisted = json.loads(
+        (output_dir / "v1.1.0" / "pds_run.json").read_text(encoding="utf8")
+    )
+    assert result.returncode == 0
+    assert response["pending"] is True
+    assert response["reason"] == "pds_create_timeout_active_run"
+    assert response["runId"] == "agent_run_cli_timeout"
+    assert persisted["runId"] == "agent_run_cli_timeout"
+    assert "release-video: PDS release-video create is still running" in combined_output
+    assert "runId=agent_run_cli_timeout" in combined_output
+    assert "did not return a YouTube URL" not in combined_output
+
+
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"

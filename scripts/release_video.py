@@ -817,6 +817,16 @@ def pds_create_has_project_exists_conflict(completed: subprocess.CompletedProces
     )
 
 
+def pds_create_has_timeout_failure(completed: subprocess.CompletedProcess[str]) -> bool:
+    combined = f"{completed.stderr}\n{completed.stdout}".lower()
+    return (
+        completed.returncode == 124
+        or "timed out" in combined
+        or "timeout" in combined
+        or "deadline exceeded" in combined
+    )
+
+
 def extract_status_response(
     *texts: str,
     preferred_run_id: str | None = None,
@@ -1949,11 +1959,18 @@ def create_release_video(
             message += f" {hint}"
         if persisted_run_metadata_path:
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
-        if pds_create_has_project_exists_conflict(completed):
+        is_timeout_failure = pds_create_has_timeout_failure(completed)
+        is_project_exists_conflict = pds_create_has_project_exists_conflict(completed)
+        if is_timeout_failure or is_project_exists_conflict:
+            reason = (
+                "pds_create_timeout_active_run"
+                if is_timeout_failure
+                else "pds_create_project_exists_active_run"
+            )
             pending_response = pending_pds_create_response_from_sidecar(
                 path=persisted_run_metadata_path,
                 tag=tag,
-                reason="pds_create_project_exists_active_run",
+                reason=reason,
                 message=message,
             )
             if pending_response:
