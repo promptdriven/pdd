@@ -973,7 +973,7 @@ Every high-risk MUST or MUST NOT rule should be covered by at least one of:
 
 Use stories for cross-module behavior, product acceptance criteria, critical edge cases, negative behavior, regressions from bugs, and behavior that is easier to describe from a user perspective than a module perspective.
 
-Story files live in `user_stories/`. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
+Story files live in `user_stories/`. Use `pdd story add <issue-source> --devunit <name>` to create a story from a GitHub issue; `pdd story list --with-regression-status` to list all stories with their linked prompts and regression status; and `pdd story link <story-file> --prompt <path>` to add a prompt link to an existing story. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
 
 ### Two files: human-verified Story + AI-generated contract
 
