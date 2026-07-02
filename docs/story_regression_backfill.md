@@ -39,6 +39,9 @@ that should feel as stable and focused as Python unit tests:
 - preprocess include and snapshot reproducibility
 - context compression and test-packing manifests
 - side-effect-free estimate mode
+- provider fallback and degraded workflow status
+- issue routing by source-of-truth classification
+- CI validation and post-push repair loops
 
 ## Verification
 
