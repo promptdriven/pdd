@@ -3935,7 +3935,7 @@ def run_agentic_e2e_fix_orchestrator(
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
                         nonlocal last_completed_step, verification_failure_context
-                        nonlocal last_verifier_failure
+                        nonlocal last_verifier_failure, github_comment_id
                         import_error_retries = r.import_error_retries
                         if r.verifier_failure_detail is not None:
                             last_verifier_failure = r.verifier_failure_detail
@@ -3952,6 +3952,44 @@ def run_agentic_e2e_fix_orchestrator(
                                 r.verifier_test_files,
                                 r.verifier_failure_detail,
                             )
+                            # Persist the comment key immediately (best-effort,
+                            # mirroring the Step 9 retry-accounting save): the
+                            # rollover save is skipped on a FINAL-cycle
+                            # rejection (current_cycle > max_cycles by then),
+                            # and the non-success exit keeps the pre-verify
+                            # ALL_TESTS_PASS state on disk — a resume would
+                            # re-verify and, without the persisted key,
+                            # duplicate this comment.
+                            try:
+                                state_data["step_comments"] = sorted(
+                                    step_comments_set
+                                )
+                                state_data["last_saved_at"] = (
+                                    datetime.now().isoformat()
+                                )
+                                _new_gh_id = save_workflow_state(
+                                    cwd,
+                                    issue_number,
+                                    workflow_name,
+                                    state_data,
+                                    state_dir,
+                                    repo_owner,
+                                    repo_name,
+                                    use_github_state,
+                                    github_comment_id,
+                                )
+                                if _new_gh_id:
+                                    github_comment_id = _new_gh_id
+                                    state_data["github_comment_id"] = (
+                                        github_comment_id
+                                    )
+                            except Exception as _save_exc:  # pylint: disable=broad-except
+                                logger.debug(
+                                    "Best-effort rejection-comment key save "
+                                    "failed: %s",
+                                    _save_exc,
+                                    exc_info=True,
+                                )
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
