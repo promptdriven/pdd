@@ -95,12 +95,23 @@ least one collected pytest test claims it with the
 `@pytest.mark.story(story_id="<slug>")` marker (see
 [`docs/generating_user_stories.md`](generating_user_stories.md), "Story
 regression tests"). `pdd checkup coverage` surfaces this per story as
-`has_regression_test`:
+`has_regression_test` plus a `status`:
 
 | `has_regression_test` | Meaning |
 |-----------------------|---------|
 | `true` | One or more marker-linked pytest tests exist for the story |
 | `false` | The story has no executable regression test (a gap to close) |
+
+| `status` | Meaning |
+|----------|---------|
+| `story-regression-passing` | A marker-linked test records the current story hash |
+| `story-regression-missing` | No marker-linked test claims the story |
+| `story-regression-stale` | A marker-linked test exists, but it was generated from an older story hash |
+
+Use `pdd checkup coverage --story-regression-gate strict <target>` to fail on
+missing or stale story regressions. The default `warn` mode reports the status
+without changing the exit code; `off` leaves the status in JSON/output but does
+not gate on it.
 
 Two orphan conditions are reported as diagnostics, not gaps:
 

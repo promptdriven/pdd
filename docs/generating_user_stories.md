@@ -345,7 +345,9 @@ def test_refund_rejects_zero_amount():
   it; given a test node id, it resolves the owning story. A story may be claimed
   by many tests, and a test may claim more than one story.
 - **Coverage:** `pdd checkup coverage <prompt>` reports per story whether an
-  executable regression test exists (`has_regression_test`); see
+  executable regression test exists (`has_regression_test`) and whether the
+  generated test is current (`story-regression-missing` /
+  `story-regression-stale`); see
   [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
   coverage".
 
@@ -372,6 +374,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 | Goal | Command |
 | --- | --- |
 | Generate a story + contract from an issue | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
+| Generate deterministic pytest tests from a story | `pdd test --from-story user_stories/story__<slug>.md` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
 | Validate all stories against their prompts | `pdd detect --stories` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |

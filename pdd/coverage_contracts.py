@@ -114,12 +114,18 @@ class StoryRegression:
 
     story_id: str
     has_regression_test: bool
+    status: str
+    tests: list[str] = field(default_factory=list)
+    story_hash: Optional[str] = None
 
     def as_dict(self) -> dict:
         """Serialise to a JSON-safe dictionary."""
         return {
             "story_id": self.story_id,
             "has_regression_test": self.has_regression_test,
+            "status": self.status,
+            "tests": self.tests,
+            "story_hash": self.story_hash,
         }
 
 
@@ -159,6 +165,12 @@ class CoverageResult:
         counts["stories_total"] = len(self.stories)
         counts["stories_with_regression_test"] = sum(
             1 for s in self.stories if s.has_regression_test
+        )
+        counts["story_regression_missing"] = sum(
+            1 for s in self.stories if s.status == "story-regression-missing"
+        )
+        counts["story_regression_stale"] = sum(
+            1 for s in self.stories if s.status == "story-regression-stale"
         )
         return counts
 
@@ -795,11 +807,37 @@ def _attach_story_regression(
         build_story_map,
         discover_story_ids,
     )
+    from .story_regression_gate import evaluate_story_regression
+    from .user_story_tests import story_id as story_id_from_path
 
     smap: StoryTestMap = story_map if story_map is not None else build_story_map(tests_dir)
 
+    story_lookup = {
+        sid: story_path
+        for story_path in sorted(stories_dir.rglob("story__*.md"))
+        for sid in [story_id_from_path(story_path)]
+    }
     for sid in linked:
-        result.stories.append(StoryRegression(sid, smap.has_regression_test(sid)))
+        story_path = story_lookup.get(sid)
+        if story_path is None:
+            result.stories.append(
+                StoryRegression(
+                    sid,
+                    smap.has_regression_test(sid),
+                    "story-regression-missing",
+                )
+            )
+            continue
+        gate = evaluate_story_regression(story_path, tests_dir=tests_dir, story_map=smap)
+        result.stories.append(
+            StoryRegression(
+                sid,
+                gate.has_regression_test,
+                gate.status,
+                gate.tests,
+                gate.current_hash,
+            )
+        )
 
     # Validation-warning orphan direction: a marker names a story_id that has no
     # ``story__<slug>.md`` on disk. Distinct from the "story has no test" gap.

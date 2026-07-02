@@ -708,6 +708,7 @@ Commands:
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
+- `pdd test --from-story user_stories/story__*.md` generates deterministic `@pytest.mark.story` regression tests from a story.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
 
 Story prompt linkage:

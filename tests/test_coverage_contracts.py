@@ -1219,7 +1219,15 @@ class TestStoryRegressionDimension:
         prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
         result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
         d = result.as_dict()
-        assert d["stories"] == [{"story_id": "foo_flow", "has_regression_test": True}]
+        assert d["stories"] == [
+            {
+                "story_id": "foo_flow",
+                "has_regression_test": True,
+                "status": "story-regression-passing",
+                "tests": ["test_foo.py::test_foo_flow"],
+                "story_hash": "8ca87cfe7267abcb",
+            }
+        ]
         assert "regression_warnings" in d
 
     def test_marker_for_nonexistent_story_is_a_warning(self, tmp_path: Path):
