@@ -248,6 +248,10 @@ def main(argv: list[str] | None = None) -> int:
         response_path.write_text(json.dumps(response, indent=2, sort_keys=True) + "\n", encoding="utf8")
 
         youtube_url = find_youtube_url(response)
+        if release_video_response_is_pending(response):
+            print(f"Release video artifacts: {output_dir}")
+            print_pending_release_video_response(response)
+            return 0
         if args.target == "publish" and not args.dry_run and not youtube_url:
             raise ReleaseVideoError(
                 "PDS release-video publish completed but did not return a YouTube URL."
@@ -347,10 +351,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--metadata-conflict",
-        default=os.environ.get("RELEASE_VIDEO_METADATA_CONFLICT", ""),
+        default=os.environ.get("RELEASE_VIDEO_METADATA_CONFLICT", "use-existing"),
         help=(
             "Pass --metadata-conflict use-existing|replace to PDS for "
-            "release-video project metadata recovery."
+            "release-video project metadata recovery. Defaults to use-existing."
         ),
     )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
@@ -705,6 +709,111 @@ def release_video_status_is_running(status: Any) -> bool:
     value = str(status or "").strip().lower()
     return value in RUNNING_PDS_STATUSES or (
         bool(value) and value not in TERMINAL_PDS_STATUSES
+    )
+
+
+def release_video_response_is_pending(response: dict[str, Any]) -> bool:
+    """Return True when PDS create is still active and must be recovered later."""
+    return response.get("pending") is True
+
+
+def print_pending_release_video_response(response: dict[str, Any]) -> None:
+    """Print operator recovery commands for a pending release video."""
+    pds_run_value = response.get("pdsRun")
+    pds_run = pds_run_value if isinstance(pds_run_value, dict) else {}
+    project_id = first_nonempty_string(response.get("projectId"), pds_run.get("projectId"))
+    run_id = first_nonempty_string(response.get("runId"), pds_run.get("runId"))
+    status = first_nonempty_string(response.get("status"), pds_run.get("status")) or "unknown"
+
+    print("release-video: PDS release-video create is still running; release video is pending.")
+    identity_parts = []
+    if project_id:
+        identity_parts.append(f"projectId={project_id}")
+    if run_id:
+        identity_parts.append(f"runId={run_id}")
+    identity_parts.append(f"status={status}")
+    print(f"release-video: {' '.join(identity_parts)}")
+
+    for label, key in (
+        ("status", "statusCommand"),
+        ("recover", "recoverCommand"),
+        ("watch", "watchCommand"),
+        ("backfill", "backfillCommand"),
+    ):
+        command = str(response.get(key) or "").strip()
+        if command:
+            print(f"{label}: {command}")
+
+
+def pending_release_video_status_command(tag: str) -> str:
+    return f"make release-video-status RELEASE_TAG={tag} RELEASE_VIDEO_STATUS_QUERY=1"
+
+
+def pending_release_video_backfill_command(tag: str) -> str:
+    return (
+        "make release-video-discord-backfill "
+        f"RELEASE_TAG={tag} RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
+    )
+
+
+def load_persisted_pds_run_metadata(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        raw = path.read_text(encoding="utf8")
+    except OSError:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def pending_pds_create_response_from_sidecar(
+    *,
+    path: Path | None,
+    tag: str,
+    reason: str,
+    message: str,
+) -> dict[str, Any] | None:
+    metadata = load_persisted_pds_run_metadata(path)
+    if not metadata or not release_video_status_is_running(metadata.get("status")):
+        return None
+
+    run_id = str(metadata.get("runId") or "").strip()
+    project_id = str(metadata.get("projectId") or "").strip()
+    status = str(metadata.get("status") or "").strip()
+    response: dict[str, Any] = {
+        "ok": False,
+        "pending": True,
+        "reason": reason,
+        "message": redact_secret_text(message),
+        "tag": tag,
+        "status": status,
+        "pdsRun": metadata,
+        "statusCommand": pending_release_video_status_command(tag),
+        "backfillCommand": pending_release_video_backfill_command(tag),
+    }
+    if run_id:
+        response["runId"] = run_id
+    if project_id:
+        response["projectId"] = project_id
+    for key in ("recoverCommand", "watchCommand"):
+        command = str(metadata.get(key) or "").strip()
+        if command:
+            response[key] = command
+    return response
+
+
+def pds_create_has_project_exists_conflict(completed: subprocess.CompletedProcess[str]) -> bool:
+    combined = f"{completed.stderr}\n{completed.stdout}".lower()
+    return (
+        "release_video_existing_project_metadata_mismatch" in combined
+        or "project-exists" in combined
+        or "project exists" in combined
+        or ("project" in combined and "already exists" in combined)
+        or ("metadata" in combined and "conflict" in combined)
     )
 
 
@@ -1805,6 +1914,14 @@ def create_release_video(
                 file=sys.stderr,
             )
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        pending_response = pending_pds_create_response_from_sidecar(
+            path=persisted_run_metadata_path,
+            tag=tag,
+            reason="pds_create_timeout_active_run",
+            message=message,
+        )
+        if pending_response:
+            return pending_response
         raise ReleaseVideoError(message) from exc
     persisted_run_metadata_path = persist_pds_run_metadata_from_output(
         completed=completed,
@@ -1832,6 +1949,15 @@ def create_release_video(
             message += f" {hint}"
         if persisted_run_metadata_path:
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        if pds_create_has_project_exists_conflict(completed):
+            pending_response = pending_pds_create_response_from_sidecar(
+                path=persisted_run_metadata_path,
+                tag=tag,
+                reason="pds_create_project_exists_active_run",
+                message=message,
+            )
+            if pending_response:
+                return pending_response
         raise ReleaseVideoError(message)
     try:
         parsed = parse_pds_create_response(completed.stdout)

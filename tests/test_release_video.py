@@ -2992,7 +2992,7 @@ def test_release_video_main_timeout_with_active_project_run_reports_pending(
                 )
             ),
             "--pds-create-timeout",
-            "0.05",
+            "0.5",
             "--output-dir",
             str(output_dir),
         ],
