@@ -22,7 +22,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -57,7 +57,7 @@ jobs:
       HAS_CLAUDE_OAUTH_SLOTS: ${{ (secrets.CLAUDE_CODE_OAUTH_TOKEN_1 != '' && secrets.CLAUDE_CODE_OAUTH_TOKEN_2 != '' && secrets.CLAUDE_CODE_OAUTH_TOKEN_3 != '') && 'true' || 'false' }}
       HAS_PDS: ${{ secrets.PDS_TOKEN != '' && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -327,7 +327,7 @@ jobs:
 
       - name: Upload release video recovery artifacts
         if: env.HAS_PDS == 'true' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-video-${{ github.ref_name }}
           path: .pdd/release-videos/${{ github.ref_name }}/
