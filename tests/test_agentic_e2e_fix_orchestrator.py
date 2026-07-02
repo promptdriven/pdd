@@ -12454,3 +12454,22 @@ class TestStep9VerifierRejectionVisibleComment:
                 **e2e_fix_default_args
             )
         assert success is False
+
+    def test_rejection_comment_header_matches_steer_status_filter(self):
+        """The rejection comment can be posted by a User-type token (not a
+        GitHub-App Bot), so drain_issue_steers only skips it via the
+        status-comment body filter `^## Step \\d+/\\d+:` (MULTILINE). If the
+        header stops matching, the orchestrator re-ingests its own rejection
+        comment as a human steer on the next drain (self-steering loop)."""
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _build_step9_verifier_rejection_comment,
+        )
+
+        for resumed in (False, True):
+            body = _build_step9_verifier_rejection_comment(
+                3, ["tests/test_widget.py"], "detail", resumed=resumed
+            )
+            assert re.search(r"^## Step \d+/\d+:", body, re.MULTILINE), (
+                "rejection comment header must match drain_issue_steers' "
+                f"status-comment filter; got header: {body.splitlines()[0]!r}"
+            )
