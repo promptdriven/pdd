@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://promptdriven.ai/schemas/story_coverage.schema.json",
+  "title": "PDD Story Regression Coverage",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "run_id",
+    "generated_at",
+    "story_count",
+    "story_backed_test_count",
+    "stories_covered",
+    "story_coverage_pct",
+    "pass_rate",
+    "passing_test_count",
+    "gap_stories",
+    "orphan_tests"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "status": {"type": "string", "enum": ["ok", "not_applicable"]},
+    "run_id": {"type": "string", "minLength": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "story_count": {"type": "integer", "minimum": 0},
+    "story_backed_test_count": {"type": "integer", "minimum": 0},
+    "stories_covered": {"type": "integer", "minimum": 0},
+    "story_coverage_pct": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "pass_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 100},
+    "passing_test_count": {"type": "integer", "minimum": 0},
+    "gap_stories": {"type": "array", "items": {"type": "string"}},
+    "orphan_tests": {"type": "array", "items": {"type": "string"}}
+  }
+}

@@ -354,6 +354,37 @@ the narrowest assertion that still catches the regression.
 - Templates: `user_stories/story__template.md` and
   `user_stories/contracts/template.contract.md`.
 
+## Story regression tests (`@pytest.mark.story`)
+
+A story can be backed by **runnable, traceable** pytest regression tests. Mark a
+test with the `story` marker (registered in `pytest.ini`) to claim a story:
+
+```python
+import pytest
+
+@pytest.mark.story(story_id="refund_payment")
+def test_refund_rejects_zero_amount():
+    ...
+```
+
+- **`story_id` convention:** the marker's `story_id` equals the story file's
+  slug — `user_stories/story__<slug>.md` → `story_id="<slug>"` (the same slug
+  used elsewhere in this guide; see "File and naming conventions"). The
+  positional form `@pytest.mark.story("<slug>")` is also accepted.
+- **Select the regression tests:** `pytest -m story` runs exactly the
+  story-backed regression tests and nothing else.
+- **Traceability:** given a story, the API resolves the set of tests that claim
+  it; given a test node id, it resolves the owning story. A story may be claimed
+  by many tests, and a test may claim more than one story.
+- **Coverage:** `pdd checkup coverage <prompt>` reports per story whether an
+  executable regression test exists (`has_regression_test`); see
+  [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
+  coverage".
+
+This is distinct from `pdd detect --stories`, which validates stories against
+prompts via an LLM oracle. The marker mechanism is deterministic and requires no
+LLM calls.
+
 ## CI integration
 
 Add story validation as a pre-merge gate so prompt drift is caught
@@ -384,6 +415,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 | Validate all stories against their prompts | `pdd detect --stories` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |
 | Re-align a contract after editing the Story | `sync_user_story_contract(...)` (library function — no CLI yet; see Step 4) |
+| Run only story-backed regression tests | `pytest -m story` |
 
 ## See also
 
@@ -397,3 +429,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
   lint.
 - [`docs/prompt_lint.md`](prompt_lint.md) — pre-merge prompt and user-story
   quality checks.
+- [`docs/evidence_manifest.md`](evidence_manifest.md) — the **executable** story
+  regression suite (`@pytest.mark.story`) and its machine-readable coverage
+  artifact (`.pdd/evidence/stories/coverage.latest.json`). This is distinct from
+  the LLM-backed `pdd detect --stories` validation described in this guide.
