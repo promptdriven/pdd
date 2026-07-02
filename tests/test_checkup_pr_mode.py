@@ -404,6 +404,89 @@ class TestOrchestratorPrMode:
             f"Step 8 must be skipped in PR mode; invoked: {invoked_steps}"
         )
 
+    def test_step_8_skip_recorded_in_telemetry_pr_mode(self, tmp_path: Path) -> None:
+        """PR mode skips create_pr (step 8) but must still record it in
+        ``step_telemetry`` as ``skipped`` (issue #1709). Regression for the gap
+        where only the ``--no-fix`` skip sites recorded telemetry, so
+        ``create_pr`` was absent on the common PR-verification path.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        captured: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        def capture_save(**kwargs):  # noqa: ANN003
+            captured.append(json.loads(json.dumps(kwargs["state"])))
+            return None
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(tmp_path / "wt", None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            (tmp_path / "wt").mkdir()
+
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success
+        # Use the richest persisted telemetry (it only grows across saves).
+        telemetry = max(
+            (s.get("step_telemetry", []) for s in captured), key=len, default=[]
+        )
+        create_pr = [e for e in telemetry if e["step_id"] == "create_pr"]
+        assert create_pr, (
+            "create_pr (step 8) must be recorded in step_telemetry even when "
+            "skipped in PR mode"
+        )
+        assert all(e["status"] == "skipped" for e in create_pr)
+        assert all(e["cost_usd"] == 0.0 for e in create_pr)
+
     def test_pr_mode_max_iterations_without_sentinel_fails_before_push(
         self, tmp_path: Path
     ) -> None:

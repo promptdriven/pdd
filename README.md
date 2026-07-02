@@ -39,6 +39,15 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
+Choose `pdd bug` before `pdd change` when an issue reports a current runtime
+symptom, even if it says the prompt or spec should be updated. Stack traces,
+failing commands, wrong CLI/API/UI output, regressions, crashes, and incorrect
+generated behavior should run through `pdd bug <issue-url>` followed by
+`pdd fix <issue-url>` (`bug → fix`) so the failure is reproduced and covered by
+a behavioral test. Use `pdd change` for explicit source-truth/spec/product
+changes with no current runtime failure to reproduce (`change → sync` after
+the source-truth change lands).
+
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
 ## Whitepaper
@@ -59,7 +68,10 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
-For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+For a rule-to-story/test coverage matrix (`pdd checkup coverage`), including the
+`@pytest.mark.story` regression marker and the per-story `has_regression_test`
+dimension, see [docs/coverage_contracts.md](docs/coverage_contracts.md) and
+[docs/generating_user_stories.md](docs/generating_user_stories.md).
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
@@ -701,6 +713,9 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
+- `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--dry-run` for a no-write preview, and `--update` to merge prompt links into an existing story.
+- `pdd story list [--with-regression-status]` lists all stories in `user_stories/` with their slug, file path, linked prompts, and (when the traceability API is available) `missing` / `passing` / `stale` regression status.
+- `pdd story link <story-file> --prompt <path>` adds a prompt link to an existing story file without regenerating the story body. Validates that the story file is inside `user_stories/`.
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
@@ -2372,7 +2387,23 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 10. **CI Validation**: First poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate any CI-specific issues (lint, artifacts, build). Once CI is green, run a real pre-checkup gate (the fix path's first drift-sync step) that **blocks** on any mechanical failure (build/smoke — compile, import, caller-compat, targeted tests) or unhealable update-drift. (Architecture-sync residuals and example-only drift are advisory in default mode — not hard blocks — because they are frequently spurious on a clean tree; strict mode promotes them.) It first drift-syncs code ↔ prompt ↔ `architecture.json` ↔ `.pdd/meta` in the worktree (the prompt/code sync is committed to the PR (an example regenerated as a side effect of an update-heal is committed and validated too; example-*only* drift is advisory — the gate does not auto-heal it, to avoid the #1243 null-hash heal loop); `.pdd/meta` fingerprint finalization is intentionally left to the post-merge sync — see #1317 — so the PR tree itself may still show fingerprint drift until then), then executes its own deterministic build/smoke checks — compile touched files, import changed modules, probe changed router/app modules for route/router objects (a non-blocking note, not a hard block — best-effort app-wiring smoke that stays with checkup), lint, caller-compatibility sweep, and run targeted unit tests by git-diff (Python tests are executed; a changed JS/TS test is reported, not run). It runs these checks itself rather than relying solely on GitHub required checks (which are often absent or vacuous)
 11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
 
-After Step 11 the workflow clears state and returns. `pdd fix` does **not** run `pdd checkup` (no Layer-1 PR-mode checkup, no Layer-2 review-loop) as a final gate — verification is the workflow's own Step 7/9 plus the deterministic pre-checkup build/smoke gate in Step 10. `pdd checkup` remains a separate command you run on its own (the semantic ship-verdict is available there via `--final-gate`). Removing the agentic gate stops a transient checkup verdict (an empty/garbled review output, or a provider rate-limit) from failing an already-committed, correct fix. Note that CI is treated as best-effort: a pending / manually-triggered / timed-out required check the bot cannot run is **inconclusive**, not fatal — so a successful `pdd fix` run may mean external CI was inconclusive (still pending), not confirmed green. (A check that actually **fails** still fails the run and drives the CI-fix loop.)
+After Step 11 the workflow clears state and returns. `pdd fix` does **not** run `pdd checkup` (no Layer-1 PR-mode checkup, no Layer-2 review-loop) as a final gate — verification is the workflow's own Step 7/9 plus the deterministic pre-checkup build/smoke gate in Step 10. `pdd checkup` remains a separate command you run on its own (the semantic ship-verdict is available there via `--final-gate`). Removing the agentic gate stops a transient checkup verdict (an empty/garbled review output, or a provider rate-limit) from failing an already-committed, correct fix. Note that CI is treated as best-effort: a pending / manually-triggered / `ACTION_REQUIRED` / timed-out required check the bot cannot run is **inconclusive**, not fatal — so a successful `pdd fix` run may mean external CI was inconclusive (still pending or waiting for manual action), not confirmed green. Failed required checks remain fail-closed by default and can still drive the CI-fix loop; repos that intentionally want pure external setup/auth failures such as missing GitHub Actions/Firebase credentials to be treated as inconclusive must opt in with `.pddrc` `ci.external_setup_fail_open: true`.
+
+For repos with comment-gated CI, configure the trigger in `.pddrc` so `pdd fix` can post each matching trigger once and repoll before falling back to an inconclusive manual-action note:
+
+```yaml
+ci:
+  manual_trigger_comment: "/gcbrun"
+  manual_triggers:
+    "auto-heal-pr": "/gcbrun"
+```
+
+For repos that intentionally want missing-secret external setup failures to be reported as inconclusive instead of repairable CI failures:
+
+```yaml
+ci:
+  external_setup_fail_open: true
+```
 
 **Resumable Operations:**
 
@@ -2512,6 +2543,13 @@ pdd [GLOBAL OPTIONS] split --legacy --output-sub prompts/sub_data_processing.pro
 ### 8. change
 
 Implement a change request from a GitHub issue using a 13-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
+
+Do not use `pdd change` as the first step for a reported runtime defect. If an
+issue says "the prompt should be updated because the generated CLI crashes" or
+includes a stack trace, failing command, wrong runtime output, or regression,
+start with `pdd bug <issue-url>` and then run `pdd fix <issue-url>`. `pdd change`
+is for source-truth/spec/product changes that do not require reproducing a
+current failure.
 
 **Agentic Mode (default):**
 ```
