@@ -5,7 +5,7 @@
   "cli": {
     "commands": [
       {"name": "generate", "description": "Generate code from a prompt or trigger agentic architecture from a GitHub issue / route PRD modes; support standard dry-run estimates only for the prompt-file code generation path."},
-      {"name": "test", "description": "Generate or enhance unit tests, generate/link prompt user stories, or generate deterministic offline regression tests from a user story (`--from-story`)."},
+      {"name": "test", "description": "Generate or enhance unit tests, or generate/link prompt user stories."},
       {"name": "example", "description": "Generate context examples from prompt and code."}
     ]
   }
@@ -18,7 +18,6 @@
 <pdd-dependency>context_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
 <pdd-dependency>template_registry_python.prompt</pdd-dependency>
-<pdd-dependency>story_test_generator_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
@@ -57,13 +56,11 @@
      - **Estimate Mode**: unsupported in this first version. The root CLI rejects estimate mode for `example` before dispatch with `Estimate mode currently supports `generate` only.`
      - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
-  3. **test**: Supports Agentic issue testing, user-story validation artifacts, deterministic offline story-test generation (`--from-story`), and Manual (`--manual`) unit-test generation.
-     - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`, `--from-story <path>`, `--force`. `--from-story` names a human `story__<slug>.md`; `--force` overwrites a previously generated file whose `story-hash` header shows human drift.
+  3. **test**: Supports Agentic issue testing, user-story validation artifacts, and Manual (`--manual`) unit-test generation.
+     - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
      - **Agentic Mode**: Triggered if first arg is a GitHub issue URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. `--clean-restart` is valid only in this agentic GitHub issue mode and must reject arbitrary HTTP/GitHub non-issue URLs.
      - **Story Generation Mode**: Triggered when not `--manual`, `--issue <url|number|issue.md>` is provided, and every positional arg is a `.prompt` file: `pdd test --issue <url|number|issue.md> <*.prompt>`. Generate a reviewable, LLM-authored `user_stories/story__*.md` user story from the resolved issue text via `generate_user_story`, while withholding prompt file content from the story author. The prompt files are used only as linked artifacts in `pdd-story-prompts` metadata for later validation. Honor `--output` and `PDD_USER_STORIES_DIR`, and surface the generated story path plus linked prompts. Missing/unresolvable issue sources or invalid LLM story output must hard-fail with a clear error; do not fall back to prompt-authored or deterministic story generation.
      - **Story Metadata Linking Mode**: Triggered when not `--manual` and exactly one positional arg is a Markdown story file whose basename starts with `story__`. Call `cache_story_prompt_links` so existing stories receive or refresh `pdd-story-prompts` metadata used by `pdd detect --stories`.
-     - **Story Test Generation Mode**: Triggered when not `--manual`, no GitHub issue URL is present, and `--from-story <story>` is supplied. Delegate to the `story_test_generator` module via `generate_story_tests(story_path=..., output=<--output>, force=force, strength=<global strength>, temperature=<global temperature>, time=<global time>, ...)`, then surface the emitted pytest file path. Hard-fail with a clear message and no fallback when the story or its sibling contract is missing, when the contract omits `## Entry Point` / `## Seams`, or when `## Oracle` / `## Negative Cases` are empty.
-     - **Story-Test Guardrails**: `--from-story` is mutually exclusive with agentic GitHub-issue mode, `--issue` story-generation mode, story-linking mode, and `--manual`; violations raise `click.UsageError`. `--force` is valid only with `--from-story`.
      - **Manual Unit-Test Mode**: Triggered by `--manual`, or by non-URL non-story inputs that fall through to legacy test generation. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
      - **Estimate Mode**: unsupported in this first version. The root CLI rejects estimate mode for `test` before dispatch with `Estimate mode currently supports `generate` only.`
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
@@ -83,7 +80,6 @@
   <include>context/context_generator_main_example.py</include>
   <include select="def:cmd_test_main">context/cmd_test_main_example.py</include>
   <include select="def:generate_user_story,def:cache_story_prompt_links" mode="interface">pdd/user_story_tests.py</include>
-  <include select="def:generate_story_tests" mode="interface">pdd/story_test_generator.py</include>
   <include>context/agentic_test_example.py</include>
   <include>context/track_cost_example.py</include>
   <utils.auth_service>

@@ -44,17 +44,6 @@ These details should not matter:
 
 List forbidden outcomes this story protects against.
 
-## Entry Point
-
-Optional. Required only when this contract's story is consumed by
-`pdd test --from-story`. Name the callable the generated tests drive in-process:
-- `pdd.<module>:<callable>`
-
-## Seams
-
-Optional. Boundaries the generated tests monkeypatch to stay offline/deterministic:
-- `pdd.<module>:<boundary_callable>` — <one-line reason (e.g. LLM/cloud call)>
-
 ## Non-Goals
 
 What this story explicitly does not cover.

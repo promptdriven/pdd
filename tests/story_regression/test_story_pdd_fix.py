@@ -1,0 +1,17 @@
+from click.testing import CliRunner
+import pytest
+
+from pdd.commands.fix import fix
+
+
+PDD_STORY_ID = "pdd_fix"
+PDD_STORY_HASH = "db469b01db51d9a7"
+
+
+@pytest.mark.story(story_id=PDD_STORY_ID)
+def test_story_pdd_fix_cli_surface_is_available():
+    result = CliRunner().invoke(fix, ["--help"])
+
+    assert result.exit_code == 0
+    assert "fix" in result.output.lower()
+    assert "story" in result.output.lower()
