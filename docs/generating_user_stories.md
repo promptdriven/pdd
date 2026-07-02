@@ -60,7 +60,8 @@ flowchart TD
     E -- approved --> G["pdd detect --stories<br/>(validate vs linked prompts)"]
     G -- fails --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
     H --> G
-    G -- passes --> I[Commit Story + contract]
+    G -- passes --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
+    I --> J[Commit Story + contract + regression test]
 ```
 
 ## Step 1 — Get the issue
@@ -110,6 +111,12 @@ pdd story add --text "As a developer, I want to validate coupon codes at checkou
 
 # Dry-run: print the proposed story path and linked prompts without writing
 pdd story add 1454 --devunit commands/generate --dry-run
+
+# Link the prompt files already changed in git status
+pdd story add 1454 --from-changed-files
+
+# Create the story and print the follow-up deterministic regression command
+pdd story add 1454 --devunit commands/generate --generate-regression
 ```
 
 Pass `--update` to merge prompt links into an existing story file rather than erroring on a slug collision.
@@ -117,6 +124,36 @@ Pass `--update` to merge prompt links into an existing story file rather than er
 ### Using `pdd test --issue` (underlying mechanism / direct form)
 
 `pdd story add` calls the same library as `pdd test --issue` internally. You may still use `pdd test --issue` directly when you need to select specific prompt files manually.
+
+## Step 3 — Generate executable regression tests
+
+After the human story and generated contract are reviewed, compile the contract into deterministic pytest tests:
+
+```bash
+pdd test --from-story user_stories/story__checkout_total.md \
+  --output tests/story_regression/test_story_checkout_total.py
+```
+
+The contract must include a machine-readable `## Entry Point` section:
+
+```markdown
+## Entry Point
+
+- module: checkout_app
+- callable: checkout_total
+- args: [1, 2]
+- kwargs: {}
+```
+
+Optional `## Seams` bullets patch runtime boundaries before the entry point is called:
+
+```markdown
+## Seams
+
+- checkout_app.TAX_RATE = 0
+```
+
+`## Oracle` and `## Negative Cases` bullets are Python assertion expressions over `result`, the return value from the entry point. Generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`, so `make regression-stories`, story coverage, and the stale/missing gate can trace them back to the source story.
 
 Run `pdd test` with `--issue` and one or more `.prompt` files. The prompt files
 are the **validation targets** the story will be linked to — they are *not* shown
@@ -377,7 +414,9 @@ def test_refund_rejects_zero_amount():
   it; given a test node id, it resolves the owning story. A story may be claimed
   by many tests, and a test may claim more than one story.
 - **Coverage:** `pdd checkup coverage <prompt>` reports per story whether an
-  executable regression test exists (`has_regression_test`); see
+  executable regression test exists (`has_regression_test`) and whether the
+  generated test is current (`story-regression-missing` /
+  `story-regression-stale`); see
   [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
   coverage".
 
@@ -406,10 +445,13 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 | Add a story from an issue (recommended) | `pdd story add <issue-url\|number\|file> --devunit <name>` |
 | Add a story from inline text | `pdd story add --text "As a user..." --devunit <name>` |
 | Add a cross-devunit story | `pdd story add <issue-source> --devunit a --devunit b` |
+| Link changed prompt files | `pdd story add <issue-source> --from-changed-files` |
 | Preview without writing (dry-run) | `pdd story add <issue-source> --devunit <name> --dry-run` |
 | Merge prompts into an existing story | `pdd story add <issue-source> --devunit <name> --update` |
+| Print the regression generation handoff | `pdd story add <issue-source> --devunit <name> --generate-regression` |
 | List stories with regression status | `pdd story list --with-regression-status` |
 | Link a prompt to an existing story | `pdd story link user_stories/story__<slug>.md --prompt prompts/<module>_<lang>.prompt` |
+| Generate executable story regression tests | `pdd test --from-story user_stories/story__<slug>.md --output tests/story_regression/test_story_<slug>.py` |
 | Generate a story + contract (direct form) | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
 | Validate all stories against their prompts | `pdd detect --stories` |
