@@ -10712,7 +10712,7 @@
   },
   {
     "reason": "Shared blocking quality gate that drift-syncs and build/smoke-verifies a PR for pre-checkup or fix-final validation.",
-    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -11573,6 +11573,88 @@
           "waiver_expires": null,
           "failures": []
         }
+      }
+    }
+  },
+  {
+    "reason": "Deterministic public-safe CI gate enforcing that user stories have passing, non-stale story regression tests.",
+    "description": "AST-scans @pytest.mark.story(story_id=..., story_hash=...) markers, compares marker story_hash values to the canonical user-story content hash, reports story-regression-missing/story-regression-stale statuses, and resolves off/warn/strict gate mode from config without LLM or network calls.",
+    "dependencies": [
+      "user_story_tests_python.prompt",
+      "story_regression_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_regression_gate_python.prompt",
+    "filepath": "pdd/story_regression_gate.py",
+    "tags": [
+      "module",
+      "python",
+      "story",
+      "gate"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "discover_story_markers",
+            "signature": "(tests_dir) -> dict[str, StoryMarker]",
+            "returns": "dict[str, StoryMarker]"
+          },
+          {
+            "name": "classify_story",
+            "signature": "(story_path, markers, *, story_text=None) -> StoryRegressionResult",
+            "returns": "StoryRegressionResult"
+          },
+          {
+            "name": "evaluate_stories",
+            "signature": "(*, stories_dir=None, tests_dir=None, only_story_ids=None) -> list[StoryRegressionResult]",
+            "returns": "list[StoryRegressionResult]"
+          },
+          {
+            "name": "run_story_regression_gate",
+            "signature": "(*, project_root, mode=None, base_ref=None, stories_dir=None, tests_dir=None, scope_to_diff=True) -> StoryRegressionGateResult",
+            "returns": "StoryRegressionGateResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deterministically compiles user story contracts into public-safe pytest regression tests.",
+    "description": "Resolves a story contract, parses Entry Point/Seams/Covers/Oracle/Negative Cases, emits stable pytest tests tagged with @pytest.mark.story(story_id=..., story_hash=...), and backs pdd test --from-story without LLM or runtime cloud calls.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_test_generator_python.prompt",
+    "filepath": "pdd/story_test_generator.py",
+    "tags": [
+      "module",
+      "python",
+      "story",
+      "test"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_story_test_spec",
+            "signature": "(story_path: Path) -> StoryTestSpec",
+            "returns": "StoryTestSpec"
+          },
+          {
+            "name": "render_story_test",
+            "signature": "(spec: StoryTestSpec) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "generate_story_test",
+            "signature": "(story_path: Path, output: Optional[Path] = None) -> StoryTestGenerationResult",
+            "returns": "StoryTestGenerationResult"
+          }
+        ]
       }
     }
   }

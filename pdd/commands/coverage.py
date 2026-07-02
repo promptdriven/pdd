@@ -173,6 +173,31 @@ def _render_result_table(result: CoverageResult) -> None:
 
     stdout_console.print(table)
 
+    if result.cross_unit_stories:
+        cross_table = Table(
+            title="Cross-dev-unit stories",
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold",
+            expand=False,
+        )
+        cross_table.add_column("Story", style="bold")
+        cross_table.add_column("Linked units")
+        for story_name in result.cross_unit_stories:
+            partners: list[str] = []
+            seen: set[str] = set()
+            for rule in result.rules:
+                if story_name not in rule.stories:
+                    continue
+                for partner in rule.cross_unit_partners:
+                    key = partner.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    partners.append(partner)
+            cross_table.add_row(story_name, _format_list(partners))
+        stdout_console.print(cross_table)
+
     summary = result.summary
     total = summary["total"]
     ok = summary["checked"] + summary["waived"]

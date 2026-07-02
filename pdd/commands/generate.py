@@ -774,7 +774,7 @@ def test(
     """
     Generate or enhance unit tests, or link story prompt metadata.
 
-    Supports four modes:
+    Supports five modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
     3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
@@ -785,12 +785,13 @@ def test(
     from ..agentic_test import run_agentic_test
 
     try:
+        estimate_mode = _estimate_mode_active(ctx)
         if from_story:
             if args:
                 raise click.UsageError("--from-story does not accept positional arguments.")
             if manual or issue:
                 raise click.UsageError("--from-story cannot be combined with --manual or --issue.")
-            if _estimate_mode_active(ctx):
+            if estimate_mode:
                 raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..story_test_generation import generate_story_regression_test
 
@@ -822,7 +823,6 @@ def test(
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
-        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 

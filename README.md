@@ -713,9 +713,10 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
-- `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--dry-run` for a no-write preview, and `--update` to merge prompt links into an existing story.
+- `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--from-changed-files` to link currently changed `.prompt` files, `--dry-run` for a no-write preview, `--update` to merge prompt links into an existing story, and `--generate-regression` to print the follow-up `pdd test --from-story` command.
 - `pdd story list [--with-regression-status]` lists all stories in `user_stories/` with their slug, file path, linked prompts, and (when the traceability API is available) `missing` / `passing` / `stale` regression status.
 - `pdd story link <story-file> --prompt <path>` adds a prompt link to an existing story file without regenerating the story body. Validates that the story file is inside `user_stories/`.
+- `pdd test --from-story user_stories/story__*.md --output tests/story_regression/test_story_*.py` generates deterministic pytest regression tests from the story contract. The contract must declare `## Entry Point` and assertion bullets under `## Oracle` / `## Negative Cases`; generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`.
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
