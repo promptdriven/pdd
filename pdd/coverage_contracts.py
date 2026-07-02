@@ -47,6 +47,10 @@ STATUS_TEST_ONLY = "test-only"
 STATUS_UNCHECKED = "unchecked"
 STATUS_WAIVED = "waived"
 STATUS_FAILED = "failed"
+from .story_regression_gate import (  # noqa: E402  (status re-export)
+    STATUS_STORY_REGRESSION_MISSING,
+    STATUS_STORY_REGRESSION_STALE,
+)
 
 # ---------------------------------------------------------------------------
 # Markdown section helper (uses contract_ir heading index)
@@ -88,6 +92,8 @@ class RuleCoverage:
     waiver_status: Optional[str] = None                # active|expired|unknown-rule|malformed|untracked
     waiver_expires: Optional[str] = None               # ISO date
     failures: list[str] = field(default_factory=list)  # validation failures
+    is_cross_unit: bool = False
+    cross_unit_partners: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         """Serialise to a JSON-safe dictionary."""
@@ -100,6 +106,8 @@ class RuleCoverage:
             "waiver_status": self.waiver_status,
             "waiver_expires": self.waiver_expires,
             "failures": self.failures,
+            "is_cross_unit": self.is_cross_unit,
+            "cross_unit_partners": self.cross_unit_partners,
         }
 
 
@@ -140,6 +148,7 @@ class CoverageResult:
     read_errors: list[str] = field(default_factory=list)
     # Orthogonal, additive story-regression dimension (see StoryRegression).
     stories: list[StoryRegression] = field(default_factory=list)
+    cross_unit_stories: list[str] = field(default_factory=list)
     # Validation warnings: a marker claims a story_id with no story__<slug>.md.
     # Distinct from the "story has no test" gap, which is a story with
     # ``has_regression_test=False`` in ``stories`` above.
@@ -183,6 +192,7 @@ class CoverageResult:
             "read_errors": self.read_errors,
             "rules": [r.as_dict() for r in self.rules],
             "stories": [s.as_dict() for s in self.stories],
+            "cross_unit_stories": self.cross_unit_stories,
             "regression_warnings": self.regression_warnings,
             "summary": self.summary,
         }
@@ -670,6 +680,89 @@ def _linked_story_ids(
     return sorted(ids)
 
 
+def _story_slug_from_name(story_name: str) -> str:
+    """Return ``<slug>`` for a ``story__<slug>.md`` filename."""
+    if story_name.startswith("story__") and story_name.endswith(".md"):
+        return story_name[len("story__"):-len(".md")]
+    return Path(story_name).stem
+
+
+def _cross_unit_story_partners(
+    stories_dir: Path,
+    prompt_path: Path,
+    read_errors: Optional[list[str]] = None,
+) -> dict[str, list[str]]:
+    """Return linked cross-unit story filename -> all declared dev units."""
+    if not stories_dir.exists():
+        return {}
+
+    from .user_story_tests import get_all_dev_units_for_story, story_is_cross_unit
+
+    prompt_name = _prompt_basename(prompt_path)
+    partners: dict[str, list[str]] = {}
+    for story_path in sorted(stories_dir.rglob("story__*.md")):
+        try:
+            story_text = story_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if read_errors is not None:
+                read_errors.append(f"{story_path.name}: {exc}")
+            continue
+        if not _story_links_prompt(story_text, prompt_name):
+            continue
+        if not story_is_cross_unit(story_text):
+            continue
+        partners[story_path.name] = get_all_dev_units_for_story(story_text)
+    return partners
+
+
+def _story_evidence_for_status(
+    story_evidence: dict[str, list[str]],
+    cross_unit_partners: dict[str, list[str]],
+    global_story_registry: Optional[set[str]],
+) -> tuple[dict[str, list[str]], set[str]]:
+    """Filter already-counted cross-unit stories out of status evidence."""
+    if global_story_registry is None:
+        return {rid: list(stories) for rid, stories in story_evidence.items()}, set()
+
+    previously_counted = set(global_story_registry)
+    newly_counted: set[str] = set()
+    filtered: dict[str, list[str]] = {}
+
+    for rid, stories in story_evidence.items():
+        visible_for_status: list[str] = []
+        for story_name in stories:
+            if story_name not in cross_unit_partners:
+                visible_for_status.append(story_name)
+                continue
+            slug = _story_slug_from_name(story_name)
+            if slug in previously_counted:
+                continue
+            visible_for_status.append(story_name)
+            newly_counted.add(slug)
+        filtered[rid] = visible_for_status
+
+    return filtered, newly_counted
+
+
+def _annotate_cross_unit_rule(
+    rule: RuleCoverage,
+    cross_unit_partners: dict[str, list[str]],
+) -> None:
+    """Populate cross-unit fields on a rule based on its attributed stories."""
+    partners: list[str] = []
+    seen: set[str] = set()
+    for story_name in rule.stories:
+        for partner in cross_unit_partners.get(story_name, []):
+            key = partner.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            partners.append(partner)
+    if partners:
+        rule.is_cross_unit = True
+        rule.cross_unit_partners = partners
+
+
 def build_coverage(
     path: Path,
     stories_dir: Optional[Path] = None,
@@ -678,6 +771,7 @@ def build_coverage(
     prompt_text: Optional[str] = None,
     require_prompt_qualified_tests: bool = False,
     story_map: "Optional[object]" = None,
+    global_story_registry: Optional[set[str]] = None,
 ) -> CoverageResult:
     """
     Build a coverage matrix for a single prompt file.
@@ -751,6 +845,13 @@ def build_coverage(
 
     read_errors: list[str] = []
     story_evidence = scan_story_evidence(stories_dir, path, read_errors=read_errors)
+    cross_unit_partners = _cross_unit_story_partners(stories_dir, path, read_errors=read_errors)
+    result.cross_unit_stories = sorted(cross_unit_partners)
+    story_evidence_for_status, newly_counted_cross_unit = _story_evidence_for_status(
+        story_evidence,
+        cross_unit_partners,
+        global_story_registry,
+    )
     test_evidence = scan_test_evidence(
         tests_dir,
         prompt_path=path,
@@ -772,12 +873,20 @@ def build_coverage(
             coverage_entries,
             waiver_map,
             waiver_details,
-            story_evidence,
+            story_evidence_for_status,
             test_evidence,
             validation_failures,
             waiver_id_to_rule=waiver_id_to_rule,
         )
+        attributed_stories = list(story_evidence.get(rid, []))
+        for story_name in attributed_stories:
+            if story_name not in rule_cov.stories:
+                rule_cov.stories.append(story_name)
+        _annotate_cross_unit_rule(rule_cov, cross_unit_partners)
         result.rules.append(rule_cov)
+
+    if global_story_registry is not None:
+        global_story_registry.update(newly_counted_cross_unit)
 
     _attach_story_regression(result, path, stories_dir, tests_dir, story_map)
 
@@ -864,6 +973,7 @@ def build_coverage_directory(
     from .story_regression import build_story_map  # local import keeps pytest lazy
 
     shared_story_map = build_story_map(tests_dir if tests_dir is not None else Path("tests"))
+    global_story_registry: set[str] = set()
 
     results: list[CoverageResult] = []
     for prompt_path in sorted(directory.rglob("*.prompt")):
@@ -878,6 +988,7 @@ def build_coverage_directory(
                 tests_dir,
                 require_prompt_qualified_tests=True,
                 story_map=shared_story_map,
+                global_story_registry=global_story_registry,
             )
         )
     return results

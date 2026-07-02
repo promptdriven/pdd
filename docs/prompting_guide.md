@@ -973,7 +973,7 @@ Every high-risk MUST or MUST NOT rule should be covered by at least one of:
 
 Use stories for cross-module behavior, product acceptance criteria, critical edge cases, negative behavior, regressions from bugs, and behavior that is easier to describe from a user perspective than a module perspective.
 
-Story files live in `user_stories/`. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
+Story files live in `user_stories/`. Use `pdd story add <issue-source> --devunit <name>` to create a story from a GitHub issue; `pdd story list --with-regression-status` to list all stories with their linked prompts and regression status; and `pdd story link <story-file> --prompt <path>` to add a prompt link to an existing story. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata. For stories that span multiple dev units, a `pdd-story-dev-units` comment is also written; `story_is_cross_unit()` and `get_cross_unit_stories_for_prompt()` expose traceability for those stories.
 
 ### Two files: human-verified Story + AI-generated contract
 
@@ -1041,6 +1041,16 @@ from the Story + issue; shown here for reference, not for hand-authoring):
 
 For a single-prompt story, keep one prompt in `pdd-story-prompts`.
 For a cross-module story, list prompts comma-separated in `pdd-story-prompts`.
+
+When `pdd test --issue` receives two or more prompt files, it also writes a
+`<!-- pdd-story-dev-units: basename1.prompt, basename2.prompt -->` comment in
+the story file alongside `pdd-story-prompts`. This marks the story as a
+cross-dev-unit story. The traceability API functions `story_is_cross_unit()` and
+`get_cross_unit_stories_for_prompt()` use this metadata to resolve cross-unit
+stories in both directions — given a story, return all linked dev units; given a
+dev unit, return all cross-unit stories that include it. `pdd checkup coverage`
+reports cross-unit stories separately and counts each such story once globally
+while still attributing coverage to every linked dev unit.
 
 For single-prompt stories, reference contract rule IDs directly:
 
@@ -2290,6 +2300,7 @@ Before merging a prompt change, check the contract, story, test, context, and ev
 - [ ] Do stories list `Covers: R...`?
 - [ ] Are negative stories included for forbidden behavior?
 - [ ] Is `pdd-story-prompts` metadata present or intentionally omitted?
+- [ ] For cross-dev-unit stories: is `pdd-story-dev-units` metadata present (written automatically by `pdd test --issue` with ≥2 prompts)?
 
 ### Test Quality
 

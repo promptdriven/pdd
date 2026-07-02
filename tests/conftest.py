@@ -495,13 +495,41 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+# Per-story outcome tallies for the story regression lane (``pytest -m story``).
+# Keyed by story id; each value is a {"passed"/"failed"/"skipped": count} bucket.
+# Populated in ``pytest_runtest_makereport`` and rendered by
+# ``pytest_terminal_summary``. Only meaningful when the lane runs without xdist
+# (the story lane in ``tests/story_regression.sh`` runs single-process so this
+# module-level state is shared across the whole session).
+_STORY_RESULTS: dict[str, dict[str, int]] = {}
+
+
+def _story_id(item: pytest.Item, marker: pytest.Mark) -> str:
+    """Resolve a human-readable story identifier from the ``story`` marker.
+
+    Accepts ``@pytest.mark.story("checkout")``, ``@pytest.mark.story(name=...)``,
+    or ``@pytest.mark.story(id=...)``; falls back to the test's file path so a
+    bare ``@pytest.mark.story`` still groups sensibly per module.
+    """
+    if marker.args:
+        return str(marker.args[0])
+    if "name" in marker.kwargs:
+        return str(marker.kwargs["name"])
+    if "id" in marker.kwargs:
+        return str(marker.kwargs["id"])
+    return item.nodeid.split("::", 1)[0]
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call):
-    """Convert InsufficientCreditsError failures to skips.
+    """Convert InsufficientCreditsError failures to skips and tally stories.
 
     The cloud batch test account may run out of credits, causing tests that call
     the production LLM endpoint to fail with InsufficientCreditsError. These are
     infrastructure failures, not code bugs — convert to skip rather than fail.
+
+    Story-marked tests are additionally tallied per story so the story
+    regression lane can emit a per-story pass/fail summary (issue #1701).
     """
     outcome = yield
     report = outcome.get_result()
@@ -510,6 +538,43 @@ def pytest_runtest_makereport(item: pytest.Item, call):
             report.outcome = "skipped"
             report.wasxfail = ""
             report.longrepr = f"Skipped: Insufficient credits for cloud LLM call"
+
+    if report.when == "call":
+        marker = item.get_closest_marker("story")
+        if marker is not None:
+            bucket = _STORY_RESULTS.setdefault(
+                _story_id(item, marker),
+                {"passed": 0, "failed": 0, "skipped": 0},
+            )
+            bucket[report.outcome] = bucket.get(report.outcome, 0) + 1
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Emit a per-story pass/fail summary for the story regression lane.
+
+    Only renders when story-marked tests actually ran, so the regular unit-test
+    run is unaffected. Reports the number of stories, the total number of story
+    regression tests, and a PASS/FAIL line per story (issue #1701).
+    """
+    if not _STORY_RESULTS:
+        return
+
+    total_tests = sum(sum(counts.values()) for counts in _STORY_RESULTS.values())
+    terminalreporter.write_sep("=", "Story Regression Summary")
+    terminalreporter.write_line(
+        f"Stories: {len(_STORY_RESULTS)}    "
+        f"Story regression tests: {total_tests}"
+    )
+    for story in sorted(_STORY_RESULTS):
+        counts = _STORY_RESULTS[story]
+        failed = counts.get("failed", 0)
+        status = "PASS" if failed == 0 else "FAIL"
+        detail = f"{counts.get('passed', 0)} passed"
+        if failed:
+            detail += f", {failed} failed"
+        if counts.get("skipped", 0):
+            detail += f", {counts['skipped']} skipped"
+        terminalreporter.write_line(f"  [{status}] {story}: {detail}")
 
 
 # Ignore non-suite assets under tests/ during collection.
