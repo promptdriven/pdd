@@ -4,6 +4,6 @@
 
 ## Story
 
-As a maintainer refreshing generated code after prompt or source changes,
-I want PDD update to expose its update workflow through the normal command surface,
-so that regeneration remains a deliberate, reviewable operation.
+As a maintainer whose generated code has changed,
+I want PDD to update the authoritative prompt through the right update mode,
+so that prompt, code, and metadata stay aligned for future syncs.

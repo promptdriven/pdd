@@ -4,6 +4,6 @@
 
 ## Story
 
-As a maintainer creating an implementation from a prompt,
-I want PDD generate to route the request through the normal command surface and produce a reviewable code artifact,
-so that prompt-authored behavior can be materialized without invoking unrelated workflows.
+As a maintainer turning prompts or product descriptions into project artifacts,
+I want PDD to route my generate request to the right generation workflow,
+so that code, architecture, and previews are produced or rejected predictably.
