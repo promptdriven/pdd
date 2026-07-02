@@ -34,3 +34,23 @@ required contract sections, rule coverage, and prompt links.
 Sub PRs target this EPIC branch and are merged here after deterministic local
 verification. The EPIC PR itself must not be merged into `main` until the full
 issue is reviewed and ready.
+
+Completed sub PRs:
+
+- #1801 — `pdd sync`: aligned the existing story contract hash and added the
+  deterministic top-flow story check.
+- #1802 — `pdd fix`: aligned the existing story contract hash and extended the
+  top-flow story check.
+- #1803 — `pdd change`: aligned the existing story contract hash and extended
+  the top-flow story check.
+- #1804 — `pdd generate`: added the missing story, contract, and top-flow story
+  check coverage.
+- #1806 — `pdd update`: added the missing story, contract, and top-flow story
+  check coverage.
+
+Final local verification:
+
+```bash
+python -m py_compile tests/test_story_backfill_top_flows.py
+python -c "import importlib.util; spec=importlib.util.spec_from_file_location('story_checks','tests/test_story_backfill_top_flows.py'); mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod); mod.test_top_flow_story_backfill_artifacts_are_complete(); print('story backfill checks passed')"
+```
