@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 STORY_MARKER = "story"
 _STORY_MARKER_HELP = (
-    "story(story_id): mark a regression test as the executable oracle for a user story"
+    "story(story_id, story_hash): mark a regression test as the executable oracle for a user story"
 )
 
 PathLike = Union[str, Path]

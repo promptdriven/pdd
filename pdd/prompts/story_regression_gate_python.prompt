@@ -1,0 +1,50 @@
+% Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a passing, non-stale executable regression test.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a passing, non-stale executable regression test behind it. The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
+
+% Background
+- User stories live in `user_stories/story__<id>.md`. A story's `story_id` is the filename stem with the `story__` prefix removed (e.g. `story__pdd_sync.md` -> `pdd_sync`).
+- The canonical staleness primitive already exists: `pdd.user_story_tests._story_content_hash(story_text)` returns a stable 16-char SHA-256 over the normalized human-facing prose. `_normalized_story_for_hash` drops the `pdd-story-prompts` metadata comment and trailing whitespace, so a metadata-only edit (relinking prompts) is NOT a content change. Reuse these verbatim; never re-implement hashing.
+- A regression test records the story content hash it was generated against via a marker: `@pytest.mark.story(story_id="...", story_hash="...")`. This is self-contained — regenerated atomically with the test — so the gate reads the hash off the marker rather than a separate `.pdd/meta` fingerprint file.
+- The gate must degrade gracefully: the sibling marker/lane deliverables (#1699-#1701) may not be present yet. A story with no resolvable `@pytest.mark.story` test is reported `story-regression-missing` rather than crashing.
+
+% Status constants
+- `STATUS_STORY_REGRESSION_OK = "story-regression-ok"`
+- `STATUS_STORY_REGRESSION_MISSING = "story-regression-missing"`
+- `STATUS_STORY_REGRESSION_STALE = "story-regression-stale"`
+- Re-export `STATUS_STORY_REGRESSION_MISSING` and `STATUS_STORY_REGRESSION_STALE` from `pdd.coverage_contracts` so `pdd checkup coverage` can report them.
+
+% Data shapes (frozen dataclasses)
+- `StoryMarker`: `story_id: str`, `story_hash: Optional[str]`, `test_file: str`, `test_name: str`, `lineno: int`.
+- `StoryRegressionResult`: `story_id: str`, `story_path: str`, `status: str` (a `STATUS_STORY_REGRESSION_*`), `current_hash: str`, `recorded_hash: Optional[str]`, `test_file: Optional[str]`, `test_name: Optional[str]`, `detail: str` (human-readable reason).
+- `StoryRegressionGateResult`: `mode: str`, `ok: bool`, `exit_code: int`, `results: tuple[StoryRegressionResult, ...]`, and a property `offending` returning the results whose status is missing or stale.
+
+% Public API
+- `story_id_from_path(path) -> str` — derive the `story_id` from a `story__<id>.md` path.
+- `discover_story_markers(tests_dir) -> dict[str, StoryMarker]` — AST-scan every `*.py` under `tests_dir` for `@pytest.mark.story(...)` decorators, keyed by `story_id`. Read `story_id` and `story_hash` from keyword args (string literals only). Never import or execute the test modules. Returns `{}` when `tests_dir` is missing/empty. If two tests claim the same `story_id`, the first by sorted file path then line order wins (deterministic).
+- `classify_story(story_path, markers, *, story_text=None) -> StoryRegressionResult` — classify one story:
+  - No marker for the story's id -> `STATUS_STORY_REGRESSION_MISSING`.
+  - Marker present but its `story_hash` is missing/empty -> `STATUS_STORY_REGRESSION_STALE` (detail notes the hash was not recorded).
+  - Marker `story_hash` != current `_story_content_hash(story_text)` -> `STATUS_STORY_REGRESSION_STALE`.
+  - Otherwise -> `STATUS_STORY_REGRESSION_OK`.
+  `current_hash` is always the current `_story_content_hash`. Read the story file when `story_text` is not supplied.
+- `evaluate_stories(*, stories_dir=None, tests_dir=None, only_story_ids=None) -> list[StoryRegressionResult]` — classify every discovered story (sorted by `story_id`). When `only_story_ids` is provided, restrict to that set (used to scope to a PR delta).
+- `changed_story_ids(project_root, *, base_ref=None) -> Optional[set[str]]` — return the `story_id`s of `story__*.md` files added or modified in `git diff <base>...HEAD`, plus tracked working-tree edits (`git diff HEAD`) and brand-new untracked files (`git ls-files --others --exclude-standard`, which `git diff` alone never reports). Resolve `<base>` by trying, in order: `base_ref`, `origin/<base_ref>`, `origin/main`, `origin/master`, `main`, `master` (first that `git rev-parse --verify` resolves). Returns `None` when git is unavailable or no base resolves (caller then evaluates all stories). Never raises; never makes network calls.
+- `load_story_regression_gate_config(project_root) -> str` — read `checkup.story_regression_gate` from `.pddrc`, then `[tool.pdd.checkup]` in `pyproject.toml`. Accept `off`/`warn`/`strict`. Normalize PyYAML booleans (`False` -> `off`; `True` -> ignored with a warning). Default `warn`.
+- `resolve_story_regression_gate_mode(*, cli_override=None, disabled=False, project_root) -> str` — `disabled` -> `off`; a `cli_override` of `warn`/`strict` wins (anything else raises `click.BadParameter`); otherwise the config value.
+- `run_story_regression_gate(*, project_root, mode=None, base_ref=None, stories_dir=None, tests_dir=None, scope_to_diff=True) -> StoryRegressionGateResult` — orchestrate the gate:
+  - Resolve `mode` from config when not given.
+  - `off` -> `ok=True`, `exit_code=0`, empty results (skip all work).
+  - Determine scope: when `scope_to_diff` is true, compute `changed_story_ids`; if it returns a set, evaluate only those; if it returns `None`, evaluate all stories.
+  - `warn` -> always `ok=True`, `exit_code=0` (report-only), results populated.
+  - `strict` -> `ok` is true iff there are no offending (missing/stale) results; `exit_code` is `2` when offending else `0`.
+
+% Determinism / safety requirements
+- No LLM calls, no `detect_change`, no `llm_invoke`, no network. Same result with and without API keys.
+- Story discovery uses the filesystem and `ast`; marker discovery never executes test code.
+- All ordering is deterministic (sorted by story_id / file path).
+
+% Code output
+- Code: `pdd/story_regression_gate.py`
