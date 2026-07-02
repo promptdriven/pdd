@@ -164,8 +164,14 @@ def _build_step9_verifier_rejection_comment(
     )
     resumed_note = " (cached claim re-verified on resume)" if resumed else ""
     bounded = _truncate_verifier_detail(verifier_detail)
+    # The header MUST match drain_issue_steers' status-comment filter
+    # (`^## Step \d+/\d+:`): orchestrator comments can be posted by a
+    # User-type token (not a GitHub-App "Bot"), and a non-matching header
+    # would be re-ingested as a human steer on the next drain and injected
+    # into subsequent step prompts (self-steering loop).
     return (
-        f"## ⚠️ Step 9 Verification Rejected (Cycle {current_cycle})\n\n"
+        "## Step 9/11: ⚠️ Independent Verification REJECTED the claimed pass "
+        f"(Cycle {current_cycle})\n\n"
         f"Step 9 reported `ALL_TESTS_PASS`{resumed_note}, but the orchestrator's "
         "**independent verification REJECTED** the claimed pass. The \"tests "
         "pass\" report above may have run a targeted subset; the independent "
