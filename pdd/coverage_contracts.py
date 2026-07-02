@@ -104,6 +104,26 @@ class RuleCoverage:
 
 
 @dataclass
+class StoryRegression:
+    """Per-story executable-regression-test dimension (orthogonal to rules).
+
+    This is *story-keyed*, not rule-keyed: it records whether at least one
+    collected pytest test claims the story via ``@pytest.mark.story``. It is
+    deliberately kept off :class:`RuleCoverage`, which stays rule-keyed.
+    """
+
+    story_id: str
+    has_regression_test: bool
+
+    def as_dict(self) -> dict:
+        """Serialise to a JSON-safe dictionary."""
+        return {
+            "story_id": self.story_id,
+            "has_regression_test": self.has_regression_test,
+        }
+
+
+@dataclass
 class CoverageResult:
     """Coverage matrix for one prompt file."""
 
@@ -112,10 +132,16 @@ class CoverageResult:
     has_contract_rules: bool = False
     error: Optional[str] = None
     read_errors: list[str] = field(default_factory=list)
+    # Orthogonal, additive story-regression dimension (see StoryRegression).
+    stories: list[StoryRegression] = field(default_factory=list)
+    # Validation warnings: a marker claims a story_id with no story__<slug>.md.
+    # Distinct from the "story has no test" gap, which is a story with
+    # ``has_regression_test=False`` in ``stories`` above.
+    regression_warnings: list[str] = field(default_factory=list)
 
     @property
     def summary(self) -> dict[str, int]:
-        """Return per-status counts."""
+        """Return per-status counts (plus the orthogonal story-regression tally)."""
         counts: dict[str, int] = {
             "total": len(self.rules),
             "checked": 0,
@@ -129,6 +155,11 @@ class CoverageResult:
             key = rule.status.replace("-", "_")
             if key in counts:
                 counts[key] += 1
+        # Additive, orthogonal keys — they do not affect the rule-status counts.
+        counts["stories_total"] = len(self.stories)
+        counts["stories_with_regression_test"] = sum(
+            1 for s in self.stories if s.has_regression_test
+        )
         return counts
 
     def as_dict(self) -> dict:
@@ -139,6 +170,8 @@ class CoverageResult:
             "error": self.error,
             "read_errors": self.read_errors,
             "rules": [r.as_dict() for r in self.rules],
+            "stories": [s.as_dict() for s in self.stories],
+            "regression_warnings": self.regression_warnings,
             "summary": self.summary,
         }
 
@@ -596,6 +629,35 @@ def _classify_rule(  # pylint: disable=too-many-arguments
 # ---------------------------------------------------------------------------
 
 
+def _linked_story_ids(
+    stories_dir: Path,
+    prompt_path: Path,
+    read_errors: Optional[list[str]] = None,
+) -> list[str]:
+    """Return the ``story_id`` of every story file that links to *prompt_path*.
+
+    Uses the same linking rules as :func:`scan_story_evidence` (a story with
+    ``<!-- pdd-story-prompts: ... -->`` must list the prompt; a metadata-less
+    story applies to the prompt set). Result is sorted and de-duplicated.
+    """
+    from .story_regression import story_id  # local import: keeps pytest lazy
+
+    if not stories_dir.exists():
+        return []
+    prompt_name = _prompt_basename(prompt_path)
+    ids: set[str] = set()
+    for story_path in sorted(stories_dir.rglob("story__*.md")):
+        try:
+            story_text = story_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if read_errors is not None:
+                read_errors.append(f"{story_path.name}: {exc}")
+            continue
+        if _story_links_prompt(story_text, prompt_name):
+            ids.add(story_id(story_path))
+    return sorted(ids)
+
+
 def build_coverage(
     path: Path,
     stories_dir: Optional[Path] = None,
@@ -603,6 +665,7 @@ def build_coverage(
     *,
     prompt_text: Optional[str] = None,
     require_prompt_qualified_tests: bool = False,
+    story_map: "Optional[object]" = None,
 ) -> CoverageResult:
     """
     Build a coverage matrix for a single prompt file.
@@ -704,7 +767,48 @@ def build_coverage(
         )
         result.rules.append(rule_cov)
 
+    _attach_story_regression(result, path, stories_dir, tests_dir, story_map)
+
     return result
+
+
+def _attach_story_regression(
+    result: CoverageResult,
+    path: Path,
+    stories_dir: Path,
+    tests_dir: Path,
+    story_map: "Optional[object]",
+) -> None:
+    """Fill the orthogonal per-story ``has_regression_test`` dimension.
+
+    Queries the ``story_regression`` traceability API rather than re-implementing
+    pytest collection here. The story<->test map is built once (lazily) and may
+    be supplied by the caller (``build_coverage_directory``) so a directory scan
+    does not re-collect per prompt.
+    """
+    linked = _linked_story_ids(stories_dir, path, read_errors=result.read_errors)
+    if not linked and story_map is None:
+        return  # nothing story-linked here and no shared map — stay cheap
+
+    from .story_regression import (  # local import keeps pytest lazy
+        StoryTestMap,
+        build_story_map,
+        discover_story_ids,
+    )
+
+    smap: StoryTestMap = story_map if story_map is not None else build_story_map(tests_dir)
+
+    for sid in linked:
+        result.stories.append(StoryRegression(sid, smap.has_regression_test(sid)))
+
+    # Validation-warning orphan direction: a marker names a story_id that has no
+    # ``story__<slug>.md`` on disk. Distinct from the "story has no test" gap.
+    on_disk = discover_story_ids(str(stories_dir))
+    for sid in sorted(smap.referenced_story_ids - on_disk):
+        result.regression_warnings.append(
+            f"@pytest.mark.story(story_id={sid!r}) references a story with no "
+            f"story__{sid}.md on disk"
+        )
 
 
 def build_coverage_directory(
@@ -717,6 +821,12 @@ def build_coverage_directory(
 
     Returns one CoverageResult per file, skipping `*_llm.prompt` files.
     """
+    # Build the story<->test map ONCE for the whole directory scan so we do not
+    # re-run pytest collection per prompt.
+    from .story_regression import build_story_map  # local import keeps pytest lazy
+
+    shared_story_map = build_story_map(tests_dir if tests_dir is not None else Path("tests"))
+
     results: list[CoverageResult] = []
     for prompt_path in sorted(directory.rglob("*.prompt")):
         if prompt_path.name.lower().endswith("_llm.prompt"):
@@ -729,6 +839,7 @@ def build_coverage_directory(
                 stories_dir,
                 tests_dir,
                 require_prompt_qualified_tests=True,
+                story_map=shared_story_map,
             )
         )
     return results
