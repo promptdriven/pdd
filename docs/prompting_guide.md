@@ -23,12 +23,28 @@ This metric, not "code volume" or "smallest possible prompt," is the thing to op
 
 ---
 
+## Concision Rules
+
+Readability is not in tension with reliability: review and edit cost sit in the denominator of the north-star metric, so a prompt a reviewer can absorb in one pass scores *better*, not worse. Reliability comes from the mold walls — a frozen interface, stable rule IDs, MUST/MUST NOT modals, defined vocabulary, and accumulated tests — none of which require verbosity. When creating or editing a prompt, apply these mechanical rules:
+
+1. **State each fact exactly once.** If a term is defined in `<vocabulary>`, don't restate the definition inside a contract rule; if a side effect is forbidden by a contract rule, don't repeat it in `<capabilities>`. Put each fact in the one section where it does the most work.
+2. **One line per contract rule by default.** Keep the stable `R<n>` ID and the MUST/MUST NOT modal; use the long template only when the trigger condition or forbidden outcome needs spelling out. (See [Contract Rule Format](#contract-rule-format).)
+3. **No implementation steps.** Specify interfaces, invariants, and outcomes; let the model — plus grounding or explicit examples — decide the how.
+4. **Don't restate what the preamble, grounding, examples, or tests already carry.** (See [What NOT to Include](#what-not-to-include).)
+5. **Omit sections that would be empty or obvious.** "This module does not send emails" is noise in a string formatter's prompt and signal in a payments prompt. Use the [Section Trigger Table](#section-trigger-table) to decide.
+6. **Prefer a plain sentence over a template** whenever the sentence is unambiguous and a test writer could act on it without follow-up questions.
+7. **Start from the [Minimal Skeleton](#minimal-skeleton-default)** and escalate section by section as risk triggers fire — never the other way around.
+
+> **Local / no-cloud carve-out:** without Cloud grounding, prompts must carry more structural guidance — explicit examples via `<include>` and interface pins. "Minimal" assumes grounding or explicit examples supply implementation patterns; don't strip a local prompt below what regenerates reliably.
+
+---
+
 ## Quickstart: PDD in 5 Minutes
 
 If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
 1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
-2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions. (See the [Reusable Prompt Skeleton](#reusable-prompt-skeleton).)
+2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies. (Start from the [Minimal Skeleton](#minimal-skeleton-default); escalate only when risk triggers fire.)
 3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML. (See [Directives & Context](#prompt-syntax-essentials).)
 4.  **Regenerate, Don't Patch:** Change behavior by changing the prompt and regenerating. If generated code fails to satisfy a correct prompt/test, use `pdd bug` / `pdd fix`. If the intended behavior is missing or wrong in the prompt, update the prompt first.
 5.  **Verify:** Run the generated code/tests. Without verification, regeneration just produces plausible wrong code faster — see [Verification](#verification-the-spine-of-pdd).
@@ -238,17 +254,10 @@ Validates a coupon code against a cart at a point in time and returns a result.
 </vocabulary>
 
 <contract_rules>
-R1 - Expiry
-For every coupon, the system MUST reject the coupon when `now` is at or after its expiry.
-
-R2 - Single use
-For every single-use coupon already marked redeemed, the system MUST reject the coupon.
-
-R3 - Minimum cart total
-For every coupon with a minimum cart total, the system MUST reject the coupon when the cart total is below that minimum.
-
-R4 - No side effects
-The system MUST NOT mutate the cart, MUST NOT mark the coupon redeemed, and MUST NOT emit any event.
+R1 (MUST): Reject the coupon when `now` is at or after its expiry.
+R2 (MUST): Reject a single-use coupon already marked redeemed.
+R3 (MUST): Reject the coupon when the cart total is below its minimum cart total.
+R4 (MUST NOT): Mutate the cart, mark the coupon redeemed, or emit any event.
 </contract_rules>
 
 <pdd-interface>
@@ -515,6 +524,17 @@ A good contract rule is observable, testable, scoped to this module, independent
 
 ### Contract Rule Format
 
+**Default — one line per rule**, keeping the stable ID and the modal verb:
+
+```md
+R1 (MUST): Reject refund requests when the requested amount exceeds the remaining refundable amount.
+R2 (MUST NOT): Call the payment provider for requests rejected by R1.
+```
+
+One line is enough whenever a test writer could implement the rule without follow-up questions. Lean on `<vocabulary>` for terms like "remaining refundable amount" instead of restating definitions inside the rule.
+
+**Escalated — long form**, for rules whose trigger condition or specific forbidden outcome doesn't fit in one clear line (idempotency, lifecycle, multi-part obligations):
+
 ```md
 R<ID> - <Short name>
 
@@ -525,19 +545,19 @@ when <condition>.
 This rule is violated if <specific forbidden outcome>.
 ```
 
-Do not renumber existing rule IDs after stories or tests reference them. If a rule is removed, mark it deprecated or leave a gap. If a rule changes meaning substantially, create a new rule ID.
-
-Example:
+Example of a rule that earns the long form:
 
 ```md
-R1 - Reject over-refunds
+R4 - Idempotency
 
-For every refund request,
-the system MUST reject the request
-when the requested amount is greater than the remaining refundable amount.
+For every duplicate request with the same payment ID and idempotency key,
+the system MUST NOT create more than one provider refund
+and MUST NOT write more than one successful-refund audit event.
 
-This rule is violated if the payment provider is called for an over-refund request.
+This rule is violated if repeated submissions produce different logical results.
 ```
+
+Both forms bind to stories and tests through the rule ID. Do not renumber existing rule IDs after stories or tests reference them. If a rule is removed, mark it deprecated or leave a gap. If a rule changes meaning substantially, create a new rule ID.
 
 ### Vocabulary and Ambiguity Control
 
@@ -665,6 +685,8 @@ A well-designed prompt contains **only what can't be handled elsewhere**. With C
 2. **Requirements** (5-10 items): Functional and non-functional specs
 3. **Dependencies** (via `<include>`): Only external or critical interfaces
 
+Copyable form: the [Minimal Skeleton](#minimal-skeleton-default).
+
 ### Required Sections for Non-Trivial Modules
 
 Use more structure when the module has external side effects, security risk, cross-module behavior, state transitions, or business-critical rules:
@@ -680,11 +702,20 @@ Use more structure when the module has external side effects, security risk, cro
 
 For trivial modules, you may combine Responsibility, Vocabulary, and Contract Rules into a concise Requirements section. Do not bloat prompts with every edge case. Use user stories and accumulated tests for examples and regressions.
 
-### Optional Sections
+### Section Trigger Table
 
-- **Instructions**: Only if default behavior needs overriding
-- **Deliverables**: Only if non-obvious
-- **Coverage**: Useful for non-trivial modules with named contract rules
+Include an optional section only when its trigger fires. If no trigger fires, omit the section — an empty or obvious section is noise, not rigor.
+
+| Section | Include only when… |
+|---|---|
+| `<vocabulary>` | A domain term could genuinely be read two ways by a test writer |
+| `<non_responsibilities>` | Scope confusion with a neighboring module is likely |
+| `<capabilities>` | The module touches external systems (network, DB, events, email) |
+| `<contract_rules>` long form | A rule's trigger condition or forbidden outcome isn't obvious in one line |
+| `<waivers>` | A high-risk rule is intentionally unchecked, with approver and expiry |
+| `<coverage>` | Production-critical module; story files remain the primary source of truth |
+| `<deliverables>` | The expected artifact is non-obvious |
+| **Instructions** | Default generation behavior needs overriding |
 
 ### What NOT to Include
 
@@ -712,6 +743,38 @@ See `pdd/pdd/templates/generic/generate_prompt.prompt` for a concrete scaffold.
 ---
 
 ## Reusable Prompt Skeleton
+
+### Minimal Skeleton (Default)
+
+Start here for every new prompt. With a shared preamble, Cloud grounding or explicit examples, and accumulated tests carrying style and patterns, this is enough for most modules:
+
+```xml
+% You are an expert <language/framework> engineer. Implement <module_name>.
+
+<include>context/project_preamble.prompt</include>
+
+<pdd-interface>
+{"type":"module","module":{"functions":[
+  {"name":"<function_name>","signature":"(<args>) -> <ReturnType>","returns":"<ReturnType>"}]}}
+</pdd-interface>
+
+% Requirements
+1. <Primary function: what the module does, one sentence>
+2. <Input contract: types, validation, accepted values>
+3. <Output contract: types, error conditions, return values>
+4. <Key invariant — use MUST/MUST NOT for non-negotiable behavior>
+5. <Security or performance constraint, if any>
+
+<dependencies>
+<include mode="interface">src/<critical_dependency>.py</include>
+</dependencies>
+```
+
+Promote a requirement to a numbered contract rule (stable `R<n>` ID) as soon as a story or test needs to reference it, and add further sections only when a [trigger](#section-trigger-table) fires.
+
+### Escalated Skeleton (High-Risk Modules)
+
+Use the full structure below only when the module has external side effects, security or privacy risk, state transitions, cross-module behavior, or business-critical rules — this refund module is deliberately the worst case. Every section beyond the minimal skeleton must earn its place via the [Section Trigger Table](#section-trigger-table).
 
 ```xml
 % Role:
@@ -757,14 +820,9 @@ This module validates and creates refunds for captured payments.
 </vocabulary>
 
 <contract_rules>
-R1 - Positive amount
-For every refund request, the system MUST reject the request when the requested amount is less than or equal to zero.
-
-R2 - Remaining balance
-For every refund request, the system MUST reject the request when the requested amount is greater than the remaining refundable amount.
-
-R3 - No provider call before validation
-The system MUST NOT call the payment provider for requests rejected by R1 or R2.
+R1 (MUST): Reject refund requests where the requested amount is less than or equal to zero.
+R2 (MUST): Reject refund requests where the requested amount exceeds the remaining refundable amount.
+R3 (MUST NOT): Call the payment provider for requests rejected by R1 or R2.
 
 R4 - Idempotency
 For every duplicate request with the same payment ID and idempotency key, the system MUST NOT create more than one provider refund, MUST NOT write more than one successful-refund audit event, and MUST return the same logical result for repeated submissions.
@@ -773,8 +831,7 @@ R5 - Auditability
 For every successful refund, the system MUST write exactly one durable successful-refund audit event.
 Provider failures MAY write a failed-refund audit event, but MUST NOT write a successful-refund audit event.
 
-R6 - Privacy
-The system MUST NOT expose card PAN, CVV, API keys, bearer tokens, or raw provider secrets in logs, audit events, errors, or return values.
+R6 (MUST NOT): Expose card PAN, CVV, API keys, bearer tokens, or raw provider secrets in logs, audit events, errors, or return values.
 </contract_rules>
 
 <capabilities>
@@ -2040,30 +2097,23 @@ You only specify:
 
 ## Example (Minimal, Python)
 
-This simplified example illustrates a minimal functional prompt:
+This simplified example follows the [Minimal Skeleton](#minimal-skeleton-default):
 
 ```text
-% You are an expert Python engineer. Your goal is to write a function `get_extension` that returns the file extension for a given language.
+% You are an expert Python engineer. Implement `get_extension`, which returns the file extension for a given language.
 
 <include>context/python_preamble.prompt</include>
 
-% Inputs/Outputs
-  Input: language (str), like "Python" or "Makefile".
-  Output: str file extension (e.g., ".py"), or "" if unknown.
-
-% Data
-  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension,run_command,run_test_command,outputs
-
-% Steps
-  1) Load env var PDD_PATH and read the CSV
-  2) Normalize language case
-  3) Lookup extension
-  4) Return "" if not found or invalid
+% Requirements
+1. Function: get_extension(language: str) -> str
+2. Input: a language name such as "Python" or "Makefile"; match case-insensitively.
+3. Output: the file extension including the dot (e.g., ".py"), or "" for unknown or invalid languages; never raise.
+4. Data source: the CSV at $PDD_PATH/data/language_format.csv with columns language,comment,extension,run_command,run_test_command,outputs.
 ```
 
 This style:
 - Declares role and outcome
-- Specifies IO, data sources, and steps
+- Specifies IO and data sources as requirements, not implementation steps
 - Uses an `<include>` to pull a shared preamble
 
 ---
