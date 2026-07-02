@@ -42,6 +42,9 @@ that should feel as stable and focused as Python unit tests:
 - provider fallback and degraded workflow status
 - issue routing by source-of-truth classification
 - CI validation and post-push repair loops
+- architecture dependency ordering
+- conflict-safe sync and update behavior
+- story contract hash synchronization
 
 ## Verification
 
