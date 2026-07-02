@@ -172,7 +172,8 @@ def _build_step9_verifier_rejection_comment(
     return (
         "## Step 9/11: ⚠️ Independent Verification REJECTED the claimed pass "
         f"(Cycle {current_cycle})\n\n"
-        f"Step 9 reported `ALL_TESTS_PASS`{resumed_note}, but the orchestrator's "
+        "Step 9 reported a tests-pass claim (`ALL_TESTS_PASS`/"
+        f"`LOCAL_TESTS_PASS`){resumed_note}, but the orchestrator's "
         "**independent verification REJECTED** the claimed pass. The \"tests "
         "pass\" report above may have run a targeted subset; the independent "
         "verifier re-runs the discovered test files in full and takes "
