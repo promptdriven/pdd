@@ -14,6 +14,7 @@ import pytest
 from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
+    STEP7_EMPTY_OUTPUT_MAX_RETRIES,
     STEP_ID_MAP,
     STEP_ORDER,
     TOTAL_STEPS,
@@ -7621,3 +7622,67 @@ class TestReportTelemetryEmbedding:
         )
         assert "Plain-text verdict" in body
         assert "Per-Step Telemetry" in body
+
+
+# ---------------------------------------------------------------------------
+# Step 7 empty verify output — retry + provider-failure routing (regression).
+#
+# An empty/whitespace Step 7 verify output means the verify agent produced NO
+# verdict — a transient agent/provider failure — not an unparseable verdict.
+# The orchestrator must (a) retry the verify call, and (b) if it stays empty,
+# route it as a retryable provider failure, rather than consuming "" as a
+# verdict that burns every fix-verify iteration and terminally reports
+# "did not verify all issues fixed".
+# ---------------------------------------------------------------------------
+
+
+class TestStep7EmptyOutput:
+    def test_empty_step7_retries_then_routes_as_provider_failure(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step7" in label:
+                return (True, "   ", 0.1, "gpt-4")  # whitespace-only == no verdict
+            return (True, "step done", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "agent providers unavailable" in msg.lower()
+        assert "no verdict" in msg.lower()
+        # 1 initial verify attempt + STEP7_EMPTY_OUTPUT_MAX_RETRIES retries,
+        # then routed as a provider failure (never a 3-iteration "empty verdict").
+        step7_calls = [
+            c for c in mock_run.call_args_list if "step7" in c.kwargs.get("label", "")
+        ]
+        assert len(step7_calls) == 1 + STEP7_EMPTY_OUTPUT_MAX_RETRIES
+
+    def test_empty_step7_retry_recovers_and_converges(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+        state = {"step7_calls": 0}
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step7" in label:
+                state["step7_calls"] += 1
+                if state["step7_calls"] == 1:
+                    return (True, "", 0.1, "gpt-4")  # first verify empty (flaky)
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")  # retry yields a verdict
+            return (True, "step done", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        # The retry recovered a real verdict, so the run converges instead of
+        # failing on an "empty step 7 output".
+        assert success is True
+        assert "Checkup complete" in msg
+        assert state["step7_calls"] == 2  # one empty + one recovering retry

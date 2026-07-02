@@ -101,6 +101,16 @@ STEP_ID_MAP: Dict[Union[int, float], str] = {
 # Maximum number of build-fix-verify loop iterations before giving up.
 MAX_FIX_VERIFY_ITERATIONS = 3
 
+# Bounded retries for an EMPTY Step 7 verify output. An empty/whitespace verify
+# output means the verify agent produced NO verdict at all — a transient
+# agent/provider failure — not an unparseable verdict. Without a retry, that
+# empty result is consumed as the "verdict", fails ``_step7_passed`` as
+# "empty step 7 output", and burns every fix-verify iteration until the run
+# terminally reports "did not verify all issues fixed". Retry the verify call a
+# few times so a flaky-empty response can still converge; if it stays empty,
+# route it as a retryable provider failure instead of a bogus empty verdict.
+STEP7_EMPTY_OUTPUT_MAX_RETRIES = 2
+
 # Issue #1116: when the remote PR head advances mid-checkup we discard the
 # stale work and restart the inner orchestrator against the new head. The
 # restart budget is bounded so a PR that keeps moving cannot make us loop
@@ -4393,6 +4403,65 @@ def _run_agentic_checkup_orchestrator_inner(
                     return (False, f"Missing prompt template: {tmpl_name}", total_cost, last_model_used)
 
                 success, output, cost, model = result
+
+                # Step 7 verify: gate on success AND non-empty output. An empty
+                # verify output = the agent produced NO verdict (a transient
+                # agent/provider failure), not an unparseable verdict. Retry the
+                # verify call (bounded) so a flaky-empty response can still
+                # converge; each discarded attempt's cost/telemetry is still
+                # recorded so ``sum(cost_usd)`` reconciles with ``total_cost``.
+                # If it stays empty after the retries, route it as a retryable
+                # provider failure ("agent providers unavailable") instead of
+                # consuming "" as a verdict that burns every fix-verify iteration
+                # and terminally fails "did not verify all issues fixed".
+                if step_num == 7:
+                    _s7_empty_retry = 0
+                    while (
+                        (not success or not (output or "").strip())
+                        and _s7_empty_retry < STEP7_EMPTY_OUTPUT_MAX_RETRIES
+                    ):
+                        _s7_empty_retry += 1
+                        _record_step_telemetry(
+                            step_num, "failed", name=description,
+                            cost=cost, model=model, iteration=fix_verify_iteration,
+                        )
+                        total_cost += cost
+                        if not quiet:
+                            console.print(
+                                "[yellow]Step 7 verify returned empty output "
+                                f"(retry {_s7_empty_retry}/"
+                                f"{STEP7_EMPTY_OUTPUT_MAX_RETRIES})…[/yellow]"
+                            )
+                        _mark_step_start(step_num, fix_verify_iteration)
+                        _s7_retry_result = _run_single_step(
+                            step_num, name, context,
+                            cwd=cwd, step_cwd=step_cwd,
+                            verbose=verbose, quiet=quiet,
+                            label=f"{iter_label}_emptyretry{_s7_empty_retry}",
+                            timeout_adder=timeout_adder,
+                            reasoning_time=reasoning_time,
+                            steers=_issue_step_steers() or None,
+                        )
+                        if _s7_retry_result is None:
+                            break
+                        success, output, cost, model = _s7_retry_result
+                    if not (output or "").strip():
+                        _record_step_telemetry(
+                            step_num, "failed", name=description,
+                            cost=cost, model=model, iteration=fix_verify_iteration,
+                        )
+                        total_cost += cost
+                        last_model_used = model or last_model_used
+                        _save_state()
+                        return (
+                            False,
+                            "Aborting: Step 7 verify produced empty output after "
+                            f"{STEP7_EMPTY_OUTPUT_MAX_RETRIES} retries - agent "
+                            "providers unavailable (no verdict was produced).",
+                            total_cost,
+                            last_model_used,
+                        )
+
                 abort = _handle_step_result(
                     step_num, success, output, cost, model,
                     description=description, iteration=fix_verify_iteration,
