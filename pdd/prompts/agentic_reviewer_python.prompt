@@ -1,0 +1,55 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Bounded agentic reviewer that follows local import/wrapper chains to collect capability-policy evidence for effects that deterministic checks miss.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_reviewer",
+        "signature": "(contract_effects: List[Dict], artifact_paths: List[Union[str, Path]], bounds: Optional[Dict] = None) -> List[Dict]",
+        "returns": "List[Dict]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/agentic_reviewer.py`.
+
+% Role & Scope
+A read-only, bounded evidence collector for capability-policy checks. Accepts a parsed contract/effect IR, a list of target artifact file paths, and a bounds config. Extracts symbols from target files, follows local import/wrapper chains up to a configurable depth, inspects dependency manifests, and calls a constrained LLM classifier to resolve ambiguous effects. Returns normalized findings using the same schema as deterministic findings, with additional provenance fields. Mode: read-only — no network access, no code execution, no file writes.
+
+% Requirements
+1. Public function: `run_agentic_reviewer(contract_effects: List[Dict], artifact_paths: List[Union[str, Path]], bounds: Optional[Dict] = None) -> List[Dict]`. Bounds defaults: `max_files=20`, `max_follow_depth=2`, `max_search_results=50`, `max_runtime_seconds=30`.
+2. Symbol extraction: for each target file call `_extract_symbols(path, content)` returning a list of `{"symbol": str, "kind": str, "line": int, "excerpt": str}` dicts. Extract: general function/method calls including chained calls such as `notificationClient.sendRefundNotice(...)` and `resend.emails.send(...)`, import statements, `require()` calls, env var reads (`process.env.*`, `os.environ`), file writes (`open(..., "w")`, `fs.write`), network calls (`fetch`, `requests.get`, `axios`, `urllib`), and logging calls (`console.log`, `logger.info`, `logging.*`). Use regex-based extraction — do not introduce AST or tree-sitter dependencies.
+3. Import-chain following: implement BFS traversal starting from the initial target files. Derive a project/common/package root with `_derive_project_root(artifact_paths)` rather than using only the first artifact's parent: prefer the nearest ancestor containing `package.json`, `pyproject.toml`, `requirements.txt`, `go.mod`, or `.git`; otherwise, when the common artifact directory is named `src`, `lib`, `app`, `tests`, or `test`, use its parent, and when the common artifact directory is nested under `src`, `lib`, or `app`, use that source directory's parent. Do not broaden a manifest-less nested path merely because an outer ancestor is named `tests` or `test`. For each file, resolve local import/require paths to candidate files on disk via `_resolve_local_import(current_file: Path, import_path: str, project_root: Path) -> Optional[Path]`. Extract JS/TS quoted relative imports and Python relative imports such as `from .utils import helper`, `from ..shared import thing`, `from . import helpers`, and `from .package import submodule`; for package imports, consider both the package path and imported submodule candidates. Try candidate extensions: `.py`, `.ts`, `.tsx`, `.js`, `/index.ts`, `/index.tsx`, `/index.js`, `/__init__.py`. Track a `visited_files` set (absolute resolved paths) to prevent cycles. Hard-stop at `max_follow_depth` per chain and `max_files` total files inspected — check bounds BEFORE reading each new file.
+4. Manifest inspection: call `_inspect_manifests(project_root: Path) -> Dict[str, List[str]]` to read `package.json` (`dependencies`, `devDependencies`), `requirements.txt`, `pyproject.toml` (`[project.dependencies]`), and `go.mod` (`require` block). Return a dict mapping package manager keys to lists of dependency names. Skip missing files silently.
+5. LLM classifier call: build the classifier input via `_build_classifier_input(contract_effects, observed_evidence, target_language)` returning a JSON-serializable dict with keys `contract_effects`, `target`, `observed_evidence`, and `deterministic_findings`. `target` MUST be the language string such as `"typescript"`, not an object. Call `llm_invoke` with `strength=0.0`, `temperature=0.1`, and a structured output schema requiring a JSON array where each element has `action`, `resource`, `judgment` (one of `"violation"`, `"likely_violation"`, `"unknown"`, `"no_violation"`), `confidence` (float 0–1), and `message`. Run the classifier behind a cancellable process boundary and terminate it when the remaining `max_runtime_seconds` budget expires. Wrap the entire classifier call in `try/except Exception` — on any exception (including invalid JSON, timeout, or LLM unavailability) emit no agentic findings and do not propagate the exception.
+6. JSON extraction fallback: implement `_extract_last_json(text: str) -> Optional[Any]` using `json.JSONDecoder.raw_decode` iterating from every `[` and `{` position to extract the last valid non-nested JSON array or object. Candidate starts inside a larger decoded JSON value must be ignored so a normal string response like `[{"action": "..."}]` returns the array, not the object nested inside it. When normalizing the classifier result, accept either a JSON array of finding objects or a single JSON object finding; reject arrays containing non-object entries, missing required finding fields, unknown `judgment` values, non-string action/resource/message values, or confidence values outside 0–1 via the graceful fallback path.
+7. Finding normalization: each finding returned MUST include: `source: "agentic_reviewer"`, `severity: "warning"`, `confidence: float`, `effect: {"action": str, "resource": str}`, `message: str`, `evidence: [{"file": str, "line": int, "excerpt": str}]`, and `agent_steps: [str]` (human-readable breadcrumb trail: `"Read file X"`, `"Found symbol Y at line N"`, `"Followed import to Z"`). Include all bounded `observed_evidence` entries in returned findings rather than a fixed-size prefix so wrapper evidence is not hidden by earlier imports or environment reads.
+8. Insufficient-evidence sentinel: when `len(observed_evidence) == 0` or all completed LLM judgment results have `confidence < 0.5`, return a single-element list containing `{"judgment": "unknown", "confidence": 0.0, "source": "agentic_reviewer", "message": "Insufficient evidence to determine effect", "severity": "warning", "evidence": [], "agent_steps": agent_steps}`. If the LLM classifier is unavailable, times out, or returns invalid JSON after evidence was collected, return an empty list so classifier outages do not become user-visible policy findings.
+9. Path safety: in `_resolve_local_import`, reject any resolved path that escapes the project root (path not starting with `project_root` after `Path.resolve()`). Skip binary files and files raising `UnicodeDecodeError` silently.
+10. Language detection: implement `_detect_language(path: Path) -> str` returning `"python"`, `"typescript"`, `"javascript"`, or `"unknown"` based on file extension. Use detected language to guide symbol extraction patterns and the `target` field in the classifier input.
+
+% Helper Functions
+- `_extract_symbols(path: Path, content: str) -> List[Dict]`: regex-based symbol extraction returning call/import/env/write/network/log hits with line numbers and excerpts
+- `_resolve_local_import(current_file: Path, import_path: str, project_root: Path) -> Optional[Path]`: resolve a relative import path to an existing file on disk; try multiple candidate extensions; reject paths outside project root
+- `_derive_project_root(artifact_paths: List[Union[str, Path]]) -> Path`: derive a common/package root for bounded import following and manifest inspection
+- `_inspect_manifests(project_root: Path) -> Dict[str, List[str]]`: read dependency manifests and return a mapping of manager to package name lists
+- `_build_classifier_input(contract_effects: List[Dict], observed_evidence: List[Dict], target_language: str) -> Dict`: build the structured JSON input for the LLM classifier
+- `_detect_language(path: Path) -> str`: return language string from file extension
+- `_extract_last_json(text: str) -> Optional[Any]`: extract the last valid JSON value from a text string using raw_decode
+
+% Dependencies
+<pdd.llm_invoke><include select="def:llm_invoke">pdd/llm_invoke.py</include></pdd.llm_invoke>
+<pdd.contract_ir><include mode="interface">pdd/contract_ir.py</include></pdd.contract_ir>
+
+% Deliverables
+- Code: `pdd/agentic_reviewer.py`
