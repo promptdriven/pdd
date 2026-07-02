@@ -4,6 +4,13 @@
 
 ### Feat
 
+- **test**: add `pdd test --from-story <story>` to compile a story's sibling
+  contract into deterministic, offline pytest. The generator consumes
+  `## Entry Point`, `## Seams`, `## Covers`, `## Oracle`, and
+  `## Negative Cases`, emits byte-stable tests tagged with
+  `@pytest.mark.story(story_id=..., story_hash=...)`, and runs without LLM,
+  network, or cloud credentials at test time. Registers the strict `story`
+  marker in `pytest.ini` (#1700).
 - **checkup**: persist per-step telemetry (`step_telemetry` list) in workflow state so pdd_cloud durable runs can attribute per-step cost and status without coupling to internal float step numbering. Each entry records a stable `step_id` string (via new `STEP_ID_MAP` constant), `status` (`completed` | `failed` | `skipped`), `cost_usd`, `model`, `iteration`, and `completed_at` ISO-8601 timestamp. Skipped steps (e.g. `--no-fix` sub-step bypass paths) emit `status: "skipped"` and `cost_usd: 0.0`. Additive and backward-compatible: state files without `step_telemetry` still load and resume; `sum(entry["cost_usd"])` reconciles with `total_cost` for fresh runs. Optionally included in the Step-7 final JSON report for consumers that do not harvest the on-disk state file (#1709).
 - **api_contract_slicer**: AST-based dependency/API contract slicing for compressed generation (#875). Preserves seed symbols, patch targets from tests, transitive local helpers/constants, and required imports; `verify_contract` fails fast when symbols are missing. Integrated via `contract:` selector in `ContentSelector`.
 - **fix**: add two-phase focused repair for large dev units (code > 500 lines or tests > 1000 lines); fast-path skips diagnosis when the traceback names 1–3 functions directly; Phase 1 sends a code skeleton to identify broken functions; Phase 2 sends only the identified slices + failing tests; silent fallback to full-file mode on parse errors; new `fix_focus` module owns skeleton extraction, function slicing, traceback parsing, and source reconstruction (#888).
