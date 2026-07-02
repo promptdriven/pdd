@@ -43,6 +43,63 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 UNIT_LIKE_STORIES = {
+    "pdd_context_compression_manifest": {
+        "metadata_prompts": [
+            "prompts/content_selector_python.prompt",
+            "prompts/test_context_packer_python.prompt",
+            "prompts/pytest_slicer_python.prompt",
+            "prompts/llm_invoke_python.prompt",
+        ],
+        "dev_units": [
+            "content_selector_python.prompt",
+            "test_context_packer_python.prompt",
+            "pytest_slicer_python.prompt",
+            "llm_invoke_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "context compression",
+            "TestPackingManifest",
+        ),
+    },
+    "pdd_estimate_side_effect_free": {
+        "metadata_prompts": [
+            "prompts/commands/generate_python.prompt",
+            "prompts/code_generator_main_python.prompt",
+            "prompts/track_cost_python.prompt",
+            "prompts/llm_invoke_python.prompt",
+        ],
+        "dev_units": [
+            "generate_python.prompt",
+            "code_generator_main_python.prompt",
+            "track_cost_python.prompt",
+            "llm_invoke_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "Estimate mode",
+            "does not write",
+        ),
+    },
+    "pdd_preprocess_snapshot_reproducibility": {
+        "metadata_prompts": [
+            "prompts/preprocess_python.prompt",
+            "prompts/preprocess_main_python.prompt",
+            "prompts/context_snapshot_python.prompt",
+            "prompts/commands/context_python.prompt",
+        ],
+        "dev_units": [
+            "preprocess_python.prompt",
+            "preprocess_main_python.prompt",
+            "context_snapshot_python.prompt",
+            "context_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "Preprocess and snapshot behavior",
+            "dynamic context snapshots",
+        ),
+    },
     "pdd_checkup_coverage_evidence": {
         "metadata_prompts": [
             "prompts/commands/checkup_python.prompt",

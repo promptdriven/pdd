@@ -36,6 +36,9 @@ that should feel as stable and focused as Python unit tests:
 - CLI mode and option guardrails
 - deterministic contract-rule checking
 - deterministic coverage evidence reporting
+- preprocess include and snapshot reproducibility
+- context compression and test-packing manifests
+- side-effect-free estimate mode
 
 ## Verification
 
