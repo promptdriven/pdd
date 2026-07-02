@@ -43,6 +43,25 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 UNIT_LIKE_STORIES = {
+    "pdd_architecture_dependency_order": {
+        "metadata_prompts": [
+            "prompts/architecture_sync_python.prompt",
+            "prompts/sync_order_python.prompt",
+            "prompts/architecture_registry_python.prompt",
+            "prompts/metadata_sync_python.prompt",
+        ],
+        "dev_units": [
+            "architecture_sync_python.prompt",
+            "sync_order_python.prompt",
+            "architecture_registry_python.prompt",
+            "metadata_sync_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "architecture dependency order",
+            "generation order",
+        ),
+    },
     "pdd_agentic_provider_fallback_status": {
         "metadata_prompts": [
             "prompts/agentic_common_python.prompt",
@@ -100,6 +119,42 @@ UNIT_LIKE_STORIES = {
         "must_contain": (
             "source-of-truth routing",
             "wrong workflow",
+        ),
+    },
+    "pdd_story_contract_hash_sync": {
+        "metadata_prompts": [
+            "prompts/user_story_tests_python.prompt",
+            "prompts/generate_story_contract_LLM.prompt",
+            "prompts/coverage_contracts_python.prompt",
+        ],
+        "dev_units": [
+            "user_story_tests_python.prompt",
+            "generate_story_contract_LLM.prompt",
+            "coverage_contracts_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "story contract hash",
+            "stale contract",
+        ),
+    },
+    "pdd_sync_conflict_safe_update": {
+        "metadata_prompts": [
+            "prompts/sync_main_python.prompt",
+            "prompts/conflicts_in_prompts_python.prompt",
+            "prompts/conflicts_main_python.prompt",
+            "prompts/sync_orchestration_python.prompt",
+        ],
+        "dev_units": [
+            "sync_main_python.prompt",
+            "conflicts_in_prompts_python.prompt",
+            "conflicts_main_python.prompt",
+            "sync_orchestration_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "conflict-safe sync",
+            "reviewable conflict evidence",
         ),
     },
     "pdd_context_compression_manifest": {
