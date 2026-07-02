@@ -4242,6 +4242,23 @@ def _run_agentic_checkup_orchestrator_inner(
         # from state; don't increment on the first pass.
         resuming_mid_iteration = fix_verify_iteration > 0
 
+        # A resume whose restored ``fix_verify_iteration`` already reached
+        # ``MAX_FIX_VERIFY_ITERATIONS`` came from a prior run that EXHAUSTED the
+        # loop (e.g. an empty-Step-7 run that gave up). Left as-is, the
+        # ``while fix_verify_iteration < MAX`` guard below is immediately false,
+        # so NO step re-runs and the stale cached verdict is re-emitted verbatim
+        # — defeating resume / "run til green" (a resumed, previously-exhausted
+        # run must re-attempt the loop, not instantly re-fail on a cached
+        # empty/failed Step 7). Reset to a fresh set of iterations and drop the
+        # stale cached Step 7 so the loop actually runs again (the per-step
+        # retry/verdict logic then decides the real outcome).
+        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS:
+            fix_verify_iteration = 0
+            resuming_mid_iteration = False
+            step_outputs.pop("7", None)
+            if start_step > 7:
+                start_step = 3
+
         # Bug B fix: between-iterations resume.
         # If start_step > 7 and we're mid-loop, the previous iteration's
         # step 7 completed without "All Issues Fixed" — start a fresh
