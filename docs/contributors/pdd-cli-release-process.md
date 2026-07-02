@@ -34,6 +34,20 @@ gh variable set PDS_CLI_PACKAGE --repo promptdriven/pdd --body '@promptdriven/pd
 
 ## Release-Video Metadata Recovery
 
+When PDS create times out but prints an active run handle, or when PDS reports
+an existing-project conflict with an active run, the wrapper exits successfully
+with a pending `pds_response.json`. It prints the project/run/status plus the
+exact status and Discord backfill commands. Do not rerun package publishing,
+tag creation, or PyPI upload for this recovery path; wait for the PDS run and
+backfill the release-video announcement after YouTube is available.
+
+Keep `RELEASE_VIDEO_METADATA_CONFLICT` unset for ordinary retries so the PDS
+idempotency key still matches the original create request. Set
+`RELEASE_VIDEO_METADATA_CONFLICT=use-existing` only when PDS explicitly reports
+that preserving existing project metadata is the recovery mode. Use
+`RELEASE_VIDEO_METADATA_CONFLICT=replace` only with
+`RELEASE_VIDEO_FORCE_REGENERATE=1`, because replacement is destructive.
+
 When PDS reports a recoverable project metadata mismatch such as
 `release_video_existing_project_metadata_mismatch`, inspect the existing run
 state first:
@@ -63,6 +77,4 @@ make release-video \
 ```
 
 Use `RELEASE_VIDEO_METADATA_CONFLICT=use-existing` when the PDS remediation
-requires preserving the existing project metadata. Use
-`RELEASE_VIDEO_METADATA_CONFLICT=replace` only with
-`RELEASE_VIDEO_FORCE_REGENERATE=1`, because replacement is destructive.
+requires preserving the existing project metadata.

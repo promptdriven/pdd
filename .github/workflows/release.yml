@@ -257,6 +257,7 @@ jobs:
           RELEASE_VIDEO_ATTEMPT_ID: ${{ vars.RELEASE_VIDEO_ATTEMPT_ID }}
           RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT: ${{ vars.RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT }}
           RELEASE_VIDEO_FORCE_REGENERATE: ${{ vars.RELEASE_VIDEO_FORCE_REGENERATE }}
+          RELEASE_VIDEO_METADATA_CONFLICT: ${{ vars.RELEASE_VIDEO_METADATA_CONFLICT }}
         run: |
           set -uo pipefail
           tag="${{ github.ref_name }}"
