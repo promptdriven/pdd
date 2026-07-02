@@ -4,6 +4,6 @@
 
 ## Story
 
-As a maintainer turning prompt source into runnable code,
-I want the `pdd generate` command to be available as a documented CLI workflow,
-so that I can create implementation artifacts from prompt files without using a lower-level API.
+As a maintainer turning prompts or product descriptions into project artifacts,
+I want PDD to route my generate request to the right generation workflow,
+so that code, architecture, and previews are produced or rejected predictably.

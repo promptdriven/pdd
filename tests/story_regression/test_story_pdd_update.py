@@ -5,7 +5,7 @@ from pdd.commands.modify import update
 
 
 PDD_STORY_ID = "pdd_update"
-PDD_STORY_HASH = "28a77cebd4eec9f4"
+PDD_STORY_HASH = "cf0bc4a2189f81bd"
 
 
 @pytest.mark.story(story_id=PDD_STORY_ID)

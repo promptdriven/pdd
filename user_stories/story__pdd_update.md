@@ -4,6 +4,6 @@
 
 ## Story
 
-As a maintainer reconciling edited generated code back into prompt source,
-I want the `pdd update` command to be available as a documented CLI workflow,
-so that source-of-truth prompts can be refreshed after implementation changes.
+As a maintainer whose generated code has changed,
+I want PDD to update the authoritative prompt through the right update mode,
+so that prompt, code, and metadata stay aligned for future syncs.
