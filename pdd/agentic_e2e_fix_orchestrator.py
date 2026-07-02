@@ -127,6 +127,65 @@ def _truncate_verifier_detail(detail: str) -> str:
         f"{detail[-tail:]}"
     )
 
+
+# Issue #1792: composite sub-key for the at-rejection-time Step 9 verifier
+# comment. Step comments use `cycle * 10000 + step_num` with step_num 0-11;
+# 909 reserves a non-colliding slot per cycle so the rejection comment posts
+# exactly once per cycle, including across resume (the persisted
+# `step_comments` set dedups replays of the same cycle's rejection).
+_VERIFIER_REJECT_COMMENT_SUBKEY = 909
+
+
+def _build_step9_verifier_rejection_comment(
+    current_cycle: int,
+    test_files: Optional[List[str]],
+    verifier_detail: str,
+    resumed: bool = False,
+) -> str:
+    """Build the visible at-rejection-time comment body (Issue #1792).
+
+    Posted when Step 9's claimed ``ALL_TESTS_PASS``/``LOCAL_TESTS_PASS`` is
+    rejected by ``_verify_tests_independently`` — the agent's own step comment
+    (already public by then) showed a possibly-targeted pass, so without this
+    comment the thread looks green while the workflow silently continues.
+    The final-report surfacing (#1776 criterion #4) only fires on a terminal
+    non-success exit; it never fires when the process is killed (e.g. the
+    Cloud Run job timeout SIGTERM observed on #1738) and never explains a
+    rejected cycle that a LATER cycle supersedes with a verified pass.
+
+    The body lists the exact files explicitly (truncation of the detail keeps
+    head+tail but can drop middle file names) and embeds the bounded verifier
+    detail, which carries the exact ``$ command`` lines and stdout/stderr.
+    """
+    files_line = (
+        ", ".join(f"`{f}`" for f in test_files)
+        if test_files
+        else "(none discovered)"
+    )
+    resumed_note = " (cached claim re-verified on resume)" if resumed else ""
+    bounded = _truncate_verifier_detail(verifier_detail)
+    return (
+        f"## ⚠️ Step 9 Verification Rejected (Cycle {current_cycle})\n\n"
+        f"Step 9 reported `ALL_TESTS_PASS`{resumed_note}, but the orchestrator's "
+        "**independent verification REJECTED** the claimed pass. The \"tests "
+        "pass\" report above may have run a targeted subset; the independent "
+        "verifier re-runs the discovered test files in full and takes "
+        "precedence. This cycle is NOT recorded as a success — the workflow "
+        "continues with another fix cycle, or stops if the cycle budget is "
+        "exhausted.\n\n"
+        f"**Test files verified independently:** {files_line}\n\n"
+        "<details>\n"
+        "<summary>Independent verifier detail (exact command + output, "
+        "bounded)</summary>\n\n"
+        "```text\n"
+        f"{bounded}\n"
+        "```\n"
+        "</details>\n\n"
+        "---\n"
+        "*Posted by PDD orchestrator (trusted credentials). Independent "
+        "verification overrides agent-reported test results (Issue #1792).*"
+    )
+
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
 # the scan finds hundreds of files.  See Issue #1010.
@@ -387,6 +446,10 @@ class _Step9TokenApplyResult(NamedTuple):
     # Step 9 pass, carry the verifier detail (files/output) so the final report
     # can surface it and a public "tests pass" comment is not left misleading.
     verifier_failure_detail: Optional[str] = None
+    # Issue #1792: the exact test files the rejected verification ran, carried
+    # separately so the at-rejection-time comment can list them explicitly
+    # (head/tail truncation of the detail could otherwise drop file names).
+    verifier_test_files: Optional[List[str]] = None
 
 
 def _apply_step9_resolved_token(
@@ -449,6 +512,7 @@ def _apply_step9_resolved_token(
                     step_outputs_9=full_failed,
                     verification_failure_context_update=verify_output,
                     verifier_failure_detail=failed_body,
+                    verifier_test_files=list(test_files),
                     last_completed_step=0,
                 )
             return _Step9TokenApplyResult(
@@ -456,6 +520,7 @@ def _apply_step9_resolved_token(
                 import_error_retries=new_retries,
                 step_outputs_9=full_failed,
                 verifier_failure_detail=failed_body,
+                verifier_test_files=list(test_files),
                 last_completed_step=step_num - 1,
             )
         console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
@@ -3230,6 +3295,36 @@ def run_agentic_e2e_fix_orchestrator(
                 # cycle rollover below and is surfaced if the run ends non-success.
                 last_verifier_failure = step_outputs["9"]
 
+                # Issue #1792: this rejection belongs to the resumed cycle whose
+                # cached Step 9 claimed a pass — post the visible comment BEFORE
+                # the rollover below reassigns current_cycle. Same per-cycle
+                # composite key as the in-run path, so a rejection already
+                # posted before the interrupt is not duplicated (dedup via the
+                # persisted step_comments set).
+                try:
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=(
+                            current_cycle * 10000
+                            + _VERIFIER_REJECT_COMMENT_SUBKEY
+                        ),
+                        body=_build_step9_verifier_rejection_comment(
+                            current_cycle,
+                            test_files,
+                            step_outputs["9"],
+                            resumed=True,
+                        ),
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                except Exception as _post_exc:  # pylint: disable=broad-except
+                    console.print(
+                        "[yellow]Step 9 verifier-rejection comment failed "
+                        f"(resume): {_post_exc}[/yellow]"
+                    )
+
                 _persist_resume_reverification_state()
 
                 if current_cycle < max_cycles:
@@ -3822,6 +3917,38 @@ def run_agentic_e2e_fix_orchestrator(
                         import_error_retries = r.import_error_retries
                         if r.verifier_failure_detail is not None:
                             last_verifier_failure = r.verifier_failure_detail
+                            # Issue #1792: surface the rejection in the issue
+                            # thread AT REJECTION TIME. The agent's own Step 9
+                            # comment (posted above, before verification) shows
+                            # a possibly-targeted pass; without this comment the
+                            # thread stays green while the workflow silently
+                            # continues — and the #1776 final-report surfacing
+                            # never fires on SIGTERM kills or when a later
+                            # cycle succeeds. Exactly once per cycle via the
+                            # persisted step_comments composite key; posting
+                            # failures must never break the workflow.
+                            try:
+                                post_step_comment_once(
+                                    repo_owner=repo_owner,
+                                    repo_name=repo_name,
+                                    issue_number=issue_number,
+                                    step_num=(
+                                        current_cycle * 10000
+                                        + _VERIFIER_REJECT_COMMENT_SUBKEY
+                                    ),
+                                    body=_build_step9_verifier_rejection_comment(
+                                        current_cycle,
+                                        r.verifier_test_files,
+                                        r.verifier_failure_detail,
+                                    ),
+                                    posted_steps=step_comments_set,
+                                    cwd=cwd,
+                                )
+                            except Exception as _post_exc:  # pylint: disable=broad-except
+                                console.print(
+                                    "[yellow]Step 9 verifier-rejection comment "
+                                    f"failed: {_post_exc}[/yellow]"
+                                )
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
