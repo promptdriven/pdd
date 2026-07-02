@@ -1206,7 +1206,7 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
 def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions.
 
-    Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
+    Clarification steps (4, 7) require explicit machine-readable markers.
     Other stop-capable steps use case-insensitive substring matching as a
     fallback. Step 8 is prompt-change analysis only and must continue to Step 9
     because code/docs direct edits may still be pending.
@@ -1221,8 +1221,25 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     if step_num == 2 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*already implemented", output_lower, re.MULTILINE):
         return "Already implemented"
     if step_num == 4:
+        route_redirect = re.search(
+            r"^[ \t]*ROUTE_REDIRECT:[ \t]*bug_fix[ \t]*$",
+            output,
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if route_redirect:
+            rationale_match = re.search(
+                r"^[ \t]*ROUTE_RATIONALE:[ \t]*(.+)$",
+                output,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            rationale = rationale_match.group(1).strip() if rationale_match else ""
+            if rationale:
+                return f"Runtime bug route needed: {rationale}"
+            return "Runtime bug route needed: use pdd bug followed by pdd fix"
         if stop_match and "clarification" in stop_match.group(1).lower():
             return "Clarification needed"
+        if stop_match and "runtime bug route" in stop_match.group(1).lower():
+            return "Runtime bug route needed: use pdd bug followed by pdd fix"
         return None
     if step_num == 6 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no dev units found", output_lower, re.MULTILINE):
         return "No dev units found"

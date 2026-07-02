@@ -5870,6 +5870,30 @@
     }
   },
   {
+    "reason": "Recommends the correct issue-driven PDD workflow before a bug, fix, change, or sync command is selected.",
+    "description": "Public route recommendation prompt for issue-driven PDD command selection. Gives runtime defect signals priority over prompt/source-truth phrasing, recommends bug -> fix for current runtime symptoms, change -> sync for source-truth/spec/product changes with no current failure, and clarification for ambiguous issues.",
+    "dependencies": [],
+    "priority": 165,
+    "filename": "agentic_issue_route_LLM.prompt",
+    "filepath": "prompts/agentic_issue_route_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 15240,
+      "y": 220
+    }
+  },
+  {
     "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
     "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
@@ -8134,7 +8158,7 @@
           },
           {
             "name": "_build_state",
-            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None) -> Dict",
+            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None, step_comments: Optional[List[int]] = None, step_telemetry: Optional[List[dict]] = None) -> Dict",
             "returns": "Dict",
             "sideEffects": [
               "None"
@@ -8220,7 +8244,13 @@
             "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
             "returns": "Tuple[bool, str, float]",
             "sideEffects": [
-              "expected_head_sha_override forces the poll to wait for a specific pushed PR head SHA instead of _get_head_sha(cwd); used by a caller that must validate CI against a specific PR head rather than cwd's local HEAD (e.g. when the head was pushed from a different worktree, so cwd's local HEAD is stale relative to the PR remote)"
+              "without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout",
+              "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
+              "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
+              "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
+              "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive, ignoring passed checks for trigger matching",
+              "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code, except ACTION_REQUIRED state remains manual-action even with a missing bucket",
+              "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when .pddrc ci.external_setup_fail_open is exactly true; by default failed checks remain fail-closed/repairable"
             ]
           },
           {
@@ -10807,6 +10837,246 @@
             "returns": "None"
           }
         ]
+      }
+    }
+  },
+  {
+    "reason": "Deterministic, marker-traceable pytest oracle linking user stories to the regression tests that claim them.",
+    "description": "Collection-only (pytest --collect-only) story<->test traceability: builds a bidirectional story_id<->nodeid map from @pytest.mark.story markers and exposes tests_for_story, story_for_test, has_regression_test, and the shared story_id helper. Never runs an LLM or executes test bodies.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_regression_python.prompt",
+    "filepath": "pdd/story_regression.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "story_id",
+            "signature": "(path: str | Path)",
+            "returns": "str"
+          },
+          {
+            "name": "tests_for_story",
+            "signature": "(story_id: str)",
+            "returns": "set[str]"
+          },
+          {
+            "name": "story_for_test",
+            "signature": "(nodeid: str)",
+            "returns": "str | set[str] | None"
+          },
+          {
+            "name": "has_regression_test",
+            "signature": "(story_id: str)",
+            "returns": "bool"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 800,
+      "y": 3600
+    }
+  },
+  {
+    "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention.",
+    "description": "User story utilities: discover story/prompt files, validate stories against prompts via detect_change, generate LLM-authored story__*.md from a GitHub issue, and apply prompt fixes for a single story. Exposes the public story_id helper (story__<slug>.md -> <slug>) reused by story_regression.",
+    "dependencies": [],
+    "priority": 6,
+    "filename": "user_story_tests_python.prompt",
+    "filepath": "pdd/user_story_tests.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "story_id",
+            "signature": "(path: str | Path)",
+            "returns": "str"
+          },
+          {
+            "name": "discover_story_files",
+            "signature": "(stories_dir: Optional[str] = None)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "discover_prompt_files",
+            "signature": "(...)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "generate_user_story",
+            "signature": "(...)",
+            "returns": "Tuple[bool, str]"
+          },
+          {
+            "name": "run_user_story_tests",
+            "signature": "(...)",
+            "returns": "Tuple[bool, str]"
+          },
+          {
+            "name": "run_user_story_fix",
+            "signature": "(...)",
+            "returns": "Tuple[bool, str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 2600,
+      "y": 3600
+    }
+  },
+  {
+    "reason": "Deterministic static contract-rule coverage matrix for prompts, plus an orthogonal per-story has_regression_test dimension.",
+    "description": "Builds a rule-to-evidence matrix for .prompt files with <contract_rules>, classifying rules as checked/story-only/test-only/unchecked/waived/failed. Adds an orthogonal, story-keyed has_regression_test dimension computed via the story_regression traceability API. Exposed through `pdd checkup coverage`.",
+    "dependencies": [
+      "story_regression_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "coverage_contracts_python.prompt",
+    "filepath": "pdd/coverage_contracts.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_coverage",
+            "signature": "(path, stories_dir=None, tests_dir=None)",
+            "returns": "CoverageResult"
+          },
+          {
+            "name": "build_coverage_directory",
+            "signature": "(directory, stories_dir=None, tests_dir=None)",
+            "returns": "list[CoverageResult]"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "RuleCoverage"
+          },
+          {
+            "name": "CoverageResult"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 4400,
+      "y": 3600
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        }
       }
     }
   }
