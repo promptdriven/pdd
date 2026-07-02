@@ -4115,6 +4115,12 @@ def run_agentic_e2e_fix_orchestrator(
             state_data["last_completed_step"] = 0
             state_data["step_outputs"] = {}
             state_data["last_saved_at"] = datetime.now().isoformat()
+            # Issue #1792: state_data's step_comments snapshot predates the
+            # at-rejection-time comment posted during Step 9 token handling
+            # (the last per-step save runs BEFORE verification). Refresh it so
+            # the rollover save persists the rejection-comment key and a
+            # crash-resume of this window cannot double-post.
+            state_data["step_comments"] = sorted(step_comments_set)
             # Issue #1034 codex P2 follow-up: the just-completed cycle's
             # cycle_start_hashes is stale for the next cycle. Clear it so
             # any resume from this transitional state falls back to the
