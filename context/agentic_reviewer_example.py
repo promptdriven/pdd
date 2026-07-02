@@ -136,7 +136,7 @@ def demo_extract_last_json() -> None:
     """Demonstrate _extract_last_json() — extracts last valid JSON from text."""
     print("=== _extract_last_json ===")
 
-    # Last valid JSON found (iterates forward; dict inside array is encountered last)
+    # Last valid non-nested JSON value is returned; objects inside arrays stay nested.
     text_with_array = 'Some preamble [{"a": 1}] then [{"b": 2, "c": 3}] trailing'
     result = _extract_last_json(text_with_array)
     print(f"  Last JSON from mixed text: {result}")

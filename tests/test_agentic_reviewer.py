@@ -16,7 +16,8 @@ Test plan (one section per spec requirement):
       output_schema; target is a language string; exception is swallowed and
       produces no agentic findings
  R6.  _extract_last_json: iterates from every [ and { position, captures arrays
-      AND objects, returns last valid one; returns None when no JSON present
+      AND objects, returns last valid non-nested one; returns None when no JSON
+      present
  R7.  Finding normalization: every finding has source, severity, confidence,
       effect{action,resource}, message, evidence[{file,line,excerpt}],
       agent_steps; breadcrumb format ("Read file X", "Found symbol Y at line N",
@@ -42,6 +43,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 from typing import Any, Dict, List
@@ -56,6 +58,17 @@ import pytest
 def _mock_llm_result(findings: List[Dict]) -> Dict[str, Any]:
     """Build a mock llm_invoke return value."""
     return {"result": findings, "cost": 0.0, "model_name": "mock"}
+
+
+def _mock_classifier_response(result: Dict[str, Any], captured: Dict[str, Any] | None = None):
+    """Build a mock _invoke_llm_with_timeout side effect."""
+    def fake_classifier(timeout_seconds: float, **kwargs: Any) -> Dict[str, Any]:
+        if captured is not None:
+            captured["timeout_seconds"] = timeout_seconds
+            captured["kwargs"] = kwargs
+        return result
+
+    return fake_classifier
 
 
 def _write_files(tmp_path: Path, files: Dict[str, str]) -> None:
@@ -254,13 +267,17 @@ class TestExtractLastJson:
     def test_finds_json_array(self):
         text = 'here is [{"a": 1}] done'
         result = _extract_last_json(text)
-        assert result is not None
+        assert result == [{"a": 1}]
+
+    def test_array_result_not_replaced_by_nested_object(self):
+        result = _extract_last_json('[{"action": "send", "confidence": 0.9}]')
+        assert result == [{"action": "send", "confidence": 0.9}]
 
     def test_finds_last_json(self):
         # The last valid top-level JSON should be returned
         text = '[{"a": 1}] then {"b": 2}'
         result = _extract_last_json(text)
-        assert result is not None
+        assert result == {"b": 2}
 
     def test_finds_json_object(self):
         text = 'prefix {"key": "value"} suffix'
@@ -395,6 +412,18 @@ class TestResolveLocalImport:
         src.parent.mkdir()
         src.write_text("")
         assert _derive_project_root([src]) == tmp_path
+
+    def test_derive_project_root_lifts_nested_src_directory(self, tmp_path):
+        src = tmp_path / "src" / "payments" / "billing.ts"
+        src.parent.mkdir(parents=True)
+        src.write_text("")
+        assert _derive_project_root([src]) == tmp_path
+
+    def test_derive_project_root_does_not_lift_nested_tests_directory_without_marker(self, tmp_path):
+        src = tmp_path / "tests" / "case" / "app.py"
+        src.parent.mkdir(parents=True)
+        src.write_text("")
+        assert _derive_project_root([src]) == src.parent
 
     def test_derive_project_root_prefers_manifest_ancestor(self, tmp_path):
         (tmp_path / "package.json").write_text("{}")
@@ -641,30 +670,64 @@ class TestRunAgenticReviewer:
             )
         assert isinstance(result, list)
 
+    def test_classifier_timeout_returns_empty_findings(self, tmp_path):
+        """Classifier latency beyond max_runtime_seconds is treated as outage."""
+        target = tmp_path / "app.py"
+        target.write_text("import os\n")
+        marker = tmp_path / "classifier_finished"
+
+        def slow_llm(**_kwargs):
+            time.sleep(0.2)
+            marker.write_text("finished", encoding="utf-8")
+            return _mock_llm_result([{
+                "action": "import",
+                "resource": "module",
+                "judgment": "no_violation",
+                "confidence": 0.9,
+                "message": "late",
+            }])
+
+        with patch("pdd.agentic_reviewer.llm_invoke", side_effect=slow_llm):
+            result = run_agentic_reviewer(
+                contract_effects=[],
+                artifact_paths=[str(target)],
+                bounds={"max_runtime_seconds": 0.03},
+            )
+        assert result == []
+        time.sleep(0.25)
+        assert not marker.exists()
+
     def test_llm_invoked_with_strength_zero(self, tmp_path):
         target = tmp_path / "app.py"
         target.write_text("import os\n")
-        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result([])) as mock_llm:
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result([]), captured),
+        ) as mock_classifier:
             run_agentic_reviewer(
                 contract_effects=[],
                 artifact_paths=[str(target)],
             )
-        mock_llm.assert_called_once()
-        call_kwargs = mock_llm.call_args
-        kwargs = call_kwargs.kwargs if call_kwargs.kwargs else call_kwargs[1]
+        mock_classifier.assert_called_once()
+        kwargs = captured["kwargs"]
         assert kwargs.get("strength") == 0.0
         assert kwargs["input_json"]["target"] == "python"
 
     def test_llm_invoked_with_temperature_01(self, tmp_path):
         target = tmp_path / "app.py"
         target.write_text("import os\n")
-        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result([])) as mock_llm:
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result([]), captured),
+        ) as mock_classifier:
             run_agentic_reviewer(
                 contract_effects=[],
                 artifact_paths=[str(target)],
             )
-        mock_llm.assert_called_once()
-        kwargs = mock_llm.call_args.kwargs
+        mock_classifier.assert_called_once()
+        kwargs = captured["kwargs"]
         assert kwargs.get("temperature") == 0.1
 
     def test_bounds_max_files_respected(self, tmp_path):
@@ -719,7 +782,7 @@ class TestRunAgenticReviewer:
     def test_follows_local_import(self, tmp_path):
         """Import-chain following: local relative import should be followed (req 3)."""
         main_file = tmp_path / "main.py"
-        main_file.write_text("from './utils' import helper\n")
+        main_file.write_text("from .utils import helper\n")
         utils_file = tmp_path / "utils.py"
         utils_file.write_text("import requests\nresponse = requests.get('https://api.example.com')\n")
 
@@ -730,22 +793,60 @@ class TestRunAgenticReviewer:
             "confidence": 0.9,
             "message": "Network call found.",
         }]
-        from pdd.agentic_reviewer import _extract_symbols as real_extract
-
-        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result(llm_findings)):
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result(llm_findings), captured),
+        ):
             result = run_agentic_reviewer(
                 contract_effects=[{"action": "network", "resource": "http"}],
                 artifact_paths=[str(main_file)],
                 bounds={"max_follow_depth": 2},
             )
+        evidence = captured["kwargs"]["input_json"]["observed_evidence"]
+        assert any(item["file"] == "utils.py" for item in evidence)
+        assert any("requests.get" in item["excerpt"] for item in evidence)
         assert isinstance(result, list)
+
+    def test_follows_python_package_imported_submodule(self, tmp_path):
+        """from .package import submodule should inspect package/submodule.py."""
+        main_file = tmp_path / "main.py"
+        package = tmp_path / "clients"
+        package.mkdir()
+        main_file.write_text("from .clients import notificationClient\nnotificationClient.send()\n")
+        (package / "__init__.py").write_text("")
+        (package / "notificationClient.py").write_text(
+            'import requests\nrequests.post("https://api.example.com")\n'
+        )
+        llm_findings = [{
+            "action": "network",
+            "resource": "http",
+            "judgment": "violation",
+            "confidence": 0.9,
+            "message": "Network call found.",
+        }]
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result(llm_findings), captured),
+        ):
+            result = run_agentic_reviewer(
+                contract_effects=[{"action": "network", "resource": "http"}],
+                artifact_paths=[str(main_file)],
+                bounds={"max_follow_depth": 2},
+            )
+
+        evidence = captured["kwargs"]["input_json"]["observed_evidence"]
+        assert any(item["file"] == "notificationClient.py" for item in evidence)
+        assert any("requests.post" in item["excerpt"] for item in evidence)
+        assert result[0]["confidence"] == 0.9
 
     def test_visited_files_prevents_cycles(self, tmp_path):
         """Circular imports must not cause infinite loops (req 3)."""
         a = tmp_path / "a.py"
         b = tmp_path / "b.py"
-        a.write_text("from './b' import foo\nimport os\n")
-        b.write_text("from './a' import bar\nimport sys\n")
+        a.write_text("from .b import foo\nimport os\n")
+        b.write_text("from .a import bar\nimport sys\n")
         with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result([])):
             result = run_agentic_reviewer(
                 contract_effects=[],
@@ -775,12 +876,65 @@ class TestRunAgenticReviewer:
             )
         assert len(result) >= 1
         assert result[0]["source"] == "agentic_reviewer"
+        assert result[0]["effect"]["action"] == "import"
+        assert result[0]["confidence"] == 0.7
+
+    def test_result_content_single_object_fallback(self, tmp_path):
+        """A single JSON object classifier response is normalized as one finding."""
+        target = tmp_path / "app.py"
+        target.write_text("import os\n")
+        llm_finding = {
+            "action": "import",
+            "resource": "module",
+            "judgment": "no_violation",
+            "confidence": 0.8,
+            "message": "ok",
+        }
+        with patch("pdd.agentic_reviewer.llm_invoke", return_value={"result": json.dumps(llm_finding), "cost": 0.0}):
+            result = run_agentic_reviewer(
+                contract_effects=[],
+                artifact_paths=[str(target)],
+            )
+        assert len(result) == 1
+        assert result[0]["effect"]["action"] == "import"
+        assert result[0]["confidence"] == 0.8
 
     def test_invalid_llm_json_returns_empty_findings(self, tmp_path):
         """Invalid classifier output should not emit an unknown warning finding."""
         target = tmp_path / "app.py"
         target.write_text("import os\n")
         with patch("pdd.agentic_reviewer.llm_invoke", return_value={"result": "not json"}):
+            result = run_agentic_reviewer(
+                contract_effects=[{"action": "read", "resource": "env"}],
+                artifact_paths=[str(target)],
+            )
+        assert result == []
+
+    def test_invalid_llm_array_shape_returns_empty_findings(self, tmp_path):
+        """Non-object array entries are invalid classifier output, not low confidence."""
+        target = tmp_path / "app.py"
+        target.write_text("import os\n")
+        with patch("pdd.agentic_reviewer.llm_invoke", return_value={"result": "[1, 2]", "cost": 0.0}):
+            result = run_agentic_reviewer(
+                contract_effects=[{"action": "read", "resource": "env"}],
+                artifact_paths=[str(target)],
+            )
+        assert result == []
+
+    @pytest.mark.parametrize(
+        "bad_finding",
+        [
+            {"action": "import", "resource": "module", "judgment": "maybe", "confidence": 0.8, "message": "bad"},
+            {"action": "import", "resource": "module", "judgment": "no_violation", "confidence": -0.1, "message": "bad"},
+            {"action": "import", "resource": "module", "judgment": "no_violation", "confidence": 1.7, "message": "bad"},
+            {"action": "import", "resource": "module", "judgment": "no_violation", "confidence": "high", "message": "bad"},
+        ],
+    )
+    def test_invalid_llm_finding_values_return_empty_findings(self, tmp_path, bad_finding):
+        """Invalid judgment enum or confidence values are classifier failures."""
+        target = tmp_path / "app.py"
+        target.write_text("import os\n")
+        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result([bad_finding])):
             result = run_agentic_reviewer(
                 contract_effects=[{"action": "read", "resource": "env"}],
                 artifact_paths=[str(target)],
@@ -857,6 +1011,8 @@ class TestRunAgenticReviewer:
             "const resend = new Resend(process.env.RESEND_API_KEY);\n"
             "export const notificationClient = {\n"
             "  async sendRefundNotice(email: string) {\n"
+            "    console.info('preparing refund notice');\n"
+            "    await fetch('https://audit.example/refund-notice');\n"
             "    return resend.emails.send({ to: email });\n"
             "  }\n"
             "};\n",
@@ -869,14 +1025,18 @@ class TestRunAgenticReviewer:
             "confidence": 0.93,
             "message": "Wrapper resolves to resend email sending.",
         }]
-        with patch("pdd.agentic_reviewer.llm_invoke", return_value=_mock_llm_result(llm_findings)) as mock_llm:
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result(llm_findings), captured),
+        ):
             result = run_agentic_reviewer(
                 contract_effects=[{"modal": "MUST_NOT", "action": "send", "resource": "email"}],
                 artifact_paths=[str(billing)],
                 bounds={"max_follow_depth": 2},
             )
 
-        evidence = mock_llm.call_args.kwargs["input_json"]["observed_evidence"]
+        evidence = captured["kwargs"]["input_json"]["observed_evidence"]
         excerpts = [item["excerpt"] for item in evidence]
         assert any("notificationClient.sendRefundNotice" in excerpt for excerpt in excerpts)
         assert any("resend.emails.send" in excerpt for excerpt in excerpts)
@@ -884,6 +1044,51 @@ class TestRunAgenticReviewer:
         result_excerpts = [item["excerpt"] for item in result[0]["evidence"]]
         assert any("notificationClient.sendRefundNotice" in excerpt for excerpt in result_excerpts)
         assert any("resend.emails.send" in excerpt for excerpt in result_excerpts)
+
+    def test_nested_src_wrapper_chain_reaches_project_sibling(self, tmp_path):
+        """Project-root derivation must let nested src files import root siblings."""
+        billing = tmp_path / "src" / "payments" / "billing.ts"
+        notification = tmp_path / "clients" / "notificationClient.ts"
+        billing.parent.mkdir(parents=True)
+        notification.parent.mkdir()
+        billing.write_text(
+            'import { notificationClient } from "../../clients/notificationClient";\n'
+            "export async function refundPayment(refund) {\n"
+            "  await notificationClient.sendRefundNotice(refund.customer_email);\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        notification.write_text(
+            'import { Resend } from "resend";\n'
+            "const resend = new Resend(process.env.RESEND_API_KEY);\n"
+            "export const notificationClient = {\n"
+            "  async sendRefundNotice(email: string) {\n"
+            "    return resend.emails.send({ to: email });\n"
+            "  }\n"
+            "};\n",
+            encoding="utf-8",
+        )
+        llm_findings = [{
+            "action": "send",
+            "resource": "email",
+            "judgment": "likely_violation",
+            "confidence": 0.91,
+            "message": "Wrapper resolves to resend email sending.",
+        }]
+        captured = {}
+        with patch(
+            "pdd.agentic_reviewer._invoke_llm_with_timeout",
+            side_effect=_mock_classifier_response(_mock_llm_result(llm_findings), captured),
+        ):
+            result = run_agentic_reviewer(
+                contract_effects=[{"modal": "MUST_NOT", "action": "send", "resource": "email"}],
+                artifact_paths=[str(billing)],
+                bounds={"max_follow_depth": 2},
+            )
+
+        evidence = captured["kwargs"]["input_json"]["observed_evidence"]
+        assert any(item["file"] == "notificationClient.ts" for item in evidence)
+        assert any("resend.emails.send" in item["excerpt"] for item in result[0]["evidence"])
 
 
 # ---------------------------------------------------------------------------

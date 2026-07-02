@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
+import queue as queue_module
 import re
 import time
 from pathlib import Path
@@ -50,6 +52,69 @@ def _extract_symbols(path: Path, content: str) -> List[Dict[str, Any]]:
                     "excerpt": line.strip()[:200]
                 })
     return symbols
+
+def _python_relative_import_to_path(module: str, imported_name: Optional[str] = None) -> Optional[str]:
+    """Convert Python relative import syntax to a filesystem-style relative path."""
+    leading_dots = len(module) - len(module.lstrip("."))
+    if leading_dots == 0:
+        return None
+
+    rest = module[leading_dots:].strip(".")
+    prefix_parts = [".."] * max(0, leading_dots - 1)
+    if rest:
+        prefix_parts.extend(part for part in rest.split(".") if part)
+    elif imported_name:
+        prefix_parts.append(imported_name)
+    else:
+        return None
+
+    prefix = "." if leading_dots == 1 else "/".join(prefix_parts[:leading_dots - 1])
+    suffix_parts = prefix_parts[leading_dots - 1:]
+    suffix = "/".join(suffix_parts)
+    if prefix == ".":
+        return f"./{suffix}" if suffix else "."
+    return f"{prefix}/{suffix}" if suffix else prefix
+
+def _extract_import_paths(excerpt: str) -> List[str]:
+    """Extract relative import paths from JS/TS quoted imports and Python relative imports."""
+    paths: List[str] = []
+
+    for match in re.finditer(r"['\"]([^'\"]+)['\"]", excerpt):
+        paths.append(match.group(1))
+
+    py_from = re.match(r"^\s*from\s+(\.+[\w.]*)\s+import\s+(.+)$", excerpt)
+    if py_from:
+        module = py_from.group(1)
+        imported = py_from.group(2).split("#", 1)[0]
+        if module.strip("."):
+            path = _python_relative_import_to_path(module)
+            if path:
+                paths.append(path)
+                for raw_name in imported.split(","):
+                    name = raw_name.strip()
+                    if not name or name == "*":
+                        continue
+                    name = re.split(r"\s+as\s+", name, maxsplit=1)[0].strip()
+                    if re.match(r"^[A-Za-z_]\w*$", name):
+                        paths.append(f"{path}/{name}")
+        else:
+            for raw_name in imported.split(","):
+                name = raw_name.strip()
+                if not name or name == "*":
+                    continue
+                name = re.split(r"\s+as\s+", name, maxsplit=1)[0].strip()
+                if re.match(r"^[A-Za-z_]\w*$", name):
+                    path = _python_relative_import_to_path(module, name)
+                    if path:
+                        paths.append(path)
+
+    unique_paths = []
+    seen = set()
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            unique_paths.append(path)
+    return unique_paths
 
 def _resolve_local_import(current_file: Path, import_path: str, project_root: Path) -> Optional[Path]:
     """
@@ -113,8 +178,13 @@ def _derive_project_root(artifact_paths: List[Union[str, Path]]) -> Path:
             break
         cursor = cursor.parent
 
-    if common.name in {"src", "lib", "app", "tests", "test"} and common.parent != common:
+    source_dirs = {"src", "lib", "app", "tests", "test"}
+    nested_source_dirs = {"src", "lib", "app"}
+    if common.name in source_dirs and common.parent != common:
         return common.parent
+    for ancestor in common.parents:
+        if ancestor.name in nested_source_dirs and ancestor.parent != ancestor:
+            return ancestor.parent
     return common
 
 def _inspect_manifests(project_root: Path) -> Dict[str, List[str]]:
@@ -192,13 +262,15 @@ def _build_classifier_input(contract_effects: List[Dict], observed_evidence: Lis
         "deterministic_findings": []
     }
 
-def _extract_last_json(text: str) -> Optional[List]:
+def _extract_last_json(text: str) -> Optional[Any]:
     """
-    Extract the last valid top-level JSON array or object from a text string using raw_decode
-    iterating from every `[` and `{` position. Used as a fallback.
+    Extract the last valid non-nested JSON array or object from text using raw_decode.
+
+    Candidate starts inside a larger decoded JSON value are ignored so a string like
+    `[{"a": 1}]` returns the array, not the object nested inside it.
     """
     decoder = json.JSONDecoder()
-    last_valid_json = None
+    candidates: List[Tuple[int, int, Any]] = []
 
     for i in range(len(text)):
         if text[i] in ('{', '['):
@@ -206,11 +278,83 @@ def _extract_last_json(text: str) -> Optional[List]:
                 obj, idx = decoder.raw_decode(text[i:])
                 # Capture arrays and objects per spec
                 if isinstance(obj, (list, dict)):
-                    last_valid_json = obj
+                    candidates.append((i, i + idx, obj))
             except json.JSONDecodeError:
                 pass
 
-    return last_valid_json
+    non_nested = []
+    for start, end, obj in candidates:
+        if any(outer_start < start and end <= outer_end for outer_start, outer_end, _ in candidates):
+            continue
+        non_nested.append((start, end, obj))
+
+    if non_nested:
+        return non_nested[-1][2]
+    if candidates:
+        return candidates[-1][2]
+    return None
+
+def _llm_invoke_worker(result_queue: multiprocessing.Queue, kwargs: Dict[str, Any]) -> None:
+    """Invoke the classifier in a child process so parent-side timeouts can terminate it."""
+    try:
+        result_queue.put(("ok", llm_invoke(**kwargs)))
+    except BaseException as exc:
+        result_queue.put(("error", repr(exc)))
+
+def _invoke_llm_with_timeout(timeout_seconds: float, **kwargs: Any) -> Dict[str, Any]:
+    """Call llm_invoke while respecting the reviewer's remaining wall-clock budget."""
+    if timeout_seconds <= 0:
+        raise TimeoutError("LLM classifier skipped because max_runtime_seconds was exhausted")
+
+    start_methods = multiprocessing.get_all_start_methods()
+    context_name = "fork" if "fork" in start_methods else start_methods[0]
+    context = multiprocessing.get_context(context_name)
+    result_queue = context.Queue(maxsize=1)
+    process = context.Process(target=_llm_invoke_worker, args=(result_queue, kwargs))
+    process.daemon = True
+    process.start()
+
+    try:
+        process.join(timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=1)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1)
+            raise TimeoutError("LLM classifier exceeded max_runtime_seconds")
+
+        try:
+            status, payload = result_queue.get_nowait()
+        except queue_module.Empty as exc:
+            raise RuntimeError(f"LLM classifier process exited with code {process.exitcode}") from exc
+
+        if status == "ok":
+            return payload
+        raise RuntimeError(f"LLM classifier failed: {payload}")
+    finally:
+        result_queue.close()
+        result_queue.join_thread()
+
+def _validate_classifier_item(item: Any) -> None:
+    """Reject classifier findings that do not satisfy the structured output contract."""
+    required_fields = {"action", "resource", "judgment", "confidence", "message"}
+    if not isinstance(item, dict) or not required_fields.issubset(item):
+        raise ValueError("LLM response result must contain finding objects with required fields")
+
+    if not isinstance(item["action"], str) or not isinstance(item["resource"], str):
+        raise ValueError("LLM response action/resource must be strings")
+    if item["judgment"] not in {"violation", "likely_violation", "unknown", "no_violation"}:
+        raise ValueError("LLM response judgment must be a known enum value")
+    if not isinstance(item["message"], str):
+        raise ValueError("LLM response message must be a string")
+
+    try:
+        confidence = float(item["confidence"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("LLM response confidence must be numeric") from exc
+    if not 0.0 <= confidence <= 1.0:
+        raise ValueError("LLM response confidence must be between 0 and 1")
 
 def run_agentic_reviewer(
     contract_effects: List[Dict],
@@ -297,10 +441,7 @@ def run_agentic_reviewer(
             
             # Follow imports
             if sym["kind"] == "import" and depth < max_follow_depth:
-                # Extract the import path from the excerpt
-                match = re.search(r"['\"]([^'\"]+)['\"]", sym["excerpt"])
-                if match:
-                    import_path = match.group(1)
+                for import_path in _extract_import_paths(sym["excerpt"]):
                     resolved = _resolve_local_import(current_file, import_path, project_root)
                     if resolved and str(resolved) not in visited_files:
                         queue.append((resolved, depth + 1))
@@ -346,7 +487,9 @@ def run_agentic_reviewer(
             }
         }
         
-        response = llm_invoke(
+        remaining_seconds = max_runtime_seconds - (time.time() - start_time)
+        response = _invoke_llm_with_timeout(
+            timeout_seconds=remaining_seconds,
             prompt=prompt,
             input_json=classifier_input,
             strength=0.0,
@@ -362,7 +505,19 @@ def run_agentic_reviewer(
                 result_content = parsed
             else:
                 raise ValueError("Failed to extract JSON from LLM response")
-                
+
+        if isinstance(result_content, dict):
+            if isinstance(result_content.get("findings"), list):
+                result_content = result_content["findings"]
+            else:
+                result_content = [result_content]
+
+        if not isinstance(result_content, list):
+            raise ValueError("LLM response result must be a JSON array or object")
+
+        for item in result_content:
+            _validate_classifier_item(item)
+
         normalized_findings = []
         all_low_confidence = True
 
@@ -388,7 +543,7 @@ def run_agentic_reviewer(
                         "file": ev["file"],
                         "line": ev["line"],
                         "excerpt": ev["excerpt"]
-                    } for ev in observed_evidence[:5] # Provide a sample of evidence
+                    } for ev in observed_evidence
                 ],
                 "agent_steps": agent_steps,
                 "judgment": item.get("judgment", "unknown")
