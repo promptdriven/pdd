@@ -33,6 +33,36 @@ You are working on step 4 of 13 in an agentic change workflow. Previous steps co
 
 % Your Task
 
+0. **Route safety check before clarity analysis**
+   This workflow is `pdd change`, which is for source-truth/spec/product changes.
+   Before deciding whether requirements are clear, verify that the issue is not a
+   runtime defect that belongs in `pdd bug` followed by `pdd fix`.
+
+   Runtime defect signals include:
+   - stack traces, traceback blocks, exception names, assertion failures, or failing tests
+   - wrong runtime output, bad CLI/API/UI behavior, incorrect generated behavior, regressions, or failing commands
+   - wording such as "crashes", "throws", "hangs", "returns X instead of Y", or "used to work"
+
+   Apply this priority rule: structural runtime signals > behavioral runtime
+   signals > prompt/source-truth phrasing. If runtime evidence appears together
+   with "the prompt should..." or "update the spec..." wording, treat it as a
+   bug/fix workflow unless concrete investigation already proves the prompt spec
+   is the only defect.
+
+   **If runtime defect signals are present, STOP this change workflow.** Use the
+   route-redirect template below, and emit all three markers outside the
+   `<step_report>` block:
+   - `ROUTE_REDIRECT: bug_fix`
+   - `ROUTE_RATIONALE: <one sentence naming the runtime signal>`
+   - `STOP_CONDITION: Runtime bug route needed`
+
+   Do not ask normal clarification questions in that case; the next action is
+   `pdd bug {issue_url}` followed by `pdd fix {issue_url}`.
+
+   Continue with the clarity check only when the issue is a genuine
+   source-truth/spec/product change with no current runtime failure, or when it
+   is ambiguous and needs clarification rather than an automatic change route.
+
 1. **Analyze clarity of requirements**
    Review the issue content and research findings to assess:
    - Is the problem statement clear and unambiguous?
@@ -172,3 +202,30 @@ This line MUST:
 - Be on its own line for reliable parsing
 
 If requirements ARE clear (proceeding to Step 5), do NOT include this line.
+
+% CRITICAL: Output Format for Runtime Bug Route Redirect
+
+If this `pdd change` run is misrouted because the issue reports a current runtime
+symptom, your final response MUST use this template:
+
+```markdown
+<step_report>
+## Step 4: Requirements Clarity Check
+
+**Status:** Wrong Workflow
+
+### Route Recommendation
+Use `pdd bug {issue_url}` followed by `pdd fix {issue_url}`.
+
+### Rationale
+[One sentence naming the runtime signal, such as a crash, stack trace, wrong output, failing command, or regression.]
+
+---
+*Workflow paused - runtime symptoms must start with bug investigation.*
+</step_report>
+ROUTE_REDIRECT: bug_fix
+ROUTE_RATIONALE: [one sentence naming the runtime signal]
+STOP_CONDITION: Runtime bug route needed
+```
+
+These marker lines MUST appear outside the `<step_report>` block for reliable parsing.

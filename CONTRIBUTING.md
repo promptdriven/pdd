@@ -94,6 +94,13 @@ pip install pytest-timeout
 pytest tests/ -m "not integration and not e2e and not real" --timeout=60
 ```
 
+### Story Regression Lane
+User stories double as executable regression oracles. Run the offline story lane locally with no API keys:
+```bash
+make regression-stories   # runs `pytest -m story` with the deterministic/offline config
+```
+This lane also runs in CI on every PR as the non-blocking `story-regression` job (no cloud/LLM credentials required). Any test marked `@pytest.mark.story` is picked up automatically — no manual registration — and the lane reports the number of stories, the number of story regression tests, and per-story pass/fail.
+
 ### Adding/Updating Tests (Strongly Encouraged)
 - Location: put tests in `tests/` using `pytest` style (`test_*.py`).
 - Red/green: commit a failing test first, then the fix that makes it pass.

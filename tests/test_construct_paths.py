@@ -710,6 +710,26 @@ def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
     assert unknown_warnings == []
 
 
+def test_load_pddrc_ci_manual_trigger_config_no_warnings(tmp_path, recwarn):
+    """Root-level CI manual trigger config is a known .pddrc section."""
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n'
+    )
+    _load_pddrc_config(pddrc)
+    unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
+    assert unknown_warnings == []
+
+
 def test_resolve_config_hierarchy_maps_test_packing_defaults_to_env_vars():
     resolved = _resolve_config_hierarchy(
         cli_options={},

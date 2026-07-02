@@ -1,5 +1,4 @@
-<pdd-reason>Validates, generates, and fixes user stories linked to PDD prompt files, with cross-unit story traceability.</pdd-reason>
-
+<pdd-reason>LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.</pdd-reason>
 <pdd-interface>
 {
   "type": "module",
@@ -8,6 +7,9 @@
       {"name": "STORY_DEV_UNITS_METADATA_KEY", "value": "pdd-story-dev-units"}
     ],
     "functions": [
+      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
+      {"name": "discover_story_files", "signature": "(stories_dir: Optional[str] = None)", "returns": "List[Path]"},
+      {"name": "discover_prompt_files", "signature": "(...)", "returns": "List[Path]"},
       {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
       {"name": "run_user_story_fix", "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "generate_user_story", "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]", "returns": "Tuple[bool, str, float, str, str, List[str]]"},
@@ -25,7 +27,6 @@
 <pdd-dependency>detect_change_python.prompt</pdd-dependency>
 <pdd-dependency>change_main_python.prompt</pdd-dependency>
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
-
 % You are an expert Python engineer. Your goal is to implement and maintain
 % `pdd/user_story_tests.py`, which provides user story validation, story generation,
 % and user story-driven prompt fixing for PDD.
@@ -40,6 +41,13 @@ Implement user story utilities that:
   (`pdd test --issue <url|number|issue.md> <*.prompt>`), linking the story to the
   prompt files it validates, without any deterministic story-generation fallback
 - apply prompt fixes for a single story by orchestrating `change_main`
+
+This module owns the **`story_id` identity/convention** (the `story__<slug>.md`
+filename slug) but remains the **LLM oracle** (it validates stories against
+prompts with `detect_change`). The deterministic, runnable-pytest story↔test
+traceability lives in the separate `story_regression` module, which reuses the
+`story_id` helper exposed here — this is a cross-reference only, not a merge of
+the two mechanisms.
 
 % Issue #820 — contract-aware story template (epic #833)
 User stories are **example-level coverage** for named contract rules. Keep the
@@ -242,6 +250,12 @@ multiple dev-unit lanes.
    - Prompt directory defaults to `prompts` and supports `PDD_PROMPTS_DIR`.
    - Discover story files using `story__*.md`.
    - Discover prompt files recursively and support `include_llm=False` default; when false, exclude `*_llm.prompt`.
+   - Expose a **public, documented `story_id` helper** that returns the `<slug>`
+     of a `story__<slug>.md` path (accepting a `str` or `Path`), so the
+     `@pytest.mark.story` marker mechanism and the story files share one identity
+     space. Keep the internal `_slug_from_story_path()` as the implementation; the
+     public helper may wrap it. Behavior MUST be byte-identical to the current
+     slug extraction. This is purely additive — no existing signature changes.
 
 2. **Story validation**
    - For each story file, read content and call:
