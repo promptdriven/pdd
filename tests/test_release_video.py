@@ -1825,13 +1825,13 @@ def test_release_video_metadata_conflict_replace_requires_force_regenerate(
     assert not capture.exists()
 
 
-def test_release_video_default_metadata_conflict_uses_existing(tmp_path: Path):
+def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
     _result, capture = run_release_video_with_existing_script(tmp_path)
 
     pds_call = pds_capture_argv(capture)
     assert "--bootstrap-selected-project" not in pds_call
     assert "--force-regenerate" not in pds_call
-    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "use-existing"
+    assert "--metadata-conflict" not in pds_call
 
 
 def test_release_video_makefile_passes_idempotency_env_vars():
@@ -1860,7 +1860,7 @@ def test_release_video_makefile_passes_recovery_env_vars():
 
     assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
-    assert "RELEASE_VIDEO_METADATA_CONFLICT ?= use-existing" in makefile_text
+    assert "RELEASE_VIDEO_METADATA_CONFLICT ?=" in makefile_text
     assert (
         'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
         in makefile_text
@@ -1902,7 +1902,7 @@ def test_release_video_metadata_conflict_recovery_is_documented():
         ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
     ).read_text(encoding="utf8")
 
-    assert "defaults to `RELEASE_VIDEO_METADATA_CONFLICT=use-existing`" in doc_text
+    assert "Keep `RELEASE_VIDEO_METADATA_CONFLICT` unset" in doc_text
     assert "RELEASE_VIDEO_METADATA_CONFLICT=replace" in doc_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE=1" in doc_text
     assert "--metadata-conflict replace --force-regenerate" in doc_text
@@ -3092,7 +3092,7 @@ def test_release_video_project_exists_conflict_with_active_run_reports_pending(
     assert response["runId"] == "agent_run_existing_project"
     assert persisted["runId"] == "agent_run_existing_project"
     pds_call = pds_capture_argv(capture)
-    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "use-existing"
+    assert "--metadata-conflict" not in pds_call
     assert "release-video: PDS release-video create is still running" in combined_output
     assert "projectId=pdd-v1-1-0-release" in combined_output
     assert "runId=agent_run_existing_project" in combined_output

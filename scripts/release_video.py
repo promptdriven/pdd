@@ -352,10 +352,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--metadata-conflict",
-        default=os.environ.get("RELEASE_VIDEO_METADATA_CONFLICT", "use-existing"),
+        default=os.environ.get("RELEASE_VIDEO_METADATA_CONFLICT", ""),
         help=(
             "Pass --metadata-conflict use-existing|replace to PDS for "
-            "release-video project metadata recovery. Defaults to use-existing."
+            "release-video project metadata recovery."
         ),
     )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
