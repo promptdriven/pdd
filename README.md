@@ -743,6 +743,16 @@ Contract coverage:
   `prompts/module_python.prompt#R2`). See `docs/coverage_contracts.md` and
   `docs/contract_check.md`.
 
+Executable regression suite:
+- Beyond drift validation, a story can carry a generated executable regression
+  test marked `@pytest.mark.story`. Run the suite with `make regression-stories`
+  (i.e. `pytest -m story`) in the public-safe, no-secrets lane.
+- Generate a test for a story with
+  `pdd test --from-story user_stories/story__<slug>.md`.
+- Seed coverage ships for the top flows (`generate`, `sync`, `fix`, `change`,
+  `update`) plus a batch of previously-fixed-bug regressions. See
+  [docs/generating_user_stories.md](docs/generating_user_stories.md#story-regression-suite-executable-oracles).
+
 ## Global Options
 
 These options can be used with any command:
