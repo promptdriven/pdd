@@ -42,9 +42,13 @@
     Step 2. Run pytest on the given test file(s) and capture stdout/stderr.
     Step 3. Parse the output to extract test counts (passed, failures, errors, warnings).
         - **Compressed Output Handling**: If the output contains markers indicating that only a subset of tests were run (e.g., due to `--compress-test-context`), ensure the parser correctly attributes failures to the specific test cases. For unscheduled tests (those skipped by compression), the `passed` count in the JSON output MUST NOT include them; instead, add a `skipped_by_compression` integer field to the result dictionary representing the count of tests that were not run due to compression filters.
-    Step 4. Build a result dictionary with the following format:
+    Step 4. Build a result dictionary with the following format. It MUST also
+    include a top-level `command` key holding the exact pytest invocation that
+    was run, shell-quoted (e.g. `" ".join(shlex.quote(a) for a in pytest_args)`),
+    so callers can surface a reproducible command (PDD #1776 criterion #4):
         {
             "test_file": "path/to/test_file.py",
+            "command": "shell-quoted exact pytest command that was run",
             "test_results": [
                 {
                     "standard_output": "standard output of the test",

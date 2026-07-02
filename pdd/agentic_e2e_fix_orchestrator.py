@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import logging
 import os
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional, Set, NamedTuple
 
+import click
 from rich.console import Console
 
 import re as _re
@@ -47,6 +49,7 @@ from .ci_validation import (
     run_ci_validation_loop,
 )
 from .pre_checkup_gate import run_pre_checkup_gate
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 # Constants
 STEP_NAMES = {
@@ -98,6 +101,32 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 # See Issues #953, #1010, #1031 for history of fallback-scan stalls.
 VERIFY_TIMEOUT_SECONDS = 600
 
+# Issue #1776 criterion #4: cap the verifier-rejection detail appended to the
+# final report / GitHub comment so a large pytest dump cannot exceed the comment
+# size / argv limits and drop the whole final comment.
+_VERIFIER_DETAIL_MAX_CHARS = 3000
+
+
+def _truncate_verifier_detail(detail: str) -> str:
+    """Bound the independent-verifier rejection detail for the final report
+    (Issue #1776 criterion #4) while preserving BOTH ends: the HEAD carries the
+    per-file context / file names (``_verify_tests_independently`` writes
+    ``"{test_file}: ..."`` at the start of each entry) and the TAIL carries the
+    pytest failure summary. Dropping the head would lose the "exact files"
+    context the issue asks for, so we keep a head slice and a (larger) tail
+    slice. Slicing is on Python ``str`` code points, so it is unicode-safe.
+    """
+    if len(detail) <= _VERIFIER_DETAIL_MAX_CHARS:
+        return detail
+    head = _VERIFIER_DETAIL_MAX_CHARS // 3
+    tail = _VERIFIER_DETAIL_MAX_CHARS - head
+    return (
+        f"{detail[:head]}\n"
+        f"…[verifier output truncated to ~{_VERIFIER_DETAIL_MAX_CHARS} chars; "
+        "kept the file/context head and the failure-summary tail]…\n"
+        f"{detail[-tail:]}"
+    )
+
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
 # the scan finds hundreds of files.  See Issue #1010.
@@ -131,11 +160,10 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
 
     Returns the token string or None if the output is ambiguous.
     """
-    # Priority: VERIFICATION_FAILED overrides everything
-    if "VERIFICATION_FAILED" in output:
-        return "VERIFICATION_FAILED"
-
     if step_num == 3:
+        # Step 3 is a root-cause classifier. Its output often discusses prior
+        # Step 2 verifier failures, so Step 3's own status token must win over
+        # incidental VERIFICATION_FAILED text from the analysis body.
         # Check for positive tokens first — if CODE_BUG/TEST_BUG/BOTH is found,
         # return it so tier 4 NOT_A_BUG fallback is skipped (same fail-before-pass
         # pattern used for Steps 1/2/9). Case-sensitive substring match (consistent
@@ -151,6 +179,14 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
             if match.tier == "semantic":
                 console.print(f"[yellow]NOT_A_BUG detected via semantic fallback (pattern: {match.pattern})[/yellow]")
             return "NOT_A_BUG"
+
+        if "VERIFICATION_FAILED" in output:
+            return "VERIFICATION_FAILED"
+
+    # Priority: VERIFICATION_FAILED overrides pass/fail tokens on test-verifier
+    # steps, but not Step 3 root-cause status tokens handled above.
+    if "VERIFICATION_FAILED" in output:
+        return "VERIFICATION_FAILED"
 
     if step_num in (1, 2, 9):
         # Exact match for LOCAL_TESTS_PASS (not in shared SEMANTIC_PATTERNS)
@@ -347,6 +383,10 @@ class _Step9TokenApplyResult(NamedTuple):
     last_completed_step: Optional[int] = None
     step_outputs_9: Optional[str] = None
     verification_failure_context_update: Optional[str] = None  # None = no change; str = set
+    # Issue #1776 criterion #4: when independent verification rejects a claimed
+    # Step 9 pass, carry the verifier detail (files/output) so the final report
+    # can surface it and a public "tests pass" comment is not left misleading.
+    verifier_failure_detail: Optional[str] = None
 
 
 def _apply_step9_resolved_token(
@@ -408,12 +448,14 @@ def _apply_step9_resolved_token(
                     import_error_retries=new_retries,
                     step_outputs_9=full_failed,
                     verification_failure_context_update=verify_output,
+                    verifier_failure_detail=failed_body,
                     last_completed_step=0,
                 )
             return _Step9TokenApplyResult(
                 break_inner=False,
                 import_error_retries=new_retries,
                 step_outputs_9=full_failed,
+                verifier_failure_detail=failed_body,
                 last_completed_step=step_num - 1,
             )
         console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
@@ -461,17 +503,16 @@ def _apply_step9_resolved_token(
     )
 
 
-def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
-    """Check if the executor environment has E2E test infrastructure.
+def _has_playwright_config(cwd: Path) -> bool:
+    """True if a Playwright/E2E config exists in the repo (root + one level of
+    subdirectories).
 
-    Returns (available, reason) where available is True if E2E tests
-    can run, False otherwise with a reason string.
+    This is a property of the REPO (does an E2E harness exist?), independent of
+    whether the npx runner happens to be installed in the executor. Issue #1776
+    keys its terminal stop off this — "no E2E harness exists" — so that a real
+    E2E repo whose runner tooling (npx) is merely missing is NOT mis-reported as
+    "no E2E test suite" and short-circuited.
     """
-    # Check for npx (needed for playwright)
-    if not shutil.which("npx"):
-        return (False, "npx not found — playwright/browser infrastructure unavailable")
-
-    # Check for playwright config files (root + one level of subdirectories)
     playwright_configs = [
         "playwright.config.ts",
         "playwright.config.js",
@@ -481,12 +522,26 @@ def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
         search_dirs = [cwd] + [d for d in cwd.iterdir() if d.is_dir() and not d.name.startswith(".")]
     except (FileNotFoundError, NotADirectoryError):
         search_dirs = [cwd]
-    has_config = any(
+    return any(
         (d / cfg).exists()
         for d in search_dirs
         for cfg in playwright_configs
     )
-    if not has_config:
+
+
+def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
+    """Check if the executor environment has E2E test infrastructure.
+
+    Returns (available, reason) where available is True if E2E tests
+    can run, False otherwise with a reason string. Combines an EXECUTOR check
+    (npx present) with a REPO check (Playwright config present); the latter is
+    factored into :func:`_has_playwright_config`.
+    """
+    # Check for npx (needed for playwright)
+    if not shutil.which("npx"):
+        return (False, "npx not found — playwright/browser infrastructure unavailable")
+
+    if not _has_playwright_config(cwd):
         return (False, "no playwright config found in project")
 
     return (True, "")
@@ -810,6 +865,18 @@ def _extract_test_files(
     return test_files
 
 
+def _decode_stream(stream: Any) -> str:
+    """Coerce a subprocess stream to str. ``subprocess.TimeoutExpired.stdout`` /
+    ``.stderr`` are BYTES even when ``run()`` used ``text=True`` (the timeout
+    drain path does not decode), so the verifier timeout path must not assume
+    str or it raises ``TypeError`` (Issue #1776 fm#1)."""
+    if stream is None:
+        return ""
+    if isinstance(stream, bytes):
+        return stream.decode("utf-8", "replace")
+    return str(stream)
+
+
 def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
     """Run appropriate test runner on test files via subprocess. Returns (all_passed, output).
 
@@ -851,10 +918,25 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
             failures = tr.get("failures", 0) + tr.get("errors", 0)
             passed = tr.get("passed", 0)
             stdout = tr.get("standard_output", "")
+            stderr = tr.get("standard_error", "")
 
             if failures > 0:
                 all_passed = False
-                all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+                # Issue #1776 criterion #4: include the exact command and BOTH
+                # stdout and stderr so the surfaced verifier detail carries the
+                # files/command/output the issue asks for (stderr can hold
+                # collection/runner-level diagnostics absent from stdout).
+                detail = stdout
+                if stderr.strip():
+                    detail = f"{detail}\n[stderr]\n{stderr}".strip()
+                # Exact command the runner used (python -B -m pytest ... -v
+                # --rootdir=...), surfaced verbatim so the rejection is
+                # reproducible; fall back to a representative form if absent.
+                cmd = result.get("command") or f"pytest {abs_path}"
+                all_outputs.append(
+                    f"$ {cmd}\n"
+                    f"{test_file}: {failures} failure(s)\n{detail}"
+                )
             else:
                 all_outputs.append(f"{test_file}: {passed} passed")
         else:
@@ -879,15 +961,28 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 if proc.returncode != 0:
                     all_passed = False
                     output = proc.stdout + proc.stderr
-                    all_outputs.append(f"{test_file}: FAILED (exit code {proc.returncode})\n{output}")
+                    all_outputs.append(
+                        f"$ {test_cmd.command}\n"
+                        f"{test_file}: FAILED (exit code {proc.returncode})\n{output}"
+                    )
                 else:
                     all_outputs.append(f"{test_file}: passed")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as te:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED (timeout)")
+                # Surface the command + any partial output captured before the
+                # timeout (Issue #1776 criterion #4 — keep the rejection
+                # reproducible). te.stdout/te.stderr are BYTES even with
+                # text=True, so decode defensively (fm#1).
+                _partial = _decode_stream(te.stdout) + _decode_stream(te.stderr)
+                all_outputs.append(
+                    f"$ {test_cmd.command}\n"
+                    f"{test_file}: FAILED (timeout after 120s)\n{_partial}".rstrip()
+                )
             except Exception as e:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED ({e})")
+                all_outputs.append(
+                    f"$ {test_cmd.command}\n{test_file}: FAILED ({e})"
+                )
 
     return all_passed, "\n".join(all_outputs)
 
@@ -914,6 +1009,627 @@ def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identif
                     current_states[unit]["fixed"] = False
     
     return current_states
+
+
+class _IssueUnitFixTarget(NamedTuple):
+    test_file: str
+    prompt_file: str
+    code_file: str
+    verification_program: Optional[str]
+
+
+class _IssueUnitFixResult(NamedTuple):
+    attempted: bool
+    success: bool
+    message: str
+    cost: float
+    model: str
+    changed_files: List[str]
+
+
+def _relpath(path: Path, cwd: Path) -> str:
+    try:
+        return str(path.relative_to(cwd))
+    except ValueError:
+        return str(path)
+
+
+def _is_hidden_or_ignored_path(path: Path) -> bool:
+    ignored_parts = {
+        ".git",
+        ".pdd",
+        "__pycache__",
+        ".pytest_cache",
+        "node_modules",
+        ".tox",
+        ".venv",
+        "venv",
+    }
+    return any(part in ignored_parts or part.startswith(".") for part in path.parts)
+
+
+def _workflow_state_marker_files(issue_content: str) -> List[str]:
+    marker_files: List[str] = []
+    search_start = 0
+    while True:
+        idx = issue_content.find(GITHUB_STATE_MARKER_START, search_start)
+        if idx == -1:
+            break
+        json_start = issue_content.find("\n", idx)
+        if json_start == -1:
+            break
+        json_start += 1
+        end_idx = issue_content.find(GITHUB_STATE_MARKER_END, json_start)
+        if end_idx == -1:
+            break
+        search_start = end_idx + len(GITHUB_STATE_MARKER_END)
+        try:
+            state = json.loads(issue_content[json_start:end_idx].strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        step_outputs = state.get("step_outputs", {})
+        if not isinstance(step_outputs, dict):
+            continue
+        for output in step_outputs.values():
+            if isinstance(output, str):
+                marker_files.extend(_extract_marker_files(output))
+    return marker_files
+
+
+def _add_base_ref_variants(ref: str, refs: List[str], seen: Set[str]) -> None:
+    ref = ref.strip().strip("`'\"").rstrip(".,")
+    if not ref or ref.upper() == "TBD":
+        return
+    if ref.startswith("refs/heads/"):
+        ref = ref[len("refs/heads/") :]
+    if not ref:
+        return
+
+    candidates = [ref]
+    if ref.startswith("origin/"):
+        candidates.append(ref[len("origin/") :])
+    else:
+        candidates.append(f"origin/{ref}")
+
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            refs.append(candidate)
+
+
+def _base_refs_from_issue_content(issue_content: str, cwd: Path) -> List[str]:
+    """Return explicit PR/base refs mentioned by an issue or linked PR URL."""
+    refs: List[str] = []
+    seen: Set[str] = set()
+
+    for line in issue_content.splitlines():
+        match = _re.match(
+            r"^\s*(?:base branch|base ref|pr base|pull request base)\s*:\s*(\S+)",
+            line,
+            _re.IGNORECASE,
+        )
+        if match:
+            _add_base_ref_variants(match.group(1), refs, seen)
+
+    pr_urls = _re.findall(r"https://github\.com/[^\s)]+/[^\s)]+/pull/\d+", issue_content)
+    for pr_url in pr_urls:
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", pr_url, "--json", "baseRefName", "--jq", ".baseRefName"],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            _add_base_ref_variants(result.stdout.strip(), refs, seen)
+
+    return refs
+
+
+def _git_ref_exists(cwd: Path, ref: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def _ensure_explicit_base_ref(cwd: Path, base: str) -> None:
+    """Fetch an explicit base branch into shallow/single-branch clones if absent."""
+    if not base:
+        return
+    if _git_ref_exists(cwd, base):
+        return
+
+    branch = base
+    if branch.startswith("refs/heads/"):
+        branch = branch[len("refs/heads/") :]
+    if branch.startswith("origin/"):
+        branch = branch[len("origin/") :]
+    if not branch or branch in {"main", "master"}:
+        return
+    if _git_ref_exists(cwd, f"origin/{branch}"):
+        return
+
+    try:
+        subprocess.run(
+            [
+                "git",
+                "fetch",
+                "--depth",
+                "50",
+                "origin",
+                f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        console.print(f"[yellow]Warning: git fetch for base ref {branch} timed out[/yellow]")
+
+
+def _diff_name_only(cwd: Path, base: str, head: str = "HEAD") -> Set[str]:
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", base, head],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {f for f in result.stdout.strip().splitlines() if f}
+
+
+def _extract_issue_unit_test_files(
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+) -> List[str]:
+    """Return targeted pdd-bug test files without falling back to the whole suite."""
+    global _fallback_scan_was_capped
+    _fallback_scan_was_capped = False
+
+    test_files: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(path: str) -> None:
+        path = path.strip()
+        if not path or path in seen or not _is_test_file(path):
+            return
+        if not path.endswith(".py"):
+            return
+        if (cwd / path).exists():
+            seen.add(path)
+            test_files.append(path)
+
+    for path in _extract_marker_files(issue_content):
+        _add(path)
+    for path in _workflow_state_marker_files(issue_content):
+        _add(path)
+    for path in changed_files:
+        _add(path)
+    for path in _get_modified_and_untracked(
+        cwd,
+        base_refs=_base_refs_from_issue_content(issue_content, cwd),
+    ):
+        _add(path)
+
+    return test_files
+
+
+def _dev_unit_names_from_test_file(test_file: str) -> List[str]:
+    stem = Path(test_file).stem
+    names: List[str] = []
+    if stem.startswith("test_") and len(stem) > len("test_"):
+        names.append(stem[len("test_"):])
+    if stem.endswith("_test") and len(stem) > len("_test"):
+        names.append(stem[: -len("_test")])
+    names.append(stem)
+
+    deduped: List[str] = []
+    for name in names:
+        if name and name not in deduped:
+            deduped.append(name)
+    return deduped
+
+
+def _module_to_path(cwd: Path, dotted: str) -> Optional[Path]:
+    if not dotted or any(part.startswith("_pytest") for part in dotted.split(".")):
+        return None
+    module_path = cwd / (dotted.replace(".", "/") + ".py")
+    if module_path.is_file():
+        return module_path
+    package_init = cwd / dotted.replace(".", "/") / "__init__.py"
+    if package_init.is_file():
+        return package_init
+    return None
+
+
+def _imported_python_modules_from_test(cwd: Path, test_file: str) -> Set[str]:
+    test_path = cwd / test_file
+    try:
+        tree = ast.parse(test_path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return set()
+
+    modules: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                path = _module_to_path(cwd, alias.name)
+                if path is not None:
+                    modules.add(_relpath(path, cwd))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level != 0 or not node.module:
+                continue
+            path = _module_to_path(cwd, node.module)
+            if path is not None:
+                modules.add(_relpath(path, cwd))
+            for alias in node.names:
+                child_path = _module_to_path(cwd, f"{node.module}.{alias.name}")
+                if child_path is not None:
+                    modules.add(_relpath(child_path, cwd))
+    return modules
+
+
+def _prompt_score_for_code(prompt_path: Path, code_file: str) -> int:
+    code_path = Path(code_file)
+    code_parent = list(code_path.parent.parts)
+    if code_parent and code_parent[0] in {"pdd", "src", "lib", "app"}:
+        code_parent = code_parent[1:]
+
+    parts = list(prompt_path.parts)
+    try:
+        prompts_index = parts.index("prompts")
+    except ValueError:
+        prompt_parent: List[str] = []
+    else:
+        prompt_parent = parts[prompts_index + 1 : -1]
+
+    score = 0
+    if prompt_parent == code_parent:
+        score += 50
+    if prompt_path.stem.startswith(f"{code_path.stem}_"):
+        score += 20
+    if prompt_path.name == f"{code_path.stem}.prompt":
+        score += 10
+    return score
+
+
+def _find_prompt_for_code(cwd: Path, code_file: str) -> Optional[str]:
+    stem = Path(code_file).stem
+    candidates: List[Path] = []
+    for pattern in (f"{stem}_*.prompt", f"{stem}.prompt"):
+        for path in cwd.rglob(pattern):
+            rel_parts = path.relative_to(cwd).parts if path.is_absolute() else path.parts
+            if "prompts" not in rel_parts:
+                continue
+            if _is_hidden_or_ignored_path(path.relative_to(cwd)):
+                continue
+            candidates.append(path)
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda path: (
+            _prompt_score_for_code(path.relative_to(cwd), code_file),
+            -len(path.parts),
+        ),
+        reverse=True,
+    )
+    return _relpath(candidates[0], cwd)
+
+
+def _is_code_candidate(path: Path) -> bool:
+    if path.name.startswith("test_") or path.suffix != ".py":
+        return False
+    rel_parts = path.parts
+    excluded = {"tests", "__tests__", "__test__", "prompts", "examples", "context"}
+    return not any(part in excluded for part in rel_parts)
+
+
+def _find_code_for_test(cwd: Path, test_file: str) -> Optional[str]:
+    dev_unit_names = _dev_unit_names_from_test_file(test_file)
+    imported_modules = _imported_python_modules_from_test(cwd, test_file)
+    candidates: Set[str] = set()
+
+    for name in dev_unit_names:
+        for path in cwd.rglob(f"{name}.py"):
+            rel = path.relative_to(cwd)
+            if not _is_hidden_or_ignored_path(rel) and _is_code_candidate(rel):
+                candidates.add(str(rel))
+
+    for rel in imported_modules:
+        rel_path = Path(rel)
+        if _is_code_candidate(rel_path):
+            candidates.add(rel)
+
+    scored: List[Tuple[int, str]] = []
+    for rel in candidates:
+        prompt = _find_prompt_for_code(cwd, rel)
+        if not prompt:
+            continue
+        score = 0
+        if Path(rel).stem in dev_unit_names:
+            score += 100
+        if rel in imported_modules:
+            score += 60
+        score += _prompt_score_for_code(cwd / prompt, rel)
+        scored.append((score, rel))
+
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return scored[0][1]
+
+
+def _find_verification_program_for_code(cwd: Path, code_file: str) -> Optional[str]:
+    stem = Path(code_file).stem
+    candidates: List[Tuple[int, Path]] = []
+    for pattern in (f"{stem}_example.*", f"{stem}_program.*"):
+        for path in cwd.rglob(pattern):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(cwd)
+            if _is_hidden_or_ignored_path(rel):
+                continue
+            if any(part in {"tests", "prompts"} for part in rel.parts):
+                continue
+            score = 0
+            if "examples" in rel.parts:
+                score += 30
+            if "context" in rel.parts:
+                score += 20
+            if path.name.startswith(f"{stem}_example."):
+                score += 10
+            candidates.append((score, path))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], -len(item[1].parts)), reverse=True)
+    return _relpath(candidates[0][1], cwd)
+
+
+def _resolve_issue_unit_fix_targets(cwd: Path, test_files: List[str]) -> List[_IssueUnitFixTarget]:
+    targets: List[_IssueUnitFixTarget] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    for test_file in test_files:
+        code_file = _find_code_for_test(cwd, test_file)
+        if not code_file:
+            continue
+        prompt_file = _find_prompt_for_code(cwd, code_file)
+        if not prompt_file:
+            continue
+        key = (test_file, code_file)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(
+            _IssueUnitFixTarget(
+                test_file=test_file,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                verification_program=_find_verification_program_for_code(cwd, code_file),
+            )
+        )
+
+    return targets
+
+
+def _build_issue_unit_fix_context(*, quiet: bool, verbose: bool) -> click.Context:
+    ctx = click.Context(click.Command("fix"))
+    ctx.obj = {
+        "force": True,
+        "quiet": quiet,
+        "strength": DEFAULT_STRENGTH,
+        "temperature": 0.0,
+        "verbose": verbose,
+        "time": DEFAULT_TIME,
+        "context": None,
+        "confirm_callback": None,
+        "local": False,
+    }
+    return ctx
+
+
+def _unit_fix_log_path(cwd: Path, issue_number: int, test_file: str) -> Path:
+    safe_stem = _re.sub(r"[^A-Za-z0-9_.-]+", "_", Path(test_file).stem)
+    log_dir = cwd / ".pdd" / "e2e-fix" / f"issue-{issue_number}"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / f"{safe_stem}_unit_fix.log"
+
+
+def _run_issue_unit_fix_preflight(
+    *,
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+    issue_number: int,
+    initial_file_hashes: Dict[str, Optional[str]],
+    quiet: bool,
+    verbose: bool,
+) -> Optional[_IssueUnitFixResult]:
+    """Run pdd-bug unit tests deterministically before the E2E-only path."""
+    if _has_playwright_config(cwd):
+        return None
+
+    test_files = _extract_issue_unit_test_files(issue_content, changed_files, cwd)
+    if not test_files:
+        return None
+
+    initial_passed, initial_output = _verify_tests_independently(test_files, cwd)
+    if initial_passed and not _fallback_scan_was_capped:
+        return _IssueUnitFixResult(
+            attempted=True,
+            success=True,
+            message="Issue unit tests already pass (pdd-bug unit path, no E2E suite).",
+            cost=0.0,
+            model="",
+            changed_files=_detect_changed_files(cwd, initial_file_hashes),
+        )
+
+    targets = _resolve_issue_unit_fix_targets(cwd, test_files)
+    if not targets:
+        if not quiet:
+            console.print(
+                "[yellow]Issue unit tests failed, but no prompt/code target could "
+                "be resolved; falling back to the existing E2E workflow.[/yellow]"
+            )
+        return None
+
+    from .fix_main import fix_main
+
+    total_cost = 0.0
+    model_used = ""
+    ctx = _build_issue_unit_fix_context(quiet=quiet, verbose=verbose)
+    summary_lines = [
+        "Detected pdd-bug unit tests on a repo without an E2E suite; running "
+        "the deterministic unit/code fix path."
+    ]
+
+    for target in targets:
+        log_path = _unit_fix_log_path(cwd, issue_number, target.test_file)
+        loop = bool(target.verification_program)
+        retry_limit = 1 if loop else 3
+        target_attempts = 0
+        target_output = initial_output
+        target_fixed = False
+
+        for preflight_attempt in range(1, retry_limit + 1):
+            log_path.write_text(target_output, encoding="utf-8")
+
+            try:
+                fixed, _fixed_test, _fixed_code, attempts, cost, model = fix_main(
+                    ctx=ctx,
+                    prompt_file=target.prompt_file,
+                    code_file=target.code_file,
+                    unit_test_file=target.test_file,
+                    error_file=str(log_path),
+                    output_test=target.test_file,
+                    output_code=target.code_file,
+                    output_results=str(log_path),
+                    loop=loop,
+                    verification_program=target.verification_program,
+                    max_attempts=3 if loop else 1,
+                    budget=5.0,
+                    auto_submit=False,
+                    agentic_fallback=True,
+                    strength=None,
+                    temperature=None,
+                    protect_tests=True,
+                    failure_aware_retries=True,
+                    compress_test_context=None,
+                    context_compression=None,
+                    compression_fallback=None,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                return _IssueUnitFixResult(
+                    attempted=True,
+                    success=False,
+                    message=(
+                        "Unit/code pdd fix failed before E2E workflow: "
+                        f"{target.test_file} -> {target.code_file}: {exc}"
+                    ),
+                    cost=total_cost,
+                    model=model_used,
+                    changed_files=_detect_changed_files(cwd, initial_file_hashes),
+                )
+
+            total_cost += cost
+            model_used = model or model_used
+            target_attempts += attempts or 1
+
+            # The single-pass fix validator runs copied temp files, which can be
+            # wrong for package-style tests that import the real workspace module.
+            # Trust the same independent pytest path used by the orchestrator.
+            target_passed, target_output = _verify_tests_independently([target.test_file], cwd)
+            if target_passed:
+                target_fixed = True
+                summary_lines.append(
+                    f"{target.test_file} -> {target.code_file}: "
+                    f"fixed ({target_attempts} attempt(s))"
+                )
+                break
+
+            if not quiet and preflight_attempt < retry_limit:
+                console.print(
+                    "[yellow]Issue unit fix attempt "
+                    f"{preflight_attempt}/{retry_limit} did not pass "
+                    f"{target.test_file}; retrying with fresh pytest output.[/yellow]"
+                )
+
+            if fixed and loop:
+                break
+
+        if not target_fixed:
+            summary_lines.append(
+                f"{target.test_file} -> {target.code_file}: "
+                f"failed ({target_attempts} attempt(s))"
+            )
+            return _IssueUnitFixResult(
+                attempted=True,
+                success=False,
+                message=(
+                    "Unit/code pdd fix failed before E2E workflow.\n"
+                    + "\n".join(summary_lines)
+                    + f"\n{target_output}"
+                ),
+                cost=total_cost,
+                model=model_used,
+                changed_files=_detect_changed_files(cwd, initial_file_hashes),
+            )
+
+    verified, verify_output = _verify_tests_independently(test_files, cwd)
+    if _fallback_scan_was_capped and verified:
+        verified = False
+        verify_output += (
+            f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially hundreds "
+            "of test files were verified; cannot confirm full suite pass."
+        )
+
+    changed = _detect_changed_files(cwd, initial_file_hashes)
+    if verified:
+        return _IssueUnitFixResult(
+            attempted=True,
+            success=True,
+            message=(
+                "pdd-bug unit tests passed after deterministic unit/code fix "
+                "(no E2E suite detected)."
+            ),
+            cost=total_cost,
+            model=model_used,
+            changed_files=changed,
+        )
+
+    return _IssueUnitFixResult(
+        attempted=True,
+        success=False,
+        message=(
+            "Unit/code pdd fix ran, but issue tests still fail; not entering "
+            f"the no-E2E fallback.\n{verify_output}"
+        ),
+        cost=total_cost,
+        model=model_used,
+        changed_files=changed,
+    )
+
 
 def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
     """Checks if files have changed since state was saved."""
@@ -945,7 +1661,7 @@ def _check_staleness(state: Dict[str, Any], cwd: Path) -> None:
         console.print("[yellow]Warning: Codebase may have changed since last run. Consider --no-resume for fresh start.[/yellow]")
 
 
-def _get_modified_and_untracked(cwd: Path) -> Set[str]:
+def _get_modified_and_untracked(cwd: Path, base_refs: Optional[List[str]] = None) -> Set[str]:
     """Returns set of modified tracked files, untracked files, and files committed on the branch.
 
     Includes files added in commits since the branch diverged from the base branch
@@ -986,7 +1702,18 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
     # nor untracked — they're committed and clean, but new relative to the base.
     # Try merge-base first (feature branch vs main/master), then fall back to
     # origin/ refs for shallow clones where local main/master don't exist (Issue #1010).
-    for base in ("main", "master", "origin/main", "origin/master"):
+    ordered_base_refs: List[str] = []
+    seen_base_refs: Set[str] = set()
+    for base in list(base_refs or []) + ["main", "master", "origin/main", "origin/master"]:
+        if base and base not in seen_base_refs:
+            seen_base_refs.add(base)
+            ordered_base_refs.append(base)
+
+    explicit_base_refs = set(base_refs or [])
+
+    for base in ordered_base_refs:
+        if base in explicit_base_refs:
+            _ensure_explicit_base_ref(cwd, base)
         try:
             mb_result = subprocess.run(
                 ["git", "merge-base", base, "HEAD"],
@@ -1012,6 +1739,11 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
             if result.returncode == 0 and result.stdout.strip():
                 files.update(f for f in result.stdout.strip().splitlines() if f)
             break
+        if base in explicit_base_refs:
+            direct_diff_files = _diff_name_only(cwd, base)
+            if direct_diff_files:
+                files.update(direct_diff_files)
+                break
 
     # Note: no blanket `git ls-files` fallback here — returning ALL tracked
     # files would cause _commit_and_push to falsely detect unchanged files as
@@ -1129,6 +1861,7 @@ def _reevaluate_step3_not_a_bug_on_resume(
     source: str = "step_outputs",
     current_cycle: Optional[int] = None,
     cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None,
+    e2e_skip: bool = False,
 ) -> str:
     """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
 
@@ -1176,6 +1909,12 @@ def _reevaluate_step3_not_a_bug_on_resume(
             resume. If ``None`` (legacy state or stale post-cycle save), the
             terminal-success branch conservatively demotes to ``FAILED:
             NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits`` instead.
+        e2e_skip: True when Step 2 was skipped as ``E2E_SKIP`` because the repo
+            has no E2E/browser harness (Issue #1776). When True and the cached
+            token classifies as ``NOT_A_BUG``, demote to ``FAILED:
+            NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip`` BEFORE the other guards so
+            Step 3 reruns and the inline E2E_SKIP-scoped terminal stop applies
+            symmetrically on resume.
 
     Returns:
         The original ``cached_output`` if the token should still be trusted,
@@ -1187,6 +1926,24 @@ def _reevaluate_step3_not_a_bug_on_resume(
         return cached_output
     if _classify_step_output(cached_output, step_num=3) != "NOT_A_BUG":
         return cached_output
+
+    # Issue #1776: When Step 2 was skipped as E2E_SKIP because the repo has no
+    # E2E/browser harness, a cached Step 3 NOT_A_BUG is terminal for the E2E
+    # path regardless of any fixed dev units or direct edits. Demote BEFORE the
+    # has_fixed_units / direct-edit / cycle-waste-breaker guards so Step 3
+    # reruns and the inline E2E_SKIP-scoped terminal stop makes the single
+    # decision (mirrors the inner-loop guard symmetrically on resume, per the
+    # prompt). The rerun re-validates the token, so a fresh non-NOT_A_BUG
+    # classification is still honoured rather than being hard-stopped here.
+    if e2e_skip:
+        if not quiet:
+            console.print(
+                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} with "
+                f"Step 2 E2E_SKIP (no E2E harness). Demoting to FAILED: "
+                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip so Step 3 reruns and the "
+                f"E2E path stops cleanly.[/yellow]"
+            )
+        return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:e2e_skip"
 
     # Guard 1: dev_unit_states with any FIXED unit suppresses NOT_A_BUG.
     # Per the prompt's cycle-waste-breaker rule on resume (no cycle_start_hashes
@@ -2005,6 +2762,12 @@ def run_agentic_e2e_fix_orchestrator(
     # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
     # terminal-success condition holds (Issue #1034). Skips the inner workflow.
     resume_terminal_success = False
+    # Issue #1776 criterion #4: most recent Step 9 independent-verification
+    # rejection (LLM claimed ALL_TESTS_PASS / LOCAL_TESTS_PASS but the
+    # independent pytest run failed). Persisted across cycles (step_outputs is
+    # cleared on cycle rollover) so the final report can surface the hidden
+    # verifier failure and a public "tests pass" comment is not left misleading.
+    last_verifier_failure: Optional[str] = None
     # Issue #1034 follow-up: True when the resumed cycle was mid-flight
     # (last_completed_step > 0, current_cycle > 1) but no cycle_start_hashes
     # was persisted (legacy state file or pre-snapshot interrupt). The outer
@@ -2122,6 +2885,7 @@ def run_agentic_e2e_fix_orchestrator(
                     source="step_outputs",
                     current_cycle=current_cycle,
                     cycle_start_hashes=resumed_cycle_start_hashes,
+                    e2e_skip=not _has_playwright_config(cwd),
                 )
                 if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
                     # Honor the inline cycle-waste-breaker terminal-success
@@ -2419,6 +3183,10 @@ def run_agentic_e2e_fix_orchestrator(
                 step_outputs["2"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
+                # Issue #1776 criterion #4: track the rejection in-memory so it
+                # survives the Step 2 rerun (which overwrites step_outputs["2"]) and
+                # is surfaced in the final report if the run ends non-success.
+                last_verifier_failure = step_outputs["2"]
                 last_completed_step = 1
                 _resume_deferred_action = None
                 _persist_resume_reverification_state()
@@ -2458,6 +3226,9 @@ def run_agentic_e2e_fix_orchestrator(
                 step_outputs["9"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
+                # Issue #1776 criterion #4: track in-memory so it survives the
+                # cycle rollover below and is surfaced if the run ends non-success.
+                last_verifier_failure = step_outputs["9"]
 
                 _persist_resume_reverification_state()
 
@@ -2498,12 +3269,39 @@ def run_agentic_e2e_fix_orchestrator(
                 f"as terminal.[/yellow]"
             )
 
+    unit_fix_terminal_failure = False
+
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
 
-        while current_cycle <= max_cycles and not success:
+        if not resumed_from_state and not success:
+            unit_fix_result = _run_issue_unit_fix_preflight(
+                issue_content=issue_content,
+                changed_files=changed_files,
+                cwd=cwd,
+                issue_number=issue_number,
+                initial_file_hashes=initial_file_hashes,
+                quiet=quiet,
+                verbose=verbose,
+            )
+            if unit_fix_result is not None and unit_fix_result.attempted:
+                total_cost += unit_fix_result.cost
+                if unit_fix_result.model:
+                    model_used = unit_fix_result.model
+                if unit_fix_result.changed_files:
+                    changed_files = unit_fix_result.changed_files
+                last_completed_step = max(last_completed_step, 1)
+                step_outputs["1"] = unit_fix_result.message
+                if unit_fix_result.success:
+                    success = True
+                    final_message = unit_fix_result.message
+                else:
+                    unit_fix_terminal_failure = True
+                    final_message = unit_fix_result.message
+
+        while current_cycle <= max_cycles and not success and not unit_fix_terminal_failure:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
             # Snapshot file hashes at cycle start for convergence detection (5b).
@@ -2600,6 +3398,7 @@ def run_agentic_e2e_fix_orchestrator(
                             source="bug_step_outputs",
                             current_cycle=None,
                             cycle_start_hashes=None,
+                            e2e_skip=not _has_playwright_config(cwd),
                         )
                         if demoted_bug3 != cached_bug3:
                             # Drop the suppressed entry from both caches and fall
@@ -2950,6 +3749,36 @@ def run_agentic_e2e_fix_orchestrator(
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
                     has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
                     if has_fixed_units or has_direct_edits:
+                        # Issue #1776: prior fixes exist AND the repo has no E2E
+                        # harness → this NOT_A_BUG is terminal for the E2E path. Stop
+                        # cleanly HERE, before the suppression below logs "NOT_A_BUG
+                        # ignored" and falls through to Step 8's nested `pdd fix`
+                        # (which looped to the 14,400 s timeout in #1738). Scoped to
+                        # the with-fixes case ONLY — a genuine no-fixes NOT_A_BUG
+                        # still gets the "Issue determined to be not a bug" message
+                        # in the else branch (the existing #468/#830 user-facing
+                        # contract; do not pre-empt it).
+                        #
+                        # Key off the REPO harness (Playwright config) via
+                        # _has_playwright_config, NOT _check_e2e_environment's boolean
+                        # (also False when npx is merely missing on a repo that DOES
+                        # have an E2E suite — would over-fire for a real E2E repo with
+                        # broken runner tooling, #1776 fm#4) and NOT the
+                        # step_outputs["2"] E2E_SKIP marker (absent on pdd-bug reuse;
+                        # falsely present on a Step-2 timeout, #791). success stays
+                        # False so we never falsely mark the code fix verified
+                        # (preserves the #779/#1206 safety intent).
+                        if not _has_playwright_config(cwd):
+                            console.print(
+                                "[yellow]E2E fix stopped: no E2E test suite/failure "
+                                "exists; use unit/code-fix verification.[/yellow]"
+                            )
+                            success = False
+                            final_message = (
+                                "E2E fix stopped: no E2E test suite/failure exists; "
+                                "use unit/code-fix verification."
+                            )
+                            break
                         # Cycle-waste safeguard: if only direct edits (no PDD fix) and
                         # this cycle made no meaningful progress, treat the prior fix as
                         # terminal and exit successfully instead of looping.
@@ -2989,7 +3818,10 @@ def run_agentic_e2e_fix_orchestrator(
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
                         nonlocal last_completed_step, verification_failure_context
+                        nonlocal last_verifier_failure
                         import_error_retries = r.import_error_retries
+                        if r.verifier_failure_detail is not None:
+                            last_verifier_failure = r.verifier_failure_detail
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
@@ -3449,14 +4281,65 @@ def run_agentic_e2e_fix_orchestrator(
         else:
             if not final_message:
                 final_message = f"Max cycles ({max_cycles}) reached without all tests passing"
-            if "not a bug" in final_message.lower():
+            _final_message_lower = final_message.lower()
+            if "not a bug" in _final_message_lower:
                 console.print(f"\n[bold yellow]E2E fix stopped: not a bug[/bold yellow]")
+            elif _final_message_lower.startswith("e2e fix stopped"):
+                # Issue #1776: scoped E2E_SKIP terminal stop is a clean,
+                # intentional exit (no E2E harness) — not an incomplete fix.
+                console.print(f"\n[bold yellow]E2E fix stopped: no E2E test suite[/bold yellow]")
             else:
                 console.print(f"\n[bold red]E2E fix incomplete[/bold red]")
             console.print(f"   Total cost: ${total_cost:.4f}")
             remaining = [u for u, s in dev_unit_states.items() if not s.get("fixed")]
             if remaining:
                 console.print(f"   Remaining failures: {', '.join(remaining)}")
+
+            # Issue #1776 criterion #4: if a "tests pass" claim was rejected by
+            # independent verification (Step 9, or a Step 1/2 cached-pass re-verify),
+            # surface it here so the visible agent
+            # "tests pass" comment is not left misleading. Appended AFTER the banner
+            # decision above so it cannot alter banner routing.
+            _verifier_failure = last_verifier_failure
+            if not _verifier_failure:
+                # Net for the verify sites that write a VERIFICATION_FAILED entry to
+                # step_outputs without touching the in-memory tracker (Step-2-skip /
+                # Step-2 early-exit reverify). step_outputs is persisted/restored, so
+                # this also recovers the current cycle's rejection on resume. We do
+                # not resurrect an earlier cycle's superseded rejection (stale) —
+                # only the current cycle's state.
+                #
+                # Documented limitation (intentional, safety-preserving): if a
+                # rejection from a prior session is overwritten by a resume rerun
+                # and the run then ends non-success with no new rejection, the
+                # detail is lost and the report degrades to the bare terminal
+                # message. This costs only report richness — `success` stays False
+                # and the message never claims a pass. Persisting this across the
+                # ~6 state_data constructions in the resume machinery was judged
+                # (over multiple reviews) higher regression risk than the benefit.
+                for _v in step_outputs.values():
+                    if isinstance(_v, str) and "VERIFICATION_FAILED" in _v:
+                        _verifier_failure = _v
+                        break
+            if _verifier_failure:
+                # Bound the appended detail (keeps the file/context HEAD and the
+                # failure-summary TAIL) so a large pytest dump cannot blow past
+                # GitHub's comment-size / the `gh ... --body` argv limit and drop
+                # the whole report.
+                _verifier_failure = _truncate_verifier_detail(_verifier_failure)
+                # Step-agnostic wording: the rejection may come from the Step 9
+                # verifier OR from a Step 1/2 cached-pass re-verification, so do NOT
+                # attribute it specifically to "Step 9" (Issue #1776 fm#2).
+                console.print(
+                    "[bold red]Note: a 'tests pass' claim was rejected by independent "
+                    "verification — surfacing it in the final comment.[/bold red]"
+                )
+                final_message = (
+                    f"{final_message}\n\n"
+                    "⚠️ Independent verification REJECTED a claimed test pass: a "
+                    "visible \"tests pass\" comment was NOT confirmed by an independent "
+                    f"run.\n{_verifier_failure}"
+                )
 
             # Post final status comment to GitHub so users see why the workflow stopped
             post_final_comment(

@@ -318,6 +318,27 @@ class TestLoopModeNoLogFile:
             "Loop mode handles errors internally and doesn't need ERROR_FILE."
         )
 
+    def test_step1_non_loop_fallback_supplies_error_file(self):
+        """Step 1's non-loop fallback must pass the required ERROR_FILE arg."""
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        assert 'pytest "$TEST_PATH" > "$ERROR_PATH" 2>&1 || true' in template
+        assert (
+            'pdd fix --manual {protect_tests_flag} "$PROMPT_PATH" "$CODE_PATH" '
+            '"$TEST_PATH" "$ERROR_PATH"'
+        ) in template
+
+    def test_step1_verification_program_find_prints_examples(self):
+        """Step 1 should print both *_example.* and *_program.* matches."""
+        template = load_prompt_template("agentic_e2e_fix_step1_unit_tests_LLM")
+        assert template is not None
+
+        assert (
+            'find . -path ./.git -prune -o \\( -name "{{dev_unit}}_example.*" '
+            '-o -name "{{dev_unit}}_program.*" \\) -print | head -1'
+        ) in template
+
 
 class TestLoopModeLogFileE2E:
     """E2E tests for issue #360: Verify CLI behavior in loop mode.
@@ -491,6 +512,7 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files") as mock_detect, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
+         patch("pdd.agentic_e2e_fix_orchestrator._has_playwright_config") as mock_has_pw_config, \
          patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify, \
          patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment, \
          patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup", side_effect=lambda **kw: (kw["total_cost"], kw["changed_files"])):
@@ -511,6 +533,10 @@ def e2e_fix_mock_dependencies(tmp_path):
         mock_commit.return_value = (True, "No changes to commit")
         # Default: E2E environment available
         mock_check_e2e.return_value = (True, "")
+        # Default: a Playwright/E2E harness (config) exists in the repo. The
+        # #1776 terminal stop keys off this (repo property), not _check_e2e_
+        # environment's boolean (which also goes False on a missing npx runner).
+        mock_has_pw_config.return_value = True
 
         yield mock_run, mock_load, mock_console
 
@@ -532,6 +558,326 @@ def e2e_fix_default_args(tmp_path):
         "resume": False,
         "use_github_state": False,
     }
+
+
+class TestIssueUnitFixPreflight:
+    """Issue-url pdd fix should use pdd-bug unit tests before no-E2E fallback."""
+
+    def test_resolves_pdd_bug_unit_target_and_example(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _extract_issue_unit_test_files,
+            _resolve_issue_unit_fix_targets,
+        )
+
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "pdd" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "pdd" / "widget.py").write_text("def widget(): return 1\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "widget_python.prompt").write_text(
+            "Generate widget.py\n", encoding="utf-8"
+        )
+        (tmp_path / "examples" / "widget_example.py").write_text(
+            "from pdd.widget import widget\n", encoding="utf-8"
+        )
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "from pdd.widget import widget\n\n"
+            "def test_widget():\n"
+            "    assert widget() == 2\n",
+            encoding="utf-8",
+        )
+
+        issue_content = "FILES_CREATED: tests/test_widget.py"
+
+        test_files = _extract_issue_unit_test_files(issue_content, [], tmp_path)
+        targets = _resolve_issue_unit_fix_targets(tmp_path, test_files)
+
+        assert test_files == ["tests/test_widget.py"]
+        assert len(targets) == 1
+        assert targets[0].test_file == "tests/test_widget.py"
+        assert targets[0].prompt_file == "pdd/prompts/widget_python.prompt"
+        assert targets[0].code_file == "pdd/widget.py"
+        assert targets[0].verification_program == "examples/widget_example.py"
+
+    def test_extracts_committed_unit_test_from_explicit_replay_base(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _extract_issue_unit_test_files
+
+        subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+        (tmp_path / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "main"], cwd=tmp_path, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "replay/prod-base-1776"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "module.py").write_text("def value(): return 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "pdd/module.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "prod base"], cwd=tmp_path, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "fix/issue-1776"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_module.py").write_text(
+            "from pdd.module import value\n\n"
+            "def test_value():\n"
+            "    assert value() == 2\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "tests/test_module.py"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "test: add pdd bug tests"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+
+        issue_content = "Base branch: replay/prod-base-1776\n"
+
+        assert _extract_issue_unit_test_files(issue_content, [], tmp_path) == [
+            "tests/test_module.py"
+        ]
+
+    def test_fetches_explicit_replay_base_in_single_branch_clone(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _extract_issue_unit_test_files
+
+        source = tmp_path / "source"
+        remote = tmp_path / "remote.git"
+        clone = tmp_path / "clone"
+        source.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=source, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=source, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=source, check=True)
+        (source / "README.md").write_text("main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-m", "main"], cwd=source, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "replay/prod-base-1776"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+        )
+        (source / "pdd").mkdir()
+        (source / "pdd" / "module.py").write_text("def value(): return 1\n", encoding="utf-8")
+        subprocess.run(["git", "add", "pdd/module.py"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-m", "prod base"], cwd=source, check=True, capture_output=True)
+
+        subprocess.run(
+            ["git", "checkout", "-b", "fix/issue-1776"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+        )
+        (source / "tests").mkdir()
+        (source / "tests" / "test_module.py").write_text(
+            "from pdd.module import value\n\n"
+            "def test_value():\n"
+            "    assert value() == 2\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "tests/test_module.py"], cwd=source, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "test: add pdd bug tests"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "clone", "--bare", str(source), str(remote)], check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                "fix/issue-1776",
+                "--single-branch",
+                f"file://{remote}",
+                str(clone),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        assert not (clone / ".git" / "refs" / "remotes" / "origin" / "replay").exists()
+
+        issue_content = "Base branch: replay/prod-base-1776\n"
+
+        assert _extract_issue_unit_test_files(issue_content, [], clone) == [
+            "tests/test_module.py"
+        ]
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_no_e2e_uses_unit_fix_before_agentic_steps(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.side_effect = [
+            (False, "tests/test_widget.py: 1 failure"),
+            (True, "tests/test_widget.py: 1 passed"),
+            (True, "tests/test_widget.py: 1 passed"),
+        ]
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program="examples/widget_example.py",
+            )
+        ]
+        mock_fix_main.return_value = (True, "", "fixed code", 1, 0.42, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["pdd/widget.py"],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True
+        assert "pdd-bug unit tests passed" in msg
+        assert cost == 0.42
+        assert model == "claude"
+        assert files == ["pdd/widget.py"]
+        mock_run.assert_not_called()
+        mock_fix_main.assert_called_once()
+        fix_kwargs = mock_fix_main.call_args.kwargs
+        assert fix_kwargs["loop"] is True
+        assert fix_kwargs["verification_program"] == "examples/widget_example.py"
+        assert fix_kwargs["output_code"] == "pdd/widget.py"
+        assert fix_kwargs["protect_tests"] is True
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_unit_fix_trusts_workspace_pytest_over_fix_main_temp_validation(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.side_effect = [
+            (False, "tests/test_widget.py: 1 failure"),
+            (True, "tests/test_widget.py: 1 passed in workspace"),
+            (True, "tests/test_widget.py: 1 passed in final verification"),
+        ]
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program=None,
+            )
+        ]
+        mock_fix_main.return_value = (False, "", "fixed code", 1, 0.42, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["pdd/widget.py"],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True
+        assert "pdd-bug unit tests passed" in msg
+        assert cost == 0.42
+        assert model == "claude"
+        assert files == ["pdd/widget.py"]
+        mock_run.assert_not_called()
+        mock_fix_main.assert_called_once()
+
+    @patch("pdd.fix_main.fix_main")
+    @patch("pdd.agentic_e2e_fix_orchestrator._resolve_issue_unit_fix_targets")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_issue_unit_test_files")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    def test_unit_fix_failure_does_not_fall_through_to_step8(
+        self,
+        mock_verify,
+        mock_extract,
+        mock_resolve,
+        mock_fix_main,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _IssueUnitFixTarget
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        mock_extract.return_value = ["tests/test_widget.py"]
+        mock_verify.return_value = (False, "tests/test_widget.py: 1 failure")
+        mock_resolve.return_value = [
+            _IssueUnitFixTarget(
+                test_file="tests/test_widget.py",
+                prompt_file="pdd/prompts/widget_python.prompt",
+                code_file="pdd/widget.py",
+                verification_program=None,
+            )
+        ]
+        mock_fix_main.return_value = (False, "", "", 1, 0.25, "claude")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "Unit/code pdd fix failed before E2E workflow" in msg
+        assert cost == 0.75
+        assert model == "claude"
+        assert files == []
+        mock_run.assert_not_called()
+        assert mock_fix_main.call_count == 3
 
 
 class TestNotABugEarlyExit:
@@ -3677,6 +4023,18 @@ class TestClassifyStepOutput:
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
         output = "VERIFICATION_FAILED: LLM claimed LOCAL_TESTS_PASS but pytest failed.\n5 tests failed."
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
+
+    def test_step3_not_a_bug_status_wins_over_prior_verification_failed_text(self):
+        """Step 3 may mention Step 2 verifier warnings while declaring NOT_A_BUG."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "## Step 3: Root Cause Analysis (Cycle 1)\n\n"
+            "**Status:** NOT_A_BUG\n\n"
+            "Step 2 reported `FAILED: VERIFICATION_FAILED ... FALLBACK_CAPPED`, "
+            "but every sampled test file passed. This is a coverage-cap warning, "
+            "not a real E2E failure."
+        )
+        assert _classify_step_output(output, step_num=3) == "NOT_A_BUG"
 
     def test_step1_all_tests_pass(self):
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
@@ -9872,7 +10230,12 @@ class TestIssue1033Step2ResumeReverification:
 
         assert mock_verify.call_count == 2
         assert success is False
-        assert msg == "Max cycles reached."
+        # Issue #1776 criterion #4: the Step 9 resume re-verification rejection is
+        # now ALSO surfaced in the user-visible final report (it is no longer a
+        # bare "Max cycles reached." that masks the hidden verifier failure).
+        assert msg.startswith("Max cycles reached.")
+        assert "independent verification" in msg.lower()
+        assert "Step 9 resume verification failed" in msg
         saved_states = [
             call.args[3]
             for call in mock_save.call_args_list
@@ -10711,3 +11074,1031 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+
+# The scoped terminal-stop message the orchestrator must emit when the E2E-fix
+# workflow is running on a repo with no E2E harness and Step 3 returns
+# NOT_A_BUG (issue #1776). Asserted as a substring so trailing punctuation /
+# wording variants downstream of the colon don't break the contract.
+_E2E_SKIP_STOP_SUBSTR = "E2E fix stopped: no E2E test suite/failure exists"
+
+
+class TestE2ESkipNotABugTerminalStop:
+    """Regression tests for issue #1776: when Step 2 is skipped as ``E2E_SKIP``
+    (no Playwright/E2E harness exists) and Step 3 classifies the remaining E2E
+    work as ``NOT_A_BUG``, the E2E-fix workflow must stop cleanly BEFORE the
+    ``has_fixed_units``/``has_direct_edits`` suppression fires, with a scoped
+    message, and must NOT fall through to Step 8 (which launches a nested
+    ``pdd fix`` and looped until the 14,400 s Cloud Run timeout in #1738).
+
+    The fix must be strictly scoped to the E2E_SKIP precondition so it does
+    NOT falsely mark a broken code fix as verified/successful, and it must
+    apply symmetrically on resume.
+
+    These tests assert observable behavior only: the called ``run_agentic_task``
+    step labels (control flow — was Step 8 invoked?) and the returned
+    ``final_message`` (the scoped stop string + absence of a false success
+    claim). They fail on the current buggy code because NOT_A_BUG is suppressed
+    and the workflow continues into Step 8.
+    """
+
+    def test_e2e_skip_direct_edits_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 1 (primary #1738 first-run repro, ``has_direct_edits`` channel).
+
+        Setup: no E2E harness (``_check_e2e_environment`` -> ``(False, ...)``)
+        so Step 2 pre-flight-skips as ``E2E_SKIP``; prior direct edits exist
+        (``_detect_meaningful_changes`` -> non-empty, the suppression channel
+        that fired in #1738); Step 1 is generic (no ALL_TESTS_PASS, so the
+        Step-2-skip early exit does not pre-empt the Step 3 check); Step 3
+        returns ``NOT_A_BUG``.
+
+        After fix: the workflow stops cleanly at Step 3 — no called label
+        contains ``step8`` — and the returned message is the scoped E2E stop
+        and does NOT claim verified success.
+
+        Before fix: the ``has_direct_edits`` suppression fires, ``NOT_A_BUG``
+        is ignored, and execution falls through into Step 8 (a ``step8`` label
+        is invoked), so this test fails.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "There is no E2E/browser failure here — no Playwright "
+                        "suite exists and the issue belongs to the Python "
+                        "unit-test/code-fix path.\n"
+                        "Step 2 reported `FAILED: VERIFICATION_FAILED / "
+                        "FALLBACK_CAPPED`, but all sampled tests passed; that "
+                        "is only a coverage-cap warning.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # Control-flow channel: Step 8 (nested pdd fix) must NOT be invoked.
+        assert not step8_calls, (
+            "Issue #1776: when Step 2 is E2E_SKIP (no E2E harness) and Step 3 "
+            "returns NOT_A_BUG, the E2E-fix workflow must stop cleanly and must "
+            "NOT fall through to Step 8. But Step 8 was invoked: "
+            f"{step8_calls}. All called labels: {called_labels}"
+        )
+
+        # Message channel: the scoped stop reason must be reported.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776: expected the scoped E2E stop message "
+            f"({_E2E_SKIP_STOP_SUBSTR!r}) but got msg={msg!r}"
+        )
+
+        # Safety channel: the stop must NOT falsely claim verified success —
+        # preserve the #779/#1206 intent of never declaring a broken code fix
+        # successful merely because Step 3 said NOT_A_BUG.
+        assert "All tests passed" not in (msg or ""), (
+            f"Issue #1776: scoped E2E stop must not claim tests passed. msg={msg!r}"
+        )
+        assert "verified" not in (msg or "").lower(), (
+            f"Issue #1776: scoped E2E stop must not claim verified success. msg={msg!r}"
+        )
+
+    def test_e2e_harness_present_not_a_bug_suppression_preserved(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 2 (scope guard): the new stop must NOT over-fire when a real
+        E2E harness exists.
+
+        Setup: identical to Test 1 except ``_check_e2e_environment`` ->
+        ``(True, "")`` (Step 2 runs normally — no E2E_SKIP), direct edits
+        still present, Step 3 returns ``NOT_A_BUG``.
+
+        Expected (both before and after the fix): with no E2E_SKIP
+        precondition, the original #779/#1206 suppression still fires — the
+        workflow continues into Step 8 and the scoped E2E stop message is NOT
+        emitted. This proves the #1776 fix is scoped strictly to the
+        E2E_SKIP case and would catch an unconditional implementation that
+        stops the workflow whenever Step 3 returns NOT_A_BUG.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "**Status:** NOT_A_BUG — already fixed."
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            # Avoid Step 2 ALL_TESTS_PASS so the Step-2 early exit doesn't fire;
+            # generic output keeps the cycle progressing into Step 3.
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # No E2E_SKIP precondition => original suppression preserved => the
+        # workflow continues into Step 8 (the #779 behavior is intact).
+        assert step8_calls, (
+            "Issue #1776 (scope guard): with a real E2E harness present (NOT "
+            "E2E_SKIP), the original NOT_A_BUG suppression must still fire and "
+            "the workflow must continue into Step 8. But Step 8 was never "
+            f"invoked. Called labels: {called_labels}. This indicates the "
+            "E2E_SKIP-scoped stop is firing unconditionally."
+        )
+
+        # And the scoped E2E stop message must NOT be emitted when no E2E_SKIP.
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 (scope guard): the E2E_SKIP-scoped stop message must "
+            "NOT appear when a real E2E harness exists. The new stop is "
+            f"over-firing. msg={msg!r}"
+        )
+
+    def test_resume_e2e_skip_fixed_units_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 3 (resume path + ``has_fixed_units`` channel).
+
+        Setup: ``resume=True`` with saved state representing a run that was
+        interrupted right after Step 2 was skipped as ``E2E_SKIP`` — the
+        persisted ``skipped_steps``/``step_outputs["2"]`` carry the E2E_SKIP
+        signal, ``last_completed_step=2`` (so Step 3 reruns fresh),
+        ``dev_unit_states`` has a FIXED unit (the ``has_fixed_units``
+        suppression channel), ``current_cycle=1``. On rerun Step 3 returns
+        ``NOT_A_BUG``.
+
+        After fix: the resumed run reaches the same scoped clean stop — no
+        ``step8`` label is invoked and the scoped stop message is returned.
+
+        Before fix: the resume restores ``has_fixed_units`` (FIXED dev unit),
+        the inline guard suppresses ``NOT_A_BUG``, and the workflow falls
+        through into Step 8 — so this test fails.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "E2E_SKIP: no playwright config found in project",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"u1": {"fixed": True}},
+            "skipped_steps": {"2": "no playwright config found in project"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "No E2E/browser failure exists; this is the unit/code-fix "
+                        "path.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # Sanity: Step 3 must actually have run on resume (otherwise the test
+        # would be vacuous — it must reach the NOT_A_BUG decision point).
+        assert step3_calls, (
+            "Issue #1776 (resume): Step 3 must rerun on resume to reach the "
+            f"NOT_A_BUG decision. Called labels: {called_labels}"
+        )
+
+        # Control-flow channel: the resumed run must also stop before Step 8.
+        assert not step8_calls, (
+            "Issue #1776 (resume): a resumed run with persisted E2E_SKIP and a "
+            "FIXED dev unit must also stop cleanly at Step 3 NOT_A_BUG and must "
+            f"NOT fall through to Step 8. But Step 8 was invoked: {step8_calls}. "
+            f"All called labels: {called_labels}"
+        )
+
+        # Message channel: the scoped stop reason must be reported on resume too.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776 (resume): expected the scoped E2E stop message "
+            f"({_E2E_SKIP_STOP_SUBSTR!r}) on resume but got msg={msg!r}"
+        )
+
+    def test_resume_cached_step3_not_a_bug_e2e_skip_demotes_and_stops(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 4 (resume path + CACHED Step 3 NOT_A_BUG, no fixes channel).
+
+        This exercises the resume re-evaluation helper directly — the gap Test 3
+        does not cover. Here the saved state carries a *cached*
+        ``step_outputs["3"]`` = ``NOT_A_BUG`` with ``last_completed_step=3`` and
+        NO fixed dev units and NO direct edits. Without the E2E_SKIP-scoped
+        resume handling, ``_reevaluate_step3_not_a_bug_on_resume`` would *trust*
+        the cached NOT_A_BUG (no suppression channel fires), leave
+        ``last_completed_step=3``, and the inner loop would skip Steps 1-3 and
+        run straight into Step 8 — the exact #1738 fall-through, on resume.
+
+        After fix: the persisted no-harness signal is threaded into the resume
+        re-evaluation, which demotes the cached token so Step 3 reruns. With NO
+        prior fixes, the reran NOT_A_BUG exits via the genuine "not a bug" branch
+        (the #1776 stop is scoped to the with-fixes suppression case) — the key
+        guarantee is that it does NOT fall through to Step 8 (the #1738 bug).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "E2E_SKIP: no playwright config found in project",
+                "3": (
+                    "## Root Cause Analysis\n"
+                    "No E2E/browser failure exists.\n"
+                    "**Status:** NOT_A_BUG"
+                ),
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {"2": "no playwright config found in project"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "No E2E/browser failure exists; unit/code-fix path.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            # No direct edits and no fixed units => without the E2E_SKIP resume
+            # handling the helper would TRUST the cached NOT_A_BUG and fall
+            # through to Step 8.
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # The cached NOT_A_BUG must be demoted so Step 3 actually reruns.
+        assert step3_calls, (
+            "Issue #1776 (resume, cached Step 3): the persisted E2E_SKIP signal "
+            "must demote the cached NOT_A_BUG so Step 3 reruns. Step 3 never ran. "
+            f"Called labels: {called_labels}"
+        )
+
+        # Control-flow channel: must stop before Step 8 (the #1738 fall-through).
+        assert not step8_calls, (
+            "Issue #1776 (resume, cached Step 3): a resumed run with a cached "
+            "Step 3 NOT_A_BUG under E2E_SKIP and no fixes must stop cleanly and "
+            f"must NOT fall through to Step 8. But Step 8 was invoked: {step8_calls}. "
+            f"All called labels: {called_labels}"
+        )
+
+        # Message channel: with NO prior fixes, the reran NOT_A_BUG is a genuine
+        # "not a bug" (the #1776 stop is scoped to the with-fixes suppression
+        # case), so the user-facing reason explains that classification.
+        assert "not a bug" in (msg or "").lower(), (
+            "Issue #1776 (resume, cached Step 3): a no-fixes NOT_A_BUG must report "
+            f"the 'not a bug' classification. msg={msg!r}"
+        )
+
+        # Safety channel: never falsely claim verified success.
+        assert "verified" not in (msg or "").lower(), (
+            f"Issue #1776: stop must not claim verified success. msg={msg!r}"
+        )
+
+    def test_real_harness_with_remembered_timeout_skip_does_not_overfire(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 5 (over-fire guard / Issue #791 interaction).
+
+        A REAL E2E harness whose Step 2 was skipped for a transient *timeout*
+        (Issue #791 remembers it in step_outputs["2"] with the ``E2E_SKIP:``
+        prefix) must NOT trigger the #1776 stop. The guard keys off the live
+        environment (``_check_e2e_environment``), not the ``E2E_SKIP:`` string, so
+        a real harness keeps the original #779/#1206 suppression and continues
+        into Step 8.
+
+        A string-prefix signal (``step_outputs["2"].startswith("E2E_SKIP:")``)
+        FALSELY fires here and wrongly stops a legitimate E2E run — this test
+        guards that regression.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                # Remembered Step-2 timeout (Issue #791) is persisted with the
+                # E2E_SKIP: prefix even though the harness is real.
+                "2": "E2E_SKIP: All agent providers failed: Timeout after 340s",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"u1": {"fixed": True}},
+            "skipped_steps": {"2": "All agent providers failed: Timeout after 340s"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "## Root Cause\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            # REAL harness present — the live truth differs from the stale marker.
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # With a real harness the #1776 stop must NOT fire; the original
+        # suppression continues into Step 8.
+        assert step8_calls, (
+            "Issue #1776 (over-fire guard): a real E2E harness whose Step 2 merely "
+            "timed out (remembered as E2E_SKIP) must NOT trigger the scoped stop; "
+            f"the workflow must continue into Step 8. Called labels: {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 (over-fire guard): the scoped stop fired on a real harness "
+            f"with only a stale E2E_SKIP timeout marker. msg={msg!r}"
+        )
+
+    def test_bug_reuse_no_harness_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
+    ):
+        """Test 6 (under-fire guard / pdd-bug reuse vector — the #1738 path).
+
+        When prior ``pdd-bug`` analysis is reused (Issue #830), Step 2's pre-flight
+        is bypassed and step_outputs["2"] holds the reused bug output, which does
+        NOT start with ``E2E_SKIP:``. On a repo with no harness a Step 3
+        ``NOT_A_BUG`` must STILL stop cleanly — the guard re-checks
+        ``_check_e2e_environment`` so the missing marker does not let the workflow
+        fall through to Step 8 (the #1738 timeout, reproduced on the reuse path by
+        a string-prefix signal).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        # e2e_fix_default_args uses cwd=tmp_path and issue_number=1.
+        bug_state_dir = tmp_path / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        (bug_state_dir / "bug_state_1.json").write_text(
+            json.dumps(
+                {
+                    "step_outputs": {
+                        # Reused pdd-bug Step 2 output — NOT an E2E_SKIP: marker.
+                        "2": "Reproduced the failure in the unit suite.",
+                        "3": "## Root Cause\n**Status:** NOT_A_BUG",
+                    }
+                }
+            )
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "## Root Cause\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        assert not step8_calls, (
+            "Issue #1776 (under-fire guard, pdd-bug reuse): a no-harness repo whose "
+            "Step 2 was bypassed via reused bug analysis (no E2E_SKIP marker) must "
+            f"still stop at Step 3 NOT_A_BUG, not reach Step 8. Labels: {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776 (under-fire guard, pdd-bug reuse): expected the scoped E2E "
+            f"stop message but got msg={msg!r}"
+        )
+
+    def test_e2e_skip_not_a_bug_stops_under_default_max_cycles(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """The scoped stop must hold under the DEFAULT ``max_cycles`` (5), not just
+        the forced ``max_cycles=1`` the other tests use — the ``final_message``
+        break must exit the OUTER loop regardless of the remaining cycle budget,
+        so it can never silently advance into another cycle and reach Step 8.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Intentionally do NOT set max_cycles — exercise the orchestrator default.
+        e2e_fix_default_args.pop("max_cycles", None)
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "No E2E/browser failure exists.\n**Status:** NOT_A_BUG",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        # Must not advance to any later cycle's Step 8.
+        assert not [l for l in called_labels if "step8" in l], (
+            "Issue #1776: under the default max_cycles the scoped stop must still "
+            f"exit before Step 8. Called labels: {called_labels}"
+        )
+        # And must not have started a second cycle at all.
+        assert not [l for l in called_labels if l.startswith("cycle2")], (
+            f"Scoped stop must break the outer loop, not advance cycles. {called_labels}"
+        )
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or "")
+
+    def test_real_harness_missing_npx_does_not_overfire(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """fm#4 (over-broad guard): a REAL E2E repo whose Playwright config EXISTS
+        but whose executor merely lacks the npx runner must NOT trigger the #1776
+        "no E2E test suite" stop. `_check_e2e_environment` returns False for a
+        missing npx even when a config is present, so the guard keys off
+        `_has_playwright_config` (the repo property) instead — the harness exists,
+        so the original suppression continues into Step 8.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "No failure here.\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            # Executor lacks npx → _check_e2e_environment reports unavailable...
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(
+                False,
+                "npx not found — playwright/browser infrastructure unavailable",
+            ),
+        ), patch(
+            # ...but the repo DOES have a Playwright config (a real E2E harness).
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # The harness EXISTS (config present) → the #1776 stop must NOT fire.
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 fm#4: a real E2E repo with a Playwright config but a "
+            f"missing npx runner must NOT report 'no E2E test suite'. msg={msg!r}"
+        )
+        # Original suppression preserved → workflow continues into Step 8.
+        assert step8_calls, (
+            "fm#4: with the harness present (config), the original NOT_A_BUG "
+            f"suppression must continue into Step 8. Called labels: {called_labels}"
+        )
+
+
+class TestStep9VerifierFailureSurfacedInFinalReport:
+    """Issue #1776 criterion #4: when Step 9's independent verifier REJECTS a
+    claimed ``ALL_TESTS_PASS``/``LOCAL_TESTS_PASS``, the final report/comment must
+    surface the verifier output (files/failures), so a public agent "tests pass"
+    comment is not left misleading when hidden verification fails."""
+
+    def test_step9_rejected_pass_is_surfaced_in_final_report(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        verifier_output = (
+            "tests/test_widget.py: 1 failure(s)\n"
+            "E   assert widget.height == 10"
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                # A real bug (not NOT_A_BUG) so the workflow proceeds to Step 9.
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                # Agent publicly claims a pass — the misleading comment.
+                return (True, "All targeted tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            # Real harness so the #1776 E2E_SKIP stop does NOT pre-empt Step 9.
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            # Independent verification REJECTS the claimed pass.
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, verifier_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        # The hidden rejection must be surfaced in the returned final report.
+        assert "independent verification" in (msg or "").lower(), (
+            "Issue #1776 criterion #4: a Step 9 'tests pass' claim rejected by "
+            f"independent verification must be surfaced in the final report. msg={msg!r}"
+        )
+        # And it must include the actual verifier output (files/failures).
+        assert "1 failure(s)" in (msg or ""), (
+            "Issue #1776 criterion #4: the verifier output (files/failures) must be "
+            f"included in the surfaced report. msg={msg!r}"
+        )
+
+    def test_step9_reject_then_verified_pass_does_not_surface_stale_rejection(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Staleness guard: a Step 9 rejection in an early cycle that is later
+        SUPERSEDED by a genuinely verified pass must NOT be surfaced — the run
+        ends in success, so the (now-stale) rejection is irrelevant. This locks
+        in that the surfacing lives only in the non-success terminal branch."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        verifier_output = "tests/test_widget.py: 1 failure(s)\nE   assert False"
+
+        verify_calls = {"n": 0}
+
+        def verify_side_effect(*_a, **_k):
+            verify_calls["n"] += 1
+            # Cycle 1 rejects the claimed pass; cycle 2 accepts it.
+            if verify_calls["n"] == 1:
+                return (False, verifier_output)
+            return (True, "")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All targeted tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            side_effect=verify_side_effect,
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, f"expected eventual verified success; msg={msg!r}"
+        # The superseded cycle-1 rejection must NOT leak into the success report.
+        assert "1 failure(s)" not in (msg or ""), (
+            "Issue #1776 criterion #4: a rejection superseded by a later verified "
+            f"pass must NOT be surfaced on the success path. msg={msg!r}"
+        )
+        assert "rejected" not in (msg or "").lower(), (
+            f"Issue #1776 criterion #4: no stale rejection on success. msg={msg!r}"
+        )
+
+    def test_resume_reverification_failure_is_surfaced(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """#1776 criterion #4 on the RESUME path: a cached Step 2 pass that fails
+        resume-time independent re-verification (`VERIFICATION_FAILED_ON_RESUME`)
+        must also be surfaced in the final non-success report — even though the
+        rerun overwrites step_outputs["2"], the in-memory tracker survives."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+        reverify_output = "tests/test_resume.py: 3 failure(s)\nE   assert resumed is False"
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in resumed run.", 0.1, "gpt-4")
+            if "step9" in label:
+                # No fresh pass-claim, so the only verifier failure is the resume one.
+                return (True, "Still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_resume.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, reverify_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "independent verification" in (msg or "").lower(), (
+            "Issue #1776 criterion #4 (resume): a resume-time re-verification "
+            f"rejection must be surfaced in the final report. msg={msg!r}"
+        )
+        assert "3 failure(s)" in (msg or ""), (
+            "Issue #1776 criterion #4 (resume): the resume re-verifier output must "
+            f"be surfaced even after the Step 2 rerun. msg={msg!r}"
+        )
+
+    def test_large_verifier_output_is_truncated_in_final_report(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """#1776 criterion #4 robustness: a large verifier dump must be truncated
+        so it cannot exceed the GitHub comment-size / `gh ... --body` argv limit
+        and drop the whole final comment."""
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_DETAIL_MAX_CHARS
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        # HEAD carries the file/context (where _verify_tests_independently writes
+        # the file names); TAIL carries the pytest failure summary. Both must
+        # survive truncation (Issue #1776 fm#3).
+        big_output = (
+            "tests/test_big.py: HEADMARKER_file_context_4_failures\n"
+            + ("E   assertion detail line\n" * 6000)
+            + "===== TAILMARKER 4 failed, 0 passed in 1.23s ====="
+        )
+        assert len(big_output) > 50_000  # sanity: this is a large dump
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_big.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, big_output),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "truncated" in (msg or "").lower(), (
+            f"large verifier output must be truncated. msg len={len(msg or '')}"
+        )
+        # The surfaced report must be bounded (cap + framing), not the full dump.
+        assert len(msg or "") < _VERIFIER_DETAIL_MAX_CHARS + 2000, (
+            f"verifier detail not bounded: len(msg)={len(msg or '')}"
+        )
+        # fm#3: both the file/context HEAD and the failure-summary TAIL must survive.
+        assert "HEADMARKER_file_context_4_failures" in (msg or ""), (
+            "truncation dropped the file/context head (issue asks for exact files)"
+        )
+        assert "TAILMARKER" in (msg or ""), "truncation dropped the failure-summary tail"
+
+    def test_fallback_surfaces_verification_failed_from_step_outputs(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Directly pin the step_outputs FALLBACK branch: the Step-2-skip
+        early-exit re-verification writes a `VERIFICATION_FAILED` entry to
+        step_outputs WITHOUT setting the in-memory tracker. When the run then
+        terminates (here via the #1776 E2E_SKIP Step 3 stop), the fallback must
+        recover that rejection from step_outputs and surface it."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        verify_out = "tests/test_x.py: 4 failure(s)\nE   assert x == y"
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step1" in label:
+                # ALL_TESTS_PASS triggers the Step-2-skip early-exit re-verify
+                # (which does NOT set last_verifier_failure → exercises fallback).
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            if "step3" in label:
+                return (True, "No E2E failure.\n**Status:** NOT_A_BUG", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._has_playwright_config",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_x.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, verify_out),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        # The #1776 E2E_SKIP stop fired AND the fallback surfaced the rejection.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or "")
+        assert "independent verification" in (msg or "").lower(), (
+            "fallback must surface the step_outputs VERIFICATION_FAILED entry when "
+            f"the in-memory tracker is unset. msg={msg!r}"
+        )
+        assert "4 failure(s)" in (msg or ""), (
+            f"fallback must include the verifier output. msg={msg!r}"
+        )
+        # Issue #1776 fm#2: this rejection came from the Step-2-skip / Step-1-pass
+        # re-verification, NOT from Step 9 — the surfaced message must NOT
+        # mis-attribute it to "Step 9".
+        assert "Step 9" not in (msg or ""), (
+            f"non-Step-9 rejection must not be attributed to Step 9. msg={msg!r}"
+        )
+
+
+class TestVerifierOutputDetail:
+    """Issue #1776 criterion #4: `_verify_tests_independently` must surface the
+    EXACT command and the full output (stdout+stderr) for a rejection — including
+    on the non-Python timeout/exception paths — so the rejection is reproducible.
+    """
+
+    def test_python_failure_surfaces_exact_command_and_stderr(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        exact_cmd = (
+            "/usr/bin/python3 -B -m pytest /abs/tests/test_x.py -v --rootdir=/abs"
+        )
+        fake_result = {
+            "test_file": "tests/test_x.py",
+            "command": exact_cmd,
+            "test_results": [
+                {
+                    "failures": 1,
+                    "errors": 0,
+                    "passed": 0,
+                    "standard_output": "FAILED tests/test_x.py::test_a - assert 1 == 2",
+                    "standard_error": "ERROR collecting: ImportError: no module named widget",
+                }
+            ],
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output",
+            return_value=fake_result,
+        ):
+            passed, output = _verify_tests_independently(["tests/test_x.py"], tmp_path)
+
+        assert passed is False
+        # fm#2: the EXACT command (python -B -m pytest ... -v --rootdir=...) is shown.
+        assert exact_cmd in output, output
+        # fm#2: BOTH stdout and stderr are surfaced.
+        assert "assert 1 == 2" in output
+        assert "ImportError: no module named widget" in output
+
+    def test_non_python_timeout_surfaces_command_and_partial_output(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        cmd_obj = MagicMock()
+        cmd_obj.command = "npx playwright test tests/widget.spec.ts"
+        cmd_obj.cwd = None
+        # subprocess.TimeoutExpired.stdout/stderr are BYTES even with text=True
+        # (fm#1). Use the ASYMMETRIC case (bytes stdout, EMPTY stderr): without the
+        # decode fix, `(te.stdout or "") + (te.stderr or "")` does bytes + str
+        # (empty bytes is falsy → ""), raising TypeError. The fix must not crash
+        # and must surface the partial stdout.
+        timeout_exc = subprocess.TimeoutExpired(
+            cmd="npx",
+            timeout=120,
+            output=b"partial stdout here",
+            stderr=b"",
+        )
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file",
+            return_value=cmd_obj,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=timeout_exc,
+        ):
+            passed, output = _verify_tests_independently(
+                ["tests/widget.spec.ts"], tmp_path
+            )
+
+        assert passed is False
+        # fm#3: the command and any partial output are surfaced on timeout
+        # (and fm#1: no TypeError on bytes-vs-empty stream coercion).
+        assert "npx playwright test tests/widget.spec.ts" in output, output
+        assert "timeout" in output.lower()
+        assert "partial stdout here" in output
