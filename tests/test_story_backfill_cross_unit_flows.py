@@ -84,6 +84,27 @@ CROSS_UNIT_STORIES = {
             "coverage matrix",
         ),
     },
+    "pdd_update_metadata_sync": {
+        "metadata_prompts": [
+            "prompts/commands/modify_python.prompt",
+            "prompts/update_main_python.prompt",
+            "prompts/agentic_update_python.prompt",
+            "prompts/metadata_sync_python.prompt",
+            "prompts/operation_log_python.prompt",
+        ],
+        "dev_units": [
+            "modify_python.prompt",
+            "update_main_python.prompt",
+            "agentic_update_python.prompt",
+            "metadata_sync_python.prompt",
+            "operation_log_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5", "R6"},
+        "must_contain": (
+            "code-to-prompt update workflow",
+            "fingerprint",
+        ),
+    },
     "pdd_feature_change_pr": {
         "metadata_prompts": [
             "prompts/commands/modify_python.prompt",
