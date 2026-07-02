@@ -144,6 +144,7 @@ markers = [
     "timeout: mark a test with a custom timeout in seconds",
     "private_prompt: mark a test as exercising a private prompt fixture not shipped in the public repo",
     "uses_real_cli_detector: mark a test that exercises the real CLI detector instead of a stub",
+    "story: regression test derived from a user story (story_id=...)",
 ]
 filterwarnings = [
     "ignore:.*Pydantic V1 style.*deprecated.*",

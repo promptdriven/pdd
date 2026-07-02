@@ -1,0 +1,101 @@
+<pdd-reason>Compiles a user story's sibling contract into deterministic, offline pytest tests for `pdd test --from-story`.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "generate_story_tests", "signature": "(story_path, *, output=None, force=False, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False) -> Tuple[bool, str, float, str, str]", "returns": "Tuple[bool, str, float, str, str]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>generate_test_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+% You are an expert Python engineer. Your goal is to write
+% `pdd/story_test_generator.py`, a deterministic, offline generator that compiles a
+% user story's sibling contract into runnable pytest regression tests.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Implement `generate_story_tests(...)`, which turns a user story's contract
+(`## Covers`, `## Oracle`, `## Negative Cases`, plus the optional `## Entry Point`
+/ `## Seams`) into a deterministic, offline pytest file whose execution needs no
+API keys.
+
+% Role & Scope
+This module is the `pdd test --from-story` engine (#1700, Phase 2 of EPIC #1698).
+It treats the LLM as a one-time *compiler*: authoring may call an LLM, but the
+emitted tests execute fully offline and deterministically. It reuses — never
+duplicates — the contract-resolution/hash/slug helpers in
+`pdd/user_story_tests.py` and the LLM→postprocess emission plumbing in
+`pdd/generate_test.py`. It does NOT touch the live drift-check path
+(`run_user_story_tests` / `detect_change`) and does NOT own story generation,
+story linking, or manual unit-test generation.
+
+% Inputs and Outputs
+- `generate_story_tests(story_path, *, output=None, force=False,
+  strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False)
+  -> Tuple[bool, str, float, str, str]`
+  - returns: `success`, status `message`, `total_cost`, `model_name`,
+    `generated_test_path` (mirrors `generate_user_story`'s tuple style).
+
+% Requirements
+1. **Resolve the contract.** For a given human `story__<slug>.md`, resolve the
+   sibling contract via `_contract_path_for_story`. Hard-fail with an actionable
+   message when the contract is missing.
+2. **Parse the contract sections.** Parse `## Covers` (rule IDs, format
+   `- R1: <name>`), `## Oracle`, `## Negative Cases`, plus the optional
+   `## Entry Point` (callable under test) and `## Seams` (boundaries to patch).
+   Hard-fail with a clear "declare `## Entry Point` / `## Seams`" message when a
+   targeted contract omits them, and hard-fail on empty `## Oracle` /
+   `## Negative Cases` (never emit an empty or trivially-green file).
+3. **Oracle → assertions (the #1461 rule).** Emit one test per `## Oracle` bullet
+   asserting a **user-observable** outcome; `## Non-Oracle` items are never
+   asserted. Emit one test per `## Negative Case` asserting the rejected behavior
+   does not occur (assertion-only; no per-case fixture stubs).
+4. **Offline, in-process runtime.** Drive the declared `## Entry Point` callable
+   **in-process** and `monkeypatch` / `unittest.mock` each declared `## Seams`
+   boundary so runtime is offline with zero API keys. Never import a live provider
+   at module top level; inject fixed seeds / a frozen clock wherever nondeterminism
+   is otherwise possible.
+5. **Marker and naming.** Tag every emitted test
+   `@pytest.mark.story(story_id="<slug>")` and name it `test_story_<slug>_R<n>_*`,
+   deriving `<slug>` via `_slug_from_story_path` / `_slugify_story_name` so contract
+   prose cannot inject invalid Python identifiers; de-duplicate colliding names with
+   an index suffix.
+6. **Idempotent, byte-stable regeneration.** Stamp a
+   `<!-- pdd-story-test story-hash="..." -->` header (reusing `_story_content_hash`
+   over story + contract) so regeneration is a **byte-stable no-op** on unchanged
+   input and a scoped rewrite on edit; pin import/helper ordering and emit no
+   timestamps.
+7. **Human-edit collision handling.** When the target generated file already exists
+   and its header hash matches, do nothing. When a human edited it (hash mismatch),
+   warn and require `--force` to overwrite (matching `sync_user_story_contract(force=...)`).
+8. **Authoring pipeline.** Use `generate_test()`'s emission pipeline (LLM-once →
+   postprocess) for authoring, driven by a dedicated story-test meta-prompt. The LLM
+   is a one-time compiler; the output is frozen and hashed — determinism is enforced
+   by the hash header, not by trusting model settings.
+
+% Extension Analysis
+- `pdd/user_story_tests.py` — its runtime validation (`run_user_story_tests` →
+  `detect_change`) is a **live LLM call at run time**, the non-deterministic drift
+  check #1700 supersedes. Folding a deterministic/offline emitter in would mix two
+  opposite runtime models. Reused as a **dependency** for contract/hash/slug helpers,
+  not extended.
+- `pdd/generate_test.py` — prompt + code/example driven; no story/contract, marker,
+  hash, or seam-declaration concept. Reused as a **dependency** for its emission
+  plumbing.
+- `pdd/cmd_test_main.py` — legacy `--manual` handler with no story/contract awareness;
+  extending it would overload the manual path.
+- **Capability gap:** an LLM-at-generation / deterministic-at-runtime pipeline anchored
+  on the two-file story/contract model, which no existing module provides.
+
+% Dependencies
+  <include select="def:generate_test" mode="interface">pdd/generate_test.py</include>
+  <include select="def:_contract_path_for_story,def:_story_content_hash,def:_slug_from_story_path,def:_slugify_story_name" mode="interface">pdd/user_story_tests.py</include>
+
+% Deliverables
+  - Code: `pdd/story_test_generator.py`
+  - `pdd/prompts/generate_story_test_LLM.prompt` — the story-test-authoring
+    meta-prompt (parallel to `generate_test_LLM` / `generate_user_story_LLM`).

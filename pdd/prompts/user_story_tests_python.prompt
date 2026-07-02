@@ -221,6 +221,34 @@ varies during normal development goes in `## Non-Oracle`.
    - Use type annotations and concise docstrings.
    - When editing, preserve existing comments and docstrings outside changed regions (issue #926).
 
+7. **Optional `## Entry Point` / `## Seams` contract sections (#1700)**
+   - Recognize two **optional** contract sections used by the deterministic
+     `pdd test --from-story` generator: `## Entry Point` (the callable the
+     generated tests drive in-process) and `## Seams` (the LLM/cloud boundaries
+     those tests monkeypatch). Provide a parser that extracts them when present
+     and reports their absence to the caller.
+   - These sections MUST NOT be added to `_REQUIRED_CONTRACT_SECTIONS`. Adding
+     them as required would fail the required-section check for every existing
+     contract. Contracts without them stay valid; only `--from-story` consumers
+     hard-fail when they are absent — this module treats them as additive/optional.
+   - `sync_user_story_contract` / the contract writer (`_generate_and_write_contract`)
+     MUST **preserve** any existing human-authored `## Entry Point` / `## Seams`
+     sections across regeneration: read them from the prior contract on disk (when
+     present) and carry them forward verbatim into the freshly generated contract
+     after a Story edit. Because these sections are human-declared and cannot be
+     re-derived from the Story prose, LLM regeneration would otherwise silently
+     clobber them and break the next `pdd test --from-story` run. Regenerating a
+     contract that has no such sections leaves the output unchanged (no empty
+     `## Entry Point` / `## Seams` stubs are emitted).
+
+8. **Stable reuse surface for `story_test_generator` (#1700)**
+   - The contract-resolution/hash/slug helpers (`_contract_path_for_story`,
+     `_story_content_hash`, `_slug_from_story_path`, `_slugify_story_name`) are
+     consumed by the new `pdd/story_test_generator.py` module and must remain
+     stable; expose a documented reuse surface (a public thin wrapper is
+     acceptable) without changing the existing signatures or the drift-check
+     runtime behavior of `run_user_story_tests` / `detect_change`.
+
 % Dependencies
 - `.contract_ir.parse_prompt_contracts`, `.contract_ir.Rule`
 - `.detect_change.detect_change`

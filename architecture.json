@@ -5664,7 +5664,7 @@
     }
   },
   {
-    "reason": "CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.",
+    "reason": "CLI commands for generate/test/example; dry-run cost estimates are supported for standard generate only.",
     "description": "Implements the pdd generate, test, and example CLI commands. Routes standard prompt-to-code generation, legacy incremental code patching, explicit experimental incremental PRD propagation, full agentic architecture generation, context examples, and agentic/manual test generation while preserving dry-run and GitHub-state guardrails.",
     "dependencies": [
       "agentic_architecture_python.prompt",
@@ -5674,6 +5674,7 @@
       "context_generator_main_python.prompt",
       "operation_log_python.prompt",
       "template_registry_python.prompt",
+      "story_test_generator_python.prompt",
       "track_cost_python.prompt",
       "user_story_tests_python.prompt"
     ],
@@ -5692,15 +5693,15 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt or trigger agentic architecture from a GitHub issue / route PRD modes; support standard dry-run estimates only for the prompt-file code generation path."
           },
           {
             "name": "test",
-            "description": "Generate or enhance unit tests, or generate/link prompt user stories."
+            "description": "Generate or enhance unit tests, generate/link prompt user stories, or generate deterministic offline regression tests from a user story (`--from-story`)."
           },
           {
             "name": "example",
-            "description": "Generate context examples from a prompt and code file."
+            "description": "Generate context examples from prompt and code."
           }
         ]
       }
@@ -10409,7 +10410,7 @@
   },
   {
     "reason": "Shared blocking quality gate that drift-syncs and build/smoke-verifies a PR for pre-checkup or fix-final validation.",
-    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -10835,6 +10836,34 @@
             "name": "render_automatic_gate_summary",
             "signature": "(reports: Sequence[PromptSourceSetReport], *, mode: str, quiet: bool = False) -> None",
             "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Compiles a user story's sibling contract into deterministic, offline pytest tests for `pdd test --from-story`.",
+    "description": "Deterministic, offline generator that resolves a user story's sibling contract, parses its Covers/Oracle/Negative Cases plus optional Entry Point/Seams sections, and emits an idempotent, byte-stable pytest file driven in-process with monkeypatched seams. Reuses contract/hash/slug helpers from user_story_tests and the LLM emission pipeline from generate_test as a one-time compiler.",
+    "dependencies": [
+      "generate_test_python.prompt",
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 235,
+    "filename": "story_test_generator_python.prompt",
+    "filepath": "pdd/story_test_generator.py",
+    "tags": [
+      "module",
+      "python",
+      "generation"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_story_tests",
+            "signature": "(story_path, *, output=None, force=False, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False) -> Tuple[bool, str, float, str, str]",
+            "returns": "Tuple[bool, str, float, str, str]"
           }
         ]
       }

@@ -715,6 +715,15 @@ Commands:
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
+- `pdd test --from-story user_stories/story__<slug>.md` generates a deterministic,
+  offline pytest file from the story's sibling contract (`## Covers`, `## Oracle`,
+  `## Negative Cases`) plus the optional `## Entry Point` / `## Seams` sections.
+  Emitted tests are tagged `@pytest.mark.story(story_id="<slug>")`, named
+  `test_story_<slug>_R<n>_*`, run with zero API keys (seams are monkeypatched,
+  clock/seeds frozen), and carry a `story-hash` header so regeneration is a no-op
+  on unchanged input. Requires the `story` marker (registered in `pytest.ini` /
+  `pyproject.toml`); the command hard-fails with an actionable message if the
+  targeted story's contract omits `## Entry Point` / `## Seams`.
 
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:

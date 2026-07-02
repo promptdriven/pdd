@@ -36,7 +36,7 @@ A story lives in **two files with different owners**:
 | File | Owner | Holds | Edited by |
 | --- | --- | --- | --- |
 | `user_stories/story__<slug>.md` | **Human** (source of truth) | One plain-language `## Story` sentence | A person, by hand |
-| `user_stories/contracts/<slug>.contract.md` | **Tooling** (generated) | `## Covers`, `## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts` | Regenerated, never hand-edited |
+| `user_stories/contracts/<slug>.contract.md` | **Tooling** (generated), except `## Entry Point` / `## Seams` | `## Covers`, `## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts` (all regenerated) **plus** the optional, human-authored `## Entry Point` / `## Seams` | Regenerated, except the human-authored `## Entry Point` / `## Seams` (see below) |
 
 The human file is deliberately tiny so a person can read it, decide *"yes, that
 is the behavior I want"*, and verify it by using the product. The machine-checkable
@@ -44,8 +44,12 @@ contract is **derived** from that Story plus the original issue, and is
 re-derived whenever the Story changes. A `story-hash` in the contract header
 tracks alignment.
 
-> **Edit the Story, not the contract.** Hand-editing the contract is overwritten
-> the next time it is regenerated.
+> **Edit the Story, not the contract.** Hand-editing the generated contract
+> sections is overwritten the next time it is regenerated. The one exception is
+> the optional `## Entry Point` / `## Seams` sections used by
+> [`pdd test --from-story`](#entry-point-and-seams-optional--required-only-for-pdd-test---from-story):
+> those are **human-authored** and are **preserved verbatim** across contract
+> regeneration.
 
 ## Workflow at a glance
 
@@ -309,6 +313,33 @@ wording, cosmetic presentation, which model is used) into `## Non-Oracle`. A
 contract has two failure modes, both bad — *too weak* (passes after a real
 regression) and *too harsh* (fails on a healthy refactor). The generator aims for
 the narrowest assertion that still catches the regression.
+
+## Entry Point and Seams (optional — required only for `pdd test --from-story`)
+
+Two optional contract sections let `pdd test --from-story` emit in-process,
+offline tests without inferring boundaries from prose:
+
+    ## Entry Point
+    - `pdd.commands.generate:test` — the callable the generated tests drive.
+
+    ## Seams
+    - `pdd.llm_invoke:llm_invoke` — LLM/cloud boundary the generated tests monkeypatch.
+
+These sections are **additive and optional**: existing contracts remain valid
+without them. When present, the generator reads them to drive the real callable
+in-process and patch each named boundary so runtime stays deterministic and
+key-free. When a story targeted by `--from-story` lacks them, the generator
+hard-fails asking you to declare them (they are not inferred from prose).
+Positive assertions are sourced only from `## Oracle` (`## Non-Oracle` is
+excluded); Negative Cases assert the rejected behavior does not occur.
+
+Unlike the other contract sections, `## Entry Point` / `## Seams` are
+**human-authored**, so they are the one carve-out to the "never hand-edit the
+contract" rule in [The two-file model](#the-two-file-model). Because they cannot
+be re-derived from the Story prose, `sync_user_story_contract` **preserves them
+verbatim** when it regenerates the rest of the contract after a Story edit — your
+declared entry point and seams survive re-alignment, so `--from-story` keeps
+working across Story changes.
 
 ## File and naming conventions
 
