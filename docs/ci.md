@@ -1,11 +1,12 @@
 # CI Tiers
 
-The public repository runs two default GitHub Actions jobs on pull requests:
+The public repository runs three default GitHub Actions jobs on pull requests:
 
 - `unit-tests`: pytest coverage that excludes tests marked or known to require real LLMs, cloud resources, or private prompts.
 - `public-cli-regression`: deterministic CLI regression coverage through `make regression-public`.
+- `story-regression`: the user-story regression lane, `make regression-stories`, which runs `pytest -m story` with the deterministic/offline config and reports a per-story pass/fail summary (number of stories, number of story regression tests, per-story result). Like `public-cli-regression` it is fork-safe and runs with no API keys; it is non-blocking (reports only) — the merge-blocking coverage gate is tracked separately.
 
-`make regression-public` must remain safe for public forks. It must not require API keys, cloud authentication, Infisical, GCP, private repositories, or live LLM calls. Put live model and cloud checks in separate secret-gated workflows or in `pdd_cloud`, not in the default public PR path.
+Both `make regression-public` and `make regression-stories` must remain safe for public forks. They must not require API keys, cloud authentication, Infisical, GCP, private repositories, or live LLM calls. Put live model and cloud checks in separate secret-gated workflows or in `pdd_cloud`, not in the default public PR path.
 
 Longer suites remain separate:
 
