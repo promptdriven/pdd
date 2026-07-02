@@ -101,6 +101,33 @@ def _render_result_table(result: CoverageResult) -> None:
             )
         stdout_console.print(story_table)
 
+    if result.cross_unit_stories:
+        partners_by_story: dict[str, set[str]] = {
+            story_name: set() for story_name in result.cross_unit_stories
+        }
+        for rule in result.rules:
+            if not getattr(rule, "is_cross_unit", False):
+                continue
+            for story_name in rule.stories:
+                if story_name in partners_by_story:
+                    partners_by_story[story_name].update(rule.cross_unit_partners)
+
+        cross_table = Table(
+            title="Cross-dev-unit stories",
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold",
+            expand=False,
+        )
+        cross_table.add_column("Story", style="bold", no_wrap=True)
+        cross_table.add_column("Linked Units")
+        for story_name in result.cross_unit_stories:
+            cross_table.add_row(
+                story_name,
+                _format_list(sorted(partners_by_story.get(story_name, set()))),
+            )
+        stdout_console.print(cross_table)
+
     if not result.has_contract_rules:
         stdout_console.print("  [dim]No <contract_rules> section — no contract coverage data.[/dim]")
         return
