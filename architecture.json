@@ -9662,7 +9662,7 @@
     }
   },
   {
-    "reason": "Parses prompt contract sections into a deterministic IR.",
+    "reason": "Parses contract-related sections from prompt files into a structured intermediate representation.",
     "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
     "dependencies": [],
     "priority": 239,
@@ -9699,8 +9699,14 @@
           },
           {
             "name": "iter_covers_refs",
-            "signature": "(story_text: str) -> \"Iterator[str]\"",
-            "returns": "Iterator[str]"
+            "signature": "(covers_text: str) -> list[CoversRef]",
+            "returns": "list[CoversRef]"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CoversRef",
+            "kind": "dataclass"
           }
         ]
       }
@@ -9708,6 +9714,257 @@
     "position": {
       "x": 0,
       "y": 0
+    }
+  },
+  {
+    "reason": "Validates, generates, and fixes user stories linked to PDD prompt files, with cross-unit story traceability.",
+    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "dependencies": [
+      "contract_ir_python.prompt",
+      "detect_change_python.prompt",
+      "change_main_python.prompt",
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "user_story_tests_python.prompt",
+    "filepath": "pdd/user_story_tests.py",
+    "tags": [
+      "module",
+      "python",
+      "stories",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "STORY_DEV_UNITS_METADATA_KEY",
+            "value": "pdd-story-dev-units"
+          }
+        ],
+        "functions": [
+          {
+            "name": "run_user_story_tests",
+            "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]",
+            "returns": "Tuple[bool, List[Dict], float, str]"
+          },
+          {
+            "name": "run_user_story_fix",
+            "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "generate_user_story",
+            "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, str, List[str]]"
+          },
+          {
+            "name": "cache_story_prompt_links",
+            "signature": "(...) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "parse_story_dev_unit_metadata",
+            "signature": "(story_text: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "story_is_cross_unit",
+            "signature": "(story_text: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_cross_unit_stories_for_prompt",
+            "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]",
+            "returns": "list[dict]"
+          },
+          {
+            "name": "get_all_dev_units_for_story",
+            "signature": "(story_text: str) -> list[str]",
+            "returns": "list[str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Builds deterministic contract coverage matrix for prompt rules against story and test evidence.",
+    "description": "Static deterministic rule-to-evidence matrix builder for PDD prompt files. Classifies each contract rule as checked, story-only, test-only, waived, failed, or unchecked based on linked story and test evidence. Supports cross-unit story attribution and deduplication in directory scans.",
+    "dependencies": [
+      "contract_ir_python.prompt",
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "coverage_contracts_python.prompt",
+    "filepath": "pdd/coverage_contracts.py",
+    "tags": [
+      "module",
+      "python",
+      "contracts",
+      "coverage"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "RuleCoverage",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CoverageResult",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_coverage",
+            "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult",
+            "returns": "CoverageResult"
+          },
+          {
+            "name": "build_coverage_directory",
+            "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]",
+            "returns": "list[CoverageResult]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R7": {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_R7_broken_syntax"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [
+            "test_receipt_failed.py: syntax error on line 4"
+          ]
+        },
+        "R8": {
+          "rule_id": "R8",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_covers_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        }
+      }
     }
   },
   {
@@ -10455,7 +10712,7 @@
   },
   {
     "reason": "Shared blocking quality gate that drift-syncs and build/smoke-verifies a PR for pre-checkup or fix-final validation.",
-    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
