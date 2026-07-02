@@ -1367,13 +1367,7 @@ def _is_ignored_github_steer_comment(comment: Dict[str, Any]) -> bool:
         return True
 
     body = str(comment.get("body", "") or "")
-    if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
-        return True
-    if "PDD-INCREMENTAL-STATUS" in body:
-        return True
-    if "PDD_WORKFLOW_STATE" in body:
-        return True
-    return bool(re.search(r"^## Step \d+/\d+:", body, re.MULTILINE))
+    return _is_pdd_status_comment_body(body)
 
 
 STEER_STATE_KEYS = (
@@ -8330,6 +8324,30 @@ def ensure_issue_steer_cursor_seeded(
     )
 
 
+def _is_pdd_status_comment_body(body: str) -> bool:
+    """True for PDD-generated state/progress/status comment bodies.
+
+    Shared by BOTH steer-ingestion paths in ``drain_issue_steers`` (the
+    ``PDD_STEER_JSON`` env handoff and the GitHub poll) so orchestrator
+    output can never be re-ingested as human steering regardless of how it
+    reaches the drain (Issue #1792: cloud runners hand pending steers over
+    via the env var, bypassing the poll-side filters).
+
+    Matches: PDD_WORKFLOW_STATE marker comments, PDD-INCREMENTAL-STATUS
+    progress comments, and trusted per-step status comments whose body
+    starts a line with ``## Step N/M:`` (posted via post_step_comment_once,
+    possibly from a User-type token that the ``user.type == "Bot"`` poll
+    filter would not catch).
+    """
+    if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
+        return True
+    if "PDD-INCREMENTAL-STATUS" in body:
+        return True
+    if "PDD_WORKFLOW_STATE" in body:
+        return True
+    return bool(re.search(r"^## Step \d+/\d+:", body, re.MULTILINE))
+
+
 def drain_issue_steers(
     repo_owner: str,
     repo_name: str,
@@ -8380,6 +8398,13 @@ def drain_issue_steers(
                 if cid_val <= last_id_val:
                     continue
                 raw_body = str(entry.get("body", ""))
+                # Issue #1792: the env handoff (cloud runner pending-steer
+                # path) must apply the same status-comment filter as the
+                # GitHub poll below — otherwise orchestrator-posted step /
+                # rejection comments handed over by the runner are injected
+                # into step prompts as fake human steers.
+                if _is_pdd_status_comment_body(raw_body):
+                    continue
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
