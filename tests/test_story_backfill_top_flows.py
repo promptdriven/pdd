@@ -50,6 +50,12 @@ TOP_FLOW_STORIES = {
         "covers": {"R1", "R2", "R3", "R4"},
         "must_contain": ("agentic E2E fix workflow", "user-story-driven prompt fixes"),
     },
+    "pdd_generate": {
+        "metadata_prompt": "prompts/commands/generate_python.prompt",
+        "package_prompt": "commands/generate_python.prompt",
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": ("standard prompt-file generation", "incremental PRD"),
+    },
     "pdd_sync": {
         "metadata_prompt": "prompts/commands/maintenance_python.prompt",
         "package_prompt": "commands/maintenance_python.prompt",
