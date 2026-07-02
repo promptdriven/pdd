@@ -60,11 +60,11 @@ def test_login_success():
     print(f"Covered Stories:    {coverage_result.stories_covered}")
     print(f"Coverage Percent:   {coverage_result.story_coverage_pct}%")
     print(f"Story Backed Tests: {coverage_result.story_backed_test_count}")
-    
+
     # 5. Locate the generated JSON artifacts
     latest_artifact = mock_project_root / ".pdd" / "evidence" / "stories" / "coverage.latest.json"
     snapshot_artifact = mock_project_root / ".pdd" / "evidence" / "stories" / "runs" / "example_run_12345.json"
-    
+
     print("\n--- Generated Artifacts ---")
     print(f"Latest coverage artifact: {latest_artifact.relative_to(PROJECT_ROOT)}")
     print(f"Snapshot run artifact:   {snapshot_artifact.relative_to(PROJECT_ROOT)}")
