@@ -3263,6 +3263,41 @@ def run_agentic_e2e_fix_orchestrator(
                 _resume_deferred_action = None
                 _persist_resume_reverification_state()
 
+    def _post_verifier_rejection_comment(
+        cycle: int,
+        rejected_test_files: Optional[List[str]],
+        rejection_detail: str,
+        resumed: bool = False,
+    ) -> None:
+        """Post the Issue #1792 at-rejection-time comment, exactly once per cycle.
+
+        Shared by the in-loop Step 9 funnel (_merge_step9_apply) and the
+        resume-time SUCCESS_FALL_THROUGH re-verification. Keyed
+        ``cycle * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY`` so the persisted
+        step_comments set dedups replays across resume. Never raises —
+        posting failures must not break the workflow.
+        """
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=cycle * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY,
+                body=_build_step9_verifier_rejection_comment(
+                    cycle,
+                    rejected_test_files,
+                    rejection_detail,
+                    resumed=resumed,
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as _post_exc:  # pylint: disable=broad-except
+            console.print(
+                "[yellow]Step 9 verifier-rejection comment failed"
+                f"{' (resume)' if resumed else ''}: {_post_exc}[/yellow]"
+            )
+
     # Issue #1001 round 11: save-before-verify race.
     # The inner-loop state save at line ~2049 persists step_outputs["9"] with
     # the LLM's raw output BEFORE the independent verification at line ~2061 /
@@ -3304,33 +3339,13 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Issue #1792: this rejection belongs to the resumed cycle whose
                 # cached Step 9 claimed a pass — post the visible comment BEFORE
-                # the rollover below reassigns current_cycle. Same per-cycle
-                # composite key as the in-run path, so a rejection already
-                # posted before the interrupt is not duplicated (dedup via the
-                # persisted step_comments set).
-                try:
-                    post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=(
-                            current_cycle * 10000
-                            + _VERIFIER_REJECT_COMMENT_SUBKEY
-                        ),
-                        body=_build_step9_verifier_rejection_comment(
-                            current_cycle,
-                            test_files,
-                            step_outputs["9"],
-                            resumed=True,
-                        ),
-                        posted_steps=step_comments_set,
-                        cwd=cwd,
-                    )
-                except Exception as _post_exc:  # pylint: disable=broad-except
-                    console.print(
-                        "[yellow]Step 9 verifier-rejection comment failed "
-                        f"(resume): {_post_exc}[/yellow]"
-                    )
+                # the rollover below reassigns current_cycle, and before the
+                # persist call so the comment key is saved for cross-resume
+                # dedup (a rejection already posted before the interrupt is
+                # not duplicated).
+                _post_verifier_rejection_comment(
+                    current_cycle, test_files, step_outputs["9"], resumed=True
+                )
 
                 _persist_resume_reverification_state()
 
@@ -3931,31 +3946,12 @@ def run_agentic_e2e_fix_orchestrator(
                             # thread stays green while the workflow silently
                             # continues — and the #1776 final-report surfacing
                             # never fires on SIGTERM kills or when a later
-                            # cycle succeeds. Exactly once per cycle via the
-                            # persisted step_comments composite key; posting
-                            # failures must never break the workflow.
-                            try:
-                                post_step_comment_once(
-                                    repo_owner=repo_owner,
-                                    repo_name=repo_name,
-                                    issue_number=issue_number,
-                                    step_num=(
-                                        current_cycle * 10000
-                                        + _VERIFIER_REJECT_COMMENT_SUBKEY
-                                    ),
-                                    body=_build_step9_verifier_rejection_comment(
-                                        current_cycle,
-                                        r.verifier_test_files,
-                                        r.verifier_failure_detail,
-                                    ),
-                                    posted_steps=step_comments_set,
-                                    cwd=cwd,
-                                )
-                            except Exception as _post_exc:  # pylint: disable=broad-except
-                                console.print(
-                                    "[yellow]Step 9 verifier-rejection comment "
-                                    f"failed: {_post_exc}[/yellow]"
-                                )
+                            # cycle succeeds.
+                            _post_verifier_rejection_comment(
+                                current_cycle,
+                                r.verifier_test_files,
+                                r.verifier_failure_detail,
+                            )
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
