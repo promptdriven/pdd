@@ -68,7 +68,10 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
-For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+For a rule-to-story/test coverage matrix (`pdd checkup coverage`), including the
+`@pytest.mark.story` regression marker and the per-story `has_regression_test`
+dimension, see [docs/coverage_contracts.md](docs/coverage_contracts.md) and
+[docs/generating_user_stories.md](docs/generating_user_stories.md).
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
@@ -710,10 +713,14 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
+- `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--dry-run` for a no-write preview, and `--update` to merge prompt links into an existing story.
+- `pdd story list [--with-regression-status]` lists all stories in `user_stories/` with their slug, file path, linked prompts, and (when the traceability API is available) `missing` / `passing` / `stale` regression status.
+- `pdd story link <story-file> --prompt <path>` adds a prompt link to an existing story file without regenerating the story body. Validates that the story file is inside `user_stories/`.
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
+- `pdd test --from-story user_stories/story__*.md` generates deterministic `@pytest.mark.story` regression tests from a story.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
 
 Story prompt linkage:
@@ -722,6 +729,9 @@ Story prompt linkage:
 - If metadata is missing, `pdd detect --stories` validates against the full prompt set.
 - `pdd test --issue ... <*.prompt>` links the prompt files passed on the command line directly in story metadata; it does not run `detect_change` during story authoring.
 - In `--stories` mode, existing story metadata scopes validation; when metadata is missing, validation falls back to the full prompt set.
+- **Cross-dev-unit stories:** When ≥2 prompt files are passed to `pdd test --issue`, a second metadata comment is also written alongside `pdd-story-prompts`:
+  `<!-- pdd-story-dev-units: basename1.prompt, basename2.prompt -->`
+  This marks the story as spanning multiple dev units (cross-unit). Single-prompt stories do not receive a `pdd-story-dev-units` comment. Cross-unit traceability is exposed via `get_cross_unit_stories_for_prompt` (forward lookup: which cross-unit stories include a given prompt) and `story_is_cross_unit` (returns `True` when either `pdd-story-prompts` or `pdd-story-dev-units` lists ≥2 entries). `pdd checkup coverage` reports cross-unit stories separately and counts each story once globally to prevent double-counting.
 
 Template:
 - See `user_stories/story__template.md` for a starter format.

@@ -25,6 +25,7 @@ from click.testing import CliRunner
 from pdd import cli
 from pdd.commands.coverage import coverage_cmd
 from pdd.commands.checkup import checkup
+from pdd.story_test_generation import generate_story_regression_test
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "coverage_contracts"
 REPO_ROOT = Path(__file__).parents[2]
@@ -111,6 +112,71 @@ W1:
              "--tests-dir", str(tmp_path / "none"), str(prompt)],
         )
         assert result.exit_code == 0
+
+    def test_story_regression_strict_fails_on_stale_generated_test(self, tmp_path):
+        prompt = _write(
+            tmp_path,
+            "foo_python.prompt",
+            """\
+            <contract_rules>
+            R1 - Upload support
+            The system accepts supported uploads.
+            </contract_rules>
+            <waivers>
+            W1:
+              Rule: R1
+              Rationale: fixture isolates story-regression gate behavior.
+            </waivers>
+            """,
+        )
+        stories = tmp_path / "user_stories"
+        stories.mkdir()
+        story = stories / "story__upload_flow.md"
+        story.write_text(
+            "<!-- pdd-story-prompts: foo_python.prompt -->\n\n"
+            "## Story\n\n"
+            "A user uploads a supported file.\n\n"
+            "## Covers\n\n"
+            "- R1\n\n"
+            "## Acceptance Criteria\n\n"
+            "- Supported uploads are accepted.\n",
+            encoding="utf-8",
+        )
+        generate_story_regression_test(story)
+        story.write_text(
+            story.read_text(encoding="utf-8") + "\nThe upload result is visible.\n",
+            encoding="utf-8",
+        )
+
+        runner = CliRunner()
+        warn = runner.invoke(
+            coverage_cmd,
+            [
+                "--contracts",
+                "--stories-dir",
+                str(stories),
+                "--tests-dir",
+                str(tmp_path / "tests"),
+                str(prompt),
+            ],
+        )
+        strict = runner.invoke(
+            coverage_cmd,
+            [
+                "--contracts",
+                "--story-regression-gate",
+                "strict",
+                "--stories-dir",
+                str(stories),
+                "--tests-dir",
+                str(tmp_path / "tests"),
+                str(prompt),
+            ],
+        )
+
+        assert warn.exit_code == 0, warn.output
+        assert "story-regression-stale" in warn.output
+        assert strict.exit_code == 1
 
     def test_default_target_is_prompts_dir(self, tmp_path, monkeypatch):
         prompts_dir = tmp_path / "prompts"
