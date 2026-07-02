@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -40,12 +41,15 @@ import click
 
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
 from .path_resolution import find_project_root_from_path
+from .story_regression import StoryTestMap, build_story_map
+from .story_test_generation import story_bundle_hash
 from .user_story_tests import (
     DEFAULT_STORIES_DIR,
     STORY_PREFIX,
     STORY_SUFFIX,
     _story_content_hash,
     discover_story_files,
+    story_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,11 +61,18 @@ logger = logging.getLogger(__name__)
 STATUS_STORY_REGRESSION_OK = "story-regression-ok"
 STATUS_STORY_REGRESSION_MISSING = "story-regression-missing"
 STATUS_STORY_REGRESSION_STALE = "story-regression-stale"
+STATUS_PASSING = "story-regression-passing"
+STATUS_MISSING = STATUS_STORY_REGRESSION_MISSING
+STATUS_STALE = STATUS_STORY_REGRESSION_STALE
 
 _GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
 _STRICT_FAIL_EXIT = 2
 _DEFAULT_TESTS_DIR = "tests"
+_HASH_ASSIGN_RE = re.compile(
+    r"^(?:PDD_)?STORY_HASH\s*=\s*(?P<value>['\"].*?['\"])",
+    re.MULTILINE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +156,39 @@ def _literal_str(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _module_string_constants(tree: ast.AST) -> Dict[str, str]:
+    """Return top-level string constants declared in a test module."""
+    constants: Dict[str, str] = {}
+    for node in getattr(tree, "body", []):
+        targets: list[ast.AST]
+        value: ast.AST
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        literal = _literal_str(value)
+        if literal is None:
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = literal
+    return constants
+
+
+def _string_value(node: ast.AST, constants: Dict[str, str]) -> Optional[str]:
+    """Return a literal string or a string module constant referenced by name."""
+    literal = _literal_str(node)
+    if literal is not None:
+        return literal
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    return None
+
+
 def _is_story_decorator(node: ast.AST) -> bool:
     """True when *node* is a ``pytest.mark.story`` (or ``mark.story``) call/attr."""
     target = node.func if isinstance(node, ast.Call) else node
@@ -156,7 +200,12 @@ def _is_story_decorator(node: ast.AST) -> bool:
 
 
 def _marker_from_decorator(
-    node: ast.AST, *, test_name: str, test_file: str, lineno: int
+    node: ast.AST,
+    *,
+    test_name: str,
+    test_file: str,
+    lineno: int,
+    constants: Dict[str, str],
 ) -> Optional[StoryMarker]:
     """Build a :class:`StoryMarker` from a decorator node, if it is a story marker."""
     if not _is_story_decorator(node):
@@ -166,14 +215,16 @@ def _marker_from_decorator(
     if isinstance(node, ast.Call):
         # Support positional story_id as the first arg, plus keywords.
         if node.args:
-            story_id = _literal_str(node.args[0])
+            story_id = _string_value(node.args[0], constants)
         for kw in node.keywords:
             if kw.arg == "story_id":
-                story_id = _literal_str(kw.value)
+                story_id = _string_value(kw.value, constants)
             elif kw.arg == "story_hash":
-                story_hash = _literal_str(kw.value)
+                story_hash = _string_value(kw.value, constants)
     if not story_id:
         return None
+    if not story_hash:
+        story_hash = constants.get("PDD_STORY_HASH") or constants.get("STORY_HASH")
     return StoryMarker(
         story_id=story_id,
         story_hash=story_hash or None,
@@ -190,6 +241,7 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
     except SyntaxError:
         logger.debug("story-gate: skipping unparsable test file %s", test_file)
         return []
+    constants = _module_string_constants(tree)
     found: List[StoryMarker] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -200,6 +252,7 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
                 test_name=node.name,
                 test_file=test_file,
                 lineno=getattr(deco, "lineno", node.lineno),
+                constants=constants,
             )
             if marker is not None:
                 found.append(marker)
@@ -246,6 +299,12 @@ def classify_story(
     if story_text is None:
         story_text = path.read_text(encoding="utf-8")
     current_hash = _story_content_hash(story_text)
+    acceptable_hashes = {current_hash}
+    if path.exists():
+        try:
+            acceptable_hashes.add(story_bundle_hash(path))
+        except OSError:
+            pass
 
     marker = markers.get(story_id)
     if marker is None:
@@ -272,7 +331,7 @@ def classify_story(
             detail="Regression test records no story_hash; cannot prove freshness.",
         )
 
-    if marker.story_hash != current_hash:
+    if marker.story_hash not in acceptable_hashes:
         return StoryRegressionResult(
             story_id=story_id,
             story_path=str(path),
@@ -575,4 +634,117 @@ def run_story_regression_gate(
 
     return StoryRegressionGateResult(
         mode=effective_mode, ok=True, exit_code=0, results=tuple(results)
+    )
+
+
+@dataclass(frozen=True)
+class StoryRegressionEvaluation:
+    """Gate verdict for one story file."""
+
+    story_id: str
+    status: str
+    current_hash: str
+    tests: list[str]
+    recorded_hashes: dict[str, str]
+
+    @property
+    def has_regression_test(self) -> bool:
+        return bool(self.tests)
+
+    @property
+    def passed(self) -> bool:
+        return self.status == STATUS_PASSING
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "story_id": self.story_id,
+            "status": self.status,
+            "has_regression_test": self.has_regression_test,
+            "current_hash": self.current_hash,
+            "tests": self.tests,
+            "recorded_hashes": self.recorded_hashes,
+        }
+
+
+def _test_file_for_nodeid(nodeid: str, tests_dir: Path) -> Optional[Path]:
+    path_part = nodeid.split("::", 1)[0]
+    candidate = Path(path_part)
+    if not candidate.is_absolute():
+        candidate = tests_dir / candidate
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _recorded_hash(test_path: Path) -> Optional[str]:
+    try:
+        text = test_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _HASH_ASSIGN_RE.search(text)
+    if not match:
+        return None
+    try:
+        return str(ast.literal_eval(match.group("value")))
+    except (SyntaxError, ValueError):
+        return None
+
+
+def evaluate_story_regression(
+    story_path: Path,
+    *,
+    tests_dir: Path,
+    story_map: Optional[StoryTestMap] = None,
+) -> StoryRegressionEvaluation:
+    """Return missing/stale/passing status for a story without executing tests."""
+    sid = story_id(story_path)
+    current_hash = story_bundle_hash(story_path)
+    smap = story_map if story_map is not None else build_story_map(tests_dir)
+    tests = sorted(smap.tests_for_story(sid))
+    if not tests:
+        return StoryRegressionEvaluation(
+            story_id=sid,
+            status=STATUS_MISSING,
+            current_hash=current_hash,
+            tests=[],
+            recorded_hashes={},
+        )
+
+    recorded: dict[str, str] = {}
+    for nodeid in tests:
+        test_path = _test_file_for_nodeid(nodeid, tests_dir)
+        if test_path is None:
+            continue
+        found = _recorded_hash(test_path)
+        if found:
+            recorded[nodeid] = found
+
+    if not recorded:
+        # Coverage uses this lightweight evaluator to preserve #1699
+        # compatibility with legacy story markers that prove traceability but
+        # predate story-hash freshness metadata. The stricter full gate path
+        # still reports hashless markers as stale via classify_story().
+        return StoryRegressionEvaluation(
+            story_id=sid,
+            status=STATUS_PASSING,
+            current_hash=current_hash,
+            tests=tests,
+            recorded_hashes={},
+        )
+
+    if current_hash not in set(recorded.values()):
+        return StoryRegressionEvaluation(
+            story_id=sid,
+            status=STATUS_STALE,
+            current_hash=current_hash,
+            tests=tests,
+            recorded_hashes=recorded,
+        )
+
+    return StoryRegressionEvaluation(
+        story_id=sid,
+        status=STATUS_PASSING,
+        current_hash=current_hash,
+        tests=tests,
+        recorded_hashes=recorded,
     )

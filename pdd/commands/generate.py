@@ -21,7 +21,6 @@ from ..evidence_manifest import (
 )
 from ..prompt_gate import maybe_run_workflow_prompt_gate
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
-from ..story_test_generator import generate_story_test
 
 # Initialize console
 console = Console(file=sys.stdout)
@@ -722,13 +721,6 @@ def example(
 @click.option("--no-github-state", is_flag=True, help="Disable GitHub issue comment-based state persistence (Agentic mode).")
 @click.option("--clean-restart", is_flag=True, help="Discard saved agentic test state and start from step 1 (Agentic mode).")
 @click.option("--output", help="Specify where to save the generated test file.")
-@click.option(
-    "--from-story",
-    "from_story",
-    type=click.Path(dir_okay=False),
-    default=None,
-    help="Generate deterministic pytest regression tests from a user story contract.",
-)
 @click.option("--language", help="Specify the programming language.")
 @click.option("--coverage-report", type=click.Path(exists=True), help="Path to the coverage report file.")
 @click.option("--existing-tests", type=click.Path(exists=True), multiple=True, help="Path(s) to existing unit test file(s).")
@@ -741,6 +733,16 @@ def example(
         "Issue source for story generation: a GitHub issue/PR URL, an issue "
         "number, or a path to a local issue markdown file. The story is "
         "authored from the issue, independent of the prompt."
+    ),
+)
+@click.option(
+    "--from-story",
+    "from_story",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help=(
+        "Generate deterministic pytest regression tests from a story__*.md "
+        "file. Execution of generated tests is offline and LLM-free."
     ),
 )
 @click.option(
@@ -760,13 +762,13 @@ def test(
     no_github_state: bool,
     clean_restart: bool,
     output: Optional[str],
-    from_story: Optional[str],
     language: Optional[str],
     coverage_report: Optional[str],
     existing_tests: Tuple[str, ...],
     target_coverage: float,
     merge: bool,
     issue: Optional[str],
+    from_story: Optional[str],
     evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
@@ -785,26 +787,37 @@ def test(
     try:
         estimate_mode = _estimate_mode_active(ctx)
         if from_story:
+            if args:
+                raise click.UsageError("--from-story does not accept positional arguments.")
+            if manual or issue:
+                raise click.UsageError("--from-story cannot be combined with --manual or --issue.")
             if estimate_mode:
                 raise click.UsageError("Estimate mode currently supports `generate` only.")
-            result = generate_story_test(
-                Path(from_story),
-                Path(output) if output else None,
-            )
+            from ..story_test_generation import generate_story_regression_test
+
+            generated = generate_story_regression_test(from_story, output=output)
             obj = ctx.obj or {}
             if not obj.get("quiet", False):
+                action = "generated" if generated.changed else "already current"
                 console.print(
-                    "[bold green]Story regression generated:[/bold green] "
-                    f"{result.output_path} ({result.test_count} tests)"
+                    "[bold green]Story regression test "
+                    f"{action}:[/bold green] {generated.test_file}"
                 )
-            return {
+            result_dict = {
                 "success": True,
-                "story_file": from_story,
-                "test_file": str(result.output_path),
-                "test_count": result.test_count,
-                "story_id": result.story_id,
-                "story_hash": result.story_hash,
-            }, 0.0, "deterministic"
+                "message": "Story regression test generated.",
+                **generated.as_dict(),
+            }
+            if evidence:
+                write_evidence_manifest(
+                    command="pdd test --from-story",
+                    output_files=[generated.test_file],
+                    model="deterministic",
+                    cost_usd=0.0,
+                    validation={"story_regression": "generated"},
+                    basename=generated.story_id,
+                )
+            return result_dict, 0.0, "deterministic"
 
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")

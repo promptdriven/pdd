@@ -414,7 +414,9 @@ def test_refund_rejects_zero_amount():
   it; given a test node id, it resolves the owning story. A story may be claimed
   by many tests, and a test may claim more than one story.
 - **Coverage:** `pdd checkup coverage <prompt>` reports per story whether an
-  executable regression test exists (`has_regression_test`); see
+  executable regression test exists (`has_regression_test`) and whether the
+  generated test is current (`story-regression-missing` /
+  `story-regression-stale`); see
   [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
   coverage".
 
