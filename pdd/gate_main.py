@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+import click
+
 from .contract_check import check_prompt
 from .coverage_contracts import STATUS_UNCHECKED, STATUS_WAIVED, build_coverage
 from .evidence_store import (
@@ -397,7 +399,7 @@ def run_gate_policy(
         candidate = Path(target)
         if candidate.is_file() and candidate.name.endswith(".latest.json"):
             manifests = [ManifestView.from_file(candidate.resolve(), project_root)]
-        else:
+        else: 
             basename = candidate.stem
             latest = devunits_dir(project_root) / f"{basename}.latest.json"
             prompt = resolve_prompt_path(project_root, basename)
@@ -460,3 +462,45 @@ def run_gate_policy(
         policy=policy,
         manifests_checked=checked,
     )
+
+
+@click.command(name="gate")
+@click.argument("target", required=False)
+@click.option("--policy", "policy_path", type=click.Path(path_type=Path), help="Path to policy file.")
+@click.option("--stories-dir", type=click.Path(path_type=Path), help="Path to stories directory.")
+@click.option("--tests-dir", type=click.Path(path_type=Path), help="Path to tests directory.")
+@click.option("--json", "json_format", is_flag=True, help="Output structured GateResult as JSON.")
+def gate_cmd(
+    target: Optional[str] = None,
+    policy_path: Optional[Path] = None,
+    stories_dir: Optional[Path] = None,
+    tests_dir: Optional[Path] = None,
+    json_format: bool = False,
+) -> None:
+    """Click command for ``pdd checkup gate``."""
+    import sys
+    from rich.console import Console
+
+    console = Console()
+    project_root = Path.cwd()
+    result = run_gate_policy(
+        project_root,
+        policy_path=policy_path,
+        target=target,
+        stories_dir=stories_dir,
+        tests_dir=tests_dir,
+    )
+
+    if json_format:
+        console.print_json(data=result.as_dict())
+    else:
+        if result.passed:
+            console.print("[bold green]Gate passed successfully.[/bold green]")
+        else:
+            console.print(f"[bold red]Gate failed with {len(result.failures)} violation(s):[/bold red]")
+            for failure in result.failures:
+                console.print(f"  - [red]{failure.code}[/red]: {failure.message}")
+                if failure.fix_command:
+                    console.print(f"    [dim]Fix: {failure.fix_command}[/dim]")
+
+    sys.exit(result.exit_code)
