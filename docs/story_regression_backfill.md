@@ -20,6 +20,8 @@ The cross-dev-unit follow-up covers documented PDD workflows that naturally span
 more than one dev unit:
 
 - PRD-backed `pdd generate` output handed to `pdd sync`
+- Feature-request `pdd change` output carried through story/contract artifacts
+  and reviewable PR creation
 
 Cross-dev-unit stories use both `pdd-story-prompts` and `pdd-story-dev-units`
 metadata so the same story is attributed to every linked dev unit while still

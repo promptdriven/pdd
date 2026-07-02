@@ -42,6 +42,27 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 CROSS_UNIT_STORIES = {
+    "pdd_feature_change_pr": {
+        "metadata_prompts": [
+            "prompts/commands/modify_python.prompt",
+            "prompts/agentic_change_orchestrator_python.prompt",
+            "prompts/agentic_change_python.prompt",
+            "prompts/user_story_tests_python.prompt",
+            "prompts/generate_story_contract_LLM.prompt",
+        ],
+        "dev_units": [
+            "modify_python.prompt",
+            "agentic_change_orchestrator_python.prompt",
+            "agentic_change_python.prompt",
+            "user_story_tests_python.prompt",
+            "generate_story_contract_LLM.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5", "R6"},
+        "must_contain": (
+            "issue-driven feature workflow",
+            "contract sidecar",
+        ),
+    },
     "pdd_prd_generate_sync": {
         "metadata_prompts": [
             "prompts/commands/generate_python.prompt",
