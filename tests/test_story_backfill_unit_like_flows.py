@@ -43,6 +43,65 @@ REQUIRED_CONTRACT_SECTIONS = (
 )
 
 UNIT_LIKE_STORIES = {
+    "pdd_agentic_provider_fallback_status": {
+        "metadata_prompts": [
+            "prompts/agentic_common_python.prompt",
+            "prompts/provider_manager_python.prompt",
+            "prompts/routing_policy_python.prompt",
+        ],
+        "dev_units": [
+            "agentic_common_python.prompt",
+            "provider_manager_python.prompt",
+            "routing_policy_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "provider fallback",
+            "degraded status",
+        ),
+    },
+    "pdd_ci_validation_fix_loop": {
+        "metadata_prompts": [
+            "prompts/ci_validation_python.prompt",
+            "prompts/agentic_e2e_fix_orchestrator_python.prompt",
+            "prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+            "prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+            "prompts/commands/fix_python.prompt",
+        ],
+        "dev_units": [
+            "ci_validation_python.prompt",
+            "agentic_e2e_fix_orchestrator_python.prompt",
+            "agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+            "agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+            "fix_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "CI validation",
+            "post-push repair",
+        ),
+    },
+    "pdd_issue_routing_source_truth": {
+        "metadata_prompts": [
+            "prompts/routing_policy_python.prompt",
+            "prompts/task_routing_csv.prompt",
+            "prompts/agentic_change_orchestrator_python.prompt",
+            "prompts/agentic_bug_orchestrator_python.prompt",
+            "prompts/agentic_test_orchestrator_python.prompt",
+        ],
+        "dev_units": [
+            "routing_policy_python.prompt",
+            "task_routing_csv.prompt",
+            "agentic_change_orchestrator_python.prompt",
+            "agentic_bug_orchestrator_python.prompt",
+            "agentic_test_orchestrator_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5"},
+        "must_contain": (
+            "source-of-truth routing",
+            "wrong workflow",
+        ),
+    },
     "pdd_context_compression_manifest": {
         "metadata_prompts": [
             "prompts/content_selector_python.prompt",
