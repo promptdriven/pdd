@@ -207,6 +207,32 @@ raise SystemExit({exit_code})
     )
 
 
+def pds_timeout_stub(
+    tmp_path: Path,
+    *,
+    stdout: str = "",
+    stderr: str = "",
+) -> Path:
+    return write_executable(
+        tmp_path / "pds-timeout-stub.py",
+        f"""#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+import time
+
+capture = pathlib.Path(os.environ["PDS_STUB_CAPTURE"])
+capture.write_text(json.dumps({{"argv": sys.argv[1:]}}, indent=2), encoding="utf8")
+sys.stdout.write({stdout!r})
+sys.stdout.flush()
+sys.stderr.write({stderr!r})
+sys.stderr.flush()
+time.sleep(60)
+""",
+    )
+
+
 def pds_version_stub(tmp_path: Path, version_output: str) -> Path:
     return write_executable(
         tmp_path / "pds-version-stub.py",
@@ -1798,13 +1824,13 @@ def test_release_video_metadata_conflict_replace_requires_force_regenerate(
     assert not capture.exists()
 
 
-def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
+def test_release_video_default_metadata_conflict_uses_existing(tmp_path: Path):
     _result, capture = run_release_video_with_existing_script(tmp_path)
 
     pds_call = pds_capture_argv(capture)
     assert "--bootstrap-selected-project" not in pds_call
     assert "--force-regenerate" not in pds_call
-    assert "--metadata-conflict" not in pds_call
+    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "use-existing"
 
 
 def test_release_video_makefile_passes_idempotency_env_vars():
@@ -1833,7 +1859,7 @@ def test_release_video_makefile_passes_recovery_env_vars():
 
     assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
-    assert "RELEASE_VIDEO_METADATA_CONFLICT ?=" in makefile_text
+    assert "RELEASE_VIDEO_METADATA_CONFLICT ?= use-existing" in makefile_text
     assert (
         'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
         in makefile_text
@@ -1875,6 +1901,7 @@ def test_release_video_metadata_conflict_recovery_is_documented():
         ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
     ).read_text(encoding="utf8")
 
+    assert "defaults to `RELEASE_VIDEO_METADATA_CONFLICT=use-existing`" in doc_text
     assert "RELEASE_VIDEO_METADATA_CONFLICT=replace" in doc_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE=1" in doc_text
     assert "--metadata-conflict replace --force-regenerate" in doc_text
@@ -2872,48 +2899,203 @@ def test_release_video_create_timeout_persists_partial_pds_run_metadata(
 
     monkeypatch.setattr(release_video.subprocess, "run", fake_subprocess_run)
 
-    try:
-        release_video.create_release_video(
-            args=SimpleNamespace(
-                pds_cli=sys.executable,
-                project_id="",
-                project_name="",
-                idempotency_key="",
-                idempotency_attempt_id="",
-                idempotency_provenance="local-test",
-                preset="release-notes",
-                target="publish",
-                platform="youtube",
-                privacy="unlisted",
-                bootstrap_selected_project=False,
-                metadata_conflict="",
-                force_regenerate=False,
-                dry_run=False,
-                pds_create_timeout=0.01,
-            ),
-            repo=repo,
-            tag="v1.1.0",
-            git_sha="abc123def456",
-            repo_url="https://github.com/promptdriven/pdd",
-            repo_name="promptdriven/pdd",
-            script_path=script_path,
-            release_notes_path=release_notes_path,
-            changelog_path=Path("CHANGELOG.md"),
-            run_metadata_path=run_metadata_path,
-        )
-    except release_video.ReleaseVideoError as exc:
-        error = str(exc)
-    else:
-        raise AssertionError("expected release-video timeout to fail")
+    response = release_video.create_release_video(
+        args=SimpleNamespace(
+            pds_cli=sys.executable,
+            project_id="",
+            project_name="",
+            idempotency_key="",
+            idempotency_attempt_id="",
+            idempotency_provenance="local-test",
+            preset="release-notes",
+            target="publish",
+            platform="youtube",
+            privacy="unlisted",
+            bootstrap_selected_project=False,
+            metadata_conflict="use-existing",
+            force_regenerate=False,
+            dry_run=False,
+            pds_create_timeout=0.01,
+        ),
+        repo=repo,
+        tag="v1.1.0",
+        git_sha="abc123def456",
+        repo_url="https://github.com/promptdriven/pdd",
+        repo_name="promptdriven/pdd",
+        script_path=script_path,
+        release_notes_path=release_notes_path,
+        changelog_path=Path("CHANGELOG.md"),
+        run_metadata_path=run_metadata_path,
+    )
 
-    assert "timed out after 0.01 seconds" in error
-    assert str(run_metadata_path) in error
     persisted = json.loads(run_metadata_path.read_text(encoding="utf8"))
     assert persisted["runId"] == "agent_run_timeout123"
     assert persisted["projectId"] == "pdd-v1-1-0-release"
     assert "release-video status --run-id agent_run_timeout123 --json" in persisted[
         "recoverCommand"
     ]
+    assert "jobs watch --run-id agent_run_timeout123 --jsonl" in persisted[
+        "watchCommand"
+    ]
+    assert response["ok"] is False
+    assert response["pending"] is True
+    assert response["reason"] == "pds_create_timeout_active_run"
+    assert response["status"] == "running"
+    assert response["runId"] == "agent_run_timeout123"
+    assert response["projectId"] == "pdd-v1-1-0-release"
+    assert response["pdsRun"] == persisted
+    assert response["recoverCommand"] == persisted["recoverCommand"]
+    assert response["watchCommand"] == persisted["watchCommand"]
+    assert (
+        response["statusCommand"]
+        == "make release-video-status RELEASE_TAG=v1.1.0 RELEASE_VIDEO_STATUS_QUERY=1"
+    )
+    assert (
+        response["backfillCommand"]
+        == "make release-video-discord-backfill "
+        "RELEASE_TAG=v1.1.0 RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
+    )
+
+
+def test_release_video_main_timeout_with_active_project_run_reports_pending(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    timed_out_run = {
+        "runId": "agent_run_timeout_cli",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_timeout_stub(
+                    tmp_path,
+                    stdout=json.dumps(timed_out_run) + "\n",
+                    stderr="[pds] still waiting for release video create\n",
+                )
+            ),
+            "--pds-create-timeout",
+            "0.05",
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined_output = result.stdout + result.stderr
+    response = json.loads(
+        (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
+    )
+    sidecar = json.loads(
+        (output_dir / "v1.1.0" / "pds_run.json").read_text(encoding="utf8")
+    )
+    assert result.returncode == 0
+    assert response["pending"] is True
+    assert response["reason"] == "pds_create_timeout_active_run"
+    assert sidecar["runId"] == "agent_run_timeout_cli"
+    assert "release-video: PDS release-video create is still running" in combined_output
+    assert "projectId=pdd-v1-1-0-release" in combined_output
+    assert "runId=agent_run_timeout_cli" in combined_output
+    assert "status=running" in combined_output
+    assert (
+        "make release-video-status RELEASE_TAG=v1.1.0 "
+        "RELEASE_VIDEO_STATUS_QUERY=1"
+    ) in combined_output
+    assert (
+        "make release-video-discord-backfill RELEASE_TAG=v1.1.0 "
+        "RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
+    ) in combined_output
+    assert "did not return a YouTube URL" not in combined_output
+
+
+def test_release_video_project_exists_conflict_with_active_run_reports_pending(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    active_run = {
+        "runId": "agent_run_existing_project",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stderr=(
+                        "Project pdd-v1-1-0-release already exists; "
+                        "metadata conflict while create is still active\n"
+                        f"{json.dumps(active_run)}\n"
+                    ),
+                    exit_code=1,
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    combined_output = result.stdout + result.stderr
+    response = json.loads(
+        (output_dir / "v1.1.0" / "pds_response.json").read_text(encoding="utf8")
+    )
+    persisted = json.loads(
+        (output_dir / "v1.1.0" / "pds_run.json").read_text(encoding="utf8")
+    )
+    assert result.returncode == 0
+    assert response["pending"] is True
+    assert response["reason"] == "pds_create_project_exists_active_run"
+    assert response["runId"] == "agent_run_existing_project"
+    assert persisted["runId"] == "agent_run_existing_project"
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "use-existing"
+    assert "release-video: PDS release-video create is still running" in combined_output
+    assert "projectId=pdd-v1-1-0-release" in combined_output
+    assert "runId=agent_run_existing_project" in combined_output
+    assert "status=running" in combined_output
+    assert "did not return a YouTube URL" not in combined_output
 
 
 def test_release_video_persists_structured_pds_run_handle_sidecar(tmp_path: Path):
