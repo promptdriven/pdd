@@ -63,6 +63,27 @@ CROSS_UNIT_STORIES = {
             "failing tests",
         ),
     },
+    "pdd_story_test_coverage": {
+        "metadata_prompts": [
+            "prompts/commands/generate_python.prompt",
+            "prompts/agentic_test_orchestrator_python.prompt",
+            "prompts/user_story_tests_python.prompt",
+            "prompts/coverage_contracts_python.prompt",
+            "prompts/commands/checkup_python.prompt",
+        ],
+        "dev_units": [
+            "generate_python.prompt",
+            "agentic_test_orchestrator_python.prompt",
+            "user_story_tests_python.prompt",
+            "coverage_contracts_python.prompt",
+            "checkup_python.prompt",
+        ],
+        "covers": {"R1", "R2", "R3", "R4", "R5", "R6"},
+        "must_contain": (
+            "story-mode test workflow",
+            "coverage matrix",
+        ),
+    },
     "pdd_feature_change_pr": {
         "metadata_prompts": [
             "prompts/commands/modify_python.prompt",
