@@ -6481,6 +6481,39 @@ def test_drain_issue_steers_strips_pdd_tags(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_drain_issue_steers_env_filters_pdd_status_comments(mock_cwd):
+    """PDD_STEER_JSON must not re-inject trusted PDD comments as human steers."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "Serhan-Asad",
+            "body": "## Step 9/11: Independent Verification REJECTED the claimed pass",
+        },
+        {
+            "comment_id": "102",
+            "author": "pdd",
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+        },
+        {
+            "comment_id": "103",
+            "author": "greg",
+            "body": "Please tighten the retry guard",
+        },
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert [s.comment_id for s in steers] == ["103"]
+        assert steers[0].body == "Please tighten the retry guard"
+        assert state["last_steered_comment_id"] == "103"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test that prompt is unchanged when steers list is absent."""
     mock_shutil_which.return_value = "/bin/claude"

@@ -10711,3 +10711,502 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+
+class TestVerifierOutputDetail:
+    """Independent verifier rejection detail must be reproducible."""
+
+    def test_python_failure_surfaces_exact_command_and_stderr(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        exact_cmd = (
+            "/usr/bin/python3 -B -m pytest /abs/tests/test_x.py -v --rootdir=/abs"
+        )
+        fake_result = {
+            "test_file": "tests/test_x.py",
+            "command": exact_cmd,
+            "test_results": [
+                {
+                    "failures": 1,
+                    "errors": 0,
+                    "passed": 0,
+                    "standard_output": "FAILED tests/test_x.py::test_a - assert 1 == 2",
+                    "standard_error": "ERROR collecting: ImportError: no widget",
+                }
+            ],
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output",
+            return_value=fake_result,
+        ):
+            passed, output = _verify_tests_independently(["tests/test_x.py"], tmp_path)
+
+        assert passed is False
+        assert exact_cmd in output
+        assert "assert 1 == 2" in output
+        assert "ImportError: no widget" in output
+
+    def test_non_python_timeout_surfaces_command_and_partial_output(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        cmd_obj = MagicMock()
+        cmd_obj.command = "npx playwright test tests/widget.spec.ts"
+        cmd_obj.cwd = None
+        timeout_exc = subprocess.TimeoutExpired(
+            cmd="npx",
+            timeout=120,
+            output=b"partial stdout here",
+            stderr=b"",
+        )
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file",
+            return_value=cmd_obj,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=timeout_exc,
+        ):
+            passed, output = _verify_tests_independently(
+                ["tests/widget.spec.ts"], tmp_path
+            )
+
+        assert passed is False
+        assert "npx playwright test tests/widget.spec.ts" in output
+        assert "timeout" in output.lower()
+        assert "partial stdout here" in output
+
+
+class TestStep9VerifierRejectionVisibleComment:
+    """Step 9 verifier rejections must be visible at rejection time."""
+
+    VERIFIER_OUTPUT = (
+        "$ /usr/bin/python3 -B -m pytest /abs/tests/test_widget.py -v --rootdir=/abs\n"
+        "tests/test_widget.py: 2 failure(s)\n"
+        "FAILED tests/test_widget.py::test_a - assert widget.height == 10"
+    )
+
+    @staticmethod
+    def _rejection_calls(mock_post_once):
+        return [
+            c
+            for c in mock_post_once.call_args_list
+            if "rejected" in c.kwargs.get("body", "").lower()
+            and "independent" in c.kwargs.get("body", "").lower()
+        ]
+
+    def test_step9_rejection_posts_visible_comment_per_cycle(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        rejections = self._rejection_calls(mock_post_once)
+        assert len(rejections) == 2
+        keys = sorted(c.kwargs["step_num"] for c in rejections)
+        assert keys[0] // 10000 == 1 and keys[1] // 10000 == 2
+        assert all(k % 10000 not in range(0, 12) for k in keys)
+
+    def test_rejection_comment_includes_files_command_output_and_statement(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        rejections = self._rejection_calls(mock_post_once)
+        assert rejections
+        body = rejections[0].kwargs["body"]
+        assert "tests/test_widget.py" in body
+        assert "$ /usr/bin/python3 -B -m pytest" in body
+        assert "2 failure(s)" in body
+        assert "ALL_TESTS_PASS" in body or "tests pass" in body.lower()
+        assert "rejected" in body.lower()
+        assert "Step 9" in body
+
+    def test_rejection_comment_posted_even_when_later_cycle_succeeds(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        verify_calls = {"n": 0}
+
+        def verify_side_effect(*_args, **_kwargs):
+            verify_calls["n"] += 1
+            if verify_calls["n"] == 1:
+                return (False, self.VERIFIER_OUTPUT)
+            return (True, "")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            side_effect=verify_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        rejections = self._rejection_calls(mock_post_once)
+        assert len(rejections) == 1
+        assert rejections[0].kwargs["step_num"] // 10000 == 1
+
+    def test_resume_reverify_rejection_posts_visible_comment(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "9": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        rejections = self._rejection_calls(mock_post_once)
+        assert rejections, msg
+        assert rejections[0].kwargs["step_num"] // 10000 == 1
+        assert "tests/test_widget.py" in rejections[0].kwargs["body"]
+
+    def test_rejection_comment_body_is_bounded(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_DETAIL_MAX_CHARS
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        big_output = (
+            "$ /usr/bin/python3 -B -m pytest /abs/tests/test_big.py -v\n"
+            "tests/test_big.py: HEADMARKER 4 failure(s)\n"
+            + ("E   assertion detail line\n" * 6000)
+            + "===== TAILMARKER 4 failed, 0 passed in 1.23s ====="
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_big.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, big_output),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        body = self._rejection_calls(mock_post_once)[0].kwargs["body"]
+        assert len(body) < _VERIFIER_DETAIL_MAX_CHARS + 2500
+        assert "HEADMARKER" in body
+        assert "TAILMARKER" in body
+
+    def test_rejection_comment_post_failure_does_not_break_run(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+
+    def test_rejection_comment_header_matches_steer_status_filter(self):
+        from pdd.agentic_common import _is_pdd_status_comment_body
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _build_step9_verifier_rejection_comment,
+        )
+
+        for resumed in (False, True):
+            body = _build_step9_verifier_rejection_comment(
+                3, ["tests/test_widget.py"], "detail", resumed=resumed
+            )
+            assert _is_pdd_status_comment_body(body)
+
+    @staticmethod
+    def _faithful_post_once(recorded_posts):
+        def _side_effect(**kwargs):
+            posted = kwargs["posted_steps"]
+            if kwargs["step_num"] in posted:
+                return True
+            posted.add(kwargs["step_num"])
+            recorded_posts.append(kwargs)
+            return True
+
+        return _side_effect
+
+    def test_final_cycle_rejection_persists_comment_key(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+        import pdd.agentic_e2e_fix_orchestrator as orch
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        assert any(kw["step_num"] == reject_key for kw in recorded)
+        saved_with_key = [
+            c
+            for c in orch.save_workflow_state.call_args_list
+            if reject_key in (c.args[3].get("step_comments") or [])
+        ]
+        assert saved_with_key
+
+    def test_resume_does_not_repost_rejection_when_key_persisted(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "9": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "step_comments": [10009, reject_key],
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert not any(kw["step_num"] == reject_key for kw in recorded)

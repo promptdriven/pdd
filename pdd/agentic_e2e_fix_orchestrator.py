@@ -98,6 +98,62 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 # See Issues #953, #1010, #1031 for history of fallback-scan stalls.
 VERIFY_TIMEOUT_SECONDS = 600
 
+_VERIFIER_DETAIL_MAX_CHARS = 3000
+_VERIFIER_REJECT_COMMENT_SUBKEY = 909
+
+
+def _truncate_verifier_detail(detail: str) -> str:
+    """Bound verifier rejection detail while preserving file context and summary."""
+    if len(detail) <= _VERIFIER_DETAIL_MAX_CHARS:
+        return detail
+    head = _VERIFIER_DETAIL_MAX_CHARS // 3
+    tail = _VERIFIER_DETAIL_MAX_CHARS - head
+    return (
+        f"{detail[:head]}\n"
+        f"...[verifier output truncated to ~{_VERIFIER_DETAIL_MAX_CHARS} chars; "
+        "kept the file/context head and failure-summary tail]...\n"
+        f"{detail[-tail:]}"
+    )
+
+
+def _build_step9_verifier_rejection_comment(
+    current_cycle: int,
+    test_files: Optional[List[str]],
+    verifier_detail: str,
+    resumed: bool = False,
+) -> str:
+    """Build the visible at-rejection-time Step 9 verifier comment."""
+    files_line = (
+        ", ".join(f"`{f}`" for f in test_files)
+        if test_files
+        else "(none discovered)"
+    )
+    resumed_note = " (cached claim re-verified on resume)" if resumed else ""
+    bounded = _truncate_verifier_detail(verifier_detail)
+    return (
+        "## Step 9/11: Independent Verification REJECTED the claimed pass "
+        f"(Cycle {current_cycle})\n\n"
+        "Step 9 reported a tests-pass claim (`ALL_TESTS_PASS`/"
+        f"`LOCAL_TESTS_PASS`){resumed_note}, but the orchestrator's "
+        "**independent verification REJECTED** the claimed pass. The \"tests "
+        "pass\" report above may have run a targeted subset; the independent "
+        "verifier re-runs the discovered test files in full and takes "
+        "precedence. This cycle is NOT recorded as a success; the workflow "
+        "continues with another fix cycle, or stops if the cycle budget is "
+        "exhausted.\n\n"
+        f"**Test files verified independently:** {files_line}\n\n"
+        "<details>\n"
+        "<summary>Independent verifier detail (exact command + output, "
+        "bounded)</summary>\n\n"
+        "```text\n"
+        f"{bounded}\n"
+        "```\n"
+        "</details>\n\n"
+        "---\n"
+        "*Posted by PDD orchestrator (trusted credentials). Independent "
+        "verification overrides agent-reported test results (Issue #1792).*"
+    )
+
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
 # the scan finds hundreds of files.  See Issue #1010.
@@ -347,6 +403,8 @@ class _Step9TokenApplyResult(NamedTuple):
     last_completed_step: Optional[int] = None
     step_outputs_9: Optional[str] = None
     verification_failure_context_update: Optional[str] = None  # None = no change; str = set
+    verifier_failure_detail: Optional[str] = None
+    verifier_test_files: Optional[List[str]] = None
 
 
 def _apply_step9_resolved_token(
@@ -408,12 +466,16 @@ def _apply_step9_resolved_token(
                     import_error_retries=new_retries,
                     step_outputs_9=full_failed,
                     verification_failure_context_update=verify_output,
+                    verifier_failure_detail=failed_body,
+                    verifier_test_files=list(test_files),
                     last_completed_step=0,
                 )
             return _Step9TokenApplyResult(
                 break_inner=False,
                 import_error_retries=new_retries,
                 step_outputs_9=full_failed,
+                verifier_failure_detail=failed_body,
+                verifier_test_files=list(test_files),
                 last_completed_step=step_num - 1,
             )
         console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
@@ -810,6 +872,15 @@ def _extract_test_files(
     return test_files
 
 
+def _decode_stream(value: Any) -> str:
+    """Return subprocess stdout/stderr as text across str/bytes/None variants."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
 def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
     """Run appropriate test runner on test files via subprocess. Returns (all_passed, output).
 
@@ -850,11 +921,19 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
             tr = result["test_results"][0]
             failures = tr.get("failures", 0) + tr.get("errors", 0)
             passed = tr.get("passed", 0)
-            stdout = tr.get("standard_output", "")
+            stdout = _decode_stream(tr.get("standard_output", ""))
+            stderr = _decode_stream(tr.get("standard_error", ""))
+            command = result.get("command") or (
+                f"pytest {shlex.quote(str(abs_path))}"
+            )
 
             if failures > 0:
                 all_passed = False
-                all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+                all_outputs.append(
+                    f"{test_file}: {failures} failure(s)\n"
+                    f"$ {command}\n"
+                    f"{stdout}{stderr}"
+                )
             else:
                 all_outputs.append(f"{test_file}: {passed} passed")
         else:
@@ -878,16 +957,28 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 )
                 if proc.returncode != 0:
                     all_passed = False
-                    output = proc.stdout + proc.stderr
-                    all_outputs.append(f"{test_file}: FAILED (exit code {proc.returncode})\n{output}")
+                    output = _decode_stream(proc.stdout) + _decode_stream(proc.stderr)
+                    all_outputs.append(
+                        f"{test_file}: FAILED (exit code {proc.returncode})\n"
+                        f"$ {test_cmd.command}\n"
+                        f"{output}"
+                    )
                 else:
                     all_outputs.append(f"{test_file}: passed")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as te:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED (timeout)")
+                partial = _decode_stream(te.stdout) + _decode_stream(te.stderr)
+                all_outputs.append(
+                    f"{test_file}: FAILED (timeout)\n"
+                    f"$ {test_cmd.command}\n"
+                    f"{partial}"
+                )
             except Exception as e:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED ({e})")
+                all_outputs.append(
+                    f"{test_file}: FAILED ({e})\n"
+                    f"$ {test_cmd.command}"
+                )
 
     return all_passed, "\n".join(all_outputs)
 
@@ -2375,6 +2466,34 @@ def run_agentic_e2e_fix_orchestrator(
                 exc_info=True,
             )
 
+    def _post_verifier_rejection_comment(
+        cycle: int,
+        rejected_test_files: Optional[List[str]],
+        rejection_detail: str,
+        resumed: bool = False,
+    ) -> None:
+        """Post the Step 9 verifier-rejection comment once per cycle."""
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=cycle * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY,
+                body=_build_step9_verifier_rejection_comment(
+                    cycle,
+                    rejected_test_files,
+                    rejection_detail,
+                    resumed=resumed,
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as post_exc:  # pylint: disable=broad-except
+            console.print(
+                "[yellow]Step 9 verifier-rejection comment failed"
+                f"{' (resume)' if resumed else ''}: {post_exc}[/yellow]"
+            )
+
     # Issue #1033: a prior run can persist Step 2's raw ALL_TESTS_PASS before
     # independent verification. Re-check cached pass tokens before the resume
     # skip at the top of the inner loop can trust them.
@@ -2457,6 +2576,10 @@ def run_agentic_e2e_fix_orchestrator(
                 )
                 step_outputs["9"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+
+                _post_verifier_rejection_comment(
+                    current_cycle, test_files, step_outputs["9"], resumed=True
                 )
 
                 _persist_resume_reverification_state()
@@ -2989,7 +3112,41 @@ def run_agentic_e2e_fix_orchestrator(
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
                         nonlocal last_completed_step, verification_failure_context
+                        nonlocal github_comment_id
                         import_error_retries = r.import_error_retries
+                        if r.verifier_failure_detail is not None:
+                            _post_verifier_rejection_comment(
+                                current_cycle,
+                                r.verifier_test_files,
+                                r.verifier_failure_detail,
+                            )
+                            try:
+                                state_data["step_comments"] = sorted(
+                                    step_comments_set
+                                )
+                                state_data["last_saved_at"] = (
+                                    datetime.now().isoformat()
+                                )
+                                new_gh_id = save_workflow_state(
+                                    cwd,
+                                    issue_number,
+                                    workflow_name,
+                                    state_data,
+                                    state_dir,
+                                    repo_owner,
+                                    repo_name,
+                                    use_github_state,
+                                    github_comment_id,
+                                )
+                                if new_gh_id:
+                                    github_comment_id = new_gh_id
+                                    state_data["github_comment_id"] = github_comment_id
+                            except Exception as save_exc:  # pylint: disable=broad-except
+                                logger.debug(
+                                    "Best-effort rejection-comment key save failed: %s",
+                                    save_exc,
+                                    exc_info=True,
+                                )
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
@@ -3150,6 +3307,7 @@ def run_agentic_e2e_fix_orchestrator(
             state_data["last_completed_step"] = 0
             state_data["step_outputs"] = {}
             state_data["last_saved_at"] = datetime.now().isoformat()
+            state_data["step_comments"] = sorted(step_comments_set)
             # Issue #1034 codex P2 follow-up: the just-completed cycle's
             # cycle_start_hashes is stale for the next cycle. Clear it so
             # any resume from this transitional state falls back to the
@@ -3159,7 +3317,7 @@ def run_agentic_e2e_fix_orchestrator(
             state_data["cycle_start_hashes"] = None
 
             if current_cycle <= max_cycles:
-                 save_workflow_state(
+                save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
                 )
 

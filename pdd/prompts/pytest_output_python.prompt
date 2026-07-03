@@ -45,6 +45,7 @@
     Step 4. Build a result dictionary with the following format:
         {
             "test_file": "path/to/test_file.py",
+            "command": "copy-pasteable pytest command actually executed",
             "test_results": [
                 {
                     "standard_output": "standard output of the test",
