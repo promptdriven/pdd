@@ -1270,6 +1270,124 @@ def test_deepswe_manifest_covers_current_public_rows_with_supported_catalog_rout
     )
 
 
+def test_zai_static_elo_fallback_clears_cutoff():
+    """glm-5.2 and glm-5-turbo must have STATIC_ELO_FALLBACK entries that
+    clear ELO_CUTOFF so mandatory Z.AI rows survive _mandatory_rows_missing_from.
+    Without these entries _get_elo returns 0 and the rows are filtered out."""
+    elo_52, _ = gmc._get_elo("glm-5.2", {})
+    elo_turbo, _ = gmc._get_elo("glm-5-turbo", {})
+    assert elo_52 >= gmc.ELO_CUTOFF, (
+        f"glm-5.2 ELO {elo_52} must be >= ELO_CUTOFF {gmc.ELO_CUTOFF}"
+    )
+    assert elo_turbo >= gmc.ELO_CUTOFF, (
+        f"glm-5-turbo ELO {elo_turbo} must be >= ELO_CUTOFF {gmc.ELO_CUTOFF}"
+    )
+
+
+def test_zai_general_api_rows_seeded_when_litellm_unaware():
+    """Z.AI general API rows (glm-5.2, glm-5-turbo) must be seeded by
+    _mandatory_rows_missing_from with the correct base_url, api_key, and
+    reasoning_type when litellm doesn't know about them yet."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_key = {(r["provider"], r["model"]): r for r in seeded}
+
+    row = by_key.get(("Z.AI", "openai/glm-5.2"))
+    assert row is not None, "Z.AI openai/glm-5.2 must be seeded"
+    assert row["base_url"] == "https://api.z.ai/api/paas/v4"
+    assert row["api_key"] == "ZAI_API_KEY"
+    assert row["reasoning_type"] == "effort"
+    assert row["structured_output"] is True
+    assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
+def test_zai_coding_plan_rows_seeded_with_zero_cost():
+    """Z.AI Coding Plan rows must have input=0.0/output=0.0 (quota-backed billing)
+    and use the coding endpoint, not the general API endpoint."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    coding_plan_rows = [r for r in seeded if r.get("provider") == "Z.AI Coding Plan"]
+    assert coding_plan_rows, "At least one Z.AI Coding Plan row must be seeded"
+
+    for row in coding_plan_rows:
+        assert row["base_url"] == "https://api.z.ai/api/coding/paas/v4", (
+            f"Coding Plan row {row['model']} must use coding endpoint"
+        )
+        assert float(row["input"]) == 0.0, (
+            f"Coding Plan row {row['model']} must have input=0.0 (quota-backed)"
+        )
+        assert float(row["output"]) == 0.0, (
+            f"Coding Plan row {row['model']} must have output=0.0 (quota-backed)"
+        )
+        assert row["api_key"] == "ZAI_API_KEY"
+
+    # glm-5.2 Coding Plan row must be present
+    models = {r["model"] for r in coding_plan_rows}
+    assert "openai/glm-5.2" in models, "Z.AI Coding Plan must include openai/glm-5.2"
+
+
+def test_zai_mandatory_rows_deduped_when_already_present():
+    """When the catalog already contains Z.AI rows, _mandatory_rows_missing_from
+    must not duplicate them."""
+    from collections import defaultdict
+
+    existing = [
+        {"model": "openai/glm-5.2", "provider": "Z.AI"},
+        {"model": "openai/glm-5.2", "provider": "Z.AI Coding Plan"},
+    ]
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=existing, arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    dupes = [r for r in seeded if r["model"] == "openai/glm-5.2"]
+    assert not dupes, "openai/glm-5.2 must not be seeded again when already present"
+
+
+def test_committed_csv_includes_zai_coding_plan_rows():
+    """Committed llm_model.csv must include Z.AI Coding Plan rows with
+    zero cost and the coding endpoint URL."""
+    rows = _read_catalog_rows()
+    coding_plan = [r for r in rows if r["provider"] == "Z.AI Coding Plan"]
+    assert coding_plan, "llm_model.csv must have at least one Z.AI Coding Plan row"
+
+    for row in coding_plan:
+        assert row["base_url"] == "https://api.z.ai/api/coding/paas/v4", (
+            f"Coding Plan row {row['model']} must use coding endpoint"
+        )
+        assert float(row["input"]) == 0.0, (
+            f"Coding Plan row {row['model']} must have input=0.0"
+        )
+        assert float(row["output"]) == 0.0, (
+            f"Coding Plan row {row['model']} must have output=0.0"
+        )
+        assert row["api_key"] == "ZAI_API_KEY"
+
+    models = {r["model"] for r in coding_plan}
+    assert "openai/glm-5.2" in models, "Committed CSV must include Coding Plan row for openai/glm-5.2"
+
+
+def test_committed_csv_includes_zai_general_api_rows():
+    """Committed llm_model.csv must include Z.AI general API rows with
+    the general API endpoint URL and non-zero pricing."""
+    rows = _read_catalog_rows()
+    general = [r for r in rows if r["provider"] == "Z.AI"]
+    assert general, "llm_model.csv must have at least one Z.AI general API row"
+
+    for row in general:
+        assert row["base_url"] == "https://api.z.ai/api/paas/v4", (
+            f"Z.AI row {row['model']} must use general API endpoint"
+        )
+        assert row["api_key"] == "ZAI_API_KEY"
+
+    models = {r["model"] for r in general}
+    assert "openai/glm-5.2" in models, "Committed CSV must include general API row for openai/glm-5.2"
+
+
 def test_cli_refresh_elo_mentions_both_manifests(tmp_path):
     """--refresh-elo error message must name both manifest files so maintainers
     know to update both pdd/data/deepswe_manifest.json and arena_elo_manifest.json."""
