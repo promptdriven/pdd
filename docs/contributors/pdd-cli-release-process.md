@@ -62,8 +62,8 @@ PDS may recommend a direct command shaped like:
 pds release-video create --metadata-conflict replace --force-regenerate
 ```
 
-Use the PDD wrapper for release recovery so the generated script, idempotency
-key, and PDS run metadata stay under `.pdd/release-videos/<tag>/`:
+Use the PDD wrapper for release recovery so the generated script, release notes,
+idempotency key, and PDS run metadata stay under `.pdd/release-videos/<tag>/`:
 
 ```bash
 make release-video \
@@ -71,6 +71,7 @@ make release-video \
   RELEASE_GIT_SHA=<release-sha> \
   RELEASE_VIDEO_PROJECT_ID=<project-id> \
   RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md \
+  RELEASE_VIDEO_RELEASE_NOTES_PATH=.pdd/release-videos/<tag>/release_notes.md \
   RELEASE_VIDEO_METADATA_CONFLICT=replace \
   RELEASE_VIDEO_FORCE_REGENERATE=1 \
   RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>
