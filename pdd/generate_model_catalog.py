@@ -220,6 +220,8 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # GLM (Zhipu AI / ZAI)
     # -----------------------------------------------------------------------
+    "glm-5.2": 1510,                   # [EST] above glm-5 (1456); June 2026 Z.AI flagship
+    "glm-5-turbo": 1450,               # [EST] between glm-5.2 and glm-4.7; lighter turbo
     "glm-5": 1456,                     # [CODE] #8
     "glm-4.7": 1440,                   # [CODE] #11
     "glm-4.6": 1357,                   # [CODE]
@@ -1448,6 +1450,111 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": True,
         "reasoning_type": "effort",
         "location": "global",
+    },
+    # Z.AI General API rows (issue #1827). LiteLLM's native zai/ prefix only
+    # covers up to glm-4.7; openai/ prefix + explicit base_url is required to
+    # route glm-5.2 and glm-5-turbo without silent provider mis-detection.
+    # ELO resolved at build time from STATIC_ELO_FALLBACK (glm-5.2: 1510,
+    # glm-5-turbo: 1450). Both Z.AI endpoints share ZAI_API_KEY.
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.2",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5-turbo",
+        "input": 0.5,
+        "output": 1.5,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.1",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-4.7",
+        "input": 0.6,
+        "output": 2.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    # Z.AI GLM Coding Plan rows (issue #1827). Quota-backed billing: input=0.0,
+    # output=0.0 avoids misleading per-token cost estimates. The Coding Plan
+    # endpoint is distinct from the general API; users on the Coding Plan must
+    # use PDD_MODEL_DEFAULT=openai/glm-5.2 with ZAI_API_KEY and this base_url.
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-5.2",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-5-turbo",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-4.7",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
     },
 ]
 
