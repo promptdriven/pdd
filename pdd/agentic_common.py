@@ -1367,6 +1367,11 @@ def _is_ignored_github_steer_comment(comment: Dict[str, Any]) -> bool:
         return True
 
     body = str(comment.get("body", "") or "")
+    return _is_pdd_status_comment_body(body)
+
+
+def _is_pdd_status_comment_body(body: str) -> bool:
+    """True for PDD-generated state/progress/status comment bodies."""
     if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
         return True
     if "PDD-INCREMENTAL-STATUS" in body:
@@ -8380,6 +8385,8 @@ def drain_issue_steers(
                 if cid_val <= last_id_val:
                     continue
                 raw_body = str(entry.get("body", ""))
+                if _is_pdd_status_comment_body(raw_body):
+                    continue
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
