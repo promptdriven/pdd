@@ -34,6 +34,7 @@ Readability is not in tension with reliability: review and edit cost sit in the 
 5. **Omit sections that would be empty or obvious.** "This module does not send emails" is noise in a string formatter's prompt and signal in a payments prompt. Use the [Section Trigger Table](#section-trigger-table) to decide.
 6. **Prefer a plain sentence over a template** whenever the sentence is unambiguous and a test writer could act on it without follow-up questions.
 7. **Start from the [Minimal Skeleton](#minimal-skeleton-default)** and escalate section by section as risk triggers fire — never the other way around.
+8. **Back-propagate behavior, not implementation.** When syncing a prompt to match code that changed first, write the new requirement at behavior level — observable results, messages, exit codes. Never transcribe private helper names, exact API calls, or internal mechanics from the code. (See [Back-Propagation Altitude](#back-propagation-altitude).)
 
 > **Local / no-cloud carve-out:** without Cloud grounding, prompts must carry more structural guidance — explicit examples via `<include>` and interface pins. "Minimal" assumes grounding or explicit examples supply implementation patterns; don't strip a local prompt below what regenerates reliably.
 
@@ -2136,7 +2137,7 @@ The PDD workflow (see `../whitepaper.md`):
 4) **Fix via Command:** When you use `pdd fix`, successful Prompt+Code pairs may be recorded for grounding, depending on your local or Cloud configuration. Treat this as part of your project's privacy and retention policy.
 5) **Fix via Prompt:** If the logic is fundamentally flawed, update the prompt text to clarify the requirement or constraint that was missed, then **go to step 1**.
 6) **Drift Check (Optional):** Occasionally regenerate the module *without* changing the prompt (e.g., after upgrading LLM versions or before major releases). If the output differs significantly or fails tests, your prompt has "drifted" (it relied on lucky seeds or implicit context). Tighten the prompt until the output is stable.
-7) **Update:** Once tests pass, back-propagate any final learnings into the prompt.
+7) **Update:** Once tests pass, back-propagate any final learnings into the prompt — at behavior level, not as transcribed implementation (see [Back-Propagation Altitude](#back-propagation-altitude)).
 
 Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts are permanent assets (accumulated and versioned).
 
@@ -2183,6 +2184,17 @@ After a successful fix, ask: "Where should this knowledge live?"
 - "Public API name changed" → Update prompt/interface
 
 If the intended behavior changed, update the prompt. For example, "The module should now accept null as a valid input" is a prompt/interface change, not just a test addition.
+
+### Back-Propagation Altitude
+
+When a behavior lands in code first and you sync the prompt to match it (manual back-propagation, `pdd update`, or a code→prompt sync commit), write the back-propagated requirement at the same altitude as any hand-authored requirement: observable behavior — inputs, outputs, messages, exit codes, state changes. The temptation during a sync is to *transcribe* the code; resist it:
+
+- **Don't pin private helpers.** "Decode the token with `_decode_jwt_payload`" pins an internal name; "report the cached token's audience and expiry status" states the behavior.
+- **Don't pin exact API calls.** "Delete with `Path.unlink()`" is the how; "delete the cache file" is the what.
+- **Don't dictate internal step ordering** unless the order is itself observable. "Validation happens before any provider call" is observable behavior; "parse, then decode, then print" is not.
+- **Don't describe a mechanism unless you have re-derived it from the code's behavior.** A transcribed mechanism that is even slightly wrong is worse than no mechanism at all. For example, "call `apply_color_preference(color)` through `ctx.call_on_close`" reads as *defer the call until close*, when the code actually applies the preference immediately and registers the **returned** restore callback on close — the next regeneration will faithfully implement the wrong description.
+
+The test for every back-propagated line: **could a different, equally correct implementation satisfy it?** If not, you transcribed instead of specified — move the detail out of the prompt and let the generated code (plus tests) own it.
 
 ### Prompt Defects vs. Code Bugs
 
