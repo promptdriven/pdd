@@ -32,6 +32,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_METADATA_CONFLICT",
         "RELEASE_VIDEO_PDS_CLAUDE_MODEL",
         "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
+        "RELEASE_VIDEO_RELEASE_NOTES_PATH",
         "RELEASE_VIDEO_SCRIPT_PATH",
         "PDS_API_URL",
         "PDS_PROFILE",
@@ -1360,6 +1361,54 @@ def test_release_video_default_idempotency_key_uses_tag_and_git_sha(tmp_path: Pa
     )
 
     assert pds_idempotency_key(capture) == "pdd-release-video:v1.1.0:abc123def456:local"
+
+
+def test_release_video_release_notes_path_reuses_original_artifact(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    output_dir = tmp_path / "videos"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_release_notes = tmp_path / "existing_release_notes.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    original_notes = "## Commits\n\n- Preserve the exact retry release notes.\n"
+    existing_release_notes.write_text(original_notes, encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--release-notes-path",
+            str(existing_release_notes),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/retry"}},
+                )
+            ),
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    preserved_notes = output_dir / "v1.1.0" / "release_notes.md"
+    assert preserved_notes.read_text(encoding="utf8") == original_notes
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--release-notes") + 1] == str(preserved_notes)
 
 
 def test_release_video_default_idempotency_key_separates_local_and_ci_provenance(
