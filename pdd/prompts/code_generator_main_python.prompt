@@ -2,9 +2,9 @@
 
 <pdd-interface>
 {
-  "type": "cli",
-  "cli": {
-    "commands": [
+  "type": "module",
+  "module": {
+    "functions": [
       {"name": "is_git_repository", "signature": "(path: Optional[str] = None) -> bool", "returns": "bool"},
       {"name": "get_git_content_at_ref", "signature": "(file_path: str, git_ref: str = \"HEAD\") -> Optional[str]", "returns": "Optional[str]"},
       {"name": "get_file_git_status", "signature": "(file_path: str) -> str", "returns": "str"},

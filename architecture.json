@@ -2241,9 +2241,9 @@
       "python"
     ],
     "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
+      "type": "module",
+      "module": {
+        "functions": [
           {
             "name": "is_git_repository",
             "signature": "(path: Optional[str] = None) -> bool",
