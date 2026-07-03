@@ -33,14 +33,14 @@
 #   23. test_zai_coding_plan_kwargs_use_coding_endpoint: Z.AI Coding Plan → coding endpoint in kwargs.
 #
 # VI. Session Persistence
-#   21. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
+#   24. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
 #
 # VII. CSV Loading Normalization
-#   22. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
+#   25. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
 #
 # VIII. Pure Function Contracts
-#   23-28. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
-#   29-30. _calculate_cost: basic math, zero tokens.
+#   26-31. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
+#   32-33. _calculate_cost: basic math, zero tokens.
 
 """Tests for model_tester.py — behavioral tests driven through test_model_interactive()."""
 
