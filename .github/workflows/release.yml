@@ -237,6 +237,9 @@ jobs:
       #   vars.RELEASE_VIDEO_SCRIPT_PATH optional checked-out artifact path to
       #                                reuse when Claude Code quota/auth blocks
       #                                script generation.
+      #   vars.RELEASE_VIDEO_RELEASE_NOTES_PATH optional checked-out release
+      #                                notes artifact path to preserve exact
+      #                                selected-project recovery metadata.
       - name: Create release video and prepend link to notes (best-effort)
         if: env.HAS_PDS == 'true'
         continue-on-error: true
@@ -252,6 +255,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RELEASE_VIDEO_PROJECT_ID: ${{ vars.RELEASE_VIDEO_PROJECT_ID }}
           RELEASE_VIDEO_SCRIPT_PATH: ${{ vars.RELEASE_VIDEO_SCRIPT_PATH }}
+          RELEASE_VIDEO_RELEASE_NOTES_PATH: ${{ vars.RELEASE_VIDEO_RELEASE_NOTES_PATH }}
           RELEASE_VIDEO_IDEMPOTENCY_KEY: ${{ vars.RELEASE_VIDEO_IDEMPOTENCY_KEY }}
           RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE: ${{ vars.RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE || 'github-actions' }}
           RELEASE_VIDEO_ATTEMPT_ID: ${{ vars.RELEASE_VIDEO_ATTEMPT_ID }}
