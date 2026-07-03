@@ -2245,9 +2245,44 @@
       "module": {
         "functions": [
           {
+            "name": "is_git_repository",
+            "signature": "(path: Optional[str] = None) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_git_content_at_ref",
+            "signature": "(file_path: str, git_ref: str = \"HEAD\") -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "get_file_git_status",
+            "signature": "(file_path: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "git_add_files",
+            "signature": "(file_paths: List[str], verbose: bool = False) -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "code_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str] = None, original_prompt_file_path: Optional[str] = None, force_incremental_flag: bool = False, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False)",
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False, snapshot_context: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, bool, float, str]",
             "returns": "Tuple[str, bool, float, str]"
+          },
+          {
+            "name": "ArchitectureConformanceError",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "returns": "ArchitectureConformanceError"
+          },
+          {
+            "name": "PublicSurfaceRegressionError",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "returns": "PublicSurfaceRegressionError"
+          },
+          {
+            "name": "TestChurnError",
+            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
+            "returns": "TestChurnError"
           }
         ]
       }
@@ -8365,7 +8400,8 @@
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
     "dependencies": [
       "commands/replay_python.prompt",
-      "commands/context_python.prompt"
+      "commands/context_python.prompt",
+      "commands/contracts_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
@@ -9161,13 +9197,13 @@
     }
   },
   {
-    "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
+    "reason": "Defines the main PDDCLI group, global estimate options, result rendering, and duplicate guard.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
-      "dump_python.prompt",
-      "errors_python.prompt",
-      "utils_python.prompt",
-      "duplicate_cli_guard_python.prompt",
+      "core/dump_python.prompt",
+      "core/errors_python.prompt",
+      "core/utils_python.prompt",
+      "core/duplicate_cli_guard_python.prompt",
       "agentic_common_python.prompt",
       "auto_update_python.prompt",
       "track_cost_python.prompt",
@@ -9188,7 +9224,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, color, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)",
             "returns": "None"
           },
           {
