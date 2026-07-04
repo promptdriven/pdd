@@ -376,11 +376,12 @@ def test_local_runner_default_survives_when_score_known(monkeypatch):
 
 
 def test_csv_fieldnames_include_interactive_only():
-    # The column must be present (and last) so DictWriter emits it for every row.
+    # The column must be present so DictWriter emits it for every row.
     assert "interactive_only" in gmc.CSV_FIELDNAMES
     assert "model_rank_score" in gmc.CSV_FIELDNAMES
     assert "model_rank_source" in gmc.CSV_FIELDNAMES
-    assert gmc.CSV_FIELDNAMES[-1] == "interactive_only"
+    assert "context_limit" in gmc.CSV_FIELDNAMES
+    assert gmc.CSV_FIELDNAMES[-1] == "context_limit"
 
 
 @pytest.mark.parametrize(
@@ -826,8 +827,8 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     Gemini Flash row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves
     directly instead of surrogating onto an unrelated first-row provider.
 
-    Pin the EXACT 14-column row (format + raw ELO 1442 +
-    DeepSWE-derived rank score 12800 + interactive_only=False)
+    Pin the EXACT 15-column row (format + raw ELO 1442 +
+    DeepSWE-derived rank score 12800 + interactive_only=False + empty context_limit)
     and its rank-sorted position (after the bare Vertex alias with the same
     rank and before the next lower DeepSWE-ranked Vertex model) so a
     regeneration that emitted a malformed or mis-sorted row would fail here,
@@ -839,7 +840,7 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
         "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,12800,"
         "deepswe-solve-rate,,"
         "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
-        "0,True,effort,global,False"
+        "0,True,effort,global,False,"
     )
     assert exact_row in lines, "GA Vertex Gemini Flash row missing or malformed"
 

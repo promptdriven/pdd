@@ -362,7 +362,7 @@ CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
     "model_rank_score", "model_rank_source", "base_url", "api_key",
     "max_reasoning_tokens", "structured_output", "reasoning_type",
-    "location", "interactive_only",
+    "location", "interactive_only", "context_limit",
 ]
 
 # DeepSWE is a solve-rate benchmark, not an ELO leaderboard.  Store its signal
@@ -1467,6 +1467,7 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": False,
         "reasoning_type": "effort",
         "location": "",
+        "context_limit": 1_000_000,
     },
     {
         "provider": "Z.AI",
@@ -1531,6 +1532,7 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": False,
         "reasoning_type": "effort",
         "location": "",
+        "context_limit": 1_000_000,
     },
     {
         "provider": "Z.AI Coding Plan",

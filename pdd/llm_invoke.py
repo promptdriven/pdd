@@ -5597,7 +5597,9 @@ def llm_invoke(
                     # call (e.g. github_copilot device-code OAuth) can't wedge
                     # the entire LLM invocation. See pdd/server/token_counter.py.
                     token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
-                    context_limit = get_context_limit(model_name_litellm)
+                    context_limit = _catalog_context_limit(model_info)
+                    if context_limit is None:
+                        context_limit = get_context_limit(model_name_litellm)
                     token_count_for_attribution = token_count
                     context_limit_for_attribution = context_limit
 

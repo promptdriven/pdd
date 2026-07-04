@@ -26,7 +26,7 @@ the web, download parquet files, or fuzzy match model identities at runtime.
 1. Use stdlib + `litellm` only as hard dependencies. Define:
    - `ELO_CUTOFF = 1300`
    - `MAX_COST_PER_MTOK = 100.0`
-   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","model_rank_score","model_rank_source","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location","interactive_only"]`
+   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","model_rank_score","model_rank_source","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location","interactive_only","context_limit"]`
    - `DEEPSWE_RANK_BASE = 10000`. DeepSWE is a solve-rate benchmark, not an ELO source. Store DeepSWE in `model_rank_score = DEEPSWE_RANK_BASE + round(solve_rate_percent * 100)`, while `coding_arena_elo` stays raw Arena/static metadata.
    - `_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama", "chatgpt"}` — provider roots that require interactive human auth/connect (device-flow OAuth, a ChatGPT subscription / `codex login` token, or a local server) and therefore hang in non-interactive contexts (Cloud Run, CI, library import). This includes the hand-managed `chatgpt/*` subscription rows, which carry an empty api_key and rely on device-flow auth.
    - `AGENTIC_ELO_MANIFEST_PATH = Path(__file__).parent / "data" / "arena_elo_manifest.json"`

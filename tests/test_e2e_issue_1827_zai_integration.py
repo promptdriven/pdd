@@ -610,3 +610,66 @@ def test_catalog_context_limit_returns_1m_for_zai_glm52_model_info():
     assert _catalog_context_limit(coding_info) == 1_000_000, (
         "Z.AI Coding Plan GLM-5.2 row must yield 1M context limit"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. Non-estimate runtime context validation uses catalog context_limit
+#
+# Verify that llm_invoke's pre-call context validation reads context_limit
+# from the catalog row rather than only querying LiteLLM, so glm-5.2 (which
+# LiteLLM doesn't register) is correctly bounded at 1,000,000 tokens.
+# ---------------------------------------------------------------------------
+
+def test_runtime_context_validation_uses_catalog_context_limit(tmp_path, monkeypatch):
+    """During a real (non-estimate) invocation, the context validation path must
+    consult _catalog_context_limit(model_info) before falling back to
+    get_context_limit(model_name_litellm).
+
+    Regression test for the finding: LiteLLM returns None for openai/glm-5.2
+    (because it doesn't know this custom model), so if the catalog override is
+    not checked first, context validation is silently skipped even when the
+    catalog declares a 1M-token limit.
+
+    Setup: catalog row has context_limit=1000000 and token_count=2000000.
+    With the fix:  context validation fires, detects 2M > 1M, raises RuntimeError.
+    Without the fix: get_context_limit returns None → validation skipped → no error.
+    """
+    import logging
+
+    _CSV_HEADER_WITH_CTX = (
+        "provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,"
+        "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,"
+        "interactive_only,context_limit\n"
+    )
+    _ROW_WITH_CTX = (
+        f"Z.AI,openai/glm-5.2,1.0,3.2,1510,1510,static-prefix,"
+        f"{_GENERAL_URL},ZAI_API_KEY,0,False,effort,,False,1000000\n"
+    )
+
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(_CSV_HEADER_WITH_CTX + _ROW_WITH_CTX, encoding="utf-8")
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-ctx-test")
+
+    import pytest
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+            # Token count exceeds the catalog's 1M limit — validation should raise.
+            with patch.object(llm_mod, "count_tokens_for_messages", return_value=2_000_000):
+                # LiteLLM doesn't know openai/glm-5.2 → returns None for this model.
+                with patch.object(llm_mod, "get_context_limit", return_value=None):
+                    with patch.object(llm_mod.litellm, "completion") as mock_comp:
+                        with pytest.raises(RuntimeError, match="context limit"):
+                            llm_mod.llm_invoke(
+                                prompt="big prompt {x}",
+                                input_json={"x": "y"},
+                                strength=0.5,
+                                use_cloud=False,
+                            )
+                        # completion must NOT be called — model was rejected before the call.
+                        mock_comp.assert_not_called()
