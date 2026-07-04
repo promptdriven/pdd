@@ -1080,6 +1080,34 @@ def _step7_unfixed_critical_blocks_targeted_pr(
     return True
 
 
+def _step7_payload_has_structured_success(payload: Dict[str, Any]) -> bool:
+    """Accept newer Step 7 verdicts that omit legacy ``success``.
+
+    Hosted runs can emit a final JSON report with explicit pass evidence
+    (`all_tests_pass`, `build_clean`, zero failures, no blocking issues, and the
+    canonical exit signal) but without the legacy `success` field. Treat that as
+    a pass only when every independent clean marker is present.
+    """
+    if payload.get("all_tests_pass") is not True:
+        return False
+    if payload.get("build_clean") is not True:
+        return False
+    if str(payload.get("exit_signal") or "").strip().lower() != "all issues fixed":
+        return False
+    blocking_issues = payload.get("blocking_issues")
+    if not isinstance(blocking_issues, list) or blocking_issues:
+        return False
+
+    failed = payload.get("failed")
+    if isinstance(failed, bool):
+        return False
+    if isinstance(failed, (int, float)):
+        return failed == 0
+    if isinstance(failed, str):
+        return failed.strip() in {"0", "0.0"}
+    return False
+
+
 def _step7_passed(
     step7_output: str,
     pr_mode: bool,
@@ -1103,7 +1131,8 @@ def _step7_passed(
 
     Returns ``(passed, failure_reason)`` where ``passed`` is True iff:
 
-    * ``success`` is ``True``;
+    * ``success`` is ``True`` (or a newer hosted verdict omits ``success`` but
+      includes all strict structured pass markers);
     * in PR mode WITH a source issue (``has_issue``), ``issue_aligned`` is
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
@@ -1147,12 +1176,16 @@ def _step7_passed(
             f"Step 7 verdict JSON could not be parsed (fail-closed): {snippet}",
         )
 
-    if payload.get("success") is not True:
-        return (
-            False,
-            f"Step 7 reported success=false. "
-            f"Message: {payload.get('message') or '<no message>'}",
-        )
+    success_value = payload.get("success")
+    if success_value is not True:
+        if "success" not in payload and _step7_payload_has_structured_success(payload):
+            success_value = True
+        else:
+            return (
+                False,
+                f"Step 7 reported success=false. "
+                f"Message: {payload.get('message') or '<no message>'}",
+            )
 
     if pr_mode and has_issue and payload.get("issue_aligned") is not True:
         return (

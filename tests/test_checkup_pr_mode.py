@@ -2689,6 +2689,56 @@ PR #1831 fully resolves issue #1827.
         assert passed is False
         assert "success=false" in reason
 
+    def test_hosted_json_verdict_without_success_passes_when_clean(self) -> None:
+        """Hosted Step 7 may emit a clean verdict using newer pass fields."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = {
+            "issue_aligned": True,
+            "all_tests_pass": True,
+            "build_clean": True,
+            "blocking_issues": [],
+            "non_blocking_notes": [
+                "Pre-existing warning in llm_invoke.py:495",
+            ],
+            "exit_signal": "All Issues Fixed",
+            "step": 7,
+            "iteration": 1,
+            "total_tests": 892,
+            "passed": 892,
+            "skipped": 2,
+            "failed": 0,
+        }
+        out = (
+            "## Step 7/8: Verification & Final Report\n\n"
+            "### Test Results: 892 passed, 2 skipped, 0 failed\n\n"
+            "```json\n"
+            f"{json.dumps(payload, indent=2)}\n"
+            "```"
+        )
+
+        passed, reason = _step7_passed(out, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+
+    def test_json_verdict_without_success_fails_with_blocking_issues(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = {
+            "issue_aligned": True,
+            "all_tests_pass": True,
+            "build_clean": True,
+            "blocking_issues": ["review finding remains"],
+            "exit_signal": "All Issues Fixed",
+            "failed": 0,
+        }
+        out = "```json\n" + json.dumps(payload) + "\n```"
+
+        passed, reason = _step7_passed(out, pr_mode=True, has_issue=True)
+
+        assert passed is False
+        assert "success=false" in reason
+
     def test_issue_aligned_false_fails_in_pr_mode(self) -> None:
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
