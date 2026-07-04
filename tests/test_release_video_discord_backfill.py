@@ -76,7 +76,7 @@ def test_backfill_posts_discord_followup_and_marks_release_body():
     assert module.discord_backfill_marker("v0.0.283", youtube_url) in github.body
 
 
-def test_backfill_persists_marker_before_posting_discord():
+def test_backfill_does_not_post_discord_when_release_link_edit_fails():
     module = load_backfill_module()
     github = FakeGitHubReleaseClient("Existing notes.\n")
     posts: list[tuple[str, dict]] = []
@@ -97,6 +97,28 @@ def test_backfill_persists_marker_before_posting_discord():
         )
 
     assert posts == []
+
+
+def test_backfill_does_not_mark_release_when_discord_post_fails():
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    github = FakeGitHubReleaseClient("Existing notes.\n")
+
+    def fail_post(webhook_url: str, payload: dict) -> None:
+        raise module.BackfillError("Discord webhook returned HTTP 403: Forbidden")
+
+    with pytest.raises(module.BackfillError, match="Discord webhook returned HTTP 403"):
+        module.backfill_release_video_discord(
+            tag="v0.0.283",
+            youtube_url=youtube_url,
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=fail_post,
+        )
+
+    assert github.body.startswith(f"Release video: {youtube_url}\n\n")
+    assert module.discord_backfill_marker("v0.0.283", youtube_url) not in github.body
 
 
 def test_backfill_merges_marker_into_latest_release_body_before_posting():
