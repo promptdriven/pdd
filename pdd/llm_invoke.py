@@ -3045,6 +3045,28 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     if not base_model_name:
         return []
     alternatives: List[Tuple[str, str]] = []
+    z_ai_openai_compatible_models = {
+        "glm-5.2",
+        "glm-5-turbo",
+        "glm-5.1",
+        "glm-5",
+        "glm-4.7",
+    }
+    if base_model_name in z_ai_openai_compatible_models:
+        # Z.AI's current GLM endpoints are OpenAI-compatible, so the catalog
+        # stores them as openai/<model> with endpoint-specific base_url rows.
+        # Try those rows before the generic surrogate-base fallback so a user
+        # default like PDD_MODEL_DEFAULT=glm-5.2 cannot silently select an
+        # unrelated first CSV row. Coding Plan is first because its rows are
+        # quota-backed and are the ZCode-specific path from issue #1827; a
+        # user CSV containing only the general row still resolves on the
+        # second alternative.
+        alternatives.extend(
+            [
+                (f"openai/{base_model_name}", "Z.AI Coding Plan"),
+                (f"openai/{base_model_name}", "Z.AI"),
+            ]
+        )
     for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
         if base_model_name.startswith(prefix):
             # Strip the prefix; only consider rows from the matching provider.

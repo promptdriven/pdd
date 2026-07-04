@@ -1300,7 +1300,7 @@ def test_zai_general_api_rows_seeded_when_litellm_unaware():
     assert row["base_url"] == "https://api.z.ai/api/paas/v4"
     assert row["api_key"] == "ZAI_API_KEY"
     assert row["reasoning_type"] == "effort"
-    assert row["structured_output"] is True
+    assert row["structured_output"] is False
     assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
 
 
@@ -1326,6 +1326,7 @@ def test_zai_coding_plan_rows_seeded_with_zero_cost():
             f"Coding Plan row {row['model']} must have output=0.0 (quota-backed)"
         )
         assert row["api_key"] == "ZAI_API_KEY"
+        assert row["structured_output"] is False
 
     # glm-5.2 Coding Plan row must be present
     models = {r["model"] for r in coding_plan_rows}
@@ -1366,6 +1367,7 @@ def test_committed_csv_includes_zai_coding_plan_rows():
             f"Coding Plan row {row['model']} must have output=0.0"
         )
         assert row["api_key"] == "ZAI_API_KEY"
+        assert row["structured_output"] == "False"
 
     models = {r["model"] for r in coding_plan}
     assert "openai/glm-5.2" in models, "Committed CSV must include Coding Plan row for openai/glm-5.2"
@@ -1383,6 +1385,7 @@ def test_committed_csv_includes_zai_general_api_rows():
             f"Z.AI row {row['model']} must use general API endpoint"
         )
         assert row["api_key"] == "ZAI_API_KEY"
+        assert row["structured_output"] == "False"
 
     models = {r["model"] for r in general}
     assert "openai/glm-5.2" in models, "Committed CSV must include general API row for openai/glm-5.2"

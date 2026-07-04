@@ -234,14 +234,14 @@ W&B Inference,wandb/MiniMaxAI/MiniMax-M2.5,0.3,1.2,1383,1383,arena-elo-fallback,
 W&B Inference,wandb/deepseek-ai/DeepSeek-R1-0528,1.35,5.4,1370,1370,static-prefix,,WANDB_API_KEY,0,False,none,,False
 W&B Inference,wandb/moonshotai/Kimi-K2-Instruct,0.6,2.5,1310,1310,static-prefix,,WANDB_API_KEY,0,False,none,,False
 W&B Inference,wandb/Qwen/Qwen3-235B-A22B-Thinking-2507,0.1,0.1,1300,1300,static-prefix,,WANDB_API_KEY,0,False,none,,False
-Z.AI,openai/glm-5.2,1.0,3.2,1510,1510,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI,openai/glm-5-turbo,0.5,1.5,1450,1450,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI,openai/glm-5.1,1.0,3.2,1436,11800,deepswe-solve-rate,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI,openai/glm-5,1.0,3.2,1436,11800,deepswe-solve-rate,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI,openai/glm-4.7,0.6,2.2,1440,1440,arena-elo-fallback,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI Coding Plan,openai/glm-5.2,0.0,0.0,1510,1510,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI Coding Plan,openai/glm-5-turbo,0.0,0.0,1450,1450,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,True,effort,,False
-Z.AI Coding Plan,openai/glm-4.7,0.0,0.0,1440,1440,arena-elo-fallback,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,True,effort,,False
+Z.AI,openai/glm-5.2,1.0,3.2,1510,1510,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI,openai/glm-5-turbo,0.5,1.5,1450,1450,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI,openai/glm-5.1,1.0,3.2,1436,11800,deepswe-solve-rate,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI,openai/glm-5,1.0,3.2,1436,11800,deepswe-solve-rate,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI,openai/glm-4.7,0.6,2.2,1440,1440,arena-elo-fallback,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI Coding Plan,openai/glm-5.2,0.0,0.0,1510,1510,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI Coding Plan,openai/glm-5-turbo,0.0,0.0,1450,1450,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False
+Z.AI Coding Plan,openai/glm-4.7,0.0,0.0,1440,1440,arena-elo-fallback,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False
 Zai,zai/glm-5,1.0,3.2,1436,11800,deepswe-solve-rate,,ZAI_API_KEY,0,True,effort,,False
 Zai,zai/glm-4.7,0.6,2.2,1440,1440,arena-elo-fallback,,ZAI_API_KEY,0,True,effort,,False
 Zai,zai/glm-4.6,0.6,2.2,1354,1354,arena-elo-fallback,,ZAI_API_KEY,0,True,effort,,False
