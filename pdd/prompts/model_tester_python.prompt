@@ -26,12 +26,13 @@ Tests a single configured model by making one `litellm.completion()` call with a
 4. Before calling, show diagnostics: check each env var from the api_key field alias-aware. Show `✓ Found (VAR)` using the resolved alias or `✗ Not found (VAR)` per var, plus base URL if applicable.
    - For `GOOGLE_APPLICATION_CREDENTIALS`, also verify the path points to an existing file.
 5. After calling, show: `LLM call  ✓ OK (0.3s, $0.0001)` or `LLM call  ✗ error description`
-6. Calculate cost from token usage × CSV row's input/output prices per 1M tokens
+6. Calculate cost from token usage × CSV row's input/output prices per 1M tokens. For quota-backed rows, currently provider `Z.AI Coding Plan`, display a quota-backed label instead of a misleading per-token dollar estimate.
 7. Persist test results in the model list display across picks within a session
 8. Distinguish errors: authentication, connection refused (local), model not found, timeout, rate limit
 9. If no user CSV exists or is empty, inform user and return
 10. CSV loading: validate required columns (provider, model, api_key). Normalize nullable string columns to empty strings and coerce numeric cost columns to floats (default 0.0).
 11. LM Studio convention: if model starts with `lm_studio/` or provider is `lm_studio`, default base_url to `LM_STUDIO_API_BASE` env var or `http://localhost:1234/v1`.
+12. For any CSV row with a non-empty `base_url`, pass it to LiteLLM as both `base_url` and `api_base` so diagnostics and test calls preserve OpenAI-compatible endpoint overrides such as Z.AI general API (`https://api.z.ai/api/paas/v4`) and Z.AI Coding Plan (`https://api.z.ai/api/coding/paas/v4`).
 
 <pdd-dependency>provider_manager_python.prompt</pdd-dependency>
 
