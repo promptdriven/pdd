@@ -476,6 +476,18 @@ def test_zai_coding_plan_kwargs_use_coding_endpoint(tmp_path, monkeypatch):
     assert call_kwargs.get("api_base") == "https://api.z.ai/api/coding/paas/v4"
 
 
+def test_zai_coding_plan_displays_quota_backed_cost(tmp_path, monkeypatch):
+    """Coding Plan rows show quota-backed usage instead of fake per-token dollars."""
+    mock_comp = MagicMock(return_value=_mock_litellm_success(10, 5))
+    output, _ = _run_interactive_capture(
+        tmp_path, ZAI_CODING_PLAN_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"ZAI_API_KEY": "sk-zai-test"},
+    )
+    assert "quota" in output.lower()
+    assert "quota-backed" in output
+
+
 # ===========================================================================
 # VI. Session Persistence
 # ===========================================================================
