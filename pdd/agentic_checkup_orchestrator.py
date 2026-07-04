@@ -1929,6 +1929,42 @@ def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List
     return fields, missing
 
 
+def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
+    """Return True when prose Step 5 output proves tests passed.
+
+    Missing ``failure_signal`` blocks still fail closed by default. This helper
+    only recovers the clean path for provider-success output that includes both
+    an explicit zero exit code and an unambiguous pass/failure-zero summary,
+    with no failure markers.
+    """
+    if not step5_output:
+        return False
+
+    has_exit_zero = bool(
+        re.search(
+            r"(?im)\b(?:exit[_\s-]*code|return[_\s-]*code)\b\D*0\b",
+            step5_output,
+        )
+    )
+    has_pass_summary = bool(
+        re.search(
+            r"(?im)\b(?:all\s+tests\s+pass(?:ed)?|(?:\d+|all)\s+passed|"
+            r"failures?\b\D*0\b|0\s+failed)\b",
+            step5_output,
+        )
+    )
+    has_failure_marker = bool(
+        re.search(
+            r"(?im)(?:^FAILED\b|^\s*FAILED\s|=+\s+FAILURES\s+=+|"
+            r"\b\d+\s+failed\b|"
+            r"\b(?:exit[_\s-]*code|return[_\s-]*code)\b\D*[1-9]\d*\b|"
+            r"\bstatus\s*:\s*(?:fail|failed|failure|error)\b)",
+            step5_output,
+        )
+    )
+    return has_exit_zero and has_pass_summary and not has_failure_marker
+
+
 _ARTIFACT_OUTPUT_MAX_LINES = 400
 _ARTIFACT_OUTPUT_MAX_BYTES = 256 * 1024
 # Codex round-6 performance: cap raw bytes pulled off disk before scrubbing.
@@ -2470,6 +2506,28 @@ def _is_python_test_path(path: Path) -> bool:
     return "tests" in path.parts and path.suffix == ".py"
 
 
+_STEP5_FOCUSED_TEST_OVERRIDES: Dict[Path, Tuple[Path, ...]] = {
+    Path("pdd/agentic_checkup_orchestrator.py"): (
+        Path("tests/test_agentic_checkup_step5_pass_evidence.py"),
+    ),
+}
+
+
+def _step5_conventional_test_candidates(rel: Path) -> List[Path]:
+    """Return conventional pytest files for a changed Python source path."""
+    stem = rel.stem
+    candidates = [
+        Path("tests") / f"test_{stem}.py",
+        Path("tests") / rel.parent / f"test_{stem}.py",
+    ]
+    if len(rel.parts) > 1:
+        candidates.append(Path("tests").joinpath(*rel.parts[1:-1], f"test_{stem}.py"))
+    if len(rel.parts) > 2:
+        joined = "_".join((*rel.parts[:-1], stem))
+        candidates.append(Path("tests") / f"test_{joined}.py")
+    return candidates
+
+
 def _select_step5_python_tests(
     worktree: Path,
     changed_paths: Sequence[str],
@@ -2484,6 +2542,21 @@ def _select_step5_python_tests(
     """
     selected: List[str] = []
     seen: Set[str] = set()
+    normalized_paths = [
+        rel
+        for raw_path in changed_paths
+        if (rel := _safe_repo_rel_path(raw_path)) is not None
+    ]
+    override_sources = {
+        rel
+        for rel in normalized_paths
+        if rel.suffix == ".py" and rel in _STEP5_FOCUSED_TEST_OVERRIDES
+    }
+    suppressed_direct_tests = {
+        candidate
+        for source in override_sources
+        for candidate in _step5_conventional_test_candidates(source)
+    }
 
     def _add(candidate: Path) -> None:
         rel = _safe_repo_rel_path(candidate.as_posix())
@@ -2496,28 +2569,32 @@ def _select_step5_python_tests(
             selected.append(rel_posix)
             seen.add(rel_posix)
 
-    for raw_path in changed_paths:
-        rel = _safe_repo_rel_path(raw_path)
-        if rel is None or rel.suffix != ".py":
+    for rel in normalized_paths:
+        if rel.suffix != ".py":
             continue
         if _is_python_test_path(rel):
+            if rel in suppressed_direct_tests:
+                continue
             _add(rel)
             continue
+        override_candidates = _STEP5_FOCUSED_TEST_OVERRIDES.get(rel)
+        if override_candidates:
+            for candidate in override_candidates:
+                _add(candidate)
+            continue
 
-        stem = rel.stem
-        candidates = [
-            Path("tests") / f"test_{stem}.py",
-            Path("tests") / rel.parent / f"test_{stem}.py",
-        ]
-        if len(rel.parts) > 1:
-            candidates.append(
-                Path("tests").joinpath(*rel.parts[1:-1], f"test_{stem}.py")
-            )
-        if len(rel.parts) > 2:
-            joined = "_".join((*rel.parts[:-1], stem))
-            candidates.append(Path("tests") / f"test_{joined}.py")
-        for candidate in candidates:
+        for candidate in _step5_conventional_test_candidates(rel):
             _add(candidate)
+
+    focused_selected = {Path(path) for path in selected}
+    suppressed_selected = {
+        candidate.as_posix()
+        for source, focused_candidates in _STEP5_FOCUSED_TEST_OVERRIDES.items()
+        if any(candidate in focused_selected for candidate in focused_candidates)
+        for candidate in _step5_conventional_test_candidates(source)
+    }
+    if suppressed_selected:
+        selected = [path for path in selected if path not in suppressed_selected]
 
     return selected
 
@@ -4434,6 +4511,14 @@ def _run_agentic_checkup_orchestrator_inner(
                     status_value = (
                         str(signal_fields.get("status", "")).strip().lower()
                     )
+                    inferred_pass_from_output = (
+                        success
+                        and "__block__" in signal_missing
+                        and _step5_output_has_strong_pass_evidence(step5_persisted)
+                    )
+                    if inferred_pass_from_output:
+                        status_value = "pass"
+                        signal_missing = []
                     # Codex round-8 Finding 1: when the agent omits or
                     # mangles the required ``failure_signal`` block, the
                     # logical outcome is unknown — treating an unknown
@@ -4444,6 +4529,10 @@ def _run_agentic_checkup_orchestrator_inner(
                     # contains "__block__"), an empty status, or any
                     # status word that is neither a known pass nor a
                     # known skipped value counts as a logical failure.
+                    # Exception: when provider success output has explicit
+                    # zero-exit and pass-summary evidence, treat the missing
+                    # block as a prompt-contract defect rather than a test
+                    # failure and do not run speculative fixes.
                     block_missing = "__block__" in signal_missing
                     status_recognised_pass = status_value in pass_statuses
                     status_skipped = status_value in skipped_statuses
