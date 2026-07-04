@@ -222,6 +222,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     "glm-5.2": 1510,                   # [EST] above glm-5 (1456); June 2026 Z.AI flagship
     "glm-5-turbo": 1450,               # [EST] between glm-5.2 and glm-4.7; lighter turbo
+    "glm-5.1": 1436,                   # [EST] DeepSWE #9; raw ELO fallback mirrors GLM-5 route family
     "glm-5": 1456,                     # [CODE] #8
     "glm-4.7": 1440,                   # [CODE] #11
     "glm-4.6": 1357,                   # [CODE]

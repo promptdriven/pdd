@@ -1282,16 +1282,20 @@ def test_deepswe_manifest_covers_current_public_rows_with_supported_catalog_rout
 
 
 def test_zai_static_elo_fallback_clears_cutoff():
-    """glm-5.2 and glm-5-turbo must have STATIC_ELO_FALLBACK entries that
+    """glm-5.2, glm-5-turbo, and glm-5.1 must have STATIC_ELO_FALLBACK entries that
     clear ELO_CUTOFF so mandatory Z.AI rows survive _mandatory_rows_missing_from.
     Without these entries _get_elo returns 0 and the rows are filtered out."""
     elo_52, _ = gmc._get_elo("glm-5.2", {})
     elo_turbo, _ = gmc._get_elo("glm-5-turbo", {})
+    elo_51, _ = gmc._get_elo("glm-5.1", {})
     assert elo_52 >= gmc.ELO_CUTOFF, (
         f"glm-5.2 ELO {elo_52} must be >= ELO_CUTOFF {gmc.ELO_CUTOFF}"
     )
     assert elo_turbo >= gmc.ELO_CUTOFF, (
         f"glm-5-turbo ELO {elo_turbo} must be >= ELO_CUTOFF {gmc.ELO_CUTOFF}"
+    )
+    assert elo_51 >= gmc.ELO_CUTOFF, (
+        f"glm-5.1 ELO {elo_51} must be >= ELO_CUTOFF {gmc.ELO_CUTOFF}"
     )
 
 
@@ -1400,6 +1404,7 @@ def test_committed_csv_includes_zai_general_api_rows():
 
     models = {r["model"] for r in general}
     assert "openai/glm-5.2" in models, "Committed CSV must include general API row for openai/glm-5.2"
+    assert "openai/glm-5.1" in models, "Committed CSV must include general API row for openai/glm-5.1"
 
 
 def test_cli_refresh_elo_mentions_both_manifests(tmp_path):

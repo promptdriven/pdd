@@ -23,7 +23,7 @@ CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
     "model_rank_score", "model_rank_source", "base_url", "api_key",
     "max_reasoning_tokens", "structured_output", "reasoning_type", "location",
-    "interactive_only",
+    "interactive_only", "context_limit",
 ]
 
 # ---------------------------------------------------------------------------

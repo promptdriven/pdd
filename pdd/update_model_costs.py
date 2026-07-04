@@ -18,11 +18,11 @@ EXPECTED_COLUMNS = [
     'provider', 'model', 'input', 'output', 'coding_arena_elo',
     'model_rank_score', 'model_rank_source', 'base_url', 'api_key',
     'max_reasoning_tokens', 'structured_output', 'reasoning_type',
-    'location', 'interactive_only',
+    'location', 'interactive_only', 'context_limit',
 ]
 
 # Define columns that should be nullable integers
-INT_COLUMNS = ['coding_arena_elo', 'model_rank_score', 'max_reasoning_tokens']
+INT_COLUMNS = ['coding_arena_elo', 'model_rank_score', 'max_reasoning_tokens', 'context_limit']
 
 # Placeholder for missing numeric values (optional, pd.NA is generally better)
 # MISSING_VALUE_PLACEHOLDER = -1.0 # Not used in current logic, pd.NA preferred

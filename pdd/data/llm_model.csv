@@ -238,6 +238,7 @@ Z.AI,openai/glm-5.2,1.0,3.2,1510,1510,static-prefix,https://api.z.ai/api/paas/v4
 Z.AI,openai/glm-5,1.0,3.2,1456,1456,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False,
 Z.AI,openai/glm-5-turbo,0.5,1.5,1450,1450,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False,
 Z.AI,openai/glm-4.7,0.6,2.2,1440,1440,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False,
+Z.AI,openai/glm-5.1,1.0,3.2,1436,1436,static-prefix,https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False,
 Z.AI Coding Plan,openai/glm-5.2,0.0,0.0,1510,1510,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False,1000000
 Z.AI Coding Plan,openai/glm-5-turbo,0.0,0.0,1450,1450,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False,
 Z.AI Coding Plan,openai/glm-4.7,0.0,0.0,1440,1440,static-prefix,https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False,
