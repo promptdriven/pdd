@@ -76,6 +76,12 @@ def _read_catalog_rows():
         return list(csv.DictReader(f))
 
 
+def _read_catalog_header():
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        return next(csv.reader(f))
+
+
 def test_module_exports_agentic_manifest_surface():
     required = [
         "AGENTIC_ELO_MANIFEST_PATH",
@@ -382,6 +388,10 @@ def test_csv_fieldnames_include_interactive_only():
     assert "model_rank_source" in gmc.CSV_FIELDNAMES
     assert "context_limit" in gmc.CSV_FIELDNAMES
     assert gmc.CSV_FIELDNAMES[-1] == "context_limit"
+
+
+def test_committed_csv_header_matches_generator_fieldnames():
+    assert _read_catalog_header() == gmc.CSV_FIELDNAMES
 
 
 @pytest.mark.parametrize(
