@@ -668,14 +668,18 @@ def _load_layer1_step5_evidence(
 
 def _layer1_step5_evidence_is_actionable(
     evidence: Optional[Dict[str, Any]],
+    *,
+    layer1_succeeded: bool = False,
 ) -> bool:
     """Return True when shell-first Step 5 evidence should drive Layer 2."""
     if not isinstance(evidence, dict):
         return False
-    return (
-        str(evidence.get("status", "")).strip().lower()
-        in _LAYER1_STEP5_ACTIONABLE_STATUSES
-    )
+    status = str(evidence.get("status", "")).strip().lower()
+    if status not in _LAYER1_STEP5_ACTIONABLE_STATUSES:
+        return False
+    if layer1_succeeded and status == "timeout_partial":
+        return False
+    return True
 
 
 def _layer1_step5_evidence_for_review(
@@ -1177,7 +1181,10 @@ def run_agentic_checkup(
     )
     layer1_step5_evidence_for_review = (
         _layer1_step5_evidence_for_review(layer1_step5_evidence)
-        if _layer1_step5_evidence_is_actionable(layer1_step5_evidence)
+        if _layer1_step5_evidence_is_actionable(
+            layer1_step5_evidence,
+            layer1_succeeded=orch_success,
+        )
         else ""
     )
 
