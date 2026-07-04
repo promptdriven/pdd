@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,11 +23,23 @@ YOUTUBE_URL_RE = re.compile(r"^https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\
 YOUTUBE_URL_IN_TEXT_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
 YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+DISCORD_HTTP_ERROR_RE = re.compile(r"^Discord webhook returned HTTP (\d{3})")
 MARKER_NAME = "pdd-release-video-discord-backfill"
+PENDING_MARKER_NAME = "pdd-release-video-discord-backfill-pending"
+POST_MARKER_MAX_ATTEMPTS = 3
+POST_MARKER_RETRY_DELAY_SECONDS = 1.0
 
 
 class BackfillError(RuntimeError):
     """Raised for actionable release-video Discord backfill failures."""
+
+
+class DiscordWebhookError(BackfillError):
+    """Raised when Discord webhook delivery fails."""
+
+    def __init__(self, message: str, *, post_definitely_failed: bool) -> None:
+        super().__init__(message)
+        self.post_definitely_failed = post_definitely_failed
 
 
 class BackfillResult:
@@ -145,6 +158,12 @@ def discord_backfill_marker(tag: str, youtube_url: str) -> str:
     return f"<!-- {MARKER_NAME}: tag={tag} video_sha256={digest} -->"
 
 
+def discord_backfill_pending_marker(tag: str, youtube_url: str) -> str:
+    video_id = youtube_video_id(youtube_url)
+    digest = hashlib.sha256(f"{tag}\n{video_id}".encode("utf8")).hexdigest()
+    return f"<!-- {PENDING_MARKER_NAME}: tag={tag} video_sha256={digest} -->"
+
+
 def release_body_has_youtube_video(body: str, video_id: str) -> bool:
     for match in YOUTUBE_URL_IN_TEXT_RE.finditer(body):
         try:
@@ -174,6 +193,130 @@ def ensure_release_body_has_marker(body: str, tag: str, youtube_url: str) -> tup
     return f"{marker}\n", True
 
 
+def ensure_release_body_has_pending_marker(
+    body: str, tag: str, youtube_url: str
+) -> tuple[str, bool]:
+    pending_marker = discord_backfill_pending_marker(tag, youtube_url)
+    if pending_marker in body:
+        return body, False
+    if body.strip():
+        return f"{body.rstrip()}\n\n{pending_marker}\n", True
+    return f"{pending_marker}\n", True
+
+
+def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
+    pending_marker = discord_backfill_pending_marker(tag, youtube_url)
+    if pending_marker not in body:
+        return body, False
+    lines = body.splitlines()
+    kept_lines = [line for line in lines if line.strip() != pending_marker]
+    if len(kept_lines) == len(lines):
+        return body, False
+    while kept_lines and not kept_lines[0]:
+        kept_lines.pop(0)
+    while kept_lines and not kept_lines[-1]:
+        kept_lines.pop()
+    cleaned_body = "\n".join(kept_lines)
+    if cleaned_body and body.endswith(("\n", "\r")):
+        cleaned_body += "\n"
+    return cleaned_body, True
+
+
+def ensure_no_uncertain_pending_marker(body: str, tag: str, youtube_url: str) -> None:
+    pending_marker = discord_backfill_pending_marker(tag, youtube_url)
+    if pending_marker in body:
+        raise BackfillError(
+            "Release has a pending Discord backfill marker for this video. "
+            "Inspect Discord before rerunning, then remove the pending marker "
+            "or replace it with the completed backfill marker."
+        )
+
+
+def mark_release_body_pending(
+    github: GitHubReleaseClient,
+    tag: str,
+    youtube_url: str,
+    body: str,
+) -> bool:
+    body_with_link, link_added = ensure_release_body_has_video_link(body, youtube_url)
+    pending_body, pending_added = ensure_release_body_has_pending_marker(
+        body_with_link,
+        tag,
+        youtube_url,
+    )
+    if link_added or pending_added:
+        github.edit_release_body(tag, pending_body)
+    return link_added or pending_added
+
+
+def cleanup_pending_marker_after_failed_post(
+    github: GitHubReleaseClient,
+    tag: str,
+    youtube_url: str,
+    post_error: BackfillError,
+) -> None:
+    try:
+        latest_body = github.get_release_body(tag)
+        cleanup_body, removed = remove_release_body_pending_marker(latest_body, tag, youtube_url)
+        if removed:
+            github.edit_release_body(tag, cleanup_body)
+    except BackfillError as cleanup_error:
+        raise BackfillError(
+            f"{post_error} Pending-marker cleanup also failed: {cleanup_error}"
+        ) from post_error
+    raise post_error
+
+
+def webhook_post_definitely_failed(error: BackfillError) -> bool:
+    if isinstance(error, DiscordWebhookError):
+        return error.post_definitely_failed
+    match = DISCORD_HTTP_ERROR_RE.match(str(error))
+    if not match:
+        return False
+    return discord_http_status_definitely_failed(int(match.group(1)))
+
+
+def discord_http_status_definitely_failed(status: int) -> bool:
+    return 400 <= status < 500
+
+
+def mark_release_body_posted(
+    github: GitHubReleaseClient,
+    tag: str,
+    youtube_url: str,
+    *,
+    attempts: int = POST_MARKER_MAX_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[bool, bool]:
+    last_error: BackfillError | None = None
+    for attempt in range(attempts):
+        try:
+            body = github.get_release_body(tag)
+            body_with_link, link_added = ensure_release_body_has_video_link(body, youtube_url)
+            body_without_pending, pending_removed = remove_release_body_pending_marker(
+                body_with_link,
+                tag,
+                youtube_url,
+            )
+            marked_body, marker_added = ensure_release_body_has_marker(
+                body_without_pending,
+                tag,
+                youtube_url,
+            )
+            if link_added or pending_removed or marker_added:
+                github.edit_release_body(tag, marked_body)
+            return link_added or pending_removed or marker_added, marker_added
+        except BackfillError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                sleep(POST_MARKER_RETRY_DELAY_SECONDS)
+    raise BackfillError(
+        "Posted Discord release-video follow-up, but could not persist the "
+        "completed backfill marker. Do not rerun until Discord has been "
+        f"inspected; the release should still contain a pending marker. {last_error}"
+    )
+
+
 def build_discord_payload(tag: str, youtube_url: str, repo: str) -> dict[str, str]:
     release_url = f"https://github.com/{repo}/releases/tag/{tag}"
     return {
@@ -198,11 +341,20 @@ def send_discord_webhook(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status = getattr(response, "status", response.getcode())
             if status >= 400:
-                raise BackfillError(f"Discord webhook returned HTTP {status}")
+                raise DiscordWebhookError(
+                    f"Discord webhook returned HTTP {status}",
+                    post_definitely_failed=discord_http_status_definitely_failed(status),
+                )
     except urllib.error.HTTPError as exc:
-        raise BackfillError(f"Discord webhook returned HTTP {exc.code}: {exc.reason}") from exc
+        raise DiscordWebhookError(
+            f"Discord webhook returned HTTP {exc.code}: {exc.reason}",
+            post_definitely_failed=discord_http_status_definitely_failed(exc.code),
+        ) from exc
     except urllib.error.URLError as exc:
-        raise BackfillError(f"Discord webhook request failed: {exc.reason}") from exc
+        raise DiscordWebhookError(
+            f"Discord webhook request failed: {exc.reason}",
+            post_definitely_failed=False,
+        ) from exc
 
 
 def validate_inputs(tag: str, youtube_url: str, repo: str) -> None:
@@ -231,14 +383,20 @@ def backfill_release_video_discord(
 
     if marker in body:
         body_with_link, link_added = ensure_release_body_has_video_link(body, youtube_url)
-        if link_added:
-            github.edit_release_body(tag, body_with_link)
+        clean_body, pending_removed = remove_release_body_pending_marker(
+            body_with_link,
+            tag,
+            youtube_url,
+        )
+        if link_added or pending_removed:
+            github.edit_release_body(tag, clean_body)
         return BackfillResult(
             posted=False,
-            release_body_updated=link_added,
+            release_body_updated=link_added or pending_removed,
             marker_added=False,
             skipped_reason="discord-followup-already-marked",
         )
+    ensure_no_uncertain_pending_marker(body, tag, youtube_url)
 
     if not webhook_url:
         raise BackfillError("DISCORD_WEBHOOK_URL is required when a follow-up has not been marked.")
@@ -249,25 +407,43 @@ def backfill_release_video_discord(
             latest_body,
             youtube_url,
         )
-        if link_added:
-            github.edit_release_body(tag, latest_body_with_link)
+        clean_body, pending_removed = remove_release_body_pending_marker(
+            latest_body_with_link,
+            tag,
+            youtube_url,
+        )
+        if link_added or pending_removed:
+            github.edit_release_body(tag, clean_body)
         return BackfillResult(
             posted=False,
-            release_body_updated=link_added,
+            release_body_updated=link_added or pending_removed,
             marker_added=False,
             skipped_reason="discord-followup-already-marked",
         )
+    ensure_no_uncertain_pending_marker(latest_body, tag, youtube_url)
 
-    body_with_link, link_added = ensure_release_body_has_video_link(latest_body, youtube_url)
-    marked_body, marker_added = ensure_release_body_has_marker(body_with_link, tag, youtube_url)
-    if link_added or marker_added:
-        github.edit_release_body(tag, marked_body)
+    release_body_updated = mark_release_body_pending(github, tag, youtube_url, latest_body)
 
-    post_discord(webhook_url, build_discord_payload(tag, youtube_url, repo))
+    try:
+        post_discord(webhook_url, build_discord_payload(tag, youtube_url, repo))
+    except BackfillError as exc:
+        if webhook_post_definitely_failed(exc):
+            cleanup_pending_marker_after_failed_post(github, tag, youtube_url, exc)
+        raise BackfillError(
+            "Discord webhook delivery failed after writing a pending marker. "
+            "Inspect Discord before rerunning; if no post was sent, remove the "
+            f"pending marker from the release body. {exc}"
+        ) from exc
+
+    post_release_body_updated, marker_added = mark_release_body_posted(
+        github,
+        tag,
+        youtube_url,
+    )
 
     return BackfillResult(
         posted=True,
-        release_body_updated=link_added or marker_added,
+        release_body_updated=release_body_updated or post_release_body_updated,
         marker_added=marker_added,
     )
 
