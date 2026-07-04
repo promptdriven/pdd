@@ -180,8 +180,12 @@
     - Before calling litellm.completion()/batch_completion()/responses(), validate the assembled prompt's
       token count against the model's context window limit within the per-model candidate loop.
     - Use litellm.token_counter(model, messages) for model-aware token counting.
-    - Use `get_context_limit(model)` from `pdd.server.token_counter` for the model's context window size.
-      This wraps litellm.get_model_info() with graceful fallback.
+    - Determine the context limit with a catalog-first lookup: call `_catalog_context_limit(model_info)`
+      (reads `context_limit` from the CSV catalog row via the candidate's model_info dict, checking
+      keys `max_input_tokens`, `context_limit`, `context_window`, `max_tokens` in that order).
+      Only if that returns None, fall back to `get_context_limit(model_name_litellm)` from
+      `pdd.server.token_counter`. This ensures models unknown to LiteLLM (e.g. `openai/glm-5.2`)
+      still honour their catalog-declared limit.
     - Claude context override: When the anthropic-beta context-1m header is set for Claude models,
       use 1,000,000 as the effective context limit instead of litellm's default (200K).
     - Graceful fallback: If context limit is None (model not found or info unavailable),
