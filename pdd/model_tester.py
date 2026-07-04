@@ -287,7 +287,12 @@ def _display_model_list(
         if i in results:
             r = results[i]
             if r["success"]:
-                test_str = f"[green]✓ OK ({r['duration_s']:.1f}s, ${r['cost']:.4f})[/green]"
+                cost_label = (
+                    "quota-backed"
+                    if _is_quota_backed_row(row_dict)
+                    else f"${r['cost']:.4f}"
+                )
+                test_str = f"[green]✓ OK ({r['duration_s']:.1f}s, {cost_label})[/green]"
             else:
                 # Truncate error for table display
                 err = r["error"] or "Unknown error"

@@ -2539,6 +2539,10 @@ def _select_step5_python_tests(
     ``tests/test_<module>.py`` candidates that already exist. When no concrete
     target exists, the caller records ``not_found`` instead of broadening into a
     repo-wide suite.
+
+    ``_STEP5_FOCUSED_TEST_OVERRIDES`` appends extra focused regression tests
+    ALONGSIDE the conventional suite — it does not suppress or replace existing
+    tests. Explicitly changed test files always run regardless of any override.
     """
     selected: List[str] = []
     seen: Set[str] = set()
@@ -2547,16 +2551,6 @@ def _select_step5_python_tests(
         for raw_path in changed_paths
         if (rel := _safe_repo_rel_path(raw_path)) is not None
     ]
-    override_sources = {
-        rel
-        for rel in normalized_paths
-        if rel.suffix == ".py" and rel in _STEP5_FOCUSED_TEST_OVERRIDES
-    }
-    suppressed_direct_tests = {
-        candidate
-        for source in override_sources
-        for candidate in _step5_conventional_test_candidates(source)
-    }
 
     def _add(candidate: Path) -> None:
         rel = _safe_repo_rel_path(candidate.as_posix())
@@ -2573,28 +2567,16 @@ def _select_step5_python_tests(
         if rel.suffix != ".py":
             continue
         if _is_python_test_path(rel):
-            if rel in suppressed_direct_tests:
-                continue
             _add(rel)
             continue
+        # For each changed source file, append any focused override tests and
+        # then add conventional test candidates — no suppression of either.
         override_candidates = _STEP5_FOCUSED_TEST_OVERRIDES.get(rel)
         if override_candidates:
             for candidate in override_candidates:
                 _add(candidate)
-            continue
-
         for candidate in _step5_conventional_test_candidates(rel):
             _add(candidate)
-
-    focused_selected = {Path(path) for path in selected}
-    suppressed_selected = {
-        candidate.as_posix()
-        for source, focused_candidates in _STEP5_FOCUSED_TEST_OVERRIDES.items()
-        if any(candidate in focused_selected for candidate in focused_candidates)
-        for candidate in _step5_conventional_test_candidates(source)
-    }
-    if suppressed_selected:
-        selected = [path for path in selected if path not in suppressed_selected]
 
     return selected
 

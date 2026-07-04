@@ -1882,10 +1882,18 @@ def _build_estimate_payload(
         else None
     )
 
-    pricing = _completion_cost_from_pricing_api(
-        input_tokens,
-        predicted_output_tokens,
-        model_name,
+    # Quota/subscription-backed providers have no per-token list price.
+    # Skip the pricing API so cost fields stay null (unknown_cost=True).
+    _provider_str = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    _is_quota_provider = "coding plan" in _provider_str
+    pricing = (
+        None
+        if _is_quota_provider
+        else _completion_cost_from_pricing_api(
+            input_tokens,
+            predicted_output_tokens,
+            model_name,
+        )
     )
 
     input_rate = None
@@ -2899,7 +2907,8 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
 
         # Convert numeric columns, handling potential errors
         numeric_cols = ['input', 'output', 'coding_arena_elo', 'model_rank_score',
-                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens']
+                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens',
+                        'context_limit']
         for col in numeric_cols:
             if col in df.columns:
                 # Use errors='coerce' to turn unparseable values into NaN

@@ -15,5 +15,6 @@
     - 'reasoning_type': Reasoning control type (none, effort, budget, adaptive)
     - 'location': Optional Vertex AI location override
     - 'interactive_only': Boolean (True/False). True for providers that require interactive human auth or a running local server (e.g. github_copilot device-flow OAuth, chatgpt subscription / codex login, lm_studio, ollama). Such rows hang in non-interactive contexts, so model selection skips them by default unless PDD_ALLOW_INTERACTIVE is set. Defaults to False for keyed providers.
+    - 'context_limit': Optional integer. Per-model context window override in tokens. When present and > 0, this value takes precedence over litellm's built-in model info for context window validation and estimate reporting. Leave blank (empty) for most models; populate only when litellm's reported context limit for that model is incorrect, missing, or needs to be pinned to a specific value.
 
 % Search the internet to get this data. Check to make sure this is valid CSV format

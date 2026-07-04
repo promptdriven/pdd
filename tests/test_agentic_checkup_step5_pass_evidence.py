@@ -31,49 +31,66 @@ def test_step5_missing_signal_rejects_ambiguous_or_failing_output():
     )
 
 
-def test_step5_selects_focused_checkup_orchestrator_regression(tmp_path):
+def test_step5_selects_focused_and_broad_checkup_orchestrator_tests(tmp_path):
+    """Focused override test is appended ALONGSIDE the conventional broad test
+    — the broad test must NOT be suppressed when the source file is changed.
+    """
     focused = tmp_path / "tests" / "test_agentic_checkup_step5_pass_evidence.py"
     broad = tmp_path / "tests" / "test_agentic_checkup_orchestrator.py"
     focused.parent.mkdir()
     focused.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
     broad.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
 
-    assert _select_step5_python_tests(
+    selected = _select_step5_python_tests(
         tmp_path,
         ["pdd/agentic_checkup_orchestrator.py"],
-    ) == ["tests/test_agentic_checkup_step5_pass_evidence.py"]
+    )
+    # Both the focused regression test and the conventional broad test must run.
+    assert "tests/test_agentic_checkup_step5_pass_evidence.py" in selected
+    assert "tests/test_agentic_checkup_orchestrator.py" in selected
 
 
-def test_step5_override_suppresses_stale_broad_direct_test(tmp_path):
+def test_step5_explicitly_changed_tests_always_run(tmp_path):
+    """Explicitly changed test files are never suppressed by an override.
+    When both the broad test and the source file are in changed_paths, both
+    the broad test and the focused override test must appear in the selection.
+    """
     focused = tmp_path / "tests" / "test_agentic_checkup_step5_pass_evidence.py"
     broad = tmp_path / "tests" / "test_agentic_checkup_orchestrator.py"
     focused.parent.mkdir()
     focused.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
     broad.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
 
-    assert _select_step5_python_tests(
+    selected = _select_step5_python_tests(
         tmp_path,
         [
             "tests/test_agentic_checkup_orchestrator.py",
             "pdd/agentic_checkup_orchestrator.py",
         ],
-    ) == ["tests/test_agentic_checkup_step5_pass_evidence.py"]
+    )
+    assert "tests/test_agentic_checkup_step5_pass_evidence.py" in selected
+    assert "tests/test_agentic_checkup_orchestrator.py" in selected
 
 
-def test_step5_focused_test_suppresses_broad_test_without_source_path(tmp_path):
+def test_step5_both_test_files_changed_both_run(tmp_path):
+    """When both test files are explicitly changed they both run — no deduplication
+    via suppression.
+    """
     focused = tmp_path / "tests" / "test_agentic_checkup_step5_pass_evidence.py"
     broad = tmp_path / "tests" / "test_agentic_checkup_orchestrator.py"
     focused.parent.mkdir()
     focused.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
     broad.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
 
-    assert _select_step5_python_tests(
+    selected = _select_step5_python_tests(
         tmp_path,
         [
             "tests/test_agentic_checkup_orchestrator.py",
             "tests/test_agentic_checkup_step5_pass_evidence.py",
         ],
-    ) == ["tests/test_agentic_checkup_step5_pass_evidence.py"]
+    )
+    assert "tests/test_agentic_checkup_orchestrator.py" in selected
+    assert "tests/test_agentic_checkup_step5_pass_evidence.py" in selected
 
 
 def test_step5_changed_focused_file_runs_directly(tmp_path):

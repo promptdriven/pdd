@@ -551,3 +551,62 @@ def test_expand_api_key_vars_zai_not_confused_with_other_keys():
     assert "OPENAI_API_KEY" not in zai_expanded, (
         "OPENAI_API_KEY must not be an alias of ZAI_API_KEY"
     )
+
+
+# ---------------------------------------------------------------------------
+# 7. Z.AI GLM-5.2 context window — bundled CSV must declare 1M context limit
+#    so estimate and runtime context diagnostics use 1,000,000 tokens.
+# ---------------------------------------------------------------------------
+
+def test_bundled_csv_has_context_limit_for_zai_glm52():
+    """The bundled llm_model.csv must carry context_limit=1000000 for BOTH
+    the general Z.AI and Z.AI Coding Plan openai/glm-5.2 rows.
+
+    Without this, estimate/context diagnostics treat the window as unknown
+    even though GLM-5.2 is documented as a 1M-token context model.
+    """
+    import csv
+    import importlib.resources
+
+    csv_data = importlib.resources.files("pdd").joinpath("data/llm_model.csv").read_text()
+    reader = csv.DictReader(csv_data.splitlines())
+
+    glm52_rows = [
+        row for row in reader
+        if row.get("model") == "openai/glm-5.2"
+        and "z.ai" in row.get("provider", "").lower()
+    ]
+    assert glm52_rows, "Bundled CSV must include at least one Z.AI openai/glm-5.2 row"
+
+    for row in glm52_rows:
+        raw = row.get("context_limit", "")
+        assert raw.strip() == "1000000", (
+            f"Row {row['provider']}/{row['model']} context_limit must be 1000000, got {raw!r}"
+        )
+
+
+def test_catalog_context_limit_returns_1m_for_zai_glm52_model_info():
+    """_catalog_context_limit must return 1_000_000 when fed a model_info dict
+    from a Z.AI GLM-5.2 row that carries context_limit=1000000.
+    """
+    from pdd.llm_invoke import _catalog_context_limit
+
+    # General row
+    general_info = {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.2",
+        "context_limit": 1_000_000,
+    }
+    assert _catalog_context_limit(general_info) == 1_000_000, (
+        "General Z.AI GLM-5.2 row must yield 1M context limit"
+    )
+
+    # Coding Plan row
+    coding_info = {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-5.2",
+        "context_limit": 1_000_000,
+    }
+    assert _catalog_context_limit(coding_info) == 1_000_000, (
+        "Z.AI Coding Plan GLM-5.2 row must yield 1M context limit"
+    )

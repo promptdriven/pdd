@@ -509,6 +509,22 @@ def test_results_persist_across_picks(tmp_path, monkeypatch):
     assert mock_comp.call_count == 2
 
 
+def test_zai_coding_plan_last_test_column_shows_quota_backed_after_refresh(tmp_path, monkeypatch):
+    """After testing a Coding Plan model, the refreshed table Last Test column must
+    show 'quota-backed' not '$0.0000' — re-rendering persisted results must not
+    reintroduce the misleading zero-dollar estimate.
+    """
+    mock_comp = MagicMock(return_value=_mock_litellm_success(10, 5))
+    # Test model 1 (Coding Plan), then 'q' to trigger a second table render before exit
+    output, _ = _run_interactive_capture(
+        tmp_path, ZAI_CODING_PLAN_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"ZAI_API_KEY": "sk-zai-test"},
+    )
+    assert "quota-backed" in output
+    assert "$0.0000" not in output
+
+
 # ===========================================================================
 # VII. CSV Loading Normalization
 # ===========================================================================
