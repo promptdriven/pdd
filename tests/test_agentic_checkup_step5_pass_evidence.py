@@ -27,6 +27,38 @@ def test_step5_strong_pass_evidence_accepts_zero_failed_summary():
     assert _step5_output_has_strong_pass_evidence(output) is True
 
 
+def test_step5_strong_pass_evidence_accepts_hosted_all_clear_table():
+    output = """
+## Step 5: Test Execution
+
+**Status:** All Clear - 0 failures
+
+### Results Summary
+
+| Test File | Passed | Failed | Skipped |
+|-----------|--------|--------|---------|
+| `tests/test_generate_model_catalog.py` | 82 | 0 | 0 |
+| `tests/test_llm_invoke.py` | 362 | 0 | 0 |
+| **TOTAL** | **1,186** | **0** | **3** |
+
+### Failures
+
+None. **0 failures.**
+
+### Root Cause of Previous Timeout
+
+Splitting into focused batches completes all tests successfully with no failures.
+"""
+
+    assert _step5_output_has_strong_pass_evidence(output) is True
+
+
+def test_step5_all_clear_without_total_row_remains_ambiguous():
+    output = "**Status:** All Clear - 0 failures\nRan pytest. 491 passed"
+
+    assert _step5_output_has_strong_pass_evidence(output) is False
+
+
 def test_step5_missing_signal_rejects_ambiguous_or_failing_output():
     assert _step5_output_has_strong_pass_evidence("Ran pytest. 491 passed") is False
     assert (

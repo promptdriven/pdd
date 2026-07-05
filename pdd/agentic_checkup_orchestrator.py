@@ -2102,9 +2102,9 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
     """Return True when prose Step 5 output proves tests passed.
 
     Missing ``failure_signal`` blocks still fail closed by default. This helper
-    only recovers the clean path for provider-success output that includes both
-    an explicit zero exit code and an unambiguous pass/failure-zero summary,
-    with no failure markers.
+    only recovers the clean path for provider-success output that includes
+    either an explicit zero exit code or the hosted all-clear table shape, plus
+    an unambiguous pass/failure-zero summary, with no failure markers.
     """
     if not step5_output:
         return False
@@ -2112,6 +2112,26 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
     has_exit_zero = bool(
         re.search(
             r"(?im)\b(?:exit[_\s-]*code|return[_\s-]*code)\b\D*0\b",
+            step5_output,
+        )
+    )
+    has_hosted_all_clear_status = bool(
+        re.search(
+            r"(?im)^\s*\*\*status:\*\*\s*all\s+clear\b[^\n]*\b0\s+failures\b",
+            step5_output,
+        )
+    )
+    has_total_row_zero_failed = bool(
+        re.search(
+            r"(?im)^\s*\|\s*\*{0,2}total\*{0,2}\s*\|"
+            r"\s*\*{0,2}[\d,]+\*{0,2}\s*\|"
+            r"\s*\*{0,2}0\*{0,2}\s*\|",
+            step5_output,
+        )
+    )
+    has_zero_failure_section = bool(
+        re.search(
+            r"(?is)###\s+failures\b.*?\bnone\b.*?\b0\s+failures\b",
             step5_output,
         )
     )
@@ -2131,7 +2151,16 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
             step5_output,
         )
     )
-    return has_exit_zero and has_pass_summary and not has_failure_marker
+    has_hosted_table_pass = (
+        has_hosted_all_clear_status
+        and has_total_row_zero_failed
+        and has_zero_failure_section
+    )
+    return (
+        (has_exit_zero or has_hosted_table_pass)
+        and has_pass_summary
+        and not has_failure_marker
+    )
 
 
 _ARTIFACT_OUTPUT_MAX_LINES = 400
