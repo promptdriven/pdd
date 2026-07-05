@@ -2618,6 +2618,43 @@ PR #1831 fully addresses all acceptance criteria of issue #1827.
 
         assert passed is True, reason
 
+    def test_hosted_step7_no_issues_remaining_table_passes_narrow_fallback(self) -> None:
+        """Hosted Step 7 can report a markdown-only green verdict in table form."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        report = """
+## Step 7: Verification & Final Report
+
+**Status:** All Clear - No Issues Remaining
+
+### Test Results
+
+| File | Tests | Status |
+|------|-------|--------|
+| `tests/test_generate_model_catalog.py` | 82 | pass |
+| `tests/test_llm_invoke.py` | 362 | pass |
+| **PR-scoped total** | **545** | **0 failed** |
+
+### Previously-Reported Bugs: All Fixed
+
+All 4 medium bugs from the prior review round have been addressed.
+
+### Issues Summary
+
+| Severity | Category | Module | Description | Fixed |
+|----------|----------|--------|-------------|-------|
+| low | build_warning | pdd/llm_invoke.py:495 | Pre-existing warning | N/A (out-of-scope) |
+
+### Overall Status
+
+All clear. PR #1831 fully resolves issue #1827. All 545 PR-scoped tests pass
+with 0 failures. No new issues found.
+"""
+
+        passed, reason = _step7_passed(report, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+
     def test_vague_step7_without_json_still_fails_closed(self) -> None:
         from pdd.agentic_checkup_orchestrator import _step7_passed
 

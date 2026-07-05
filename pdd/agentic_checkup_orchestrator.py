@@ -1261,15 +1261,34 @@ def _step7_human_success_report_passed(
         return False
 
     lower = step7_output.lower()
-    if "## step 7/8: verification & final report" not in lower:
+    if not re.search(
+        r"^##\s+step\s+7(?:/8)?\s*:\s*verification\s*&\s*final report\b",
+        lower,
+        flags=re.MULTILINE,
+    ):
         return False
-    if "checkup complete" not in lower:
+    if "checkup complete" not in lower and "### overall status" not in lower:
         return False
-    if "all clear" not in lower or "no remaining issues" not in lower:
+    no_issue_markers = (
+        "no remaining issues",
+        "no issues remaining",
+        "0 issues remain",
+        "0 issues remaining",
+    )
+    if "all clear" not in lower or not any(
+        marker in lower for marker in no_issue_markers
+    ):
         return False
-    if not re.search(r"\*\*failed:\*\*\s*0\b", lower):
+    zero_failure_markers = (
+        re.search(r"\*\*failed:\*\*\s*0\b", lower),
+        re.search(r"\b0\s+failed\b", lower),
+        re.search(r"\b0\s+failures\b", lower),
+    )
+    if not any(zero_failure_markers):
         return False
     if re.search(r"\*\*failed:\*\*\s*[1-9]\d*\b", lower):
+        return False
+    if re.search(r"\b[1-9]\d*\s+(?:failed|failures)\b", lower):
         return False
     if "all fixed" not in lower and "| **fixed**" not in lower:
         return False
