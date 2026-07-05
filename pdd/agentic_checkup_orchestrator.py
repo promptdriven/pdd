@@ -913,6 +913,37 @@ def _github_token_from_env() -> str:
     return fn()
 
 
+def _github_tokens_from_env() -> List[str]:
+    """Return all GitHub token values visible to this process, deduped."""
+    tokens: List[str] = []
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if token_file_path:
+        token_path = Path(token_file_path)
+        try:
+            if token_path.exists():
+                tokens.append(token_path.read_text(encoding="utf-8").strip())
+        except OSError:
+            pass
+    for env_name in ("GH_TOKEN", "GITHUB_TOKEN", "PDD_GITHUB_TOKEN"):
+        tokens.append(os.environ.get(env_name, "").strip())
+
+    seen: Set[str] = set()
+    unique: List[str] = []
+    for token in tokens:
+        if token and token not in seen:
+            unique.append(token)
+            seen.add(token)
+    return unique
+
+
+def _redact_github_tokens_from_env(text: str) -> str:
+    """Redact every GitHub token source, not just the first helper match."""
+    redacted = text
+    for token in _github_tokens_from_env():
+        redacted = _redact_secret(redacted, token)
+    return redacted
+
+
 def _scrub_secrets(text: str) -> str:
     """Lazy wrapper around the review-loop regex secret scrubber.
 
@@ -2236,13 +2267,10 @@ def _read_failure_signal_artifact(
     # cannot redact the fragment. Scrub everything, then truncate the
     # already-safe text.
     full_text = raw_bytes.decode("utf-8", errors="replace")
-    token = _github_token_from_env()
 
     def _scrub(value: str) -> str:
         scrubbed_value = _scrub_secrets(value)
-        if token:
-            scrubbed_value = _redact_secret(scrubbed_value, token)
-        return scrubbed_value
+        return _redact_github_tokens_from_env(scrubbed_value)
 
     scrubbed_full = _scrub(full_text)
     scrubbed_lines = scrubbed_full.splitlines()
@@ -2793,9 +2821,7 @@ def _select_step5_python_tests(
 def _truncate_step5_shell_output(text: str) -> Tuple[str, bool]:
     """Scrub and truncate Step 5 shell output before prompt/report use."""
     scrubbed = _scrub_secrets(text or "")
-    token = _github_token_from_env()
-    if token:
-        scrubbed = _redact_secret(scrubbed, token)
+    scrubbed = _redact_github_tokens_from_env(scrubbed)
     if len(scrubbed) <= _STEP5_SHELL_OUTPUT_MAX_CHARS:
         return scrubbed, False
     half = max(1, (_STEP5_SHELL_OUTPUT_MAX_CHARS - 80) // 2)
@@ -2811,10 +2837,7 @@ def _storage_safe_step5_shell_evidence_value(value: Any) -> Any:
     """Recursively scrub secret-like strings before evidence persistence."""
     if isinstance(value, str):
         scrubbed = _scrub_secrets(value)
-        token = _github_token_from_env()
-        if token:
-            scrubbed = _redact_secret(scrubbed, token)
-        return scrubbed
+        return _redact_github_tokens_from_env(scrubbed)
     if isinstance(value, list):
         return [_storage_safe_step5_shell_evidence_value(item) for item in value]
     if isinstance(value, tuple):
@@ -3809,9 +3832,7 @@ def _run_agentic_checkup_orchestrator_inner(
         persistable_output = output
         if step_num == 5 and output:
             persistable_output = _scrub_secrets(output)
-            token = _github_token_from_env()
-            if token:
-                persistable_output = _redact_secret(persistable_output, token)
+            persistable_output = _redact_github_tokens_from_env(persistable_output)
 
         context[f"step{step_key}_output"] = persistable_output
 

@@ -98,7 +98,9 @@ class TestStep5ShellFirstEvidence:
             encoding="utf-8",
         )
         env_token = "customToken123456789"
+        gh_env_token = "anotherCustomToken987654321"
         gh_token = "ghp_" + "A" * 36
+        monkeypatch.setenv("GH_TOKEN", gh_env_token)
         monkeypatch.setenv("GITHUB_TOKEN", env_token)
         context = {
             "pr_mode": "true",
@@ -111,6 +113,7 @@ class TestStep5ShellFirstEvidence:
             stdout=(
                 "FAILED tests/test_widget.py::test_breaks\n"
                 f"Authorization: Bearer {gh_token}\n"
+                f"gh env token: {gh_env_token}\n"
                 f"env token: {env_token}\n"
             ),
             stderr="",
@@ -144,8 +147,10 @@ class TestStep5ShellFirstEvidence:
         assert "tests/test_widget.py::test_breaks" in memory_text
         artifact_text = memory_text
         assert gh_token not in artifact_text
+        assert gh_env_token not in artifact_text
         assert env_token not in artifact_text
         assert gh_token not in context["step5_shell_evidence"]
+        assert gh_env_token not in context["step5_shell_evidence"]
         assert env_token not in context["step5_shell_evidence"]
         assert run_mock.call_args.args[0][-1] == "tests/test_widget.py"
 
