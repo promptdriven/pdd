@@ -24,6 +24,13 @@ YOUTUBE_URL_IN_TEXT_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.
 YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DISCORD_HTTP_ERROR_RE = re.compile(r"^Discord webhook returned HTTP (\d{3})")
+DISCORD_WEBHOOK_URL_RE = re.compile(
+    r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/[^\s\"'<>]+"
+)
+DISCORD_EMBED_COLOR = 3447003
+DISCORD_USER_AGENT = "curl/8.5.0"
+DISCORD_ERROR_BODY_MAX_BYTES = 4096
+DISCORD_ERROR_BODY_MAX_CHARS = 500
 MARKER_NAME = "pdd-release-video-discord-backfill"
 PENDING_MARKER_NAME = "pdd-release-video-discord-backfill-pending"
 POST_MARKER_MAX_ATTEMPTS = 3
@@ -317,11 +324,90 @@ def mark_release_body_posted(
     )
 
 
-def build_discord_payload(tag: str, youtube_url: str, repo: str) -> dict[str, str]:
+def build_discord_payload(tag: str, youtube_url: str, repo: str) -> dict[str, Any]:
     release_url = f"https://github.com/{repo}/releases/tag/{tag}"
     return {
-        "content": f"Release video recovered for {tag}: {youtube_url}\nRelease: {release_url}"
+        "embeds": [
+            {
+                "title": f"Release {tag}",
+                "url": release_url,
+                "description": (
+                    f"\U0001f3a5 **Release video:** {youtube_url}\n\n"
+                    f"Recovered release video for {tag}.\n"
+                    f"Release: {release_url}"
+                ),
+                "color": DISCORD_EMBED_COLOR,
+            }
+        ]
     }
+
+
+def redact_discord_webhook_references(body: str, webhook_url: str | None) -> str:
+    """Redact Discord webhook URLs, including common encoded forms."""
+    variants: set[str] = set()
+    if webhook_url:
+        quoted = urllib.parse.quote(webhook_url, safe="")
+        quoted_plus = urllib.parse.quote_plus(webhook_url, safe="")
+        variants.update(
+            {
+                webhook_url,
+                webhook_url.replace("/", "\\/"),
+                quoted,
+                quoted_plus,
+                lower_percent_escapes(quoted),
+                lower_percent_escapes(quoted_plus),
+            }
+        )
+    for variant in sorted(variants, key=len, reverse=True):
+        if variant:
+            body = body.replace(variant, "[redacted-discord-webhook]")
+    return DISCORD_WEBHOOK_URL_RE.sub("[redacted-discord-webhook]", body)
+
+
+def lower_percent_escapes(value: str) -> str:
+    """Normalize percent escape hex digits to lowercase without changing token text."""
+    return re.sub(r"%[0-9A-Fa-f]{2}", lambda match: match.group(0).lower(), value)
+
+
+def sanitized_response_body_excerpt(response: Any, webhook_url: str | None = None) -> str:
+    try:
+        raw_body = response.read(DISCORD_ERROR_BODY_MAX_BYTES + 1)
+    except (AttributeError, OSError, ValueError):
+        return ""
+
+    if not raw_body:
+        return ""
+    if isinstance(raw_body, str):
+        body = raw_body
+    else:
+        body = raw_body.decode("utf8", errors="replace")
+
+    body = redact_discord_webhook_references(body, webhook_url)
+    body = (
+        body.replace("\\r", " ")
+        .replace("\\n", " ")
+        .replace("\\t", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+        .replace("\t", " ")
+    )
+    body = " ".join(body.split())
+    if len(body) > DISCORD_ERROR_BODY_MAX_CHARS:
+        return f"{body[:DISCORD_ERROR_BODY_MAX_CHARS]}..."
+    return body
+
+
+def discord_http_error_message(
+    status: int,
+    reason: str,
+    response: Any,
+    webhook_url: str | None = None,
+) -> str:
+    message = f"Discord webhook returned HTTP {status}: {reason}"
+    body_excerpt = sanitized_response_body_excerpt(response, webhook_url)
+    if body_excerpt:
+        message = f"{message} Response body excerpt: {body_excerpt}"
+    return message
 
 
 def send_discord_webhook(
@@ -334,7 +420,11 @@ def send_discord_webhook(
     request = urllib.request.Request(
         webhook_url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "User-Agent": DISCORD_USER_AGENT,
+        },
         method="POST",
     )
     try:
@@ -347,7 +437,7 @@ def send_discord_webhook(
                 )
     except urllib.error.HTTPError as exc:
         raise DiscordWebhookError(
-            f"Discord webhook returned HTTP {exc.code}: {exc.reason}",
+            discord_http_error_message(exc.code, str(exc.reason), exc, webhook_url),
             post_definitely_failed=discord_http_status_definitely_failed(exc.code),
         ) from exc
     except urllib.error.URLError as exc:
