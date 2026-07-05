@@ -39,7 +39,7 @@ Tests a single configured model by making one `litellm.completion()` call with a
 % Dependencies
 <llm_model_csv_schema>
 The user's CSV at ~/.pdd/llm_model.csv has columns:
-provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only
+provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only,context_limit
 </llm_model_csv_schema>
 
 <provider_manager>

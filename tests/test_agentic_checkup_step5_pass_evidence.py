@@ -21,6 +21,12 @@ def test_step5_missing_signal_accepts_strong_pass_evidence():
     assert _step5_output_has_strong_pass_evidence(output) is True
 
 
+def test_step5_strong_pass_evidence_accepts_zero_failed_summary():
+    output = "- Exit code: 0\n- 5 passed, 0 failed in 3.21s"
+
+    assert _step5_output_has_strong_pass_evidence(output) is True
+
+
 def test_step5_missing_signal_rejects_ambiguous_or_failing_output():
     assert _step5_output_has_strong_pass_evidence("Ran pytest. 491 passed") is False
     assert (

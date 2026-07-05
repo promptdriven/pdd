@@ -2106,7 +2106,7 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
     has_failure_marker = bool(
         re.search(
             r"(?im)(?:^FAILED\b|^\s*FAILED\s|=+\s+FAILURES\s+=+|"
-            r"\b\d+\s+failed\b|"
+            r"\b[1-9]\d*\s+failed\b|"
             r"\b(?:exit[_\s-]*code|return[_\s-]*code)\b\D*[1-9]\d*\b|"
             r"\bstatus\s*:\s*(?:fail|failed|failure|error)\b)",
             step5_output,
