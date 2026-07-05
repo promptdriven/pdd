@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pdd.agentic_common import DEFAULT_MAX_RETRIES
 from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
@@ -1760,6 +1761,24 @@ class TestTimeouts:
             expected = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + 100.0
             assert timeout == expected
 
+    def test_step7_uses_single_long_provider_attempt(
+        self, mock_dependencies, default_args
+    ):
+        """Step 7 should get one longer final-verification attempt."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        for call_obj in mock_run.call_args_list:
+            label = call_obj.kwargs.get("label", "")
+            max_retries = call_obj.kwargs.get("max_retries")
+            timeout = call_obj.kwargs.get("timeout")
+            if label.startswith("step7"):
+                assert max_retries == 1
+                assert timeout == CHECKUP_STEP_TIMEOUTS[7]
+            else:
+                assert max_retries == DEFAULT_MAX_RETRIES
+
 
 # ---------------------------------------------------------------------------
 # Consecutive Provider Failure Abort
@@ -1817,6 +1836,36 @@ class TestProviderFailureAbort:
         # Steps 1-2 fail but don't hit 3 consecutive, then steps 3+ succeed.
         assert success is True
         assert mock_run.call_count == 10
+
+    def test_step7_provider_timeout_aborts_without_restarting_fix_loop(
+        self, mock_dependencies, default_args
+    ):
+        """A final verification provider timeout is infrastructure, not a fix loop."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "gpt-4")
+            if label.startswith("step7"):
+                return (
+                    False,
+                    "All agent providers failed: anthropic: Claude interactive mode timed out",
+                    0.0,
+                    "",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 7" in msg
+        assert "agent providers" in msg
+        assert "step3_iter2" not in labels
 
 
 # ---------------------------------------------------------------------------

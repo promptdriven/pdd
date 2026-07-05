@@ -61,8 +61,15 @@ CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     6.1: 600.0,  # Fix issues
     6.2: 600.0,  # Regression tests
     6.3: 600.0,  # E2E / integration tests
-    7: 1200.0,   # Verify (re-runs full test suite, needs extra time)
+    7: 2400.0,   # Verify (re-runs full test suite, needs extra time)
     8: 340.0,    # Create PR
+}
+
+# Step-specific provider retry budgets. Step 7 is the final verification gate:
+# a provider timeout there is not a code failure the fixer can act on, so use
+# one longer attempt instead of several shorter silent retries.
+CHECKUP_STEP_MAX_RETRIES: Dict[Union[int, float], int] = {
+    7: 1,
 }
 
 TOTAL_STEPS = 8
@@ -3121,7 +3128,7 @@ def _run_single_step(
         quiet=quiet,
         label=label,
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
-        max_retries=DEFAULT_MAX_RETRIES,
+        max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
     )
@@ -3856,6 +3863,18 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs[step_key] = f"FAILED: {persistable_output}"
             if _is_provider_failure(output):
                 consecutive_provider_failures += 1
+                if step_num == 7:
+                    _save_state()
+                    return (
+                        False,
+                        (
+                            f"{_format_step_abort_message(step_num, output)}. "
+                            "Final verification did not complete, so no "
+                            "fix-verify iteration was started."
+                        ),
+                        total_cost,
+                        last_model_used,
+                    )
                 if consecutive_provider_failures >= 3:
                     _save_state()
                     failure_kind = (
