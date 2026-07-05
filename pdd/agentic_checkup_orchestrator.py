@@ -2326,7 +2326,9 @@ def _is_step_timeout_failure(output: str) -> bool:
     """Return true when a step failed because the agent process timed out."""
     return bool(
         re.search(
-            r"(Timeout expired|TimeoutExpired|agent(?:ic)? execution timed out|Agent timed out|step \d+(?:\.\d+)? timed out)",
+            r"(Timeout expired|TimeoutExpired|agent(?:ic)? execution timed out|"
+            r"Agent timed out|interactive mode timed out|"
+            r"step \d+(?:\.\d+)? timed out)",
             output or "",
             flags=re.IGNORECASE,
         )
@@ -3863,7 +3865,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {persistable_output}"
-            if _is_provider_failure(output):
+            if _is_provider_failure(output) or _is_step_timeout_failure(output):
                 consecutive_provider_failures += 1
                 if step_num in (5, 7):
                     _save_state()

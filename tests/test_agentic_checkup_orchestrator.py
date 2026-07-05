@@ -1867,7 +1867,7 @@ class TestProviderFailureAbort:
 
         assert success is False
         assert "Step 7" in msg
-        assert "agent providers" in msg
+        assert "timed out" in msg
         assert "step3_iter2" not in labels
 
     def test_step5_provider_timeout_aborts_without_running_fixer(
@@ -1897,7 +1897,38 @@ class TestProviderFailureAbort:
 
         assert success is False
         assert "Step 5" in msg
-        assert "agent providers" in msg
+        assert "timed out" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
+
+    def test_step5_interactive_timeout_aborts_without_running_fixer(
+        self, mock_dependencies, default_args
+    ):
+        """A provider timeout string without the provider-exhaustion sentinel is terminal."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    "anthropic: Claude interactive mode timed out. Output tail: spinner",
+                    0.0,
+                    "",
+                )
+            if label.startswith("step7"):
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "timed out" in msg
         assert not any(label.startswith("step6") for label in labels)
         assert not any(label.startswith("step7") for label in labels)
 
