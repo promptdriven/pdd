@@ -414,7 +414,7 @@ PDD supports two Z.AI API endpoints:
 - **General API** (`https://api.z.ai/api/paas/v4`) — standard prepaid/resource billing, suitable for general use.
 - **GLM Coding Plan** (`https://api.z.ai/api/coding/paas/v4`) — quota-backed subscription plan designed for coding workflows. Diagnostics show it as quota-backed rather than a per-token dollar estimate.
 
-Both endpoints use the same API key. To configure Z.AI in PDD:
+Both endpoints use the same API key. To use the bundled GLM Coding Plan rows:
 
 ```bash
 export ZAI_API_KEY=your_zai_api_key_here
@@ -428,9 +428,16 @@ defaults:
   model: glm-5.2
 ```
 
-The bundled catalog includes rows for `Z.AI` (general API) and `Z.AI Coding Plan` providers. PDD stores these rows as OpenAI-compatible `openai/glm-5.2` model strings with explicit `base_url` values, and resolves a user default such as `glm-5.2` to the configured Z.AI row instead of falling through to an unrelated provider.
+The bundled catalog includes rows for `Z.AI` (general API) and `Z.AI Coding Plan` providers. PDD stores these rows as OpenAI-compatible `openai/glm-5.2` model strings with explicit `base_url` values, and resolves a bare user default such as `glm-5.2` to the quota-backed Coding Plan row instead of falling through to an unrelated provider.
 
-To use the Coding Plan endpoint, select a model row whose provider is `Z.AI Coding Plan` in your `llm_model.csv`, or set `PDD_MODEL_DEFAULT` to `glm-5.2` after configuring a `Z.AI Coding Plan` row in your local `~/.pdd/llm_model.csv`. Structured-output forcing is disabled for these rows until Z.AI schema support is verified; `reasoning_effort` is enabled through PDD's normal `low`/`medium`/`high` effort mapping.
+To target the per-token General API endpoint (`https://api.z.ai/api/paas/v4`) instead of the Coding Plan endpoint, select the explicit OpenAI-compatible row:
+
+```bash
+export ZAI_API_KEY=your_zai_api_key_here
+export PDD_MODEL_DEFAULT=openai/glm-5.2
+```
+
+Structured-output forcing is disabled for Z.AI rows until Z.AI schema support is verified; `reasoning_effort` is enabled through PDD's normal `low`/`medium`/`high` effort mapping.
 
 Run `pdd setup` with `ZAI_API_KEY` set to have PDD detect Z.AI and include it in the provider configuration.
 
