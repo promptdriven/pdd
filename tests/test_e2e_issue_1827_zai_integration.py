@@ -11,6 +11,8 @@ All tests use mocked LiteLLM completions; no real API calls are made.
 """
 from __future__ import annotations
 
+import csv
+import io
 import os
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +23,8 @@ import pytest
 
 import pdd.llm_invoke as llm_mod
 import pdd.generate_model_catalog as gmc
+import pdd.provider_manager as pm
+import pdd.update_model_costs as umc
 from pdd import model_tester
 from pdd.provider_manager import expand_api_key_vars
 
@@ -673,3 +677,231 @@ def test_runtime_context_validation_uses_catalog_context_limit(tmp_path, monkeyp
                             )
                         # completion must NOT be called — model was rejected before the call.
                         mock_comp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Cross-module schema parity: generate_model_catalog ↔ provider_manager ↔
+# update_model_costs all define the same 15-column schema including
+# context_limit.  A mismatch here means one module will silently drop or
+# misplace the column when reading/writing the bundled CSV.
+# ---------------------------------------------------------------------------
+
+def test_csv_schema_parity_across_all_three_module_holders():
+    """All three modules that own a copy of CSV_FIELDNAMES / EXPECTED_COLUMNS
+    must agree on the same ordered list, including the 15th column
+    ``context_limit`` added for issue #1827.
+
+    Cross-module: generate_model_catalog ↔ provider_manager ↔ update_model_costs.
+    """
+    gmc_fields = gmc.CSV_FIELDNAMES
+    pm_fields = pm.CSV_FIELDNAMES
+    umc_fields = list(umc.EXPECTED_COLUMNS)
+
+    assert gmc_fields == pm_fields, (
+        "generate_model_catalog.CSV_FIELDNAMES != provider_manager.CSV_FIELDNAMES\n"
+        f"  gmc: {gmc_fields}\n  pm:  {pm_fields}"
+    )
+    assert gmc_fields == umc_fields, (
+        "generate_model_catalog.CSV_FIELDNAMES != update_model_costs.EXPECTED_COLUMNS\n"
+        f"  gmc: {gmc_fields}\n  umc: {umc_fields}"
+    )
+    assert "context_limit" in gmc_fields, (
+        "'context_limit' missing from CSV_FIELDNAMES — all three modules would drop it"
+    )
+    assert gmc_fields[-1] == "context_limit", (
+        f"'context_limit' must be the last (15th) column; got {gmc_fields[-1]!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# provider_manager._write_csv_atomic write→read round-trip preserves
+# context_limit values for Z.AI rows.  This is the most direct test of the
+# fix: if _write_csv_atomic uses an old 14-column schema, the column is
+# silently discarded; with the fix it must survive the round-trip.
+# ---------------------------------------------------------------------------
+
+def test_provider_manager_write_cycle_preserves_zai_context_limit(tmp_path):
+    """A Z.AI row with context_limit=1000000 written via _write_csv_atomic
+    must be read back with the same value by _read_csv.
+
+    Cross-module: provider_manager._write_csv_atomic ↔ provider_manager._read_csv.
+    Regression guard: the old 14-column CSV_FIELDNAMES silently dropped the
+    column on write, making context validation unreachable at runtime.
+    """
+    csv_path = tmp_path / "llm_model.csv"
+
+    zai_row = {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.2",
+        "input": "1.0",
+        "output": "3.2",
+        "coding_arena_elo": "1510",
+        "model_rank_score": "1510",
+        "model_rank_source": "static-prefix",
+        "base_url": _GENERAL_URL,
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": "0",
+        "structured_output": "False",
+        "reasoning_type": "effort",
+        "location": "",
+        "interactive_only": "False",
+        "context_limit": "1000000",
+    }
+
+    pm._write_csv_atomic(csv_path, [zai_row])
+    rows = pm._read_csv(csv_path)
+
+    assert len(rows) == 1, "Expected exactly one row after round-trip"
+    row = rows[0]
+    assert "context_limit" in row, (
+        "_read_csv did not return 'context_limit' key — _write_csv_atomic must have "
+        "dropped the column (old 14-column schema)"
+    )
+    assert row["context_limit"] == "1000000", (
+        f"context_limit round-trip mismatch: expected '1000000', got {row['context_limit']!r}"
+    )
+    assert row["base_url"] == _GENERAL_URL, "base_url must survive the round-trip unchanged"
+
+
+# ---------------------------------------------------------------------------
+# update_model_costs schema repair preserves context_limit: when a CSV is
+# loaded into a DataFrame and the schema-repair reindex is applied, rows that
+# already carry context_limit values must not have them overwritten with NA.
+# ---------------------------------------------------------------------------
+
+def test_update_model_costs_schema_repair_preserves_context_limit(tmp_path):
+    """The update_model_costs schema-repair path (``df.reindex(columns=EXPECTED_COLUMNS)``)
+    must preserve existing context_limit values rather than overwriting them
+    with NA.
+
+    Cross-module: provider_manager._write_csv_atomic → update_model_costs schema repair.
+    This guards against a regression where EXPECTED_COLUMNS omitted context_limit,
+    causing reindex to silently zero-out the column.
+    """
+    # Write a CSV with context_limit via provider_manager (the authoritative writer).
+    csv_path = tmp_path / "llm_model.csv"
+    rows_to_write = [
+        {
+            "provider": "Z.AI",
+            "model": "openai/glm-5.2",
+            "input": "1.0",
+            "output": "3.2",
+            "coding_arena_elo": "1510",
+            "model_rank_score": "1510",
+            "model_rank_source": "static-prefix",
+            "base_url": _GENERAL_URL,
+            "api_key": "ZAI_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "False",
+            "reasoning_type": "effort",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1000000",
+        },
+        {
+            "provider": "Z.AI Coding Plan",
+            "model": "openai/glm-5.2",
+            "input": "0.0",
+            "output": "0.0",
+            "coding_arena_elo": "1510",
+            "model_rank_score": "1510",
+            "model_rank_source": "static-prefix",
+            "base_url": _CODING_URL,
+            "api_key": "ZAI_API_KEY",
+            "max_reasoning_tokens": "0",
+            "structured_output": "False",
+            "reasoning_type": "effort",
+            "location": "",
+            "interactive_only": "False",
+            "context_limit": "1000000",
+        },
+    ]
+    pm._write_csv_atomic(csv_path, rows_to_write)
+
+    # Simulate the schema-repair step inside update_model_data: load and reindex.
+    df = pd.read_csv(str(csv_path))
+    assert "context_limit" in df.columns, (
+        "context_limit was not written to CSV — provider_manager._write_csv_atomic bug"
+    )
+
+    # Reindex just as update_model_data does on schema repair.
+    df_repaired = df.reindex(columns=umc.EXPECTED_COLUMNS)
+
+    assert "context_limit" in df_repaired.columns, (
+        "context_limit was dropped by df.reindex(columns=EXPECTED_COLUMNS) — "
+        "update_model_costs.EXPECTED_COLUMNS must be missing the column"
+    )
+
+    # Values must not be clobbered with NA during reindex.
+    ctx_values = df_repaired["context_limit"].tolist()
+    assert all(str(v) == "1000000" for v in ctx_values), (
+        f"context_limit values corrupted after schema-repair reindex: {ctx_values}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# openai/glm-5.1 mandatory row: _mandatory_rows_missing_from must emit a row
+# for glm-5.1 when it is absent from the existing catalog, and that row must
+# survive the ELO_CUTOFF check (i.e. its resolved ELO ≥ ELO_CUTOFF).
+# ---------------------------------------------------------------------------
+
+def test_glm51_mandatory_row_survives_elo_cutoff_in_seeded_output():
+    """_mandatory_rows_missing_from([], {}, defaultdict(int)) must include a
+    row for ``openai/glm-5.1`` with a resolved ELO ≥ ELO_CUTOFF.
+
+    Cross-module: generate_model_catalog._MANDATORY_MODEL_ROWS →
+    _mandatory_rows_missing_from → ELO_CUTOFF filter.
+
+    Regression guard: if glm-5.1 is not in _MANDATORY_MODEL_ROWS, or if its
+    static-fallback ELO is below ELO_CUTOFF, it will silently vanish from
+    every regen'd catalog even though it is a supported model.
+    """
+    result = gmc._mandatory_rows_missing_from([], {}, defaultdict(int))
+    model_ids = [r["model"] for r in result]
+
+    assert "openai/glm-5.1" in model_ids, (
+        "openai/glm-5.1 is absent from _mandatory_rows_missing_from output.\n"
+        f"Emitted mandatory models: {model_ids}"
+    )
+
+    glm51_rows = [r for r in result if r["model"] == "openai/glm-5.1"]
+    assert len(glm51_rows) == 1, f"Expected exactly one glm-5.1 row; got {glm51_rows}"
+
+    row = glm51_rows[0]
+    elo = row.get("coding_arena_elo")
+    assert elo is not None, "openai/glm-5.1 mandatory row has no coding_arena_elo"
+    assert int(elo) >= gmc.ELO_CUTOFF, (
+        f"openai/glm-5.1 ELO {elo} is below ELO_CUTOFF {gmc.ELO_CUTOFF} — "
+        "row will be filtered out during catalog generation"
+    )
+    assert row.get("base_url") == _GENERAL_URL, (
+        f"openai/glm-5.1 base_url must be {_GENERAL_URL!r}; got {row.get('base_url')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bundled CSV header order must match the canonical CSV_FIELDNAMES list so
+# that csv.DictReader, pandas, and any future reader all see the same column
+# positions without surprises.
+# ---------------------------------------------------------------------------
+
+def test_bundled_csv_header_order_matches_canonical_fieldnames():
+    """The first line of the committed ``pdd/data/llm_model.csv`` must exactly
+    equal ``','.join(gmc.CSV_FIELDNAMES)``.
+
+    Cross-module: generate_model_catalog.CSV_FIELDNAMES ↔ pdd/data/llm_model.csv.
+    A mismatch here means the CSV was regenerated with a different schema or
+    the header was edited manually without updating the schema constant.
+    """
+    bundled_csv = Path(__file__).parent.parent / "pdd" / "data" / "llm_model.csv"
+    assert bundled_csv.exists(), f"Bundled CSV not found at {bundled_csv}"
+
+    with open(bundled_csv, "r", encoding="utf-8", newline="") as fh:
+        first_line = fh.readline().rstrip("\n").rstrip("\r")
+
+    expected_header = ",".join(gmc.CSV_FIELDNAMES)
+    assert first_line == expected_header, (
+        "Bundled CSV header does not match gmc.CSV_FIELDNAMES.\n"
+        f"  CSV header:         {first_line!r}\n"
+        f"  CSV_FIELDNAMES:     {expected_header!r}"
+    )
