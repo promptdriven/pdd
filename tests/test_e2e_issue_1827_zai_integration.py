@@ -905,3 +905,284 @@ def test_bundled_csv_header_order_matches_canonical_fieldnames():
         f"  CSV header:         {first_line!r}\n"
         f"  CSV_FIELDNAMES:     {expected_header!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 20. Mandatory Coding Plan rows include all three expected model IDs
+#
+# generate_model_catalog._mandatory_rows_missing_from must yield exactly three
+# Z.AI Coding Plan rows (glm-5.2, glm-5-turbo, glm-4.7), each pointing at the
+# Coding Plan endpoint with zero-dollar pricing.
+#
+# Cross-module: generate_model_catalog._MANDATORY_MODEL_ROWS → llm_invoke
+# row selection (the rows must have the right shape to be selectable).
+# ---------------------------------------------------------------------------
+
+def test_mandatory_coding_plan_includes_glm_5_turbo_and_glm_4_7():
+    """_mandatory_rows_missing_from yields Z.AI Coding Plan rows for
+    openai/glm-5.2, openai/glm-5-turbo, and openai/glm-4.7, all with
+    the Coding Plan endpoint URL and zero-dollar input/output pricing.
+
+    Cross-module: generate_model_catalog → llm_invoke candidate shape.
+    """
+    all_rows = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    coding_plan_rows = [r for r in all_rows if r.get("provider") == "Z.AI Coding Plan"]
+
+    model_ids = [r["model"] for r in coding_plan_rows]
+    for expected_model in ("openai/glm-5.2", "openai/glm-5-turbo", "openai/glm-4.7"):
+        assert expected_model in model_ids, (
+            f"{expected_model} is missing from Z.AI Coding Plan mandatory rows.\n"
+            f"  Found: {model_ids}"
+        )
+
+    for row in coding_plan_rows:
+        assert row.get("base_url") == _CODING_URL, (
+            f"Coding Plan row {row['model']!r} must have base_url={_CODING_URL!r}; "
+            f"got {row.get('base_url')!r}"
+        )
+        assert float(row.get("input", 1.0)) == 0.0, (
+            f"Coding Plan row {row['model']!r} must have input=0.0 (quota-backed); "
+            f"got {row.get('input')!r}"
+        )
+        assert float(row.get("output", 1.0)) == 0.0, (
+            f"Coding Plan row {row['model']!r} must have output=0.0 (quota-backed); "
+            f"got {row.get('output')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 21. Bare glm-5-turbo name routes to Z.AI Coding Plan (not a competitor row)
+#
+# Near-miss: a competitor row for the same base model name exists in the
+# catalog but the user only has ZAI_API_KEY set.  _alternative_base_lookups
+# must prefer the Z.AI Coding Plan row.
+#
+# Cross-module: llm_invoke._alternative_base_lookups → _select_model_candidates.
+# ---------------------------------------------------------------------------
+
+def test_glm_5_turbo_bare_name_routes_to_zai_coding_plan(tmp_path, monkeypatch):
+    """Bare PDD_MODEL_DEFAULT=glm-5-turbo must resolve to the Z.AI Coding Plan
+    row (via _alternative_base_lookups) and not to an OpenRouter-style
+    competitor row for the same base model name.
+
+    Near-miss adversarial: only ZAI_API_KEY is set; OPENROUTER_API_KEY absent.
+    Cross-module: _alternative_base_lookups ↔ _select_model_candidates.
+    """
+    # Build a CSV header that includes context_limit so we can use the
+    # glm-5-turbo Coding Plan row with the canonical 15-column schema.
+    header_15col = (
+        "provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,"
+        "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,"
+        "location,interactive_only,context_limit\n"
+    )
+    # Competitor row: same bare model, different provider — should be ignored when
+    # its required API key is absent.
+    competitor_row = (
+        "OpenRouter,openrouter/z-ai/glm-5-turbo,0.90,2.70,1480,1480,static,"
+        ",OPENROUTER_API_KEY,0,False,none,,False,\n"
+    )
+    # The authoritative Z.AI Coding Plan row for glm-5-turbo.
+    coding_plan_glm5t_row = (
+        f"Z.AI Coding Plan,openai/glm-5-turbo,0.0,0.0,1450,1450,static-prefix,"
+        f"{_CODING_URL},ZAI_API_KEY,0,False,effort,,False,\n"
+    )
+
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(header_15col + competitor_row + coding_plan_glm5t_row, encoding="utf-8")
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "glm-5-turbo")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "glm-5-turbo")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-glm5t-test")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    captured_kwargs: dict = {}
+
+    def _capture(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _make_mock_completion()
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch.object(llm_mod.litellm, "completion", side_effect=_capture):
+            with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+                llm_mod.llm_invoke(
+                    prompt="ping",
+                    input_json={},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+    assert captured_kwargs.get("base_url") == _CODING_URL, (
+        f"glm-5-turbo must route to the Coding Plan endpoint {_CODING_URL!r}; "
+        f"got base_url={captured_kwargs.get('base_url')!r}"
+    )
+    assert "openrouter" not in str(captured_kwargs.get("base_url", "")).lower(), (
+        "OpenRouter endpoint must not be used when only ZAI_API_KEY is set"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 22. Z.AI rows excluded when ZAI_API_KEY is absent
+#
+# When ZAI_API_KEY is not in the environment, the Z.AI Coding Plan row must be
+# treated as unavailable.  llm_invoke must raise an exception (no candidates)
+# and litellm.completion must never be called.
+#
+# Cross-module: llm_invoke._select_model_candidates api_key filtering ↔ CSV
+# api_key column.
+# ---------------------------------------------------------------------------
+
+def test_zai_rows_excluded_when_zai_api_key_absent(tmp_path, monkeypatch):
+    """When ZAI_API_KEY is absent from the environment, the Z.AI Coding Plan
+    row must be filtered out by _select_model_candidates, so litellm.completion
+    is never called.
+
+    Cross-module: csv api_key column ↔ _select_model_candidates key filtering.
+    """
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(_CSV_HEADER + _CODING_PLAN_ROW, encoding="utf-8")
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    mock_comp = MagicMock()
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch.object(llm_mod.litellm, "completion", mock_comp):
+            with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+                with pytest.raises(Exception):
+                    llm_mod.llm_invoke(
+                        prompt="ping",
+                        input_json={},
+                        strength=0.5,
+                        use_cloud=False,
+                    )
+
+    mock_comp.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 23. estimate_only=True with Coding Plan row reports $0 cost
+#
+# When estimate_only=True is passed and the selected row is a Z.AI Coding Plan
+# row (input=0.0, output=0.0), the raised EstimateOnlyResult must carry a
+# total_cost of 0.0 — confirming quota-backed zero-dollar pricing flows through
+# the estimate path.
+#
+# Cross-module: llm_invoke._build_estimate_payload ↔ CSV input/output pricing.
+# ---------------------------------------------------------------------------
+
+def test_estimate_only_coding_plan_reports_quota_backed_cost(tmp_path, monkeypatch):
+    """estimate_only=True with a Z.AI Coding Plan row raises EstimateOnlyResult
+    whose estimate dict reflects quota-backed pricing: unknown_cost=True,
+    cost_known=False, total_cost=None (no per-token dollar amount).
+
+    Quota-backed providers skip the pricing API intentionally so that per-token
+    cost is never misleadingly reported — the subscription covers access.
+
+    Cross-module: CSV provider='Z.AI Coding Plan' ↔ _build_estimate_payload
+    quota-skip branch ↔ EstimateOnlyResult.estimate.
+    """
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(_CSV_HEADER + _CODING_PLAN_ROW, encoding="utf-8")
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-estimate-test")
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+            with pytest.raises(llm_mod.EstimateOnlyResult) as exc_info:
+                llm_mod.llm_invoke(
+                    prompt="estimate this",
+                    input_json={},
+                    strength=0.5,
+                    use_cloud=False,
+                    estimate_only=True,
+                )
+
+    estimate = exc_info.value.estimate
+    assert estimate.get("unknown_cost") is True, (
+        "Z.AI Coding Plan is quota-backed; estimate must have unknown_cost=True. "
+        f"Got unknown_cost={estimate.get('unknown_cost')!r}"
+    )
+    assert estimate.get("cost_known") is False, (
+        "Z.AI Coding Plan is quota-backed; estimate must have cost_known=False. "
+        f"Got cost_known={estimate.get('cost_known')!r}"
+    )
+    assert estimate.get("total_cost") is None, (
+        "Quota-backed Coding Plan rows must NOT expose a per-token total_cost; "
+        f"got total_cost={estimate.get('total_cost')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 24. reasoning_effort kwarg propagated for Z.AI GLM-5.2 row (effort type)
+#
+# When the selected row has reasoning_type=effort and llm_invoke is called with
+# time=0.8, LiteLLM must receive reasoning_effort="high" — not a GPT-5-style
+# nested 'reasoning' dict.  This verifies the effort branch of the reasoning
+# dispatcher for non-OpenAI providers.
+#
+# Cross-module: CSV reasoning_type column ↔ llm_invoke reasoning dispatcher ↔
+# litellm.completion kwargs.
+# ---------------------------------------------------------------------------
+
+def test_reasoning_effort_kwarg_propagated_for_zai_glm52_row(tmp_path, monkeypatch):
+    """With reasoning_type=effort in the CSV row and time=0.8 passed to
+    llm_invoke, litellm.completion must receive reasoning_effort='high' (not
+    a GPT-5-style nested 'reasoning' dict).
+
+    time=0.8 > 0.7 → time_to_effort_level returns 'high'.
+    Cross-module: CSV reasoning_type ↔ llm_invoke effort dispatcher ↔ litellm.
+    """
+    csv_path = tmp_path / "llm_model.csv"
+    # Use the general Z.AI row which has reasoning_type=effort.
+    csv_path.write_text(_CSV_HEADER + _GENERAL_ROW, encoding="utf-8")
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-reasoning-test")
+
+    captured_kwargs: dict = {}
+
+    def _capture(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _make_mock_completion()
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch.object(llm_mod.litellm, "completion", side_effect=_capture):
+            with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+                llm_mod.llm_invoke(
+                    prompt="reason about this",
+                    input_json={},
+                    strength=0.5,
+                    use_cloud=False,
+                    time=0.8,
+                )
+
+    assert "reasoning_effort" in captured_kwargs, (
+        "litellm.completion must receive 'reasoning_effort' kwarg when "
+        "reasoning_type=effort and time=0.8; "
+        f"actual kwargs keys: {sorted(captured_kwargs.keys())}"
+    )
+    assert captured_kwargs["reasoning_effort"] == "high", (
+        f"time=0.8 > 0.7 → time_to_effort_level='high'; "
+        f"got reasoning_effort={captured_kwargs['reasoning_effort']!r}"
+    )
+    assert "reasoning" not in captured_kwargs or not isinstance(
+        captured_kwargs.get("reasoning"), dict
+    ), (
+        "Z.AI GLM-5.2 must NOT use the GPT-5-style nested 'reasoning' dict; "
+        f"got: {captured_kwargs.get('reasoning')!r}"
+    )
