@@ -1,5 +1,7 @@
 import importlib.util
+import io
 from pathlib import Path
+import urllib.error
 
 import pytest
 
@@ -44,6 +46,149 @@ def load_backfill_module():
     return module
 
 
+def expected_discord_embed_payload(tag: str, youtube_url: str, repo: str) -> dict:
+    release_url = f"https://github.com/{repo}/releases/tag/{tag}"
+    return {
+        "embeds": [
+            {
+                "title": f"Release {tag}",
+                "url": release_url,
+                "description": (
+                    f"\U0001f3a5 **Release video:** {youtube_url}\n\n"
+                    f"Recovered release video for {tag}.\n"
+                    f"Release: {release_url}"
+                ),
+                "color": 3447003,
+            }
+        ]
+    }
+
+
+def test_build_discord_payload_uses_release_workflow_embed_style():
+    module = load_backfill_module()
+    youtube_url = "https://www.youtube.com/watch?v=RIkxCaylRAQ"
+
+    payload = module.build_discord_payload("v0.0.283", youtube_url, "promptdriven/pdd")
+
+    assert "content" not in payload
+    assert payload == expected_discord_embed_payload(
+        "v0.0.283",
+        youtube_url,
+        "promptdriven/pdd",
+    )
+
+
+def test_send_discord_webhook_posts_json_with_user_agent(monkeypatch):
+    module = load_backfill_module()
+    payload = expected_discord_embed_payload(
+        "v0.0.283",
+        "https://youtu.be/RIkxCaylRAQ",
+        "promptdriven/pdd",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        status = 204
+
+        def getcode(self) -> int:
+            return self.status
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+    def fake_urlopen(request, *, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    module.send_discord_webhook("https://discord.example/webhook", payload, timeout=7)
+
+    request = captured["request"]
+    assert request.get_method() == "POST"
+    assert request.get_header("Content-type") == "application/json"
+    assert request.get_header("User-agent").startswith("curl/")
+    assert request.get_header("Accept") == "*/*"
+    assert module.json.loads(request.data.decode("utf8")) == payload
+    assert captured["timeout"] == 7
+
+
+def test_send_discord_webhook_includes_sanitized_http_error_response_body(monkeypatch):
+    module = load_backfill_module()
+    payload = expected_discord_embed_payload(
+        "v0.0.283",
+        "https://youtu.be/RIkxCaylRAQ",
+        "promptdriven/pdd",
+    )
+    response_body = (
+        b'{"message":"blocked webhook\\ntry again",'
+        b'"webhook":"https://discord.com/api/webhooks/123456789/secret-token"}'
+    )
+
+    def fake_urlopen(request, *, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            hdrs={},
+            fp=io.BytesIO(response_body),
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(module.DiscordWebhookError) as exc_info:
+        module.send_discord_webhook("https://discord.example/webhook", payload)
+
+    message = str(exc_info.value)
+    assert "Discord webhook returned HTTP 403: Forbidden" in message
+    assert "Response body excerpt:" in message
+    assert "blocked webhook try again" in message
+    assert "secret-token" not in message
+    assert "https://discord.com/api/webhooks/123456789/secret-token" not in message
+
+
+def test_send_discord_webhook_redacts_encoded_webhook_urls_from_error_body(monkeypatch):
+    module = load_backfill_module()
+    webhook_url = "https://discord.com/api/webhooks/123456789/Secret-Token"
+    payload = expected_discord_embed_payload(
+        "v0.0.283",
+        "https://youtu.be/RIkxCaylRAQ",
+        "promptdriven/pdd",
+    )
+    response_body = (
+        b'{"literal":"https://discord.com/api/webhooks/123456789/Secret-Token",'
+        b'"json_escaped":"https:\\/\\/discord.com\\/api\\/webhooks\\/123456789\\/Secret-Token",'
+        b'"encoded":"https%3A%2F%2Fdiscord.com%2Fapi%2Fwebhooks%2F123456789%2FSecret-Token",'
+        b'"encoded_lower":"https%3a%2f%2fdiscord.com%2fapi%2fwebhooks%2f123456789%2fSecret-Token"}'
+    )
+
+    def fake_urlopen(request, *, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            hdrs={},
+            fp=io.BytesIO(response_body),
+        )
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(module.DiscordWebhookError) as exc_info:
+        module.send_discord_webhook(webhook_url, payload)
+
+    message = str(exc_info.value)
+    assert "Response body excerpt:" in message
+    assert "Secret-Token" not in message
+    assert "123456789" not in message
+    assert "https:\\/\\/discord.com\\/api\\/webhooks" not in message
+    assert "https%3A%2F%2Fdiscord.com%2Fapi%2Fwebhooks" not in message
+    assert "https%3a%2f%2fdiscord.com%2fapi%2fwebhooks" not in message
+
+
 def test_backfill_posts_discord_followup_and_marks_release_body():
     module = load_backfill_module()
     youtube_url = "https://www.youtube.com/watch?v=RIkxCaylRAQ"
@@ -63,13 +208,7 @@ def test_backfill_posts_discord_followup_and_marks_release_body():
     assert posts == [
         (
             "https://discord.example/webhook",
-            {
-                "content": (
-                    "Release video recovered for v0.0.283: "
-                    "https://www.youtube.com/watch?v=RIkxCaylRAQ\n"
-                    "Release: https://github.com/promptdriven/pdd/releases/tag/v0.0.283"
-                )
-            },
+            expected_discord_embed_payload("v0.0.283", youtube_url, "promptdriven/pdd"),
         )
     ]
     assert github.body.startswith(f"Release video: {youtube_url}\n\n")
@@ -404,7 +543,11 @@ def test_backfill_does_not_skip_for_a_different_video_url():
 
     assert result.posted is True
     assert len(posts) == 1
-    assert f"Release video recovered for v0.0.283: {second_url}" in posts[0][1]["content"]
+    assert posts[0][1] == expected_discord_embed_payload(
+        "v0.0.283",
+        second_url,
+        "promptdriven/pdd",
+    )
     assert module.discord_backfill_marker("v0.0.283", second_url) in github.body
 
 
