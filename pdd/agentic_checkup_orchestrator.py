@@ -65,10 +65,12 @@ CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     8: 340.0,    # Create PR
 }
 
-# Step-specific provider retry budgets. Step 7 is the final verification gate:
-# a provider timeout there is not a code failure the fixer can act on, so use
-# one longer attempt instead of several shorter silent retries.
+# Step-specific provider retry budgets. Step 5 test execution and Step 7 final
+# verification are gates: a provider timeout there is infrastructure, not a code
+# failure the fixer can act on, so use one longer attempt instead of several
+# shorter silent retries.
 CHECKUP_STEP_MAX_RETRIES: Dict[Union[int, float], int] = {
+    5: 1,
     7: 1,
 }
 
@@ -3863,15 +3865,19 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs[step_key] = f"FAILED: {persistable_output}"
             if _is_provider_failure(output):
                 consecutive_provider_failures += 1
-                if step_num == 7:
+                if step_num in (5, 7):
                     _save_state()
-                    return (
-                        False,
-                        (
-                            f"{_format_step_abort_message(step_num, output)}. "
+                    follow_up = (
+                        "Test execution did not complete, so no fixer step was started."
+                        if step_num == 5
+                        else (
                             "Final verification did not complete, so no "
                             "fix-verify iteration was started."
-                        ),
+                        )
+                    )
+                    return (
+                        False,
+                        f"{_format_step_abort_message(step_num, output)}. {follow_up}",
                         total_cost,
                         last_model_used,
                     )

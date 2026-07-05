@@ -1761,10 +1761,10 @@ class TestTimeouts:
             expected = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + 100.0
             assert timeout == expected
 
-    def test_step7_uses_single_long_provider_attempt(
+    def test_step5_and_step7_use_single_provider_attempts(
         self, mock_dependencies, default_args
     ):
-        """Step 7 should get one longer final-verification attempt."""
+        """Provider-timeout-sensitive gates should not silently retry."""
         mock_run, _, _, _ = mock_dependencies
 
         run_agentic_checkup_orchestrator(**default_args)
@@ -1776,6 +1776,9 @@ class TestTimeouts:
             if label.startswith("step7"):
                 assert max_retries == 1
                 assert timeout == CHECKUP_STEP_TIMEOUTS[7]
+            elif label.startswith("step5"):
+                assert max_retries == 1
+                assert timeout == CHECKUP_STEP_TIMEOUTS[5]
             else:
                 assert max_retries == DEFAULT_MAX_RETRIES
 
@@ -1866,6 +1869,37 @@ class TestProviderFailureAbort:
         assert "Step 7" in msg
         assert "agent providers" in msg
         assert "step3_iter2" not in labels
+
+    def test_step5_provider_timeout_aborts_without_running_fixer(
+        self, mock_dependencies, default_args
+    ):
+        """A test-step provider timeout must not be handed to Step 6 as test output."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    "All agent providers failed: anthropic: Claude interactive mode timed out",
+                    0.0,
+                    "",
+                )
+            if label.startswith("step7"):
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "agent providers" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
 
 
 # ---------------------------------------------------------------------------
