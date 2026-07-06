@@ -2192,6 +2192,20 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
     if not step5_output:
         return False
 
+    def _markdown_summary_count(label: str) -> Optional[int]:
+        match = re.search(
+            rf"(?im)^\s*[-*]\s*\*{{0,2}}{re.escape(label)}"
+            rf"(?:\*{{0,2}}\s*:|\s*:\*{{0,2}})"
+            rf"\s*\*{{0,2}}([0-9][0-9,]*)\*{{0,2}}(?:\s+\w+)?\s*$",
+            step5_output,
+        )
+        if not match:
+            return None
+        try:
+            return int(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
     has_exit_zero = bool(
         re.search(
             r"(?im)\b(?:exit[_\s-]*code|return[_\s-]*code)\b\D*0\b",
@@ -2239,9 +2253,21 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
         and has_total_row_zero_failed
         and has_zero_failure_section
     )
+    total_count = _markdown_summary_count("total")
+    passed_count = _markdown_summary_count("passed")
+    failed_count = _markdown_summary_count("failed")
+    errors_count = _markdown_summary_count("errors")
+    has_hosted_count_summary_pass = (
+        total_count is not None
+        and total_count > 0
+        and passed_count is not None
+        and passed_count > 0
+        and failed_count == 0
+        and errors_count == 0
+    )
     return (
-        (has_exit_zero or has_hosted_table_pass)
-        and has_pass_summary
+        (has_exit_zero or has_hosted_table_pass or has_hosted_count_summary_pass)
+        and (has_pass_summary or has_hosted_count_summary_pass)
         and not has_failure_marker
     )
 

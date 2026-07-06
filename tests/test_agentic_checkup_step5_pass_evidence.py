@@ -53,6 +53,34 @@ Splitting into focused batches completes all tests successfully with no failures
     assert _step5_output_has_strong_pass_evidence(output) is True
 
 
+def test_step5_strong_pass_evidence_accepts_hosted_count_summary_without_signal():
+    output = """
+## Step 5/8: Test Execution
+
+### Results Summary
+- **Total:** 1206 tests
+- **Passed:** 1206
+- **Failed:** 0
+- **Skipped:** 3 (pre-existing interactive-only model tests, unrelated to PR)
+- **Errors:** 0
+
+### Batch Details
+| Batch | Tests | Result |
+|-------|-------|--------|
+| Z.AI integration + catalog + model tester + pass evidence | tests/test_e2e_issue_1827_zai_integration.py, test_generate_model_catalog.py, test_model_tester.py, test_agentic_checkup_step5_pass_evidence.py | 154 passed in 3.07s |
+
+### Failures
+*(none)*
+
+### Z.AI-specific test confirmation
+All Z.AI GLM Coding Plan tests confirmed passing:
+- `test_zai_coding_plan_kwargs_use_coding_endpoint` passed
+- All E2E integration tests in test_e2e_issue_1827_zai_integration.py passed
+"""
+
+    assert _step5_output_has_strong_pass_evidence(output) is True
+
+
 def test_step5_all_clear_without_total_row_remains_ambiguous():
     output = "**Status:** All Clear - 0 failures\nRan pytest. 491 passed"
 
