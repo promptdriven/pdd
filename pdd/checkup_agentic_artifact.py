@@ -131,7 +131,8 @@ class AgenticV1Artifact(BaseModel):
     pr_number: int = 0
     head_sha: str = ""
     mode: str = "fix"
-    status: str = ""
+    # One of: passed | failed | needs_human | error | timeout | budget_exhausted.
+    status: str = "error"
     authority: str = AGENTIC_AUTHORITY_STATUSES[0]
     layer1: AgenticLayer1 = Field(default_factory=lambda: AgenticLayer1(status="unknown"))
     reviewers: List[AgenticReviewer] = Field(default_factory=list)
@@ -290,6 +291,73 @@ def _canonical_status_from_gate(final_gate_report: Any) -> str:
     return "unknown"
 
 
+# ``ReviewLoopState.raw_outputs`` keys are compound. Reviewer passes use
+# ``"{mode}:{reviewer}:round{N}"`` (optionally ``:parse-repair``), while fixer
+# passes use ``"fix:{fixer}:for:{reviewer}:round{N}"`` and
+# ``"sot-repair:{fixer}:round{N}"``. Only reviewer passes carry reviewer
+# findings, so fixer keys are skipped when attributing findings.
+_FIXER_OUTPUT_PREFIXES = ("fix:", "sot-repair:")
+
+
+def _reviewer_name_from_key(key: str) -> Optional[str]:
+    """Return the plain reviewer role for a raw-output key, or ``None``.
+
+    ``None`` means the entry is a fixer output (not a reviewer pass) and must not
+    be attributed to a reviewer. A plain key with no ``:`` (e.g. ``"codex"``) is
+    returned unchanged so direct callers/tests keep working.
+    """
+    text = str(key or "").strip()
+    if not text:
+        return None
+    if text.startswith(_FIXER_OUTPUT_PREFIXES):
+        return None
+    if ":" not in text:
+        return text
+    parts = text.split(":")
+    # "{mode}:{reviewer}:round{N}" (+ optional trailing token).
+    if len(parts) >= 3 and parts[2].startswith("round"):
+        return parts[1] or None
+    return None
+
+
+def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
+    """Map a ``FixResult`` onto the spec ``fix_attempts[].status`` vocabulary.
+
+    Spec values: ``skipped | applied | failed | timeout``. ``FixResult`` carries
+    ``fixer_result`` in ``{attempted, skipped, failed}``; ``"attempted"`` means
+    the fixer ran and produced changes, i.e. ``applied``.
+    """
+    result = _coerce_str(fixer_result).strip().lower()
+    if "timeout" in result:
+        return "timeout"
+    if result == "attempted":
+        return "applied"
+    if result in ("skipped", "failed"):
+        return result
+    # No explicit fixer_result: infer from push outcome.
+    push = _coerce_str(push_status).strip().lower()
+    if push == "pushed":
+        return "applied"
+    if push == "push_failed":
+        return "failed"
+    return "skipped"
+
+
+def _map_status(*, passed: bool, budget_exhausted: bool, needs_human: bool) -> str:
+    """Map the review outcome onto the spec top-level ``status`` vocabulary.
+
+    Spec values: ``passed | failed | needs_human | error | timeout |
+    budget_exhausted``.
+    """
+    if passed:
+        return "passed"
+    if budget_exhausted:
+        return "budget_exhausted"
+    if needs_human:
+        return "needs_human"
+    return "failed"
+
+
 # ---------------------------------------------------------------------------
 # Public builder
 # ---------------------------------------------------------------------------
@@ -330,13 +398,20 @@ def build_agentic_v1_artifact(
     reviewer_status: Dict[str, str] = dict(getattr(loop_state, "reviewer_status", {}) or {})
     raw_outputs = list(getattr(loop_state, "raw_outputs", []) or [])
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
+    reviewers_with_output: set = set()
     for entry in raw_outputs:
         try:
-            reviewer_name, output_text = entry[0], entry[1]
+            raw_key, output_text = entry[0], entry[1]
         except (TypeError, IndexError, KeyError):
             continue
-        parsed = _normalize_findings(_coerce_str(output_text), _coerce_str(reviewer_name))
-        findings_by_reviewer.setdefault(_coerce_str(reviewer_name), []).extend(parsed)
+        # Normalize the compound raw-output key to the plain reviewer role; skip
+        # fixer outputs so their prose is never parsed as reviewer findings.
+        reviewer_name = _reviewer_name_from_key(_coerce_str(raw_key))
+        if not reviewer_name:
+            continue
+        reviewers_with_output.add(reviewer_name)
+        parsed = _normalize_findings(_coerce_str(output_text), reviewer_name)
+        findings_by_reviewer.setdefault(reviewer_name, []).extend(parsed)
 
     # Prefer already-structured loop findings when present.
     structured: List[AgenticFinding] = []
@@ -363,13 +438,23 @@ def build_agentic_v1_artifact(
 
     reviewers: List[AgenticReviewer] = []
     reviewer_commands: Dict[str, str] = dict(getattr(config, "reviewer_commands", {}) or {})
+    # The loop reports a role as ``fixer`` in reviewer_status purely for
+    # traceability; that is not a reviewer verdict, so skip it here.
     for name, status in reviewer_status.items():
+        if name == "fresh-final" or _coerce_str(status) == "fixer":
+            continue
         own = [f for f in all_findings if f.reviewer == name]
-        # R4: a reviewer whose output failed to parse (no findings extracted
-        # from a non-empty output) is degraded, never clean.
-        had_output = any(_coerce_str(o[0]) == name for o in raw_outputs if isinstance(o, (list, tuple)))
-        parse_failed = had_output and not findings_by_reviewer.get(name)
-        resolved_status = "degraded" if (parse_failed and status == "clean") else _coerce_str(status)
+        status_str = _coerce_str(status)
+        # R4: a reviewer that reported findings/blocking but whose output could
+        # not be parsed into any structured finding is degraded, never reported
+        # as if it produced clean/attributable results. A genuinely clean
+        # reviewer (no findings) stays clean.
+        parse_failed = (
+            name in reviewers_with_output
+            and status_str in ("findings", "blocking")
+            and not own
+        )
+        resolved_status = "degraded" if parse_failed else status_str
         reviewers.append(
             AgenticReviewer(
                 name=_coerce_str(name),
@@ -390,8 +475,9 @@ def build_agentic_v1_artifact(
                         provider=_coerce_str(
                             getattr(fx, "fixer", None) or getattr(fx, "provider", "") or "unknown"
                         ),
-                        status=_coerce_str(
-                            getattr(fx, "fixer_result", None) or getattr(fx, "push_status", "") or "unknown"
+                        status=_map_fix_status(
+                            getattr(fx, "fixer_result", None),
+                            getattr(fx, "push_status", None),
                         ),
                         changed_files=list(getattr(fx, "changed_files", []) or []),
                         commit_sha=(
@@ -432,28 +518,38 @@ def build_agentic_v1_artifact(
         evidence=[verified] if verified else [],
     )
 
-    # --- agentic verdict + blocking signal --------------------------------
-    remaining_open = [f for f in all_findings if f.blocking]
-    stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
-    passed = (
-        fresh_status == "clean"
-        and not remaining_open
-        and not stop_reason
-    )
-    agentic_blocking = bool(remaining_open) or (fresh_status not in ("clean", "missing"))
-    decision = "pass" if passed else "block"
-    verdict = AgenticVerdict(decision=decision, reason=stop_reason)
-    status = "clean" if passed else "blocking"
-
-    # --- authority (R6) ---------------------------------------------------
-    authority = _resolve_authority(canonical_status, agentic_blocking)
-
     # --- budget (R5: computed fresh from config caps vs actual) -----------
     budget = AgenticBudget(
         max_rounds_reached=bool(getattr(loop_state, "max_rounds_reached", False)),
         max_minutes_reached=bool(getattr(loop_state, "max_duration_reached", False)),
         max_cost_reached=bool(getattr(loop_state, "max_cost_reached", False)),
     )
+    budget_exhausted = (
+        budget.max_rounds_reached
+        or budget.max_minutes_reached
+        or budget.max_cost_reached
+    )
+
+    # --- agentic verdict + blocking signal --------------------------------
+    # A clean pass is derived purely from the outcome: the fresh-final review is
+    # clean and no blocking findings remain. ``stop_reason`` is NOT a failure
+    # gate — ``run_checkup_review_loop`` sets it on EVERY exit path, including a
+    # clean one (e.g. "Primary reviewer is clean."), so it is reported as the
+    # verdict reason but never used to decide pass/fail.
+    remaining_open = [f for f in all_findings if f.blocking]
+    stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
+    passed = fresh_status == "clean" and not remaining_open
+    agentic_blocking = bool(remaining_open) or (fresh_status not in ("clean", "missing"))
+    decision = "pass" if passed else "block"
+    verdict = AgenticVerdict(decision=decision, reason=stop_reason)
+    # A reviewer that failed/degraded/errored (not a content block) means the
+    # outcome could not be decided by the reviewers → needs_human.
+    reviewer_states = {r.status for r in reviewers}
+    needs_human = bool(reviewer_states & {"failed", "degraded", "missing", "error"}) and not remaining_open
+    status = _map_status(passed=passed, budget_exhausted=budget_exhausted, needs_human=needs_human)
+
+    # --- authority (R6) ---------------------------------------------------
+    authority = _resolve_authority(canonical_status, agentic_blocking)
 
     try:
         return AgenticV1Artifact(

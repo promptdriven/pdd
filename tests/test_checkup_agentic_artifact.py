@@ -198,17 +198,47 @@ def test_build_artifact_authority_is_closed_and_canonical_owned_R6():
 
 
 def test_build_artifact_degraded_reviewer_on_parse_failure_R4():
-    # Reviewer produced non-empty output that yields no parseable findings.
+    # Reviewer reported findings but its (compound-keyed, production-format)
+    # output could not be parsed into any structured finding -> degraded.
     art = build_agentic_v1_artifact(
         loop_state=_state(
-            reviewer_status={"codex": "clean"},
-            raw_outputs=[("codex", "some prose without any severity token")],
+            reviewer_status={"codex": "findings"},
+            findings=[],
+            raw_outputs=[("review:codex:round1", "prose with no severity token")],
         ),
         config=_config(), context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     codex = next(r for r in art.reviewers if r.name == "codex")
     assert codex.status == "degraded"
+
+
+def test_build_artifact_clean_reviewer_with_output_stays_clean():
+    # A genuinely clean reviewer (no findings) must NOT be marked degraded.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "clean"},
+            raw_outputs=[("review:codex:round1", "looks good, nothing to flag")],
+        ),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    codex = next(r for r in art.reviewers if r.name == "codex")
+    assert codex.status == "clean"
+
+
+def test_build_artifact_fixer_output_not_parsed_as_reviewer_findings():
+    # fix:/sot-repair: outputs are fixer prose, never reviewer findings.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "clean"},
+            raw_outputs=[("fix:claude:for:codex:round1", "blocker foo.py:1 bad")],
+        ),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    # No reviewer named 'claude' (fixer), and the fixer prose is not a finding.
+    assert all(f.reviewer != "claude" for f in art.findings)
 
 
 def test_build_artifact_identity_and_budget():
@@ -231,3 +261,84 @@ def test_build_artifact_never_crashes_on_garbage_inputs():
     assert isinstance(art, AgenticV1Artifact)
     assert art.authority in AGENTIC_AUTHORITY_STATUSES
     assert art.schema_version == AGENTIC_V1_SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# Regression: production always sets a non-empty stop_reason (#1788 review)
+# ---------------------------------------------------------------------------
+
+
+def test_build_artifact_passed_true_despite_nonempty_stop_reason():
+    # run_checkup_review_loop sets stop_reason on EVERY exit path, including
+    # clean ones. A clean fresh-final + no blocking findings must still pass.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "clean"},
+            fresh_final_status="clean",
+            stop_reason="Primary reviewer is clean.",
+        ),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.status == "passed"
+    assert art.verdict.decision == "pass"
+    assert art.verdict.reason == "Primary reviewer is clean."
+
+
+def test_build_artifact_status_vocab_matches_spec():
+    # blocking findings -> failed
+    blocking = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "findings"},
+            findings=[SimpleNamespace(severity="blocker", reviewer="codex",
+                                      finding="bad", required_fix="fix", location="a.py")],
+            fresh_final_status="findings",
+            stop_reason="findings remain",
+        ),
+        config=_config(), context=_context(), final_gate_report={"layer1_status": "pass"},
+    )
+    assert blocking.status == "failed"
+    # budget exhausted -> budget_exhausted
+    budget = build_agentic_v1_artifact(
+        loop_state=_state(fresh_final_status="missing", max_cost_reached=True,
+                          stop_reason="budget"),
+        config=_config(), context=_context(), final_gate_report={"layer1_status": "unknown"},
+    )
+    assert budget.status == "budget_exhausted"
+    # reviewer failed, no content block -> needs_human
+    nh = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status={"codex": "failed"}, fresh_final_status="missing",
+                          stop_reason="reviewer failed"),
+        config=_config(), context=_context(), final_gate_report={"layer1_status": "unknown"},
+    )
+    assert nh.status == "needs_human"
+
+
+def test_build_artifact_reviewer_command_populated():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status={"codex": "clean", "claude": "clean"}),
+        config=_config(reviewer_commands={"codex": "/review", "claude": "/code-review"}),
+        context=_context(), final_gate_report={"layer1_status": "pass"},
+    )
+    cmds = {r.name: r.command for r in art.reviewers}
+    assert cmds["codex"] == "/review"
+    assert cmds["claude"] == "/code-review"
+
+
+def test_build_artifact_fix_status_maps_attempted_to_applied():
+    fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
+                             push_status="pushed", changed_files=["a.py"],
+                             pushed_head_sha="deadbeef")]
+    art = build_agentic_v1_artifact(
+        loop_state=_state(fixes=fixes), config=_config(no_fix=False),
+        context=_context(), final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.fix_attempts[0].status == "applied"
+
+
+def test_build_artifact_layer1_blockers_passed_through():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(), config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "fail", "blockers": ["gate X failed", "test Y failed"]},
+    )
+    assert art.layer1.blockers == ["gate X failed", "test Y failed"]

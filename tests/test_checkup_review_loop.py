@@ -13749,3 +13749,105 @@ def test_review_loop_config_agentic_fields_default_off():
     assert cfg.adversarial_prompt is None
     assert cfg.agentic_mode is False
     assert cfg.fresh_final_review_role is None
+
+
+# ---------------------------------------------------------------------------
+# Fresh final review role override + agentic artifact write (issue #1788)
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_final_review_override_runs_override_role(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = crl.ReviewLoopContext(
+        issue_url="", issue_content="", repo_owner="o", repo_name="pdd",
+        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        pr_url="", pr_owner="promptdriven", pr_repo="pdd", pr_number=1790,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="gemini")
+
+    called = {}
+
+    def fake_run_review(*, reviewer, **kw):
+        called["reviewer"] = reviewer
+        return crl.ReviewResult(reviewer=reviewer, status="clean", issue_aligned=True, findings=[])
+
+    with patch.object(crl, "_run_review", side_effect=fake_run_review), \
+         patch.object(crl, "_record_review"):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx, config=cfg, state=state, worktree=tmp_path,
+            artifacts_dir=tmp_path, round_number=1, pr_metadata={}, deadline=None,
+            verbose=False, quiet=False,
+        )
+    # The override role (gemini), not the primary (codex), ran the fresh review.
+    assert called["reviewer"] == "gemini"
+    assert state.fresh_final_status == "clean"
+    assert state.reviewer_status["gemini"] == "clean"
+
+
+def test_fresh_final_review_override_skips_when_not_agentic(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(reviewer_status={"codex": "clean"},
+                                active_reviewer="codex", fresh_final_status="clean")
+    ctx = crl.ReviewLoopContext(
+        issue_url="", issue_content="", repo_owner="o", repo_name="pdd",
+        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        pr_url="", pr_owner="o", pr_repo="pdd", pr_number=1, project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=False, fresh_final_review_role="gemini")
+    with patch.object(crl, "_run_review") as run_review:
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx, config=cfg, state=state, worktree=tmp_path,
+            artifacts_dir=tmp_path, round_number=1, pr_metadata={}, deadline=None,
+            verbose=False, quiet=False,
+        )
+    run_review.assert_not_called()
+
+
+def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="", issue_content="", repo_owner="o", repo_name="pdd",
+        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        pr_url="", pr_owner="promptdriven", pr_repo="pdd", pr_number=1790,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, review_only=True)
+    state = crl.ReviewLoopState(reviewer_status={"codex": "clean"},
+                                active_reviewer="codex", fresh_final_status="clean",
+                                stop_reason="Primary reviewer is clean.")
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    assert out is not None
+    written = tmp_path / "pdd-checkup-agentic-1790.json"
+    assert written.exists()
+    data = _json.loads(written.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["mode"] == "nofix"
+    assert data["status"] == "passed"
+    # No Layer-1 evidence -> canonical status unknown -> agentic fallback (clean).
+    assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
+
+
+def test_agentic_mode_off_writes_nothing(tmp_path, monkeypatch):
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="", issue_content="", repo_owner="o", repo_name="pdd",
+        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        pr_url="", pr_owner="o", pr_repo="pdd", pr_number=1, project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(agentic_mode=False)
+    state = crl.ReviewLoopState(reviewer_status={"codex": "clean"}, active_reviewer="codex")
+    assert crl._maybe_write_agentic_artifact(ctx, cfg, state) is None
+    assert not (tmp_path / "pdd-checkup-agentic-1.json").exists()

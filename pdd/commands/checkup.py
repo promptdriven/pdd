@@ -187,11 +187,16 @@ def _forward_subcommand_json(
     "--adversarial-prompt",
     "adversarial_prompt",
     type=str,
-    default="find reasons not to merge the PR",
-    show_default=True,
+    default=(
+        "Using the same criteria as canonical pdd checkup, find concrete "
+        "reasons this PR should not merge. Do not introduce new merge criteria. "
+        "Report only verifiable blockers or material risks."
+    ),
+    show_default=False,
     help=(
         "Adversarial instruction forwarded to all reviewers in "
-        "--agentic-review-loop mode."
+        "--agentic-review-loop mode. Defaults to a canonical-checkup-anchored "
+        "lens so the fallback/mirror pass does not invent new merge criteria."
     ),
 )
 @click.option(

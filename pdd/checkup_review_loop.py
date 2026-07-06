@@ -740,6 +740,11 @@ class ReviewLoopConfig:
     adversarial_prompt: Optional[str] = None
     agentic_mode: bool = False
     fresh_final_review_role: Optional[str] = None
+    # APPENDED — issue #1788. Normalized ``{role: /slash-command}`` mapping parsed
+    # from a ``--reviewers codex:/review,claude:/code-review`` spec (via
+    # ``parse_reviewer_commands``). Surfaced verbatim in the agentic artifact's
+    # ``reviewers[].command``. Empty when no per-role commands were supplied.
+    reviewer_commands: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -2010,10 +2015,99 @@ def run_checkup_review_loop(
     ):
         state.fresh_final_status = "clean"
 
+    _maybe_run_fresh_final_review_override(
+        context=context,
+        config=config,
+        state=state,
+        worktree=worktree,
+        artifacts_dir=artifacts_dir,
+        round_number=round_number,
+        pr_metadata=pr_metadata,
+        deadline=deadline,
+        verbose=verbose,
+        quiet=quiet,
+    )
+
     report = _finalize(context, state, roles, artifacts_dir)
     _maybe_write_agentic_artifact(context, config, state)
     _post_review_loop_report(context, report, use_github_state)
     return True, report, state.total_cost, state.last_model
+
+
+def _maybe_run_fresh_final_review_override(
+    *,
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    pr_metadata: Optional[Dict[str, Any]],
+    deadline: Optional[float],
+    verbose: bool,
+    quiet: bool,
+) -> None:
+    """Issue #1788: run the fresh final review with an explicit role override.
+
+    In ``--agentic-review-loop`` mode ``config.fresh_final_review_role`` names the
+    role that performs the fresh final review in a new session, independent of the
+    primary reviewer/fixer. When it resolves to a role distinct from the active
+    reviewer and the loop otherwise reached a clean primary verdict, run one fresh
+    ``mode="review"`` pass with that role and let its outcome own
+    ``state.fresh_final_status`` (fresh eyes can veto an otherwise-clean verdict).
+    Best-effort: never raises, so a provider outage cannot wedge the loop.
+    """
+    if not getattr(config, "agentic_mode", False):
+        return
+    role_raw = getattr(config, "fresh_final_review_role", None)
+    if not role_raw:
+        return
+    resolved = _normalize_reviewers([role_raw])
+    if not resolved:
+        return
+    role = resolved[0]
+    # Only run when the primary path is otherwise clean; a non-clean verdict
+    # already blocks and does not need a confirming fresh pass.
+    if state.fresh_final_status != "clean" or role == state.active_reviewer:
+        return
+    try:
+        result = _run_review(
+            reviewer=role,
+            context=context,
+            worktree=worktree,
+            round_number=round_number,
+            state=state,
+            config=config,
+            verbose=verbose,
+            quiet=quiet,
+            artifacts_dir=artifacts_dir,
+            mode="review",
+            pr_metadata=pr_metadata,
+            deadline=deadline,
+        )
+        _record_review(state, result)
+        if result.status in HARD_NOT_CLEAN_STATES:
+            state.reviewer_status[role] = result.status
+            state.fresh_final_status = result.status
+            state.stop_reason = (
+                f"Fresh final reviewer {role} could not complete: {result.status}."
+            )
+            return
+        open_findings = _actionable_findings(state, result.findings)
+        if open_findings:
+            state.reviewer_status[role] = "findings"
+            state.fresh_final_status = "findings"
+            state.stop_reason = (
+                f"Fresh final reviewer {role} reported findings."
+            )
+        else:
+            state.reviewer_status[role] = "clean"
+            state.fresh_final_status = "clean"
+    except Exception as exc:  # pragma: no cover - defensive: never break the loop
+        print(
+            f"Warning: fresh final review override ({role}) failed: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _maybe_write_agentic_artifact(
@@ -2039,9 +2133,30 @@ def _maybe_write_agentic_artifact(
             try:
                 parsed = json.loads(raw_evidence)
                 if isinstance(parsed, dict):
+                    status = str(parsed.get("status", "") or "unknown")
+                    # Carry real Layer 1 blockers into the artifact rather than an
+                    # empty list. Prefer explicit blockers/findings; otherwise
+                    # synthesize one from the failing command evidence.
+                    blockers: List[str] = []
+                    for blk in parsed.get("blockers", []) or []:
+                        blockers.append(_scrub_secrets(str(blk)))
+                    for finding in parsed.get("findings", []) or []:
+                        if isinstance(finding, dict):
+                            text = finding.get("finding") or finding.get("summary") or ""
+                            if text:
+                                blockers.append(_scrub_secrets(str(text)))
+                    if not blockers and status in _LAYER1_STEP5_ACTIONABLE_STATUSES:
+                        command = str(parsed.get("command") or "").strip() or "unknown"
+                        exit_code = parsed.get("exit_code")
+                        blockers.append(
+                            _scrub_secrets(
+                                f"Layer 1 Step 5 failed (status={status}, "
+                                f"command={command}, exit_code={exit_code})"
+                            )
+                        )
                     final_gate_report = {
-                        "layer1_status": str(parsed.get("status", "") or "unknown"),
-                        "blockers": [],
+                        "layer1_status": status,
+                        "blockers": blockers,
                     }
             except json.JSONDecodeError:
                 final_gate_report = None

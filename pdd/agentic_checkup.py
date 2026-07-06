@@ -45,6 +45,7 @@ from .checkup_review_loop import (
     ReviewLoopContext,
     clear_final_state,
     load_final_state,
+    parse_reviewer_commands,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
@@ -1046,6 +1047,9 @@ def run_agentic_checkup(
             fresh_final_review_role=(
                 fresh_final_review_role if agentic_review_loop else None
             ),
+            # Per-role slash commands parsed from ``--reviewers codex:/review,...``
+            # so the agentic artifact records each reviewer's command.
+            reviewer_commands=parse_reviewer_commands(reviewers),
         )
         return run_checkup_review_loop(
             context=loop_context,
