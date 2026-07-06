@@ -2280,17 +2280,40 @@ def _step5_output_has_strong_pass_evidence(
             )
         )
     )
+    has_hosted_targeted_all_tests_status = (
+        pr_test_scope == "targeted"
+        and bool(
+            re.search(
+                r"(?im)^\s*\*\*status:\*\*\s*all\s+tests\s+pass(?:ed)?"
+                r"\b[^\n]*\bno\s+failures\b",
+                step5_output,
+            )
+        )
+    )
+    has_inline_total_pass_summary = bool(
+        re.search(
+            r"(?im)^\s*\*{0,2}total\s*:\s*\*{0,2}\s*"
+            r"[0-9][0-9,]*\s+passed\b[^\n]*\b0\s+failed\b[^\n]*"
+            r"\*{0,2}\s*$",
+            step5_output,
+        )
+    )
+    has_hosted_targeted_aggregate_pass = (
+        has_hosted_targeted_all_tests_status and has_inline_total_pass_summary
+    )
     return (
         (
             has_exit_zero
             or has_hosted_table_pass
             or has_hosted_count_summary_pass
             or has_hosted_targeted_summary_pass
+            or has_hosted_targeted_aggregate_pass
         )
         and (
             has_pass_summary
             or has_hosted_count_summary_pass
             or has_hosted_targeted_summary_pass
+            or has_hosted_targeted_aggregate_pass
         )
         and not has_failure_marker
     )

@@ -6143,6 +6143,55 @@ class TestIssue1215Round8Step5MissingFailureSignal:
         )
         assert 7 in invoked
 
+    def test_provider_success_targeted_all_tests_pass_total_line_skips_fixer(
+        self, tmp_path
+    ):
+        invoked = []
+        hosted_targeted_pass_output = (
+            "## Step 5: Test Suite Results\n\n"
+            "**Status:** All tests pass — no failures\n\n"
+            "The full targeted test suite for PR #1831 was run in batches "
+            "(the prior shell run timed out at 180s due to the large "
+            "`test_agentic_checkup_orchestrator.py` suite taking ~7.5 minutes "
+            "alone).\n\n"
+            "| Test File(s) | Result |\n"
+            "|---|---|\n"
+            "| `tests/test_agentic_checkup.py` | 43 passed |\n"
+            "| `tests/test_agentic_checkup_orchestrator.py` | 259 passed |\n\n"
+            "**Total: 1468 passed, 3 skipped, 0 failed**\n\n"
+            "No test failures. The PR #1831 changes are test-clean across all "
+            "targeted test files.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, hosted_targeted_pass_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "test_scope": "targeted"}
+            )
+
+        assert success is True, msg
+        assert 6.1 not in invoked, (
+            "Strong targeted hosted aggregate pass evidence without "
+            f"failure_signal must skip speculative fixes; steps={invoked}"
+        )
+        assert 7 in invoked
+
     def test_provider_success_no_failure_signal_block_invokes_fixer(self, tmp_path):
         invoked = []
 

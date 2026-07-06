@@ -103,6 +103,45 @@ All Z.AI GLM Coding Plan tests confirmed passing.
     )
 
 
+def test_step5_strong_pass_evidence_accepts_targeted_all_tests_pass_total_line():
+    output = """
+## Step 5: Test Suite Results
+
+**Status:** All tests pass — no failures
+
+The full targeted test suite for PR #1831 was run in batches (the prior shell
+run timed out at 180s due to the large `test_agentic_checkup_orchestrator.py`
+suite taking ~7.5 minutes alone).
+
+**Total: 1468 passed, 3 skipped, 0 failed**
+
+No test failures. The PR #1831 changes are test-clean across all targeted test
+files.
+"""
+
+    assert (
+        _step5_output_has_strong_pass_evidence(
+            output,
+            pr_test_scope="targeted",
+        )
+        is True
+    )
+
+
+def test_step5_targeted_all_tests_pass_total_line_does_not_satisfy_full_scope():
+    output = """
+## Step 5: Test Suite Results
+
+**Status:** All tests pass — no failures
+
+The full targeted test suite for PR #1831 was run in batches.
+
+**Total: 1468 passed, 3 skipped, 0 failed**
+"""
+
+    assert _step5_output_has_strong_pass_evidence(output) is False
+
+
 def test_step5_targeted_pass_summary_does_not_satisfy_full_scope():
     output = """
 ## Step 5: Test Suite Results
