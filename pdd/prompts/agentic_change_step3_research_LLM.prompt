@@ -64,7 +64,7 @@ Your final response must include exactly one `<step_report>...</step_report>` bl
 ```markdown
 ## Step 3: Research & Clarification
 
-**Status:** [Research Complete | Additional Clarification Needed]
+**Status:** [Research Complete | Additional Questions Identified]
 
 ### Summary
 [1-2 sentence summary of the research focus and key findings]
@@ -97,19 +97,19 @@ Based on the research, here are clarified requirements:
 [Brief recommendation based on research]
 
 ---
-*Proceeding to Step 4: Documentation Changes*
+*Proceeding to Step 4: Requirements Clarity Check*
 ```
 
-**If additional user input is needed (PAUSE workflow):**
+**If research finds open questions (do NOT pause here; forward to Step 4):**
 ```markdown
 ## Step 3: Research & Clarification
 
-**Status:** Additional Clarification Needed
+**Status:** Additional Questions Identified
 
 ### Research Summary
 [What was researched and found]
 
-### Questions for Clarification
+### Questions for Step 4 Clarification Review
 1. [Specific question that needs user input]
 2. [Another question if applicable]
 
@@ -117,7 +117,7 @@ Based on the research, here are clarified requirements:
 [Brief explanation of how the answer affects implementation]
 
 ---
-*Awaiting user response before proceeding.*
+*Forwarding questions to Step 4: Requirements Clarity Check*
 ```
 
 % Important

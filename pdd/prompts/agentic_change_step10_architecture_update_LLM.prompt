@@ -170,6 +170,9 @@ ASSOCIATED_DOCS_UNCHANGED: docs/api.md
 | `prompts/xxx.prompt` | Added tags | module |
 
 ARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt
+ASSOCIATED_DOCS_MODIFIED: README.md
+ASSOCIATED_DOCS_CONFLICTS: docs/spec.md
+ASSOCIATED_DOCS_UNCHANGED: docs/api.md
 
 ---
 *Proceeding to Step 11: Identify Issues*
@@ -182,6 +185,18 @@ ARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt
 **Status:** Skipped (no prompt files in changes)
 
 No new or modified prompt files require architecture metadata updates.
+
+### Associated Documents
+| Document | Status | Notes |
+|----------|--------|-------|
+| `README.md` | Modified | Updated for the changed behavior |
+| `docs/spec.md` | Conflict | Needs human review |
+| `docs/api.md` | Unchanged | Already consistent |
+
+ARCHITECTURE_FILES_MODIFIED:
+ASSOCIATED_DOCS_MODIFIED: README.md
+ASSOCIATED_DOCS_CONFLICTS: docs/spec.md
+ASSOCIATED_DOCS_UNCHANGED: docs/api.md
 
 ---
 *Proceeding to Step 11: Identify Issues*

@@ -29,9 +29,9 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 {step8_output}
 </step8_output>
 
-% Manual Review Required (from Step 5/9 conflict flagging)
+% Manual Review Required (from orchestrator aggregation)
 
-The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emitted by Step 9 (and any review-loop iteration from Step 12). These are documents Step 5 drafted edits for but Step 9 could not safely apply, OR documents whose originating prompt Step 6 did not ratify. They MUST be surfaced in the PR body so reviewers can address them — not buried elsewhere on the issue thread.
+The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emitted by Step 9 JSON/prose, synthesized from Step 10 associated-doc conflicts, or emitted by Step 11/12 review-loop JSON/prose. These are items the workflow could not safely auto-resolve. They MUST be surfaced in the PR body so reviewers can address them — not buried elsewhere on the issue thread.
 
 <manual_review_lines>
 {manual_review_lines}
@@ -110,14 +110,14 @@ gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base
 gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
 ```
 
-After creating or updating the PR, return your findings in your final response.
+After attempting to create or update the PR, return your findings in your final response.
 Do not post GitHub issue comments yourself; the orchestrator extracts the
 `<step_report>` block and posts it with trusted credentials when GitHub state is
 enabled.
 
 % Structured Output Artifacts (REQUIRED — source of truth)
 
-After you create or update the PR, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON to learn the PR URL and outcome; the PR link inside the `<step_report>` block is now a FALLBACK only.
+After every PR attempt, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you), including failure cases where no PR was created or updated. The orchestrator reads the JSON to learn the PR URL and outcome; the PR link inside the `<step_report>` block is now a FALLBACK only.
 
 1. `{artifacts_dir}/13_create_pr.json` — the machine-readable result. Emit valid JSON:
    ```json
@@ -129,12 +129,12 @@ After you create or update the PR, write TWO files into the artifacts directory 
    }}
    ```
    - `status`: `"pr_created"` for a new PR, `"pr_updated"` when you edited an existing open PR in place (clean-restart path), or `"blocked"` when the PR could not be created/updated (the orchestrator maps this to a workflow failure).
-   - `pr_url` / `pr_number`: the created/updated PR's URL and number (omit `pr_number` if unknown).
-   - `summary`: one-line PR summary.
+   - `pr_url` / `pr_number`: the created/updated PR's URL and number. For `"blocked"`, set `pr_url` to `""` and omit `pr_number` if unknown.
+   - `summary`: one-line PR summary, or for `"blocked"` a concise error summary naming the failed command/action.
 
 2. `{artifacts_dir}/13_create_pr.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 13/13` issue comment.
 
-Still emit the `<step_report>` block with the PR link below UNCHANGED — it is the orchestrator's fallback when these files are missing.
+Still emit the `<step_report>` block below UNCHANGED — include the PR link on success, or the blocking error summary on `"blocked"`. It is the orchestrator's fallback when these files are missing.
 
 **PR Body Format:**
 ```markdown
@@ -188,6 +188,8 @@ Render the contents of ``<manual_review_lines>`` here. If the value is the liter
 ```
 
 **Step Report Format:**
+
+**If PR creation/update succeeded:**
 ```markdown
 <step_report>
 ## Step 13: Pull Request Created
@@ -212,10 +214,30 @@ Render the contents of ``<manual_review_lines>`` here. If the value is the liter
 </step_report>
 ```
 
+**If PR creation/update was blocked:**
+```markdown
+<step_report>
+## Step 13: Pull Request Blocked
+
+**Status:** PR Creation Blocked
+
+### Blocking Error
+- Failed action: [push | create PR | update PR | detect existing PR]
+- Error: [concise command/action failure summary]
+
+### Remediation
+1. [Concrete next action for the maintainer]
+2. Re-run `pdd change` after the blocker is resolved
+
+---
+*Agentic change workflow blocked before PR creation. Total cost: ${{total_cost:.4f}}*
+</step_report>
+```
+
 % Important
 
 - Always link the PR to the issue using "Closes #N" or "Fixes #N"
 - Push to origin before creating PR
 - Include clear next steps for the reviewer
-- Report the PR URL in the `<step_report>` block
+- Report the PR URL in the `<step_report>` block when a PR exists; for `"blocked"`, report the blocking error and remediation instead
 - This is the final step - workflow is complete after this

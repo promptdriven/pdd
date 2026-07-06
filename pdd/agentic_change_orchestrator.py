@@ -112,6 +112,227 @@ def _review_loop_no_issues(output: str) -> bool:
     return any(v in lower for v in variants)
 
 
+_STEP_ARTIFACT_STEMS = {
+    11: "11_review",
+    12: "12_fix",
+}
+
+_DECISION_JSON_STEPS = {1, 2, 4, 6, 7, 9, 10, 11, 12, 13}
+
+
+def _step_artifact_stem(step_num: int, name: str) -> str:
+    """Return the authoritative JSON/Markdown artifact stem for a step."""
+    return _STEP_ARTIFACT_STEMS.get(step_num, f"{step_num:02d}_{name}")
+
+
+def _decision_json_filename(step_num: int, name: str) -> Optional[str]:
+    if step_num not in _DECISION_JSON_STEPS:
+        return None
+    return f"{_step_artifact_stem(step_num, name)}.json"
+
+
+def _artifacts_dir_path(work_dir: Path, issue_number: int) -> Path:
+    return Path(work_dir) / ".pdd" / "change" / f"issue-{issue_number}"
+
+
+def _artifacts_dir_for(work_dir: Path, issue_number: int) -> Path:
+    """Return and create the per-issue structured artifact directory."""
+    artifacts_dir = _artifacts_dir_path(work_dir, issue_number)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    return artifacts_dir
+
+
+def _reset_artifacts_dir(work_dir: Path, issue_number: int) -> None:
+    """Remove stale structured artifacts for a fresh non-resume run."""
+    shutil.rmtree(_artifacts_dir_path(work_dir, issue_number), ignore_errors=True)
+
+
+def _read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]:
+    """Return parsed step JSON, or None on missing/unreadable/unparseable."""
+    try:
+        data = json.loads((Path(artifacts_dir) / filename).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_step_md(artifacts_dir: Path, filename: str) -> Optional[str]:
+    """Return stripped step Markdown, or None on missing/unreadable/empty."""
+    try:
+        text = (Path(artifacts_dir) / filename).read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    return text or None
+
+
+def _json_list(data: Optional[dict], key: str) -> List[str]:
+    value = data.get(key) if isinstance(data, dict) else None
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    for item in value:
+        if isinstance(item, str):
+            item = item.strip()
+            if item:
+                result.append(item)
+    return result
+
+
+def _dedupe_preserve_order(items: Sequence[str]) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered
+
+
+def _manual_review_lines_from_json(data: Optional[dict]) -> str:
+    entries = data.get("manual_review") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return ""
+    lines: List[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path = str(entry.get("path") or "").strip()
+        reason = str(entry.get("reason") or "").strip()
+        if path and reason:
+            lines.append(f"MANUAL_REVIEW: {path} — {reason}")
+        elif path:
+            lines.append(f"MANUAL_REVIEW: {path}")
+    return "\n".join(_dedupe_preserve_order(lines))
+
+
+def _step9_changed_files_from_json(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]:
+    """Return (changed, created, modified, direct_edits) from Step 9 JSON."""
+    modified = _json_list(data, "files_modified")
+    created = _json_list(data, "files_created")
+    direct_edits = _json_list(data, "direct_edits")
+    changed = _dedupe_preserve_order([*modified, *created, *direct_edits])
+    return changed, created, modified, direct_edits
+
+
+def _step10_changed_files_from_json(data: dict) -> List[str]:
+    return _dedupe_preserve_order(
+        [
+            *_json_list(data, "architecture_files_modified"),
+            *_json_list(data, "associated_docs_modified"),
+        ]
+    )
+
+
+def _hard_stop_from_json_with_presence(
+    step_num: int, artifacts_dir: Path, name: str
+) -> Tuple[bool, Optional[str], List[str]]:
+    """Map a hard-stop step JSON status to the legacy stop reason.
+
+    Returns ``(json_present, stop_reason, direct_edit_candidates)`` so callers
+    can distinguish a valid ``proceed`` JSON from a missing JSON fallback.
+    """
+    data = _read_step_json(artifacts_dir, f"{_step_artifact_stem(step_num, name)}.json")
+    if data is None:
+        return False, None, []
+    status = str(data.get("status") or "").strip().lower()
+    direct_edit_candidates = _json_list(data, "direct_edit_candidates")
+
+    if status == "proceed":
+        return True, None, direct_edit_candidates
+    if step_num == 1 and status == "duplicate":
+        return True, "Issue is a duplicate", direct_edit_candidates
+    if step_num == 2 and status == "already_done":
+        return True, "Already implemented", direct_edit_candidates
+    if step_num == 4:
+        if status == "needs_clarification":
+            return True, "Clarification needed", direct_edit_candidates
+        if status == "route_bug":
+            rationale = str(data.get("rationale") or "").strip()
+            if rationale:
+                return True, f"Runtime bug route needed: {rationale}", direct_edit_candidates
+            return True, "Runtime bug route needed: use pdd bug followed by pdd fix", direct_edit_candidates
+    if step_num == 6 and status == "no_dev_units":
+        return True, "No dev units found", direct_edit_candidates
+    if step_num == 7 and status == "needs_decision":
+        return True, "Architectural decision needed", direct_edit_candidates
+    return True, None, direct_edit_candidates
+
+
+def _hard_stop_from_json(step_num: int, artifacts_dir: Path, name: str) -> Optional[str]:
+    return _hard_stop_from_json_with_presence(step_num, artifacts_dir, name)[1]
+
+
+def _step13_result_from_json_or_output(
+    data: Optional[dict], output: str
+) -> Tuple[str, str]:
+    """Return (status, pr_url), preferring Step 13 JSON over prose regex."""
+    if isinstance(data, dict):
+        status = str(data.get("status") or "").strip() or "unknown"
+        if status == "blocked":
+            return status, "Unknown"
+        pr_url = str(data.get("pr_url") or "").strip()
+        if pr_url:
+            return status, pr_url
+    url_match = re.search(r"https://github.com/\S+/pull/\d+", output or "")
+    return "unknown", url_match.group(0) if url_match else "Unknown"
+
+
+def _valid_step_json(step_num: int, data: Optional[dict]) -> bool:
+    if not isinstance(data, dict):
+        return False
+    list_fields_by_step = {
+        1: ("duplicates", "questions"),
+        4: ("questions",),
+        6: ("direct_edit_candidates",),
+        7: ("questions",),
+        9: ("files_modified", "files_created", "direct_edits", "manual_review"),
+        10: (
+            "architecture_files_modified",
+            "associated_docs_modified",
+            "associated_docs_conflicts",
+            "associated_docs_unchanged",
+        ),
+        11: ("manual_review",),
+        12: ("manual_review",),
+    }
+    for key in list_fields_by_step.get(step_num, ()):
+        if key in data and not isinstance(data.get(key), list):
+            return False
+    status_sets = {
+        1: {"proceed", "duplicate"},
+        2: {"proceed", "already_done"},
+        4: {"proceed", "needs_clarification", "route_bug"},
+        6: {"proceed", "no_dev_units"},
+        7: {"proceed", "needs_decision"},
+        9: {"changed", "no_change_needed", "failed"},
+        11: {"clean", "issues_found"},
+        12: {"fixed_issues", "partial"},
+        13: {"pr_created", "pr_updated", "blocked"},
+    }
+    allowed_statuses = status_sets.get(step_num)
+    if allowed_statuses is not None:
+        status = str(data.get("status") or "").strip()
+        return status in allowed_statuses
+    if step_num == 10:
+        required = {
+            "architecture_files_modified",
+            "associated_docs_modified",
+            "associated_docs_conflicts",
+            "associated_docs_unchanged",
+        }
+        return all(key in data for key in required)
+    return True
+
+
+def _comment_body_from_artifact(
+    artifacts_dir: Path,
+    stem: str,
+    output: str,
+    fallback: str,
+) -> str:
+    return _read_step_md(artifacts_dir, f"{stem}.md") or extract_step_report(output) or fallback
+
+
 def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
     """Remove corrupted dependency values from architecture.json after step 10."""
     arch_path = worktree_path / "architecture.json"
@@ -1500,6 +1721,7 @@ def _preflight_drift_heal(
 def _verify_doc_sync_contract(
     discovered_docs: List[str],
     step10_output: str,
+    step10_json: Optional[dict] = None,
 ) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
     """Enforce the associated-document contract after Step 10.
 
@@ -1562,9 +1784,14 @@ def _verify_doc_sync_contract(
     # The verifier and ``_extract_marker_paths`` share marker-walking
     # semantics by design — if they ever disagree on what Step 10 emitted
     # the orchestrator's bookkeeping silently diverges from the contract.
-    modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
-    conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
-    unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
+    if isinstance(step10_json, dict):
+        modified = _json_list(step10_json, "associated_docs_modified")
+        conflicted = _json_list(step10_json, "associated_docs_conflicts")
+        unchanged = _json_list(step10_json, "associated_docs_unchanged")
+    else:
+        modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
+        conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
+        unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
 
     def _normalize(p: str) -> str:
         # Normalize backslashes to forward slashes BEFORE pathlib so a
@@ -1934,6 +2161,9 @@ def run_agentic_change_orchestrator(
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
+    manual_review_json_lines: List[str] = list(
+        state.get("manual_review_json_lines") or []
+    )
 
     if ensure_issue_steer_cursor_seeded(
         repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
@@ -2004,15 +2234,44 @@ def run_agentic_change_orchestrator(
         and cached_step6_output
         and not cached_step6_output.startswith("FAILED:")
     ):
-        context["direct_edit_candidates"] = _parse_direct_edit_candidates(
-            cached_step6_output
+        s6_json = _read_step_json(
+            _artifacts_dir_path(cwd, issue_number), "06_devunits.json"
         )
+        if _valid_step_json(6, s6_json):
+            context["direct_edit_candidates"] = _json_list(
+                s6_json, "direct_edit_candidates"
+            )
+        else:
+            context["direct_edit_candidates"] = _parse_direct_edit_candidates(
+                cached_step6_output
+            )
 
     changed_files = []
     
     if "step9_output" in context:
         s9_out = context["step9_output"]
-        extracted_files = _parse_changed_files(s9_out)
+        s9_json = None
+        if worktree_path and worktree_path.exists():
+            s9_json = _read_step_json(
+                _artifacts_dir_path(worktree_path, issue_number),
+                "09_implement.json",
+            )
+        if _valid_step_json(9, s9_json):
+            extracted_files, files_created, files_modified, direct_edits = (
+                _step9_changed_files_from_json(s9_json)
+            )
+            context["files_created"] = ", ".join(files_created)
+            context["files_modified"] = ", ".join(files_modified)
+            context["direct_edits"] = ", ".join(direct_edits)
+            manual_line = _manual_review_lines_from_json(s9_json)
+            if manual_line:
+                manual_review_json_lines = _dedupe_preserve_order(
+                    [*manual_review_json_lines, *manual_line.splitlines()]
+                )
+        else:
+            extracted_files = _parse_changed_files(s9_out)
+            context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", s9_out))
+            context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", s9_out))
         if not extracted_files and worktree_path and worktree_path.exists():
             # Resume case for the successful Step 9 fallback path: the LLM
             # omitted FILES_* markers, so the only authoritative source is
@@ -2022,17 +2281,20 @@ def run_agentic_change_orchestrator(
                 _parse_direct_edit_candidates(context.get("step6_output", "")),
             )
         changed_files.extend(extracted_files)
-        # Reviewer 6th-pass (F2): use the same multi-line + bullet-aware
-        # extractor as `_parse_changed_files`, then comma-join. The old
-        # `\s*(.*)` regex truncated multi-line LLM output to the first
-        # line, so any prompt path on lines 2+ never reached Step 10's
-        # discovery sweep and its docs bypassed Step 10.5.
-        context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", s9_out))
-        context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", s9_out))
     
     if "step10_output" in context:
         s10_out = context["step10_output"]
-        arch_files = _parse_changed_files(s10_out)
+        s10_json = None
+        if worktree_path and worktree_path.exists():
+            s10_json = _read_step_json(
+                _artifacts_dir_path(worktree_path, issue_number),
+                "10_architecture_update.json",
+            )
+        arch_files = (
+            _step10_changed_files_from_json(s10_json)
+            if _valid_step_json(10, s10_json)
+            else _parse_changed_files(s10_out)
+        )
         new_files = [f for f in arch_files if f not in changed_files]
         changed_files.extend(new_files)
 
@@ -2040,6 +2302,9 @@ def run_agentic_change_orchestrator(
         context["files_to_stage"] = ", ".join(changed_files)
 
     start_step = last_completed_step + 1
+
+    if start_step == 1 or clean_restart:
+        _reset_artifacts_dir(cwd, issue_number)
 
     if last_completed_step > 0 and not quiet:
         console.print(f"Resuming change workflow for issue #{issue_number}")
@@ -2202,6 +2467,8 @@ def run_agentic_change_orchestrator(
                 current_work_dir = worktree_path
                 state["worktree_path"] = str(worktree_path)
                 context["worktree_path"] = str(worktree_path)
+                if start_step == 1 or clean_restart:
+                    _reset_artifacts_dir(worktree_path, issue_number)
 
             # Step 8.5: pre-flight drift heal — run once per worktree (so heals
             # are contained to the worktree and can't touch the user's main
@@ -2299,10 +2566,14 @@ def run_agentic_change_orchestrator(
                 except (json.JSONDecodeError, OSError):
                     previous_architecture = None
 
+        artifacts_dir = _artifacts_dir_for(current_work_dir, issue_number)
+        context["artifacts_dir"] = str(artifacts_dir)
+
         template_name = f"agentic_change_step{step_num}_{name}_LLM"
         prompt_template = load_prompt_template(template_name)
         if not prompt_template:
             return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
+        expects_artifacts = "{artifacts_dir}" in prompt_template
 
         # Preprocess to expand <include> tags and escape curly braces
         # Exclude context keys from escaping so they can be substituted
@@ -2329,6 +2600,46 @@ def run_agentic_change_orchestrator(
         state["total_cost"] = total_cost
         state["model_used"] = model_used
 
+        decision_json_name = _decision_json_filename(step_num, name)
+        step_json = (
+            _read_step_json(artifacts_dir, decision_json_name)
+            if decision_json_name
+            else None
+        )
+        if (
+            decision_json_name
+            and expects_artifacts
+            and not _valid_step_json(step_num, step_json)
+        ):
+            if not quiet:
+                console.print(
+                    f"[yellow]Step {step_num} did not write valid {decision_json_name}; rerunning once before prose fallback.[/yellow]"
+                )
+            retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
+                instruction=formatted_prompt,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout,
+                label=f"step{step_num}_json_retry",
+                max_retries=DEFAULT_MAX_RETRIES,
+                reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
+            )
+            step_success = retry_success
+            step_output = retry_output
+            total_cost += retry_cost
+            model_used = retry_model
+            state["total_cost"] = total_cost
+            state["model_used"] = model_used
+            step_json = _read_step_json(artifacts_dir, decision_json_name)
+        if decision_json_name and not _valid_step_json(step_num, step_json):
+            if not quiet and expects_artifacts:
+                console.print(
+                    f"[yellow]Step {step_num} JSON unavailable after retry; using prose fallback.[/yellow]"
+                )
+            step_json = None
+
         if not step_success:
             # Track consecutive provider failures for early abort
             if "All agent providers failed" in step_output:
@@ -2347,7 +2658,13 @@ def run_agentic_change_orchestrator(
             else:
                 consecutive_provider_failures = 0
 
-            stop_reason = _check_hard_stop(step_num, step_output)
+            json_seen, stop_reason, json_direct_edits = (
+                _hard_stop_from_json_with_presence(step_num, artifacts_dir, name)
+            )
+            if step_num == 6 and json_seen:
+                context["direct_edit_candidates"] = json_direct_edits
+            if not json_seen:
+                stop_reason = _check_hard_stop(step_num, step_output)
             if stop_reason:
                 post_step_comment(
                     repo_owner=repo_owner, repo_name=repo_name,
@@ -2374,12 +2691,23 @@ def run_agentic_change_orchestrator(
         # identifying unmanaged direct edit candidates. Parse those before hard
         # stop detection so direct-edit-only runs can continue to Step 8/9.
         if step_num == 6:
-            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
+            json_seen, _, json_direct_edits = _hard_stop_from_json_with_presence(
+                step_num, artifacts_dir, name
+            )
+            direct_edit_candidates = (
+                json_direct_edits
+                if json_seen
+                else _parse_direct_edit_candidates(step_output)
+            )
             context["direct_edit_candidates"] = direct_edit_candidates
             if direct_edit_candidates and not quiet:
                 console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
-        stop_reason = _check_hard_stop(step_num, step_output)
+        json_seen, stop_reason, _ = _hard_stop_from_json_with_presence(
+            step_num, artifacts_dir, name
+        )
+        if not json_seen:
+            stop_reason = _check_hard_stop(step_num, step_output)
         if step_num == 6 and stop_reason and context.get("direct_edit_candidates"):
             stop_reason = None
         if stop_reason:
@@ -2404,7 +2732,76 @@ def run_agentic_change_orchestrator(
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         if step_num == 9:
-            extracted_files = _parse_changed_files(step_output)
+            if _valid_step_json(9, step_json) and step_json.get("status") == "failed":
+                error = str(
+                    step_json.get("error")
+                    or step_json.get("summary")
+                    or "Implementation failed"
+                ).strip()
+                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                state["step_comments"] = sorted(step_comments_set)
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+                return False, f"Stopped at step 9: {error}", total_cost, model_used, []
+            if _valid_step_json(9, step_json) and step_json.get("status") == "no_change_needed":
+                state["step_outputs"][str(step_num)] = step_output
+                state["last_completed_step"] = step_num
+                try:
+                    report_body = _comment_body_from_artifact(
+                        artifacts_dir,
+                        "09_implement",
+                        step_output,
+                        (
+                            "Step 9 completed with no repository changes needed. "
+                            "Raw output retained in workflow state."
+                        ),
+                    )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=step_num,
+                        body=f"## Step 9/13: Implement the prompt changes\n\n{report_body}",
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                except Exception as _exc:
+                    console.print(f"[yellow]Warning: failed to post step comment for step {step_num}: {_exc}[/yellow]")
+                state["step_comments"] = sorted(step_comments_set)
+                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+                clear_agentic_progress()
+                return (
+                    True,
+                    f"No prompt changes needed for issue #{issue_number}",
+                    total_cost,
+                    model_used,
+                    [],
+                )
+            if _valid_step_json(9, step_json):
+                extracted_files, files_created, files_modified, direct_edits = (
+                    _step9_changed_files_from_json(step_json)
+                )
+                context["files_created"] = ", ".join(files_created)
+                context["files_modified"] = ", ".join(files_modified)
+                context["direct_edits"] = ", ".join(direct_edits)
+                manual_line = _manual_review_lines_from_json(step_json)
+                if manual_line:
+                    manual_review_json_lines = _dedupe_preserve_order(
+                        [*manual_review_json_lines, *manual_line.splitlines()]
+                    )
+                    state["manual_review_json_lines"] = manual_review_json_lines
+            else:
+                extracted_files = _parse_changed_files(step_output)
+                if not extracted_files and re.search(r"\bFAIL:", step_output, re.IGNORECASE):
+                    state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                    state["step_comments"] = sorted(step_comments_set)
+                    save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+                    return False, "Stopped at step 9: Implementation failed", total_cost, model_used, []
+                # Reviewer 6th-pass (F2): same fix as the resume path above —
+                # use the multi-line + bullet-aware extractor so Step 10's
+                # discovery sweep sees the full list, not the first line.
+                context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", step_output))
+                context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", step_output))
+                context["direct_edits"] = ", ".join(_extract_marker_paths("DIRECT_EDITS", step_output))
             if not extracted_files and worktree_path:
                 # Fallback: check worktree for actual file changes
                 # Pass direct_edit_candidates so those files are also detected
@@ -2414,12 +2811,6 @@ def run_agentic_change_orchestrator(
                     console.print(f"[yellow]Note: Detected {len(extracted_files)} changed file(s) in worktree (LLM output lacked markers)[/yellow]")
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
-            # Reviewer 6th-pass (F2): same fix as the resume path above —
-            # use the multi-line + bullet-aware extractor so Step 10's
-            # discovery sweep sees the full list, not the first line.
-            context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", step_output))
-            context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", step_output))
-            context["direct_edits"] = ", ".join(_extract_marker_paths("DIRECT_EDITS", step_output))
             if not changed_files:
                 # Save step output for debugging before failing
                 # Issue #467: Mark as FAILED instead of using step_num - 1
@@ -2430,7 +2821,11 @@ def run_agentic_change_orchestrator(
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
         if step_num == 10:
-            arch_files = _parse_changed_files(step_output)
+            arch_files = (
+                _step10_changed_files_from_json(step_json)
+                if _valid_step_json(10, step_json)
+                else _parse_changed_files(step_output)
+            )
             new_files = [f for f in arch_files if f not in changed_files]
             changed_files.extend(new_files)
             context["files_to_stage"] = ", ".join(changed_files)
@@ -2507,6 +2902,7 @@ def run_agentic_change_orchestrator(
                 ) = _verify_doc_sync_contract(
                     discovered_docs=discovered_docs,
                     step10_output=step_output,
+                    step10_json=step_json if _valid_step_json(10, step_json) else None,
                 )
                 violations: List[str] = []
                 warning_lines: List[str] = []
@@ -2583,12 +2979,15 @@ def run_agentic_change_orchestrator(
             state["last_completed_step"] = step_num
             # Trusted per-step success comment (post once per step)
             try:
-                report_body = extract_step_report(step_output)
-                if report_body is None:
-                    report_body = (
+                report_body = _comment_body_from_artifact(
+                    artifacts_dir,
+                    _step_artifact_stem(step_num, name),
+                    step_output,
+                    (
                         f"Step {step_num} completed; no `<step_report>` block returned by agent. "
                         "Raw output retained in workflow state."
-                    )
+                    ),
+                )
                 body = f"## Step {step_num}/13: {description}\n\n{report_body}"
                 post_step_comment_once(
                     repo_owner=repo_owner,
@@ -2635,9 +3034,12 @@ def run_agentic_change_orchestrator(
             state["review_iteration"] = review_iteration
             if not quiet:
                 console.print(f"[bold][Step 11/13][/bold] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+            artifacts_dir = _artifacts_dir_for(current_work_dir, issue_number)
+            context["artifacts_dir"] = str(artifacts_dir)
             s11_template = load_prompt_template("agentic_change_step11_identify_issues_LLM")
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
+            s11_expects_artifacts = bool(s11_template and "{artifacts_dir}" in s11_template)
             # Preprocess to escape curly braces in included content
             exclude = list(context.keys())
             s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude=exclude)
@@ -2647,17 +3049,39 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
+            s11_json = _read_step_json(artifacts_dir, "11_review.json")
+            if s11_expects_artifacts and not _valid_step_json(11, s11_json):
+                if not quiet:
+                    console.print("[yellow]Step 11 did not write valid 11_review.json; rerunning once before prose fallback.[/yellow]")
+                s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
+                    instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                )
+                total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
+                s11_json = _read_step_json(artifacts_dir, "11_review.json")
+            if not _valid_step_json(11, s11_json):
+                if not quiet and s11_expects_artifacts:
+                    console.print("[yellow]Step 11 JSON unavailable after retry; using prose fallback.[/yellow]")
+                s11_json = None
+            s11_manual = _manual_review_lines_from_json(s11_json)
+            if s11_manual:
+                manual_review_json_lines = _dedupe_preserve_order(
+                    [*manual_review_json_lines, *s11_manual.splitlines()]
+                )
+                state["manual_review_json_lines"] = manual_review_json_lines
             # Trusted post for Step 11 (iteration-keyed: iter * 100 + 11)
             if s11_success:
                 try:
                     s11_iter_key = review_iteration * 100 + 11
-                    s11_report = extract_step_report(s11_output)
-                    if s11_report is None:
-                        s11_report = (
+                    s11_report = _comment_body_from_artifact(
+                        artifacts_dir,
+                        "11_review",
+                        s11_output,
+                        (
                             f"Step 11 (review iteration {review_iteration}) completed; "
                             "no `<step_report>` block returned by agent. "
                             "Raw output retained in workflow state."
-                        )
+                        ),
+                    )
                     post_step_comment_once(
                         repo_owner=repo_owner, repo_name=repo_name,
                         issue_number=issue_number, step_num=s11_iter_key,
@@ -2667,14 +3091,22 @@ def run_agentic_change_orchestrator(
                     state["step_comments"] = sorted(step_comments_set)
                 except Exception as _exc:
                     console.print(f"[yellow]Warning: failed to post step 11 comment: {_exc}[/yellow]")
-            if _review_loop_no_issues(s11_output):
+            review_clean = (
+                str(s11_json.get("status", "")).strip() == "clean"
+                if isinstance(s11_json, dict)
+                else _review_loop_no_issues(s11_output)
+            )
+            if review_clean:
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
             if not quiet: console.print("   -> Issues found. Proceeding to fix.")
             if not quiet:
                 console.print(f"[bold][Step 12/13][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
+            artifacts_dir = _artifacts_dir_for(current_work_dir, issue_number)
+            context["artifacts_dir"] = str(artifacts_dir)
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
+            s12_expects_artifacts = bool(s12_template and "{artifacts_dir}" in s12_template)
             # Preprocess to escape curly braces in included content
             exclude = list(context.keys())
             s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude=exclude)
@@ -2684,17 +3116,39 @@ def run_agentic_change_orchestrator(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
+            s12_json = _read_step_json(artifacts_dir, "12_fix.json")
+            if s12_expects_artifacts and not _valid_step_json(12, s12_json):
+                if not quiet:
+                    console.print("[yellow]Step 12 did not write valid 12_fix.json; rerunning once before prose fallback.[/yellow]")
+                s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
+                    instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                )
+                total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
+                s12_json = _read_step_json(artifacts_dir, "12_fix.json")
+            if not _valid_step_json(12, s12_json):
+                if not quiet and s12_expects_artifacts:
+                    console.print("[yellow]Step 12 JSON unavailable after retry; using prose fallback.[/yellow]")
+                s12_json = None
+            s12_manual = _manual_review_lines_from_json(s12_json)
+            if s12_manual:
+                manual_review_json_lines = _dedupe_preserve_order(
+                    [*manual_review_json_lines, *s12_manual.splitlines()]
+                )
+                state["manual_review_json_lines"] = manual_review_json_lines
             # Trusted post for Step 12 (iteration-keyed: iter * 100 + 12)
             if s12_success:
                 try:
                     s12_iter_key = review_iteration * 100 + 12
-                    s12_report = extract_step_report(s12_output)
-                    if s12_report is None:
-                        s12_report = (
+                    s12_report = _comment_body_from_artifact(
+                        artifacts_dir,
+                        "12_fix",
+                        s12_output,
+                        (
                             f"Step 12 (review iteration {review_iteration}) completed; "
                             "no `<step_report>` block returned by agent. "
                             "Raw output retained in workflow state."
-                        )
+                        ),
+                    )
                     post_step_comment_once(
                         repo_owner=repo_owner, repo_name=repo_name,
                         issue_number=issue_number, step_num=s12_iter_key,
@@ -2902,8 +3356,14 @@ def run_agentic_change_orchestrator(
         # but the spec calls them "left for human", so each conflict path
         # must surface as a MANUAL_REVIEW line in the PR body.
         s10_out = context.get("step10_output", "") or ""
-        s10_conflict_paths = _extract_marker_paths(
-            "ASSOCIATED_DOCS_CONFLICTS", s10_out
+        s10_json = _read_step_json(
+            _artifacts_dir_path(gate_worktree, issue_number),
+            "10_architecture_update.json",
+        )
+        s10_conflict_paths = (
+            _json_list(s10_json, "associated_docs_conflicts")
+            if _valid_step_json(10, s10_json)
+            else _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", s10_out)
         )
         synthesized_conflict_lines = "\n".join(
             f"MANUAL_REVIEW: {p} — Step 10 ASSOCIATED_DOCS_CONFLICTS, manual edit needed"
@@ -2913,6 +3373,7 @@ def run_agentic_change_orchestrator(
             context.get("step9_output", "") or "",
             previous_fixes,
             synthesized_conflict_lines,
+            "\n".join(manual_review_json_lines),
         )
         context["clean_restart"] = "true" if effective_clean_restart else "false"
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir
@@ -2925,8 +3386,11 @@ def run_agentic_change_orchestrator(
         context["head_branch"] = (
             current_worktree_branch(current_work_dir) or f"change/issue-{issue_number}"
         )
+        artifacts_dir = _artifacts_dir_for(current_work_dir, issue_number)
+        context["artifacts_dir"] = str(artifacts_dir)
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+        s13_expects_artifacts = bool(s13_template and "{artifacts_dir}" in s13_template)
         # Preprocess to escape curly braces in included content
         exclude = list(context.keys())
         s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude=exclude)
@@ -2936,20 +3400,43 @@ def run_agentic_change_orchestrator(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
         )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
+        s13_json = _read_step_json(artifacts_dir, "13_create_pr.json")
+        if s13_expects_artifacts and not _valid_step_json(13, s13_json):
+            if not quiet:
+                console.print("[yellow]Step 13 did not write valid 13_create_pr.json; rerunning once before prose fallback.[/yellow]")
+            s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
+                instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+            )
+            total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
+            s13_json = _read_step_json(artifacts_dir, "13_create_pr.json")
+        if not _valid_step_json(13, s13_json):
+            if not quiet and s13_expects_artifacts:
+                console.print("[yellow]Step 13 JSON unavailable after retry; using prose fallback.[/yellow]")
+            s13_json = None
         if not s13_success:
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
              console.print("[red]Step 13 (PR Creation) failed.[/red]")
              state["step_comments"] = sorted(step_comments_set)
              save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
              return False, "PR Creation failed", total_cost, model_used, changed_files
+        s13_status, pr_url = _step13_result_from_json_or_output(s13_json, s13_output)
+        if s13_status == "blocked":
+             post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
+             console.print("[red]Step 13 (PR Creation) blocked.[/red]")
+             state["step_comments"] = sorted(step_comments_set)
+             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+             return False, "PR Creation blocked", total_cost, model_used, changed_files
         # Trusted per-step success comment for Step 13
         try:
-            s13_report = extract_step_report(s13_output)
-            if s13_report is None:
-                s13_report = (
+            s13_report = _comment_body_from_artifact(
+                artifacts_dir,
+                "13_create_pr",
+                s13_output,
+                (
                     "Step 13 completed; no `<step_report>` block returned by agent. "
                     "Raw output retained in workflow state."
-                )
+                ),
+            )
             post_step_comment_once(
                 repo_owner=repo_owner, repo_name=repo_name,
                 issue_number=issue_number, step_num=13,
@@ -2959,8 +3446,6 @@ def run_agentic_change_orchestrator(
             state["step_comments"] = sorted(step_comments_set)
         except Exception as _exc:
             console.print(f"[yellow]Warning: failed to post step 13 comment: {_exc}[/yellow]")
-        pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)
-        if url_match: pr_url = url_match.group(0)
         if not quiet:
             console.print("\n[green]Change workflow complete[/green]")
             console.print(f"   Total cost: ${total_cost:.4f}")

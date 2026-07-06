@@ -131,6 +131,10 @@ Your final response must include exactly one `<step_report>...</step_report>` bl
    - **Issue:** [Description]
    - **Fix:** [What needs to be changed]
 
+### Manual Review
+For any issue that cannot be safely auto-fixed by Step 12, include one fallback marker line per item:
+MANUAL_REVIEW: `path/to/file` — [reason human review is required]
+
 ### Summary
 Found {{N}} issues requiring fixes.
 

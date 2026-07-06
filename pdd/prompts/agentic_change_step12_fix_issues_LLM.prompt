@@ -120,6 +120,9 @@ Applied {{N}} fixes successfully.
    - Reason: [Why it couldn't be fixed]
    - Recommendation: [What the user should do]
 
+For every item in "Could Not Fix", include one fallback marker line:
+MANUAL_REVIEW: `prompts/yyy_python.prompt` — [reason human review is required]
+
 ### Summary
 Applied {{N}} of {{M}} fixes. {{remaining}} issues require manual intervention.
 

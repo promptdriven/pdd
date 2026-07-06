@@ -613,6 +613,312 @@ def test_step13_prompt_uses_resolved_base_branch():
     assert "--base main" not in prompt
 
 
+def test_json_artifact_readers_are_safe_and_strip_markdown(tmp_path):
+    from pdd.agentic_change_orchestrator import _read_step_json, _read_step_md
+
+    artifacts = tmp_path / ".pdd" / "change" / "issue-1850"
+    artifacts.mkdir(parents=True)
+    (artifacts / "valid.json").write_text('{"status": "clean"}', encoding="utf-8")
+    (artifacts / "bad.json").write_text("{not json", encoding="utf-8")
+    (artifacts / "body.md").write_text("\n  Posted body  \n", encoding="utf-8")
+    (artifacts / "empty.md").write_text("  \n", encoding="utf-8")
+
+    assert _read_step_json(artifacts, "valid.json") == {"status": "clean"}
+    assert _read_step_json(artifacts, "bad.json") is None
+    assert _read_step_json(artifacts, "missing.json") is None
+    assert _read_step_md(artifacts, "body.md") == "Posted body"
+    assert _read_step_md(artifacts, "empty.md") is None
+    assert _read_step_md(artifacts, "missing.md") is None
+
+
+def test_artifact_stems_use_review_loop_contract_names():
+    from pdd.agentic_change_orchestrator import _step_artifact_stem
+
+    assert _step_artifact_stem(11, "identify_issues") == "11_review"
+    assert _step_artifact_stem(12, "fix_issues") == "12_fix"
+    assert _step_artifact_stem(9, "implement") == "09_implement"
+
+
+def test_hard_stop_from_json_maps_statuses_and_direct_edits(tmp_path):
+    from pdd.agentic_change_orchestrator import (
+        _hard_stop_from_json_with_presence,
+    )
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "01_duplicate.json").write_text(
+        json.dumps({"status": "duplicate", "duplicates": ["#1850"]}),
+        encoding="utf-8",
+    )
+    (artifacts / "06_devunits.json").write_text(
+        json.dumps(
+            {
+                "status": "no_dev_units",
+                "direct_edit_candidates": ["frontend/app.tsx"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    present, reason, direct_edits = _hard_stop_from_json_with_presence(
+        1, artifacts, "duplicate"
+    )
+    assert present is True
+    assert reason == "Issue is a duplicate"
+    assert direct_edits == []
+
+    present, reason, direct_edits = _hard_stop_from_json_with_presence(
+        6, artifacts, "devunits"
+    )
+    assert present is True
+    assert reason == "No dev units found"
+    assert direct_edits == ["frontend/app.tsx"]
+
+
+def test_step9_json_changed_files_are_order_preserving_and_manual_review():
+    from pdd.agentic_change_orchestrator import (
+        _manual_review_lines_from_json,
+        _step9_changed_files_from_json,
+    )
+
+    payload = {
+        "status": "changed",
+        "files_modified": ["prompts/a_python.prompt", "prompts/b_python.prompt"],
+        "files_created": ["prompts/a_python.prompt", "prompts/c_python.prompt"],
+        "direct_edits": ["src/app.py"],
+        "manual_review": [
+            {"path": "docs/a.md", "reason": "schema conflict"},
+            {"path": "docs/b.md", "reason": "human decision needed"},
+        ],
+    }
+
+    changed, created, modified, direct_edits = _step9_changed_files_from_json(payload)
+    assert changed == [
+        "prompts/a_python.prompt",
+        "prompts/b_python.prompt",
+        "prompts/c_python.prompt",
+        "src/app.py",
+    ]
+    assert created == ["prompts/a_python.prompt", "prompts/c_python.prompt"]
+    assert modified == ["prompts/a_python.prompt", "prompts/b_python.prompt"]
+    assert direct_edits == ["src/app.py"]
+    assert _manual_review_lines_from_json(payload) == (
+        "MANUAL_REVIEW: docs/a.md — schema conflict\n"
+        "MANUAL_REVIEW: docs/b.md — human decision needed"
+    )
+
+
+def test_doc_sync_contract_prefers_json_buckets_over_prose():
+    from pdd.agentic_change_orchestrator import _verify_doc_sync_contract
+
+    modified, conflicted, unchanged, dropped, overlapping = _verify_doc_sync_contract(
+        discovered_docs=["docs/a.md", "docs/b.md"],
+        step10_output="ASSOCIATED_DOCS_MODIFIED: docs/a.md",
+        step10_json={
+            "associated_docs_modified": ["docs/b.md"],
+            "associated_docs_conflicts": [],
+            "associated_docs_unchanged": ["docs/a.md"],
+        },
+    )
+
+    assert modified == ["docs/b.md"]
+    assert conflicted == []
+    assert unchanged == ["docs/a.md"]
+    assert dropped == []
+    assert overlapping == []
+
+
+def test_step13_pr_url_prefers_json_and_blocked_status():
+    from pdd.agentic_change_orchestrator import _step13_result_from_json_or_output
+
+    status, pr_url = _step13_result_from_json_or_output(
+        {"status": "pr_updated", "pr_url": "https://github.com/o/r/pull/1850"},
+        "legacy says https://github.com/o/r/pull/1",
+    )
+    assert status == "pr_updated"
+    assert pr_url == "https://github.com/o/r/pull/1850"
+
+    status, pr_url = _step13_result_from_json_or_output(
+        {"status": "blocked"}, "legacy says https://github.com/o/r/pull/1"
+    )
+    assert status == "blocked"
+    assert pr_url == "Unknown"
+
+
+def test_comment_body_prefers_markdown_artifact(tmp_path):
+    from pdd.agentic_change_orchestrator import _comment_body_from_artifact
+
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    (artifacts / "09_implement.md").write_text("Structured comment", encoding="utf-8")
+
+    assert _comment_body_from_artifact(
+        artifacts,
+        "09_implement",
+        "<step_report>Legacy report</step_report>",
+        "fallback",
+    ) == "Structured comment"
+
+
+def test_invalid_json_reruns_once_before_hard_stop(mock_dependencies, temp_cwd):
+    """A migrated decision step with missing JSON gets exactly one repair rerun.
+
+    The rerun must use the same steering hook call shape as normal runs.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["template_loader"].side_effect = (
+        lambda name: "artifact target: {artifacts_dir}"
+        if name == "agentic_change_step1_duplicate_LLM"
+        else "Mocked Prompt Template"
+    )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1_json_retry":
+            artifacts = temp_cwd / ".pdd" / "change" / "issue-1850"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "01_duplicate.json").write_text(
+                json.dumps({"status": "duplicate", "duplicates": ["#1"]}),
+                encoding="utf-8",
+            )
+            return (True, "retry wrote json", 0.2, "gpt-4")
+        return (True, "initial output without json", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="JSON retry",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 1" in msg
+    assert cost == pytest.approx(0.3)
+    assert [c.kwargs.get("label") for c in mock_run.call_args_list] == [
+        "step1",
+        "step1_json_retry",
+    ]
+    assert all("steers" in c.kwargs for c in mock_run.call_args_list)
+
+
+def test_review_loop_exits_on_clean_json_even_when_prose_says_issues(
+    mock_dependencies, temp_cwd
+):
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/a_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            artifacts = temp_cwd / ".pdd" / "worktrees" / "change-issue-1850" / ".pdd" / "change" / "issue-1850"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "11_review.json").write_text(
+                json.dumps({"status": "clean", "manual_review": []}),
+                encoding="utf-8",
+            )
+            return (True, "**Status:** Issues Found", 0.1, "gpt-4")
+        if label == "step12":
+            pytest.fail("Step 12 should not run when 11_review.json is clean")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Review JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert "PR Created: https://github.com/owner/repo/pull/1850" in msg
+    assert not any(c.kwargs.get("label", "").startswith("step12") for c in mock_run.call_args_list)
+
+
+def test_step9_no_change_needed_json_stops_successfully_without_pr(
+    mock_dependencies, temp_cwd
+):
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step9_implement_LLM":
+            return "implement artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            artifacts = temp_cwd / ".pdd" / "worktrees" / "change-issue-1850" / ".pdd" / "change" / "issue-1850"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "09_implement.json").write_text(
+                json.dumps(
+                    {
+                        "status": "no_change_needed",
+                        "files_modified": [],
+                        "files_created": [],
+                        "direct_edits": [],
+                        "manual_review": [],
+                        "summary": "already satisfied",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (artifacts / "09_implement.md").write_text(
+                "No repository changes needed.", encoding="utf-8"
+            )
+            return (True, "No Changes Needed", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="No change",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert "No prompt changes needed" in msg
+    assert files == []
+    assert not any(c.kwargs.get("label") == "step10" for c in mock_run.call_args_list)
+    assert not any(c.kwargs.get("label") == "step13" for c in mock_run.call_args_list)
+
+
 def test_orchestrator_happy_path(mock_dependencies, temp_cwd):
     """
     Test the full successful execution of the orchestrator (Steps 1-13).

@@ -6002,6 +6002,36 @@
             "name": "run_agentic_change_orchestrator",
             "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "_artifacts_dir_for",
+            "signature": "(work_dir: Path, issue_number: int) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "_read_step_json",
+            "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]",
+            "returns": "Optional[dict]"
+          },
+          {
+            "name": "_read_step_md",
+            "signature": "(artifacts_dir: Path, filename: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_hard_stop_from_json_with_presence",
+            "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]",
+            "returns": "Tuple[bool, Optional[str], List[str]]"
+          },
+          {
+            "name": "_step9_changed_files_from_json",
+            "signature": "(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]",
+            "returns": "Tuple[List[str], List[str], List[str], List[str]]"
+          },
+          {
+            "name": "_step13_result_from_json_or_output",
+            "signature": "(data: Optional[dict], output: str) -> Tuple[str, str]",
+            "returns": "Tuple[str, str]"
           }
         ]
       }
