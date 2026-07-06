@@ -461,24 +461,10 @@ def test_old_zai_prefix_row_not_selected_via_alternative_lookup(tmp_path, monkey
 # catalog, selecting each by explicit model string routes to the correct endpoint.
 # ---------------------------------------------------------------------------
 
-def test_both_endpoints_in_catalog_general_api_selects_general_url(tmp_path, monkeypatch):
-    """With both endpoints in the catalog, explicit openai/glm-5.2 under Z.AI
-    (general API) resolves to the general API endpoint, not the Coding Plan URL.
+def test_general_api_single_row_selects_general_url(tmp_path, monkeypatch):
+    """A single explicit Z.AI general API row routes openai/glm-5.2 to the
+    general API endpoint, not the Coding Plan URL.
     """
-    csv_path = tmp_path / "llm_model.csv"
-    csv_path.write_text(
-        _CSV_HEADER + _CODING_PLAN_ROW + _GENERAL_ROW,
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
-    # Force the general API row by requesting the model under the Z.AI provider.
-    # llm_invoke picks by matching model string; since both rows share the same
-    # model string, we use explicit PDD_MODEL_DEFAULT=openai/glm-5.2 which hits
-    # the first matching row in available_df.  To isolate the general row, put
-    # it first in the CSV (done above: Coding Plan first, then General).
-    # _alternative_base_lookups for bare "glm-5.2" prefers Coding Plan first —
-    # so test explicit openai/glm-5.2 with a CSV where only the general row exists.
     csv_path_general_only = tmp_path / "llm_model_general.csv"
     csv_path_general_only.write_text(
         _CSV_HEADER + _GENERAL_ROW,
@@ -515,6 +501,46 @@ def test_both_endpoints_in_catalog_general_api_selects_general_url(tmp_path, mon
     assert _CODING_URL not in str(captured_kwargs.get("base_url", "")), (
         "General API row must not accidentally use the Coding Plan endpoint"
     )
+
+
+def test_both_endpoints_in_catalog_explicit_openai_glm52_selects_general_url(tmp_path, monkeypatch):
+    """When both endpoint rows share openai/glm-5.2, the explicit prefixed model
+    selects the first exact model row: the general Z.AI row in sorted catalog
+    order. Bare glm-5.2 is the Coding Plan shortcut tested separately.
+    """
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(
+        _CSV_HEADER + _GENERAL_ROW + _CODING_PLAN_ROW,
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-general-both-rows")
+
+    captured_kwargs: dict = {}
+
+    def _capture(**kwargs):
+        captured_kwargs.update(kwargs)
+        return _make_mock_completion()
+
+    with patch("litellm.caching.caching.Cache"):
+        with patch.object(llm_mod.litellm, "completion", side_effect=_capture):
+            with patch("pdd.core.cloud.CloudConfig.is_cloud_enabled", return_value=False):
+                llm_mod.llm_invoke(
+                    prompt="ping",
+                    input_json={},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+    assert captured_kwargs.get("base_url") == _GENERAL_URL, (
+        "Explicit openai/glm-5.2 must select the general API row when both rows exist"
+    )
+    assert captured_kwargs.get("api_base") == _GENERAL_URL
+    assert _CODING_URL not in str(captured_kwargs.get("base_url", ""))
 
 
 # ---------------------------------------------------------------------------

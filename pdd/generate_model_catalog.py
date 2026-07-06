@@ -1520,8 +1520,11 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     },
     # Z.AI GLM Coding Plan rows (issue #1827). Quota-backed billing: input=0.0,
     # output=0.0 avoids misleading per-token cost estimates. The Coding Plan
-    # endpoint is distinct from the general API; users on the Coding Plan must
-    # use PDD_MODEL_DEFAULT=openai/glm-5.2 with ZAI_API_KEY and this base_url.
+    # endpoint is distinct from the general API. Users on the Coding Plan should
+    # use bare PDD_MODEL_DEFAULT=glm-5.2 with ZAI_API_KEY so provider-aware
+    # fallback selects this row before the general API row. An explicit
+    # PDD_MODEL_DEFAULT=openai/glm-5.2 selects the general Z.AI row because both
+    # endpoint families share the same OpenAI-compatible model string.
     {
         "provider": "Z.AI Coding Plan",
         "model": "openai/glm-5.2",
