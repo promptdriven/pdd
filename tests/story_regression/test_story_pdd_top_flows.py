@@ -48,7 +48,7 @@ def test_story_pdd_change_help_is_public_safe():
     assert "pdd change ISSUE_URL" in result.output
 
 
-@pytest.mark.story(story_id="pdd_update", story_hash="d633c79daa412aae")
+@pytest.mark.story(story_id="pdd_update", story_hash="cf0bc4a2189f81bd")
 def test_story_pdd_update_help_is_public_safe():
     result = _help("update")
     assert result.exit_code == 0, result.output
