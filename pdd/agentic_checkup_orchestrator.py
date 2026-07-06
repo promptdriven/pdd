@@ -1859,6 +1859,7 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+_STEP5_FAILURE_STATUSES = frozenset({"fail", "error", "failed", "failure"})
 _STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a", "n_a"})
 STEP5_SHELL_EVIDENCE_SCHEMA = "pdd.checkup.layer1_step5_evidence.v1"
 STEP5_SHELL_EVIDENCE_FILENAME = "layer1-step5-evidence.json"
@@ -1900,6 +1901,27 @@ def _step5_was_skipped(step_output_value: str) -> bool:
     gate must refuse the push regardless.
     """
     return _step5_failure_signal_status(step_output_value) in _STEP5_SKIPPED_STATUSES
+
+
+def _step5_unsuccessful_output_has_test_or_skip_signal(step_output_value: str) -> bool:
+    """Return True when an unsuccessful Step 5 result is actionable test output.
+
+    Step 5 is a gate, but a real test failure is intentionally represented as a
+    failed step in older paths and should still flow to the fixer. Infrastructure
+    failures that return no failure_signal or pytest evidence must abort instead
+    of being mistaken for code failures.
+    """
+    status = _step5_failure_signal_status(step_output_value)
+    if status in _STEP5_FAILURE_STATUSES or status in _STEP5_SKIPPED_STATUSES:
+        return True
+    return bool(
+        re.search(
+            r"(?im)(^FAILED[:\s]|^ERROR[:\s]|FAILED\s+\S|"
+            r"=+\s+FAILURES\s+=+|short test summary info|"
+            r"AssertionError|Traceback)",
+            step_output_value or "",
+        )
+    )
 
 
 _EXPANSION_CAUSAL_KEYWORDS = (
@@ -3907,24 +3929,28 @@ def _run_agentic_checkup_orchestrator_inner(
                 _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {persistable_output}"
+            gate_step_unverified = step_num == 7 or (
+                step_num == 5
+                and not _step5_unsuccessful_output_has_test_or_skip_signal(output)
+            )
+            if gate_step_unverified:
+                _save_state()
+                follow_up = (
+                    "Test execution did not complete, so no fixer step was started."
+                    if step_num == 5
+                    else (
+                        "Final verification did not complete, so no "
+                        "fix-verify iteration was started."
+                    )
+                )
+                return (
+                    False,
+                    f"{_format_step_abort_message(step_num, output)}. {follow_up}",
+                    total_cost,
+                    last_model_used,
+                )
             if _is_provider_failure(output) or _is_step_timeout_failure(output):
                 consecutive_provider_failures += 1
-                if step_num in (5, 7):
-                    _save_state()
-                    follow_up = (
-                        "Test execution did not complete, so no fixer step was started."
-                        if step_num == 5
-                        else (
-                            "Final verification did not complete, so no "
-                            "fix-verify iteration was started."
-                        )
-                    )
-                    return (
-                        False,
-                        f"{_format_step_abort_message(step_num, output)}. {follow_up}",
-                        total_cost,
-                        last_model_used,
-                    )
                 if consecutive_provider_failures >= 3:
                     _save_state()
                     failure_kind = (
