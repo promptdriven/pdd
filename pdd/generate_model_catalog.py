@@ -1647,10 +1647,23 @@ def _mandatory_rows_missing_from(
     elo_source_counts: Dict[str, int],
     deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[dict]:
-    existing_ids = {r["model"] for r in rows}
+    existing_ids = {
+        (r.get("provider", ""), r.get("model", ""))
+        for r in rows
+        if r.get("provider")
+    }
+    providerless_existing_models = {
+        r.get("model", "")
+        for r in rows
+        if not r.get("provider")
+    }
     missing: List[dict] = []
     for default_row in _MANDATORY_MODEL_ROWS:
-        if default_row["model"] in existing_ids:
+        model = default_row.get("model", "")
+        if model in providerless_existing_models:
+            continue
+        default_id = (default_row.get("provider", ""), model)
+        if default_id in existing_ids:
             continue
         seeded = dict(default_row)
         elo, src = _add_score_fields(seeded, arena_index, deepswe_index)

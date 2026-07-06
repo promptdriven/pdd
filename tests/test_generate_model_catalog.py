@@ -1364,6 +1364,29 @@ def test_zai_mandatory_rows_deduped_when_already_present():
     assert not dupes, "openai/glm-5.2 must not be seeded again when already present"
 
 
+def test_zai_mandatory_rows_deduped_by_provider_and_model():
+    """Rows sharing a model id under different providers are distinct catalog routes.
+
+    A general Z.AI API row must not suppress the Z.AI Coding Plan row that uses
+    the same OpenAI-compatible model string with a different endpoint.
+    """
+    from collections import defaultdict
+
+    existing = [{"model": "openai/glm-5.2", "provider": "Z.AI"}]
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=existing, arena_index={}, elo_source_counts=defaultdict(int)
+    )
+
+    assert any(
+        r["model"] == "openai/glm-5.2" and r["provider"] == "Z.AI Coding Plan"
+        for r in seeded
+    ), "Z.AI Coding Plan openai/glm-5.2 must be seeded when only Z.AI exists"
+    assert not any(
+        r["model"] == "openai/glm-5.2" and r["provider"] == "Z.AI"
+        for r in seeded
+    ), "Existing Z.AI openai/glm-5.2 row must not be duplicated"
+
+
 def test_committed_csv_includes_zai_coding_plan_rows():
     """Committed llm_model.csv must include Z.AI Coding Plan rows with
     zero cost and the coding endpoint URL."""
