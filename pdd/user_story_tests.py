@@ -431,6 +431,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     if not story_path.exists() or not story_path.is_file():
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
+    explicit_prompt_files = list(prompt_files) if prompt_files else None
     prompt_files = prompt_files or discover_prompt_files(
         prompts_dir, include_llm=include_llm_prompts
     )
@@ -439,6 +440,36 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
 
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
     story_content = _read_story(story_path)
+
+    # Explicit prompt inputs are authoritative: `pdd story link --prompt` and
+    # `pdd story add --update` name the exact prompts to link, so honor them
+    # all (merged with still-resolvable existing refs) without spending an LLM
+    # call second-guessing the caller.
+    if explicit_prompt_files and force_relink:
+        existing_paths: List[Path] = []
+        for ref in _parse_story_prompt_metadata(story_content):
+            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            if resolved:
+                existing_paths.append(resolved)
+        linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)
+        updated = _upsert_story_prompt_metadata(
+            story_path,
+            story_content,
+            linked_prompt_paths,
+            prompts_root,
+        )
+        linked_refs = sorted(
+            {
+                _prompt_reference_for_metadata(path.resolve(), prompts_root)
+                for path in linked_prompt_paths
+            }
+        )
+        message = (
+            "Story prompt metadata linked from explicit prompt inputs."
+            if updated
+            else "Story prompt metadata already up to date for explicit prompt inputs."
+        )
+        return True, message, 0.0, "", linked_refs
 
     # Keep existing valid metadata unchanged unless force_relink is requested.
     existing_refs = _parse_story_prompt_metadata(story_content)
