@@ -3931,7 +3931,11 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs[step_key] = f"FAILED: {persistable_output}"
             gate_step_unverified = step_num == 7 or (
                 step_num == 5
-                and not _step5_unsuccessful_output_has_test_or_skip_signal(output)
+                and (
+                    _is_provider_failure(output)
+                    or _is_step_timeout_failure(output)
+                    or not _step5_unsuccessful_output_has_test_or_skip_signal(output)
+                )
             )
             if gate_step_unverified:
                 _save_state()

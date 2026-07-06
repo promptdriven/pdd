@@ -1906,6 +1906,41 @@ class TestProviderFailureAbort:
         assert not any(label.startswith("step6") for label in labels)
         assert not any(label.startswith("step7") for label in labels)
 
+    def test_step5_provider_timeout_dominates_test_like_tail(
+        self, mock_dependencies, default_args
+    ):
+        """Provider timeout stays terminal even when its output tail has pytest text."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    (
+                        "All agent providers failed: anthropic: Claude interactive "
+                        "mode timed out. Output tail:\n"
+                        "FAILED tests/test_agentic_checkup.py::test_probe\n"
+                        "short test summary info"
+                    ),
+                    0.0,
+                    "",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "timed out" in msg
+        assert "no fixer step was started" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
+
     def test_step5_interactive_timeout_aborts_without_running_fixer(
         self, mock_dependencies, default_args
     ):

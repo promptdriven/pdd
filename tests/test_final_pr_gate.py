@@ -397,6 +397,30 @@ class TestFinalGateLibrary:
         assert success is True, msg
         loop_mock.assert_called_once()
 
+    def test_layer1_provider_timeout_suppresses_timeout_partial_step5_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        _write_layer1_step5_evidence(tmp_path, status="timeout_partial")
+        (result, _orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(
+                False,
+                (
+                    "Aborting after Step 5: agent execution timed out before the "
+                    "step could complete. Test execution did not complete, so no "
+                    "fixer step was started."
+                ),
+                0.5,
+                "model",
+            ),
+        )
+
+        success, msg, _cost, _model = result
+        assert success is False
+        assert "Final gate Layer 1 failed" in msg
+        assert "Layer 1 Step 5 shell-first tests failed" not in msg
+        loop_mock.assert_not_called()
+
     def test_github_checks_gate_runs_between_layer1_and_layer2(self, tmp_path: Path) -> None:
         order: list[str] = []
 
