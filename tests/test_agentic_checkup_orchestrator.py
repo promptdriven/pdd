@@ -13,6 +13,7 @@ import pytest
 
 from pdd.agentic_common import DEFAULT_MAX_RETRIES
 from pdd.agentic_checkup_orchestrator import (
+    CHECKUP_STEP_STALL_TIMEOUTS,
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
     STEP_ID_MAP,
@@ -1766,6 +1767,29 @@ class TestTimeouts:
             step_num = self._label_to_step_num(label)
             expected = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + 100.0
             assert timeout == expected
+
+    def test_reasoning_steps_pass_no_progress_watchdog(
+        self, mock_dependencies, default_args
+    ):
+        """Discovery-style checkup steps should fail fast on transcript stalls."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        calls_by_label = {
+            call_obj.kwargs.get("label", ""): call_obj
+            for call_obj in mock_run.call_args_list
+        }
+
+        assert calls_by_label["step1"].kwargs.get("stall_timeout") == (
+            CHECKUP_STEP_STALL_TIMEOUTS[1]
+        )
+        assert calls_by_label["step2"].kwargs.get("stall_timeout") == (
+            CHECKUP_STEP_STALL_TIMEOUTS[2]
+        )
+        assert calls_by_label["step3_iter1"].kwargs.get("stall_timeout") is None
+        assert calls_by_label["step5_iter1"].kwargs.get("stall_timeout") is None
+        assert calls_by_label["step7_iter1"].kwargs.get("stall_timeout") is None
 
     def test_step5_and_step7_use_single_provider_attempts(
         self, mock_dependencies, default_args

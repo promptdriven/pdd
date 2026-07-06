@@ -65,6 +65,15 @@ CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     8: 340.0,    # Create PR
 }
 
+# Step-specific no-progress watchdogs for interactive providers. These are
+# intentionally limited to reasoning/discovery steps that should keep producing
+# transcript progress; build/test/fix/verify steps can legitimately sit quiet
+# while tools run.
+CHECKUP_STEP_STALL_TIMEOUTS: Dict[Union[int, float], float] = {
+    1: 120.0,    # Discover
+    2: 120.0,    # Deps
+}
+
 # Step-specific provider retry budgets. Step 5 test execution and Step 7 final
 # verification are gates: a provider timeout there is infrastructure, not a code
 # failure the fixer can act on, so use one longer attempt instead of several
@@ -3272,6 +3281,7 @@ def _run_single_step(
         quiet=quiet,
         label=label,
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
+        stall_timeout=CHECKUP_STEP_STALL_TIMEOUTS.get(step_num),
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
