@@ -48,6 +48,41 @@ def test_generate_story_regression_test_is_marked_and_deterministic(tmp_path: Pa
     assert "Ineligible checkout refunds are rejected." in text
 
 
+def test_generate_routes_to_behavioral_generator_when_entry_point_present(tmp_path: Path) -> None:
+    """When the contract declares a ## Entry Point, `pdd test --from-story`
+    (generate_story_regression_test) must produce a *behavioral* test that
+    calls the entry point and asserts over `result`, not a text-pin."""
+    stories = tmp_path / "user_stories"
+    contracts = stories / "contracts"
+    contracts.mkdir(parents=True)
+    (stories / "story__checkout_total.md").write_text(
+        "# User Story: checkout_total\n\n## Story\n\nAs a shopper, I can see my total.\n",
+        encoding="utf-8",
+    )
+    (contracts / "checkout_total.contract.md").write_text(
+        "# Contract\n\n## Covers\n- R1: total\n\n"
+        "## Entry Point\n- module: checkout_app\n- callable: checkout_total\n"
+        "- args: [1, 2]\n- kwargs: {}\n\n"
+        "## Seams\n- checkout_app.TAX_RATE = 0\n\n"
+        '## Oracle\n- result["total"] == 3\n',
+        encoding="utf-8",
+    )
+
+    result = generate_story_regression_test(stories / "story__checkout_total.md")
+    text = result.test_file.read_text(encoding="utf-8")
+    assert "result = story_result" in text  # behavioral: invokes the entry point
+    assert "@pytest.mark.story(story_id=STORY_ID, story_hash=STORY_HASH)" in text
+
+
+def test_generate_text_pins_when_no_entry_point(tmp_path: Path) -> None:
+    """A contract without an ## Entry Point still yields the text-pinning test."""
+    story = _story(tmp_path)  # helper builds a contract with Oracle but no Entry Point
+    result = generate_story_regression_test(story)
+    text = result.test_file.read_text(encoding="utf-8")
+    assert "_bundle_hash() == PDD_STORY_HASH" in text
+    assert "result = story_result" not in text
+
+
 def test_story_regression_gate_detects_missing_passing_and_stale(tmp_path: Path) -> None:
     story = _story(tmp_path)
 

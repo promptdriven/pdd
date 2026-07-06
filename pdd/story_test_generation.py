@@ -199,6 +199,34 @@ def _render_test(
     return "\n".join(lines) + "\n"
 
 
+def _generate_behavioral_test(
+    story_path: Path,
+    output: Optional[str],
+) -> GeneratedStoryTest:
+    """Delegate to the entry-point (behavioral) generator and adapt its result.
+
+    Used when the story's contract declares a ``## Entry Point``. The generated
+    test imports the callable, invokes it (applying any ``## Seams``), and
+    asserts the ``## Oracle`` / ``## Negative Cases`` expressions over the
+    return value — a real behavioral oracle rather than a text pin.
+    """
+    from .story_test_generator import generate_story_test
+
+    output_path = _resolve_output(story_path, output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    before = output_path.read_text(encoding="utf-8") if output_path.exists() else None
+    result = generate_story_test(story_path, output_path)
+    after = result.output_path.read_text(encoding="utf-8")
+    return GeneratedStoryTest(
+        story_id=result.story_id,
+        story_file=story_path,
+        test_file=result.output_path,
+        story_hash=result.story_hash,
+        changed=before != after,
+        test_count=result.test_count,
+    )
+
+
 def generate_story_regression_test(
     story_file: str | Path,
     *,
@@ -214,6 +242,15 @@ def generate_story_regression_test(
     slug = story_id(story_path)
     story_text, contract_path, bundle = _read_story_bundle(story_path)
     md_sections = _sections(bundle)
+
+    # If the contract declares a machine-readable ## Entry Point, generate a
+    # *behavioral* test that calls the entry point and asserts the ## Oracle /
+    # ## Negative Cases as Python expressions over `result` (delegating to
+    # story_test_generator). Contracts without an Entry Point fall through to
+    # the text-pinning generator below, which pins the story/contract clauses.
+    if md_sections.get("entry point"):
+        return _generate_behavioral_test(story_path, output)
+
     oracle_text = _section(md_sections, "Oracle", "Acceptance Criteria", "Story")
     negative_text = _section(md_sections, "Negative Cases", "Non-Oracle")
     covers_text = _section(md_sections, "Covers")
