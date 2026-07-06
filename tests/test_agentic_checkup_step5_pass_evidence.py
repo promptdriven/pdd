@@ -81,6 +81,40 @@ All Z.AI GLM Coding Plan tests confirmed passing:
     assert _step5_output_has_strong_pass_evidence(output) is True
 
 
+def test_step5_strong_pass_evidence_accepts_targeted_pass_summary_in_targeted_scope():
+    output = """
+## Step 5: Test Suite Results
+
+**Status:** All targeted tests passed - no failures
+
+The full test suite for PR #1831 timed out in the shell-first pass (180s limit).
+
+| `tests/test_provider_manager.py` + `tests/server/test_token_counter.py` | passed |
+
+All Z.AI GLM Coding Plan tests confirmed passing.
+"""
+
+    assert (
+        _step5_output_has_strong_pass_evidence(
+            output,
+            pr_test_scope="targeted",
+        )
+        is True
+    )
+
+
+def test_step5_targeted_pass_summary_does_not_satisfy_full_scope():
+    output = """
+## Step 5: Test Suite Results
+
+**Status:** All targeted tests passed - no failures
+
+The full test suite for PR #1831 timed out in the shell-first pass (180s limit).
+"""
+
+    assert _step5_output_has_strong_pass_evidence(output) is False
+
+
 def test_step5_all_clear_without_total_row_remains_ambiguous():
     output = "**Status:** All Clear - 0 failures\nRan pytest. 491 passed"
 

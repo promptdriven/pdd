@@ -6098,6 +6098,51 @@ class TestIssue1215Round8Step5MissingFailureSignal:
         )
         assert 7 in invoked
 
+    def test_provider_success_targeted_pass_summary_without_signal_skips_fixer(
+        self, tmp_path
+    ):
+        invoked = []
+        hosted_targeted_pass_output = (
+            "## Step 5: Test Suite Results\n\n"
+            "**Status:** All targeted tests passed - no failures\n\n"
+            "The full test suite for PR #1831 timed out in the shell-first pass "
+            "(180s limit).\n\n"
+            "| Test Batch | Result |\n"
+            "|------------|--------|\n"
+            "| `tests/test_provider_manager.py` + `tests/server/test_token_counter.py` | "
+            "passed |\n\n"
+            "All Z.AI GLM Coding Plan tests confirmed passing.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, hosted_targeted_pass_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "test_scope": "targeted"}
+            )
+
+        assert success is True, msg
+        assert 6.1 not in invoked, (
+            "Strong targeted hosted pass evidence without failure_signal must "
+            f"skip speculative fixes; steps={invoked}"
+        )
+        assert 7 in invoked
+
     def test_provider_success_no_failure_signal_block_invokes_fixer(self, tmp_path):
         invoked = []
 

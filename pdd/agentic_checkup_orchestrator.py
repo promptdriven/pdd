@@ -2181,13 +2181,18 @@ def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List
     return fields, missing
 
 
-def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
+def _step5_output_has_strong_pass_evidence(
+    step5_output: str,
+    *,
+    pr_test_scope: str = "full",
+) -> bool:
     """Return True when prose Step 5 output proves tests passed.
 
     Missing ``failure_signal`` blocks still fail closed by default. This helper
     only recovers the clean path for provider-success output that includes
-    either an explicit zero exit code or the hosted all-clear table shape, plus
-    an unambiguous pass/failure-zero summary, with no failure markers.
+    either an explicit zero exit code, the hosted all-clear table shape, the
+    hosted count summary shape, or a targeted-scope-only pass summary, plus an
+    unambiguous pass/failure-zero summary, with no failure markers.
     """
     if not step5_output:
         return False
@@ -2265,9 +2270,28 @@ def _step5_output_has_strong_pass_evidence(step5_output: str) -> bool:
         and failed_count == 0
         and errors_count == 0
     )
+    has_hosted_targeted_summary_pass = (
+        pr_test_scope == "targeted"
+        and bool(
+            re.search(
+                r"(?im)^\s*\*\*status:\*\*\s*all\s+targeted\s+tests\s+"
+                r"pass(?:ed)?\b[^\n]*\bno\s+failures\b",
+                step5_output,
+            )
+        )
+    )
     return (
-        (has_exit_zero or has_hosted_table_pass or has_hosted_count_summary_pass)
-        and (has_pass_summary or has_hosted_count_summary_pass)
+        (
+            has_exit_zero
+            or has_hosted_table_pass
+            or has_hosted_count_summary_pass
+            or has_hosted_targeted_summary_pass
+        )
+        and (
+            has_pass_summary
+            or has_hosted_count_summary_pass
+            or has_hosted_targeted_summary_pass
+        )
         and not has_failure_marker
     )
 
@@ -4819,7 +4843,10 @@ def _run_agentic_checkup_orchestrator_inner(
                     inferred_pass_from_output = (
                         success
                         and "__block__" in signal_missing
-                        and _step5_output_has_strong_pass_evidence(step5_persisted)
+                        and _step5_output_has_strong_pass_evidence(
+                            step5_persisted,
+                            pr_test_scope=pr_test_scope,
+                        )
                     )
                     if inferred_pass_from_output:
                         status_value = "pass"
