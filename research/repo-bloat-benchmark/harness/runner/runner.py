@@ -26,6 +26,7 @@ from harness.context_snapshots.attribution import TreeIndex, extract_payload_tex
 from harness.context_snapshots.iteration_analyzer import analyze_run
 from harness.context_snapshots.proxy import RecordingProxy
 from harness.distractors.manifest import load_manifest, manifest_sha256, verify_lockfile
+from harness.runner.env_freeze import FreezeConfig, FrozenEnvironment
 from harness.runner.metrics import build_run_record, read_changed_paths
 from harness.runner.mock_agent import MockAgent, MockModelServer
 from harness.runner.variant_builder import materialize_variant
@@ -44,6 +45,12 @@ class RunConfig:
     mock_read_distractor_count: int = 2
     timeout_seconds: float = 1800.0
     check_baseline: bool = True  # assert visible-pass/hidden-fail before the agent
+    # §8.1.1 run-environment freeze — required for real command-arm runs. When
+    # set, the agent executes under a sanitized, fingerprinted environment
+    # built fresh per trial; `registered_env_fingerprint` (when given) must
+    # match the built environment or the run aborts.
+    freeze: FreezeConfig | None = None
+    registered_env_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         for name in ("scenario_dir", "distractors_dir", "reports_dir", "work_root"):
@@ -168,6 +175,9 @@ class ExperimentRunner:
 
         # 4. Agent.
         timed_out = False
+        frozen: FrozenEnvironment | None = None
+        env_fingerprint: str | None = None
+        cli_version: str | None = None
         started = time.monotonic()
         try:
             if config.arm == "mock":
@@ -192,15 +202,42 @@ class ExperimentRunner:
                     part.replace("{workdir}", str(workdir))
                     for part in (config.agent_command or [])
                 ]
+                if config.freeze is not None:
+                    frozen = FrozenEnvironment(
+                        config=config.freeze,
+                        run_dir=report_dir,
+                        proxy_base_url=proxy_url,
+                    ).build()
+                    if config.registered_env_fingerprint:
+                        frozen.verify_fingerprint(config.registered_env_fingerprint)
+                    env_fingerprint = frozen.fingerprint()
+                    cli_version = frozen.cli_version
+                    agent_env = frozen.environment()
+                else:
+                    # Unfrozen command runs are for harness development only;
+                    # every record they produce says so (env_fingerprint null).
+                    import os
+
+                    agent_env = dict(os.environ)
+                    agent_env["OPENAI_BASE_URL"] = f"{proxy_url}/v1"
                 try:
-                    self._run(
+                    subprocess.run(
                         command,
-                        cwd=workdir,
-                        env_extra={"OPENAI_BASE_URL": f"{proxy_url}/v1"},
+                        cwd=str(workdir),
+                        env=agent_env,
+                        capture_output=True,
+                        text=True,
                         timeout=config.timeout_seconds,
                     )
                 except subprocess.TimeoutExpired:
                     timed_out = True
+                finally:
+                    if frozen is not None:
+                        archived = frozen.collect_and_destroy()
+                        (report_dir / "codex_home_manifest.json").write_text(
+                            json.dumps({"archived": archived}, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
         finally:
             wall_clock = time.monotonic() - started
             proxy.stop()
@@ -254,6 +291,8 @@ class ExperimentRunner:
             timed_out=timed_out,
             wall_clock_seconds=wall_clock,
             timeout_seconds=config.timeout_seconds,
+            env_fingerprint_sha256=env_fingerprint,
+            cli_version=cli_version,
         )
         (report_dir / "run_record.json").write_text(
             json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
