@@ -63,7 +63,7 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
 
    A canonical `fail` is authoritative regardless of the agentic outcome — never let the agentic result flip it. The returned value MUST be a member of `AGENTIC_AUTHORITY_STATUSES`.
 
-5. **`build_agentic_v1_artifact(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact`**: assembles all blocks from loop state. Maps `mode` (`"nofix"` when `no_fix=True`, else `"fix"`), `status`, `authority` (via `_resolve_authority`, deriving `canonical_status` from `final_gate_report` and `agentic_blocking` from whether the agentic verdict/findings are blocking), `layer1`, `reviewers`, `findings` (via `_normalize_findings` + `_deduplicate_findings`), `fix_attempts`, `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget`. All free-text fields routed through `_scrub_secrets` and capped at `FINDING_TEXT_MAX_CHARS`. Graceful degradation: extraction failures log WARNING and use safe defaults; never crash the caller.
+5. **`build_agentic_v1_artifact(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact`**: assembles all blocks from loop state. Maps `mode` (`"nofix"` when the real review-loop config is read-only via `review_only=True`, or when a compatibility config exposes `no_fix=True`; otherwise `"fix"`), `status`, `authority` (via `_resolve_authority`, deriving `canonical_status` from `final_gate_report` and `agentic_blocking` from whether the agentic verdict/findings are blocking), `layer1`, `reviewers`, `findings` (via `_normalize_findings` + `_deduplicate_findings`), `fix_attempts`, `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget`. All free-text fields routed through `_scrub_secrets` and capped at `FINDING_TEXT_MAX_CHARS`. Graceful degradation: extraction failures log WARNING and use safe defaults; never crash the caller.
 
 6. **Budget booleans**: computed at artifact-build time by comparing actual elapsed rounds/minutes/cost vs configured caps (`config.max_review_rounds`, `config.max_review_minutes`, `config.max_review_cost`).
 
@@ -71,7 +71,7 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
 
 8. **R2 — No raw secrets**: all free-text fields (`summary`, `suggested_fix`, `verdict.reason`, `layer1.blockers[]`) MUST be routed through `_scrub_secrets` before inclusion.
 
-9. **R3 — Nofix no-write guarantee**: when `mode == "nofix"`, `fix_attempts` MUST be an empty list; never populate it from loop state in nofix mode.
+9. **R3 — Nofix no-write guarantee**: when `mode == "nofix"` (including production `ReviewLoopConfig(review_only=True)`), `fix_attempts` MUST be an empty list; never populate it from loop state in nofix mode.
 
 10. **R4 — Fail-closed on normalization failure**: when `_normalize_findings` returns `[]` for a reviewer (parse failure), the corresponding `AgenticReviewer.status` MUST be set to `"degraded"`; never report it as `"clean"`.
 

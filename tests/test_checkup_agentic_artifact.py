@@ -17,6 +17,7 @@ from pdd.checkup_agentic_artifact import (
     _normalize_findings,
     _resolve_authority,
 )
+from pdd.checkup_review_loop import ReviewLoopConfig
 
 
 # ---------------------------------------------------------------------------
@@ -158,21 +159,16 @@ def test_build_artifact_schema_version_constant_R1():
 def test_build_artifact_nofix_never_populates_fix_attempts_R3():
     fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
                              changed_files=["a.py"], pushed_head_sha="deadbeef")]
-    # no_fix=True must yield empty fix_attempts even with fixes in loop state.
+    # Production no-fix agentic runs are represented as review_only on the real
+    # ReviewLoopConfig; do not rely on a fake no_fix attribute.
     art = build_agentic_v1_artifact(
-        loop_state=_state(fixes=fixes), config=_config(no_fix=True), context=_context(),
+        loop_state=_state(fixes=fixes),
+        config=ReviewLoopConfig(review_only=True, agentic_mode=True),
+        context=_context(),
         final_gate_report={"layer1_status": "unknown"},
     )
     assert art.mode == "nofix"
     assert art.fix_attempts == []
-
-    # review_only also implies nofix.
-    art2 = build_agentic_v1_artifact(
-        loop_state=_state(fixes=fixes), config=_config(review_only=True), context=_context(),
-        final_gate_report={"layer1_status": "unknown"},
-    )
-    assert art2.mode == "nofix"
-    assert art2.fix_attempts == []
 
 
 def test_build_artifact_fix_mode_records_attempts():

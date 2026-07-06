@@ -582,6 +582,42 @@ class TestRunAgenticCheckup:
         assert "{{" not in context.issue_content
         assert "{{" not in context.pr_content
 
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_agentic_no_fix_maps_to_review_only_config(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+    ):
+        mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+
+        run_agentic_checkup(
+            None,
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            agentic_review_loop=True,
+            no_fix=True,
+        )
+
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.review_only is True
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(
