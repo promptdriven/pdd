@@ -66,6 +66,7 @@ from pdd.story_regression_gate import (
     StoryRegressionGateResult,
     changed_story_ids,
     classify_story,
+    discover_all_story_markers,
     discover_story_markers,
     evaluate_stories,
     load_story_regression_gate_config,
@@ -249,6 +250,31 @@ def test_evaluate_classifies_all_sorted(fixture_tree):
     assert by_id["refund"] == STATUS_STORY_REGRESSION_OK
     assert by_id["checkout"] == STATUS_STORY_REGRESSION_STALE
     assert by_id["export"] == STATUS_STORY_REGRESSION_MISSING
+
+
+def test_discover_all_keeps_every_claim(tmp_path: Path):
+    # discover_story_markers collapses to first-wins; discover_all keeps both.
+    _write(tmp_path / "test_a.py", _test_module(_marked("dup", "hashA", "test_a")))
+    _write(tmp_path / "test_b.py", _test_module(_marked("dup", "hashB", "test_b")))
+    all_markers = discover_all_story_markers(tmp_path)
+    assert [m.story_hash for m in all_markers["dup"]] == ["hashA", "hashB"]
+
+
+def test_evaluate_stale_duplicate_does_not_shadow_fresh(tmp_path: Path):
+    """A story claimed by two tests — one stale, one fresh — is OK. A stale
+    duplicate marker must not shadow a fresh sibling (regression for pdd#1857 G1,
+    where a per-flow file's stale hash shadowed the fresh top_flows marker)."""
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    _write(stories / "story__refund.md", FRESH_STORY)
+    fresh_hash = _story_content_hash(FRESH_STORY)
+    # Sorted-first file carries a STALE hash; sorted-later file the FRESH one.
+    _write(tests / "test_a_stale.py", _test_module(_marked("refund", "0000000000000000", "test_stale")))
+    _write(tests / "test_b_fresh.py", _test_module(_marked("refund", fresh_hash, "test_fresh")))
+
+    by_id = {r.story_id: r for r in evaluate_stories(stories_dir=str(stories), tests_dir=str(tests))}
+    assert by_id["refund"].status == STATUS_STORY_REGRESSION_OK
+    assert by_id["refund"].recorded_hash == fresh_hash
 
 
 def test_evaluate_only_story_ids_scopes(fixture_tree):

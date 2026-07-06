@@ -282,18 +282,49 @@ def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
     return markers
 
 
+def discover_all_story_markers(tests_dir) -> Dict[str, List[StoryMarker]]:
+    """Like :func:`discover_story_markers`, but keeps *every* marker claiming a
+    ``story_id`` (deterministically ordered by file path then line).
+
+    A story may legitimately be claimed by more than one test; collapsing to a
+    single first-wins marker lets a stale duplicate shadow a fresh sibling and
+    misreport the whole story as stale. Callers that judge freshness should use
+    this so any fresh claim counts.
+    """
+    base = Path(tests_dir)
+    if not base.exists() or not base.is_dir():
+        return {}
+    markers: Dict[str, List[StoryMarker]] = {}
+    for py in sorted(base.rglob("*.py")):
+        try:
+            source = py.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for marker in sorted(
+            _markers_in_source(source, str(py)), key=lambda m: m.lineno
+        ):
+            markers.setdefault(marker.story_id, []).append(marker)
+    return markers
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
 
 
-def classify_story(
+def _classify_story_from_markers(
     story_path,
-    markers: Dict[str, StoryMarker],
+    story_markers: Sequence[StoryMarker],
     *,
     story_text: Optional[str] = None,
 ) -> StoryRegressionResult:
-    """Classify a single story against the discovered markers."""
+    """Classify a story against every marker that claims it.
+
+    A story is fresh if *any* claiming test records an acceptable hash, so a
+    stale duplicate marker can never shadow a fresh one. When none is fresh the
+    stale/missing detail is drawn from the first marker (by file, then line)
+    that records a hash, keeping the message deterministic.
+    """
     path = Path(story_path)
     story_id = story_id_from_path(path)
     if story_text is None:
@@ -306,8 +337,7 @@ def classify_story(
         except OSError:
             pass
 
-    marker = markers.get(story_id)
-    if marker is None:
+    if not story_markers:
         return StoryRegressionResult(
             story_id=story_id,
             story_path=str(path),
@@ -319,7 +349,24 @@ def classify_story(
             detail="No @pytest.mark.story regression test resolves to this story.",
         )
 
-    if not marker.story_hash:
+    # Fresh if ANY claiming test records an acceptable hash.
+    for marker in story_markers:
+        if marker.story_hash and marker.story_hash in acceptable_hashes:
+            return StoryRegressionResult(
+                story_id=story_id,
+                story_path=str(path),
+                status=STATUS_STORY_REGRESSION_OK,
+                current_hash=current_hash,
+                recorded_hash=marker.story_hash,
+                test_file=marker.test_file,
+                test_name=marker.test_name,
+                detail="Story has a fresh regression test.",
+            )
+
+    # None fresh: prefer a marker that at least records a hash for a precise message.
+    hashed = [m for m in story_markers if m.story_hash]
+    if not hashed:
+        marker = story_markers[0]
         return StoryRegressionResult(
             story_id=story_id,
             story_path=str(path),
@@ -331,30 +378,40 @@ def classify_story(
             detail="Regression test records no story_hash; cannot prove freshness.",
         )
 
-    if marker.story_hash not in acceptable_hashes:
-        return StoryRegressionResult(
-            story_id=story_id,
-            story_path=str(path),
-            status=STATUS_STORY_REGRESSION_STALE,
-            current_hash=current_hash,
-            recorded_hash=marker.story_hash,
-            test_file=marker.test_file,
-            test_name=marker.test_name,
-            detail=(
-                f"Story changed since the regression test was generated "
-                f"(recorded {marker.story_hash}, now {current_hash})."
-            ),
-        )
-
+    marker = hashed[0]
     return StoryRegressionResult(
         story_id=story_id,
         story_path=str(path),
-        status=STATUS_STORY_REGRESSION_OK,
+        status=STATUS_STORY_REGRESSION_STALE,
         current_hash=current_hash,
         recorded_hash=marker.story_hash,
         test_file=marker.test_file,
         test_name=marker.test_name,
-        detail="Story has a fresh regression test.",
+        detail=(
+            f"Story changed since the regression test was generated "
+            f"(recorded {marker.story_hash}, now {current_hash})."
+        ),
+    )
+
+
+def classify_story(
+    story_path,
+    markers: Dict[str, StoryMarker],
+    *,
+    story_text: Optional[str] = None,
+) -> StoryRegressionResult:
+    """Classify a single story against a first-wins marker map.
+
+    Retained for backward compatibility. Prefer :func:`evaluate_stories`, which
+    considers every marker that claims a story (via
+    :func:`discover_all_story_markers`) so a stale duplicate cannot shadow a
+    fresh one.
+    """
+    marker = markers.get(story_id_from_path(Path(story_path)))
+    return _classify_story_from_markers(
+        story_path,
+        [marker] if marker is not None else [],
+        story_text=story_text,
     )
 
 
@@ -369,14 +426,14 @@ def evaluate_stories(
     ``only_story_ids`` restricts evaluation to that set, e.g. to scope the gate
     to the stories touched by a pull request.
     """
-    markers = discover_story_markers(tests_dir or _DEFAULT_TESTS_DIR)
+    markers = discover_all_story_markers(tests_dir or _DEFAULT_TESTS_DIR)
     wanted = set(only_story_ids) if only_story_ids is not None else None
     results: List[StoryRegressionResult] = []
     for story_path in discover_story_files(stories_dir):
         story_id = story_id_from_path(story_path)
         if wanted is not None and story_id not in wanted:
             continue
-        results.append(classify_story(story_path, markers))
+        results.append(_classify_story_from_markers(story_path, markers.get(story_id, [])))
     results.sort(key=lambda r: r.story_id)
     return results
 
