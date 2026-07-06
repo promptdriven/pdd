@@ -5,7 +5,7 @@ from pdd.commands.maintenance import sync
 
 
 PDD_STORY_ID = "pdd_sync"
-PDD_STORY_HASH = "8af64c69836b4aa9"
+PDD_STORY_HASH = "db8793f0c80a101b"
 
 
 @pytest.mark.story(story_id=PDD_STORY_ID)

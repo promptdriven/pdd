@@ -5,7 +5,7 @@ from pdd.commands.fix import fix
 
 
 PDD_STORY_ID = "pdd_fix"
-PDD_STORY_HASH = "db469b01db51d9a7"
+PDD_STORY_HASH = "b587af4ac2bc2176"
 
 
 @pytest.mark.story(story_id=PDD_STORY_ID)
