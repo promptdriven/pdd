@@ -70,3 +70,23 @@ def test_story_regression_gate_detects_missing_passing_and_stale(tmp_path: Path)
     )
     stale = evaluate_story_regression(story, tests_dir=tmp_path / "tests", story_map=story_map)
     assert stale.status == STATUS_STALE
+
+
+def test_generate_story_regression_test_rejects_malformed_story(tmp_path: Path) -> None:
+    """A story with no Oracle/Acceptance/Story sections must fail loudly, not
+    emit a vacuous raw-body-pin test (issue #1857 G3)."""
+    import pytest
+
+    stories = tmp_path / "user_stories"
+    stories.mkdir(parents=True)
+    story = stories / "story__malformed.md"
+    story.write_text(
+        "garbage content with no recognizable headings\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="has no ## Oracle"):
+        generate_story_regression_test(story)
+
+    # No test file may be left behind for the malformed story.
+    assert not list(tmp_path.rglob("test_story_*.py"))

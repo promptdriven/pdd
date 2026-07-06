@@ -222,7 +222,16 @@ def generate_story_regression_test(
     rule_ids = sorted({match.group(0).upper().replace("-", "") for match in _RULE_RE.finditer(covers_text)})
     if not oracle_items:
         story_sections = _sections(story_text)
-        oracle_items = _bullets(_section(story_sections, "Story")) or [story_text.strip()]
+        oracle_items = _bullets(_section(story_sections, "Story"))
+    if not oracle_items:
+        # A story with no ## Oracle / ## Acceptance Criteria / ## Story content
+        # would previously be pinned by its raw body — a vacuous, always-passing
+        # test that gives false regression confidence. Fail with guidance instead.
+        raise ValueError(
+            f'Story "{story_path}" has no ## Oracle, ## Acceptance Criteria, or '
+            "## Story content to generate assertions from. Add a ## Story section "
+            "(or regenerate its contract) before running pdd test --from-story."
+        )
 
     output_path = _resolve_output(story_path, output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
