@@ -106,7 +106,7 @@ On macOS, you'll need to install some prerequisites before installing PDD:
    brew install python
    ```
    
-   **Note**: Recent versions of macOS no longer ship with Python pre-installed. PDD requires Python 3.8 or higher. The `brew install python` command installs the latest Python 3 version.
+   **Note**: Recent versions of macOS no longer ship with Python pre-installed. PDD requires Python 3.12 or higher. The `brew install python` command installs the latest Python 3 version.
 
 ### Recommended Method: uv
 
@@ -372,7 +372,7 @@ OAuth login.)
 
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
-PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
+PDD's local mode uses the packaged LiteLLM dependency (`>=1.84.0,<1.85` in this release) for interacting with language models, providing:
 
 - Support for multiple model providers (OpenAI, Anthropic, Google/Vertex AI, and more)
 - Automatic model selection based on strength settings
@@ -427,7 +427,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
    - **Python not found or wrong version**: Install Python 3 via Homebrew: `brew install python`
    - **Permission denied during compilation**: Ensure Xcode Command Line Tools are properly installed and you have write permissions to the installation directory
    - **uv installation fails**: Try installing uv through Homebrew: `brew install uv`
-   - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.8+: `which python3 && python3 --version`
+   - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.12+: `which python3 && python3 --version`
 
 ## Version
 
@@ -697,6 +697,11 @@ graph TB
 ### Utility Commands
 - **[`auth`](#19-auth)**: Manages authentication with PDD Cloud
 - **[`sessions`](#20-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
+- **[`report-core`](#report-core-command)**: Create a GitHub issue from a debug snapshot
+- **`contracts check`**: Run deterministic contract section checks; see [docs/contract_check.md](docs/contract_check.md)
+- **`templates`**: List, inspect, and copy packaged prompt templates
+- **`which`**: Print resolved configuration values and search paths
+- **`install_completion`**: Refresh shell completion scripts
 
 ### User Story Prompt Tests
 PDD can validate prompt changes against user stories stored as Markdown files. This uses `detect` under the hood: a story **passes** when `detect` returns no required prompt changes.
@@ -737,9 +742,9 @@ Contract coverage:
 These options can be used with any command:
 
 - `--force`: Skip all interactive prompts (file overwrites, API key requests). Useful for CI/automation.
-- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
+- `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 1.0 unless `.pddrc` or `PDD_STRENGTH_DEFAULT` overrides it).
   - 0.0: Cheapest available model
-  - 0.5: Default base model
+  - 0.5: Mid-ranked model
   - 1.0: Most powerful model (highest DeepSWE-first rank score)
 - `--time FLOAT`: Controls the reasoning allocation for LLM models supporting reasoning capabilities (0.0 to 1.0, default is 0.25).
   - For models with specific reasoning token limits (e.g., 64k), a value of `1.0` utilizes the maximum available tokens.
@@ -754,8 +759,8 @@ These options can be used with any command:
 - `--estimate-json`: Emit the estimate result as machine-readable JSON instead of the human-readable table.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
-- `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
-- `report-core`: Report a bug by creating a GitHub issue with the core dump file.
+- `--core-dump / --no-core-dump`: Write a debug snapshot for this run into `.pdd/core_dumps` (default: on). Use `--no-core-dump` to disable it.
+- `--keep-core-dumps N`: Keep the most recent N debug snapshots (default: 10; use `0` to clean them immediately after writing).
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
 - `--compress-examples`: Automatically apply `mode="interface"` to example includes (legacy; prefer `--context-compression examples`).
@@ -765,20 +770,21 @@ These options can be used with any command:
 
 ### Core Dump Debug Bundles
 
-If something goes wrong and you want the PDD team to be able to reproduce it, you can run any command with a core dump enabled:
+PDD writes JSON debug snapshots to `.pdd/core_dumps` by default and keeps the 10 most recent files. These snapshots capture enough run context to replay and analyze failures. Disable them with `--no-core-dump`, or change retention with `--keep-core-dumps`.
 
 ```bash
-pdd --core-dump sync factorial_calculator
-pdd --core-dump crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
+pdd sync factorial_calculator
+pdd --no-core-dump sync factorial_calculator
+pdd --keep-core-dumps 20 crash prompts/calc_python.prompt src/calc.py examples/run_calc.py crash_errors.log
 ```
 
-When `--core-dump` is set, PDD:
+When debug snapshots are enabled, PDD:
 
 - Captures the full CLI command and arguments
 - Records relevant logs and internal trace information for that run
 - Bundles the prompt(s), generated code, and key metadata needed to replay the issue
 
-At the end of the run, PDD prints the path to the core dump bundle.  
+At the end of the run, PDD prints the path to the debug snapshot.  
 Attach that bundle when you open a GitHub issue or send a bug report so maintainers can quickly reproduce and diagnose your problem.
 
 #### `report-core` Command
@@ -795,7 +801,7 @@ pdd report-core [OPTIONS] [CORE_FILE]
 
 **Options:**
 - `--api`: Create the issue directly via the GitHub API instead of opening a browser. This enables automatic Gist creation for attached files.
-- `--repo OWNER/REPO`: Override the target repository (default: `promptdriven/pdd`).
+- `--repo OWNER/REPO`: Target GitHub repository. Required unless `PDD_GITHUB_REPO` is set.
 - `--description`, `-d TEXT`: A short description of what went wrong.
 
 **Authentication:**
@@ -2377,7 +2383,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 6. **Create Unit Tests**: For code bugs, create or append unit tests for the affected dev units
 7. **Verify Tests**: Run new unit tests to confirm they detect the bugs and will pass once fixed
 8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
-9. **Verify All**: Final verification that all tests pass locally
+9. **Verify All**: Final verification that all tests pass locally. The orchestrator independently re-runs the discovered test files (not the agent's possibly-targeted selection); if that independent verification rejects an agent-reported pass, PDD posts a trusted `## Step 9/11:` rejection comment on the issue with the exact verifier command and bounded output, and the cycle is not recorded as a success
 10. **CI Validation**: First poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate any CI-specific issues (lint, artifacts, build). Once CI is green, run a real pre-checkup gate (the fix path's first drift-sync step) that **blocks** on any mechanical failure (build/smoke — compile, import, caller-compat, targeted tests) or unhealable update-drift. (Architecture-sync residuals and example-only drift are advisory in default mode — not hard blocks — because they are frequently spurious on a clean tree; strict mode promotes them.) It first drift-syncs code ↔ prompt ↔ `architecture.json` ↔ `.pdd/meta` in the worktree (the prompt/code sync is committed to the PR (an example regenerated as a side effect of an update-heal is committed and validated too; example-*only* drift is advisory — the gate does not auto-heal it, to avoid the #1243 null-hash heal loop); `.pdd/meta` fingerprint finalization is intentionally left to the post-merge sync — see #1317 — so the PR tree itself may still show fingerprint drift until then), then executes its own deterministic build/smoke checks — compile touched files, import changed modules, probe changed router/app modules for route/router objects (a non-blocking note, not a hard block — best-effort app-wiring smoke that stays with checkup), lint, caller-compatibility sweep, and run targeted unit tests by git-diff (Python tests are executed; a changed JS/TS test is reported, not run). It runs these checks itself rather than relying solely on GitHub required checks (which are often absent or vacuous)
 11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
 
@@ -3324,7 +3330,15 @@ pdd auth token [OPTIONS]
 **Options:**
 - `--format [raw|json]`: Output format for the token. Use `raw` for just the token string (default), or `json` for structured output including token and expiration time.
 
-**When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, and `auth token` when you need to pass credentials to scripts or other tools.
+##### auth clear-cache
+
+Clears the cached JWT token at `~/.pdd/jwt_cache`. Use it when switching environments or recovering from token audience/cache issues, then authenticate again with `pdd auth login`.
+
+```bash
+pdd auth clear-cache
+```
+
+**When to use**: Use `auth` commands to manage your PDD Cloud authentication state. Use `auth login` to authenticate before using cloud features, `auth status` to verify your current session, `auth token` when you need to pass credentials to scripts or other tools, and `auth clear-cache` when cached JWT state is stale.
 
 ### 20. `pdd sessions` - Manage Remote Sessions
 

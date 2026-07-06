@@ -7,6 +7,7 @@ import signal
 import sys
 import pytest
 import subprocess
+import shlex
 from pathlib import Path
 from rich.console import Console
 from rich.pretty import pprint
@@ -238,6 +239,8 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
         subprocess_kwargs["cwd"] = str(test_path.parent)
         pytest_args.append(f"--rootdir={test_path.parent}")
 
+    command = " ".join(shlex.quote(str(arg)) for arg in pytest_args)
+
     try:
         # Run pytest using Popen for proper process group cleanup (Issue #894).
         # Use -B flag to disable bytecode caching, ensuring fresh imports.
@@ -259,6 +262,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                 pass
             return {
                 "test_file": test_file,
+                "command": command,
                 "test_results": [
                     {
                         "standard_output": "",
@@ -306,6 +310,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
 
         return {
             "test_file": test_file,
+            "command": command,
             "test_results": [
                 {
                     "standard_output": stdout,
@@ -326,6 +331,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
     except Exception as e:
         return {
             "test_file": test_file,
+            "command": command,
             "test_results": [
                 {
                     "standard_output": "",
