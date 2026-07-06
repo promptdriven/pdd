@@ -27,15 +27,15 @@ Orchestrator for the 13-step agentic change workflow. Runs each step as a separa
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
-6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately.
+6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately. **JSON-first (see % Structured Step Artifacts, B.1): read `09_implement.json` first and use its `files_modified`/`files_created`/`direct_edits`/`status`; this marker-parsing path is the fallback when the JSON is missing or unparseable.**
 7. Pass extracted files to subsequent steps via `files_to_stage` context variable
-7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_CONFLICTS: path1, path2`, and `ASSOCIATED_DOCS_UNCHANGED: path1, path2` lines. Append `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED` entries to `changed_files` / `files_to_stage`. `ASSOCIATED_DOCS_CONFLICTS` entries are logged but NOT auto-added (they need human review). `ASSOCIATED_DOCS_UNCHANGED` entries are logged only, not staged.
+7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_CONFLICTS: path1, path2`, and `ASSOCIATED_DOCS_UNCHANGED: path1, path2` lines. Append `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED` entries to `changed_files` / `files_to_stage`. `ASSOCIATED_DOCS_CONFLICTS` entries are logged but NOT auto-added (they need human review). `ASSOCIATED_DOCS_UNCHANGED` entries are logged only, not staged. **JSON-first (see % Structured Step Artifacts, B.4): read `10_architecture_update.json` first and use its `architecture_files_modified`/`associated_docs_{modified,conflicts,unchanged}` arrays; this marker-parsing path is the fallback when the JSON is missing.**
 7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
 7d. For Step 8.5 (see "Pre-Flight Drift Heal" section): After the worktree is set up and before Step 9 rewrites prompts, call `_preflight_drift_heal()` once per workflow to find and heal modules whose prompts are stale relative to their code (`decision.operation == "update"`). Must be contained to the worktree. Record healed/failed basenames in `state["preflight_healed_modules"]` and `state["preflight_failed_heal_modules"]`. Use `state["preflight_drift_healed"]` as idempotency flag on resume.
 7e. For Step 10.5 (see "Associated-Document Contract Verifier" section): Before Step 10, call `pdd.sync_order.discover_associated_documents(...)` and store the result in `context["associated_documents"]` (for the Step 10 LLM) and `context["_associated_documents_discovered"]` (for the post-step verifier). Build `modified_prompts` from the authoritative changed-file set, not only `files_created` / `files_modified`: include `files_created`, `files_modified`, `files_to_stage`, and the in-memory `changed_files` list so Step 9's successful worktree fallback path cannot bypass doc discovery when the LLM omitted `FILES_*` markers. After Step 10 completes, run `_verify_doc_sync_contract()` to confirm every discovered doc appears in EXACTLY ONE of the `ASSOCIATED_DOCS_MODIFIED` / `ASSOCIATED_DOCS_CONFLICTS` / `ASSOCIATED_DOCS_UNCHANGED` buckets. Silent drops (doc missing from all three) and overlaps (doc in 2+ buckets) are both contract violations; append `ORCHESTRATOR_POSTCHECK_WARNINGS` with `DOC_SYNC_SILENT_DROPS:` and/or `DOC_SYNC_BUCKET_OVERLAPS:` marker lines. Strict mode (env var `PDD_STRICT_DOC_SYNC=1`/`true`/`yes`) aborts the workflow with `success=False` and a message naming the dropped/overlapping docs; default non-strict mode forwards the warnings to Step 11 via `step10_output` for review-loop recovery.
 8. **State Persistence**: Save step outputs to state file after each step completes
 9. **Step Resumption**: On start, load saved state and skip steps that have already completed
-10. **Review Loop**: Steps 11-12 repeat until step 11 output contains "no issues found" (case-insensitive, max 5 iterations)
+10. **Review Loop**: Steps 11-12 repeat until step 11 signals no remaining issues (max 5 iterations). **JSON-first (see % Structured Step Artifacts, B.2): exit when `11_review.json`'s `status == "clean"`; the case-insensitive "no issues found" substring check is the fallback when the JSON is missing.**
 11. **Sync Order Generation**: After review loop completes (before Step 13):
     - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
     - Build dependency graph from prompts_dir = worktree_path / "prompts"
@@ -106,6 +106,72 @@ For steps 1-10 and 13:
 7. **Save state to file** after step completes (for resumption)
 8. Accumulate cost: `total_cost += step_cost`
 
+% Structured Step Artifacts (JSON as Source of Truth)
+
+Historically the orchestrator learned each step's decision by regex-parsing the LLM's prose (`FILES_MODIFIED:`, `STOP_CONDITION:`, "No Issues Found", etc.). Paraphrase and omission in that prose is a recurring bug class (#865, #868, #1080, #964, #880, #882, #571, #467). To eliminate it, every decision-bearing step now ALSO writes its decision to a machine-readable JSON artifact that the orchestrator reads directly, and its human-facing comment body to a Markdown artifact. **This is JSON-first with prose-parser fallback: the prose markers are still emitted by the step prompts and every parser named elsewhere in this prompt is RETAINED as a permanent fallback.** If a provider emits missing or malformed JSON, the step degrades to the exact legacy prose-parsing behavior instead of failing. No prose parser or marker described elsewhere in this prompt is removed.
+
+### A.1 — Per-issue artifacts directory (gitignored)
+
+Helper: `_artifacts_dir_for(work_dir: Path, issue_number: int) -> Path` — returns `work_dir / ".pdd" / "change" / f"issue-{issue_number}"`, creating it with `mkdir(parents=True, exist_ok=True)`.
+
+- **Injected into context like `issue_content` is.** Immediately before building each step's prompt (Step Execution item 4), set `context["artifacts_dir"] = str(_artifacts_dir_for(current_work_dir, issue_number))` so the step template's `{artifacts_dir}` placeholder resolves to the correct absolute path.
+- **Recompute per phase so it tracks `current_work_dir`:** Steps 1-8 run in `cwd` → `cwd/.pdd/change/issue-{N}/`; Steps 9-13 run in the worktree → `worktree_path/.pdd/change/issue-{N}/`.
+- **Keyed by issue number** so concurrent runs on different issues never collide.
+- `.pdd/**` is already gitignored, so Step 13's `git add -A` never stages these artifacts.
+- **Write-root guard:** the file-tree snapshot guard `run_agentic_task` applies must admit `artifacts_dir` as a writable path. It is always under the step's working-directory root (`cwd` for 1-8, `worktree_path` for 9-13), so the existing allowed-root set already covers it; do NOT narrow the guard such that `.pdd/change/issue-{N}/` becomes unwritable in either phase.
+- **Fresh-run reset:** on a non-resume run (`start_step == 1`, not resuming cached state) and on `clean_restart`, delete the issue's artifacts directory up front (before Step 1) so stale files from a prior run are never mistaken for this run's output. **NEVER delete it on resume** — a resumed run must still read artifacts written before the pause.
+
+### A.2 — Read helpers (defined next to the existing prose parsers)
+
+- `_read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]` — return the parsed contents of `Path(artifacts_dir) / filename`, or `None` on missing/unreadable/unparseable input. Never raises (wrap `json.loads(p.read_text(...))` in a bare `try/except`).
+- `_read_step_md(artifacts_dir: Path, filename: str) -> Optional[str]` — return the stripped text of `Path(artifacts_dir) / filename`, or `None` when missing/unreadable/empty. Never raises.
+
+### A.3 — Bounded re-run on invalid JSON
+
+When a step that is supposed to emit a decision JSON finishes and `_read_step_json(...)` returns `None` (file missing or unparseable), re-run that step EXACTLY ONCE via the existing retry mechanism before falling back to the prose parser. Guard with a per-step `json_retry_done` flag so a step can never re-run more than once for this reason. If the JSON is still `None` after the single re-run, fall back to the legacy prose parser for that surface. Log each re-run and each fallback so the fallback rate can be instrumented; a future cleanup PR may delete the prose parsers once that rate is measured ~0.
+
+### Per-step artifact filenames
+
+Each step's prompt is instructed to write these into `{artifacts_dir}`:
+
+| Step | Decision JSON | Comment-body Markdown |
+|------|---------------|-----------------------|
+| 1 duplicate | `01_duplicate.json` | `01_duplicate.md` |
+| 2 docs | `02_docs.json` | `02_docs.md` |
+| 3 research | — (no decision) | `03_research.md` |
+| 4 clarify | `04_clarify.json` | `04_clarify.md` |
+| 5 docs_change | — (no decision) | `05_docs_change.md` |
+| 6 devunits | `06_devunits.json` | `06_devunits.md` |
+| 7 architecture | `07_architecture.json` | `07_architecture.md` |
+| 8 analyze | — (no decision) | `08_analyze.md` |
+| 9 implement | `09_implement.json` | `09_implement.md` |
+| 10 architecture_update | `10_architecture_update.json` | `10_architecture_update.md` |
+| 11 identify_issues | `11_review.json` | `11_review.md` |
+| 12 fix_issues | `12_fix.json` | `12_fix.md` |
+| 13 create_pr | `13_create_pr.json` | `13_create_pr.md` |
+
+The review loop (steps 11/12) overwrites `11_review.json` / `12_fix.json` (and the `.md`) on each iteration; the orchestrator reads the file immediately after that iteration's step returns — before the next iteration runs — so per-iteration decisions are never confused.
+
+### B — Reading each decision (JSON-first, prose-parser fallback)
+
+For every surface below, read the JSON field first; when `_read_step_json` returns `None`, fall back to the existing prose parser named in the other sections of this prompt. Downstream handling (state saves, comment posts, stop dispatch, staging, doc-sync verification) is IDENTICAL regardless of which source produced the values.
+
+- **B.1 Step 9 changed files** (`09_implement.json`): fields `status` ∈ {`changed`, `no_change_needed`}; `files_modified`, `files_created`, `direct_edits` (lists of repo-relative paths); `manual_review` (list of `{path, reason}` objects). When JSON is present: `changed_files = files_modified + files_created + direct_edits` (dedup, order-preserving); populate `context["files_created" | "files_modified" | "direct_edits"]`; feed each `manual_review` entry into the PR-body `manual_review_lines` aggregation as `MANUAL_REVIEW: {path} — {reason}`. **Keep `_detect_worktree_changes` as the git-status fallback for the empty case** — a real worktree change with no JSON must still be detected. If the JSON is absent, use the existing `_parse_changed_files` path. Apply the same JSON-first preference in the Step 9 resume block.
+- **B.2 Steps 11/12 review loop** (`11_review.json` / `12_fix.json`): `status` — Step 11 emits `clean` (no issues) or `issues_found`; Step 12 emits `fixed_issues` or `partial`. **Exit the review loop when Step 11's `status == "clean"`;** fall back to `_review_loop_no_issues(step11_output)` when the JSON is missing. Both may carry `manual_review` (list of `{path, reason}`), folded into `manual_review_lines`. Iteration count, `previous_fixes`, the iteration-keyed comment dedupe, and the `s11_success`/`s12_success` posting gate are all unchanged.
+- **B.3 Hard-stop steps (1, 2, 4, 6, 7)** — each writes a single decision field. Introduce `_hard_stop_from_json(step_num: int, artifacts_dir: Path, name: str) -> Optional[str]` which reads `{NN}_{name}.json` and maps `status` to the EXACT stop-reason string `_check_hard_stop` returns today, so ALL downstream stop handling (clarification re-run for steps 4/7, direct-edit-continue for step 6, `last_completed_step` rewind, `_fetch_issue_updated_at` refresh, state saves, comment posts) is untouched:
+  - Step 1: `status == "duplicate"` → the same `Duplicate of #{n}` reason (the `duplicates` list supplies the numbers); `status == "proceed"` → no stop.
+  - Step 2: `status == "already_done"` → the "already implemented" reason; else no stop.
+  - Step 4: `status == "needs_clarification"` → the clarification stop reason; `status == "route_bug"` → the `ROUTE_REDIRECT: bug_fix` reason (with `rationale` used as the `ROUTE_RATIONALE`); else no stop.
+  - Step 6: `status == "no_dev_units"` → the "no dev units found" reason; `direct_edit_candidates` (list) populates `context["direct_edit_candidates"]` (fallback `_parse_direct_edit_candidates`); `status == "proceed"` → no stop.
+  - Step 7: `status == "needs_decision"` → the architectural-decision stop reason; else no stop.
+  The orchestrator calls `_hard_stop_from_json(...)` first; when it returns `None` because the JSON is missing/unparseable (distinct from a valid `proceed`), fall back to `_check_hard_stop(step_num, output)`. A valid `proceed` short-circuits the prose parser. Optional fields carried per step: `duplicates` (#-prefixed issue refs), `questions` (clarification/architectural questions), `rationale` (route/decision rationale), `direct_edit_candidates` (paths).
+- **B.4 Step 10 architecture / doc-sync** (`10_architecture_update.json`): fields `architecture_files_modified`, `associated_docs_modified`, `associated_docs_conflicts`, `associated_docs_unchanged` (all lists of paths). When present: feed `_verify_doc_sync_contract`'s three buckets from `associated_docs_{modified,conflicts,unchanged}` instead of `_extract_marker_paths`; append `architecture_files_modified` to `changed_files` / `files_to_stage`; `associated_docs_conflicts` are logged and synthesized into `manual_review_lines` (NOT auto-staged); `associated_docs_unchanged` are logged only. Silent-drop / overlap detection, the `ORCHESTRATOR_POSTCHECK_WARNINGS` block, the `PDD_STRICT_DOC_SYNC` abort, and all `_sanitize_architecture_dependencies` / `_sanitize_architecture_interfaces` / `_merge_interface_signatures` / `register_untracked_prompts` behavior are unchanged. Fall back to `_extract_marker_paths` over the `ASSOCIATED_DOCS_*:` / `ARCHITECTURE_FILES_MODIFIED:` markers when the JSON is missing.
+- **B.5 Step 13 create PR** (`13_create_pr.json`): fields `status` ∈ {`pr_created`, `pr_updated`, `blocked`}; `pr_url`, `pr_number`, `summary`. Take the PR URL from `pr_url` instead of the inline `re.search(r"https://github.com/\S+/pull/\d+", s13_output)`; fall back to that regex when the JSON is missing. `status == "blocked"` maps to the existing Step 13 failure return. The PR body itself is still authored and posted via `gh` by the Step 13 agent exactly as today — only the orchestrator's read-back of the resulting URL/number becomes JSON.
+
+### B.6 — Comment bodies from Markdown (all steps)
+
+Everywhere the orchestrator currently computes `extract_step_report(step_output)` and passes it to `post_step_comment_once(body=...)`, prefer `_read_step_md(artifacts_dir, "{NN}_{name}.md")`. Fall back to `extract_step_report(step_output)` when the `.md` is missing, then to the existing short placeholder body when both are absent. `_sanitize_comment_body` (secret redaction + 25 000-char truncation), the `## Step {step_num}/13: {description}` header wrap, and the iteration-keyed `posted_steps` dedupe are UNCHANGED — the `.md` body flows through the exact same sanitization and dedupe path. Applies to the step 1-10 loop, the 11/12 review-loop iteration posts, and step 13. Any exception reading the `.md` MUST be log-and-continue (never raise into the loop), matching the existing `extract_step_report` contract.
+
 % Review Loop (Steps 11-12)
 Steps 11 and 12 form a review loop that repeats until no issues are found:
 
@@ -132,7 +198,7 @@ if review_iteration >= MAX_REVIEW_ITERATIONS:
     print("Warning: Maximum review iterations reached")
 ```
 
-Helper: `_review_loop_no_issues(output: str) -> bool` — case-insensitive check for "no issues found" in output. LLMs don't reliably emit exact magic tokens, so this is intentionally loose.
+Helper: `_review_loop_no_issues(output: str) -> bool` — case-insensitive check for "no issues found" in output. LLMs don't reliably emit exact magic tokens, so this is intentionally loose. **This helper is now the FALLBACK: prefer `11_review.json`'s `status == "clean"` (see % Structured Step Artifacts, B.2) and only call this when that JSON is missing/unparseable.** In the loop below, replace the bare `if _review_loop_no_issues(step11_output):` with a JSON-first check: break when the Step 11 JSON `status == "clean"`, else fall back to `_review_loop_no_issues(step11_output)`.
 
 Context for review loop:
 - Step 11 receives: files_to_stage, worktree_path, step9_output, review_iteration, previous_fixes
@@ -239,7 +305,7 @@ Helper function: `_parse_direct_edit_candidates(step6_output: str) -> List[str]`
 
 % Early Exit Conditions (Hard Stops)
 
-The orchestrator must parse step output to detect stop conditions. Use `_check_hard_stop(step_num, output)`:
+The orchestrator must detect stop conditions after each stop-capable step. **JSON-first (see % Structured Step Artifacts, B.3): call `_hard_stop_from_json(step_num, artifacts_dir, name)` first; it maps the step's `{NN}_{name}.json` `status` field to the exact stop-reason string `_check_hard_stop` returns today. Fall back to `_check_hard_stop(step_num, output)` only when the JSON is missing/unparseable (a valid `proceed` short-circuits the prose parser).** The prose-parsing contract that `_check_hard_stop(step_num, output)` implements — unchanged, as the fallback — is:
 
 | Step | Stop Condition | Detection |
 |------|----------------|-----------|
@@ -287,7 +353,7 @@ The orchestrator owns user-visible per-step `## Step N/13:` comments on the GitH
 2. **State shape**: `state["step_comments"]` persists as a sorted `List[int]` of step indices whose trusted success-comment has been posted. Immediately after `load_workflow_state`, hydrate to `Set[int]` via `normalize_step_comments_state(state.get("step_comments"))` and write `state["step_comments"] = sorted(set)` back so the on-disk form stays canonical. Persist back as a sorted list before every `save_workflow_state` call (normal completion AND hard-stop / failure early-returns).
 
 3. **Posting protocol** inside the per-step loop (applied to steps 1-10 with `step_num` as the integer key; steps 11/12 use the iteration-keyed encoding below; step 13 uses `step_num=13`):
-   - On a successful step, compute `report_body = extract_step_report(step_output)`. If `None`, post a short fallback body saying the step completed and raw output is retained in workflow state; do not fail the run.
+   - On a successful step, compute the comment body JSON-first (see % Structured Step Artifacts, B.6): `report_body = _read_step_md(artifacts_dir, "{NN}_{name}.md")`, falling back to `extract_step_report(step_output)` when the `.md` is missing, then to a short placeholder body (step completed; raw output retained in workflow state) when both are absent. Do not fail the run when the body is a placeholder.
    - Otherwise build the comment body as `f"## Step {step_num}/13: {description}\n\n{report_body}"` and call `post_step_comment_once(repo_owner=..., repo_name=..., issue_number=..., step_num=step_num, body=body, posted_steps=step_comments_set, cwd=current_work_dir)`.
    - After the call returns, persist the canonical sorted form: `state["step_comments"] = sorted(step_comments_set)` and rely on the subsequent `save_workflow_state` call to flush it. The set is mutated in place by the helper, so unconditional re-assignment after the call is safe and survives a contract refactor.
    - Any exception from `extract_step_report` / `post_step_comment_once` / persistence MUST be log-and-continue (never raise into the orchestrator loop). Use `console.print` for the warning.
@@ -349,7 +415,7 @@ Step 10 now has two responsibilities: (a) update `architecture.json` metadata as
    - On discovery failure (missing prompts_dir, malformed architecture.json, unexpected exception): log yellow warning, set both context keys to `"None"` / `[]`, and continue — never abort the workflow from the discovery phase.
 
 2. Post-Step-10 verifier call:
-   - After Step 10 completes and `step_output` is captured, run `_verify_doc_sync_contract(discovered_docs, step10_output)` which returns `(modified, conflicted, unchanged, silently_dropped, overlapping)`
+   - After Step 10 completes and `step_output` is captured, run `_verify_doc_sync_contract(discovered_docs, step10_output)` which returns `(modified, conflicted, unchanged, silently_dropped, overlapping)`. **JSON-first (see % Structured Step Artifacts, B.4): source the three `ASSOCIATED_DOCS_*` buckets the verifier compares against from `10_architecture_update.json`'s `associated_docs_{modified,conflicts,unchanged}` arrays when present, and only parse them out of `step10_output` (via `_extract_marker_paths`) when the JSON is missing/unparseable. Silent-drop / overlap detection and all downstream handling are identical either way.**
    - **Silent drop** = discovered doc absent from all three `ASSOCIATED_DOCS_*` buckets. **Overlap** = discovered doc present in 2+ buckets (contradictory state). Both are contract violations.
    - When violations exist, append to `step_output`:
      ```
@@ -443,6 +509,10 @@ Before Step 9, create an isolated git worktree for prompt changes. This prevents
    - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
    - `_check_existing_pr(repo_owner, repo_name, issue_number) -> Optional[str]` - Use `gh pr list` to check for open PR with `head:change/issue-{issue_number}`. Return PR URL if found.
    - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
+   - `_artifacts_dir_for(work_dir: Path, issue_number: int) -> Path` - Return (creating) `work_dir / ".pdd" / "change" / f"issue-{issue_number}"`, the per-issue gitignored artifacts directory injected as `context["artifacts_dir"]` each phase. See % Structured Step Artifacts, A.1.
+   - `_read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]` - Parse `artifacts_dir/filename` as JSON; return `None` on missing/unreadable/unparseable input; never raises. See % Structured Step Artifacts, A.2.
+   - `_read_step_md(artifacts_dir: Path, filename: str) -> Optional[str]` - Return the stripped text of `artifacts_dir/filename`, or `None` when missing/unreadable/empty; never raises. See % Structured Step Artifacts, A.2/B.6.
+   - `_hard_stop_from_json(step_num: int, artifacts_dir: Path, name: str) -> Optional[str]` - JSON-first hard-stop dispatch for steps 1/2/4/6/7: read `{NN}_{name}.json` and map `status` to the exact stop-reason string `_check_hard_stop` returns today; return `None` (fall back to `_check_hard_stop`) when the JSON is missing/unparseable; a valid `proceed` status returns `None` for "no stop" while still short-circuiting the prose parser. See % Structured Step Artifacts, B.3.
    - Before Step 13, set context key `base_branch` from `_normalize_pr_base_branch(_resolve_main_ref_name(...))` and require the Step 13 prompt to use `gh pr create --base {base_branch}` rather than hardcoding `main`.
 
 % Console Output

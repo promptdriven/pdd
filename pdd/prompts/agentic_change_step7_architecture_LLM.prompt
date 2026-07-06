@@ -17,6 +17,7 @@ You are working on step 7 of 13 in an agentic change workflow. Previous steps id
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 - Issue Author: {issue_author}
 
 % Issue Content
@@ -91,6 +92,26 @@ You are working on step 7 of 13 in an agentic change workflow. Previous steps id
    - Provide 2-3 concrete options for each question
    - Explain trade-offs for each option
    - Limit to 2-4 most critical questions
+
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON `status` to decide whether to stop or proceed; the `STOP_CONDITION:` marker line below is now a FALLBACK only.
+
+1. `{artifacts_dir}/07_architecture.json` — the machine-readable decision. Emit valid JSON:
+   ```json
+   {{
+     "status": "proceed",
+     "questions": ["Should the cache be write-through or write-back?"],
+     "rationale": "standard patterns apply"
+   }}
+   ```
+   - `status`: `"needs_decision"` for the architectural-decision hard stop; `"proceed"` otherwise.
+   - `questions`: the architectural questions for the author (used when `needs_decision`). Empty list otherwise.
+   - `rationale`: one-line reason.
+
+2. `{artifacts_dir}/07_architecture.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 7/13` issue comment.
+
+Still emit the `<step_report>` block and the `STOP_CONDITION:` marker line described below UNCHANGED — they are the orchestrator's fallback when these files are missing.
 
 % Output
 

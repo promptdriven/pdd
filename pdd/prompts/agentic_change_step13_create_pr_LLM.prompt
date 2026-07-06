@@ -11,6 +11,7 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 - Issue Number: {issue_number}
 - Issue Title: {issue_title}
 - Worktree Path: {worktree_path}
+- Artifacts Directory: {artifacts_dir}
 - Branch Name: {head_branch}
 - Base Branch: {base_branch}
 - Files Changed: {files_to_stage}
@@ -113,6 +114,27 @@ After creating or updating the PR, return your findings in your final response.
 Do not post GitHub issue comments yourself; the orchestrator extracts the
 `<step_report>` block and posts it with trusted credentials when GitHub state is
 enabled.
+
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+After you create or update the PR, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON to learn the PR URL and outcome; the PR link inside the `<step_report>` block is now a FALLBACK only.
+
+1. `{artifacts_dir}/13_create_pr.json` — the machine-readable result. Emit valid JSON:
+   ```json
+   {{
+     "status": "pr_created",
+     "pr_url": "https://github.com/{repo_owner}/{repo_name}/pull/42",
+     "pr_number": 42,
+     "summary": "one-line description of the PR"
+   }}
+   ```
+   - `status`: `"pr_created"` for a new PR, `"pr_updated"` when you edited an existing open PR in place (clean-restart path), or `"blocked"` when the PR could not be created/updated (the orchestrator maps this to a workflow failure).
+   - `pr_url` / `pr_number`: the created/updated PR's URL and number (omit `pr_number` if unknown).
+   - `summary`: one-line PR summary.
+
+2. `{artifacts_dir}/13_create_pr.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 13/13` issue comment.
+
+Still emit the `<step_report>` block with the PR link below UNCHANGED — it is the orchestrator's fallback when these files are missing.
 
 **PR Body Format:**
 ```markdown
