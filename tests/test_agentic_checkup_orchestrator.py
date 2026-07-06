@@ -3549,6 +3549,43 @@ def _pr_patches_1212(
 class TestTargetedPrStep7Exit:
     """Targeted PR mode can exit on the structured Step 7 verdict."""
 
+    def test_hosted_human_step7_pass_exits_without_legacy_marker(self, tmp_path):
+        labels: List[str] = []
+        hosted_step7_pass = (
+            "## Step 7: Verify Fixes - Fix-Verify Iteration 1\n\n"
+            "**Status:** All findings resolved. Tests pass.\n\n"
+            "### Findings from Previous Review\n"
+            "- Both prior medium findings are resolved and verified.\n\n"
+            "### Test Results\n"
+            "**Total:** 147 passed, 0 failed, 1 pre-existing warning\n\n"
+            "### Acceptance Criteria Verification\n"
+            "| Criterion | Test | Status |\n"
+            "| Z.AI Coding Plan endpoint | E2E integration tests | Pass |\n\n"
+            "### Summary\n"
+            "No remaining issues. Both medium-severity findings from the previous "
+            "review loop are resolved and verified. The working tree is clean. "
+            "All 147 Z.AI-related tests pass.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            labels.append(kwargs.get("label", ""))
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, hosted_step7_pass, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "step7_iter1" in labels
+        assert "step3_iter2" not in labels
+
     def test_structured_targeted_pass_exits_without_legacy_marker(self, tmp_path):
         labels: List[str] = []
         targeted_step7_pass = (
@@ -6882,6 +6919,21 @@ class TestNumstatRenameParsing:
 class TestStep7PassedMeritReview:
     """The Step 7 verdict gate under #1292's optional-issue PR mode."""
 
+    HOSTED_VERIFY_FIXES_REPORT = (
+        "## Step 7: Verify Fixes - Fix-Verify Iteration 1\n\n"
+        "**Status:** All findings resolved. Tests pass.\n\n"
+        "### Findings from Previous Review\n"
+        "- Both prior medium findings are resolved and verified.\n\n"
+        "### Test Results\n"
+        "**Total:** 147 passed, 0 failed, 1 pre-existing warning\n\n"
+        "### Acceptance Criteria Verification\n"
+        "| Criterion | Test | Status |\n"
+        "| Z.AI Coding Plan endpoint | E2E integration tests | Pass |\n\n"
+        "### Summary\n"
+        "No remaining issues. Both medium-severity findings from the previous "
+        "review loop are resolved and verified. The working tree is clean. "
+        "All 147 Z.AI-related tests pass.\n"
+    )
     MERIT_VERDICT = (
         '```json\n'
         '{"success": true, "message": "ok", "issues": [], "changed_files": []}\n'
@@ -7049,6 +7101,31 @@ class TestStep7PassedMeritReview:
 
         passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
         assert not passed  # issue_aligned still required by default
+
+    def test_hosted_verify_fixes_human_report_passes_without_json(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.HOSTED_VERIFY_FIXES_REPORT,
+            pr_mode=True,
+            has_issue=True,
+        )
+        assert passed, reason
+
+    def test_hosted_verify_fixes_human_report_requires_issue_alignment(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        unaligned_report = self.HOSTED_VERIFY_FIXES_REPORT.replace(
+            "### Acceptance Criteria Verification\n",
+            "",
+        )
+
+        passed, _reason = _step7_passed(
+            unaligned_report,
+            pr_mode=True,
+            has_issue=True,
+        )
+        assert not passed
 
     def test_targeted_pr_blocks_out_of_diff_critical_without_structured_reason(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed

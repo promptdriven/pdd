@@ -1292,32 +1292,39 @@ def _step7_human_success_report_passed(
     """Accept the narrow hosted Step-7 green-report shape when JSON is missing.
 
     Step 7 is still expected to emit JSON. This fallback only covers a report
-    that is already explicit enough to be machine-checked: it must be the Step 7
-    final report, have zero failures, state that no issues remain, include the
-    completion marker, and in PR+issue mode explicitly assert issue alignment.
-    Vague no-JSON summaries remain fail-closed.
+    that is already explicit enough to be machine-checked: it must be an
+    identifiable Step 7 report, have zero failures, state that no issues remain
+    or all findings are resolved, include a completion/status marker, and in
+    PR+issue mode explicitly assert issue alignment. Vague no-JSON summaries
+    remain fail-closed.
     """
     if not isinstance(step7_output, str) or not step7_output.strip():
         return False
 
     lower = step7_output.lower()
     if not re.search(
-        r"^##\s+step\s+7(?:/8)?\s*:\s*verification\s*&\s*final report\b",
+        r"^##\s+step\s+7(?:/8)?\s*:\s*"
+        r"(?:verification\s*&\s*final report|verify\s+fixes)\b",
         lower,
         flags=re.MULTILINE,
     ):
         return False
-    if "checkup complete" not in lower and "### overall status" not in lower:
+    status_markers = (
+        "checkup complete",
+        "### overall status",
+        "**status:** all findings resolved",
+        "status: all findings resolved",
+    )
+    if not any(marker in lower for marker in status_markers):
         return False
     no_issue_markers = (
+        "all findings resolved",
         "no remaining issues",
         "no issues remaining",
         "0 issues remain",
         "0 issues remaining",
     )
-    if "all clear" not in lower or not any(
-        marker in lower for marker in no_issue_markers
-    ):
+    if not any(marker in lower for marker in no_issue_markers):
         return False
     zero_failure_markers = (
         re.search(r"\*\*failed:\*\*\s*0\b", lower),
@@ -1330,7 +1337,20 @@ def _step7_human_success_report_passed(
         return False
     if re.search(r"\b[1-9]\d*\s+(?:failed|failures)\b", lower):
         return False
-    if "all fixed" not in lower and "| **fixed**" not in lower:
+    test_pass_markers = (
+        "tests pass",
+        "test suite pass",
+        re.search(r"\b\d+\s+passed,\s*0\s+failed\b", lower),
+    )
+    if not any(test_pass_markers):
+        return False
+    resolved_markers = (
+        "all fixed",
+        "| **fixed**",
+        "all findings resolved",
+        "resolved and verified",
+    )
+    if not any(marker in lower for marker in resolved_markers):
         return False
     if "critical" in lower and re.search(
         r"critical[^\n|]*(?:not fixed|open|remain|remaining)",
@@ -1340,6 +1360,7 @@ def _step7_human_success_report_passed(
     if pr_mode and has_issue:
         alignment_markers = (
             "issue alignment verification",
+            "acceptance criteria verification",
             "fully addresses all acceptance criteria",
             "fully resolves issue",
             "issue_aligned: true",
