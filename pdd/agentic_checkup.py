@@ -735,6 +735,9 @@ def run_agentic_checkup(
     max_prompt_repair_rounds: int = 1,
     max_prompt_token_growth: int = 1000,
     max_prompt_repair_seconds: float = 120.0,
+    adversarial_prompt: Optional[str] = None,
+    agentic_review_loop: bool = False,
+    fresh_final_review_role: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -1033,6 +1036,16 @@ def run_agentic_checkup(
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
+            # Issue #1788 — agentic-review-loop knobs. ``agentic_mode`` drives the
+            # bounded ``pdd.checkup.agentic.v1`` artifact write; the adversarial
+            # instruction and fresh-final-review role steer the reviewers. These
+            # only take effect in ``--agentic-review-loop`` mode — a plain
+            # ``--review-loop`` must never inherit the adversarial steer.
+            adversarial_prompt=(adversarial_prompt if agentic_review_loop else None),
+            agentic_mode=agentic_review_loop,
+            fresh_final_review_role=(
+                fresh_final_review_role if agentic_review_loop else None
+            ),
         )
         return run_checkup_review_loop(
             context=loop_context,
@@ -1123,6 +1136,16 @@ def run_agentic_checkup(
                 0.0,
                 "",
             )
+
+    if agentic_review_loop and not final_gate:
+        # Issue #1788: standalone adversarial PR checkup. Requires ``--pr`` but
+        # NOT a source issue (the PR is reviewed on its own merits); it runs the
+        # same primary-reviewer/fixer loop as ``--review-loop`` with the agentic
+        # ``pdd.checkup.agentic.v1`` artifact write enabled (``agentic_mode`` on
+        # the config). ``no_fix`` (report-only) is permitted.
+        if not pr_context_ready:
+            return False, "--agentic-review-loop requires --pr.", 0.0, ""
+        return _run_review_loop_layer()
 
     if review_loop and not final_gate:
         if not pr_context_ready:

@@ -1,0 +1,486 @@
+from __future__ import annotations
+
+"""Bounded/redacted ``pdd.checkup.agentic.v1`` artifact builder.
+
+Pure data-assembly module: it accepts loop state, config, and context from
+:func:`pdd.checkup_review_loop.run_checkup_review_loop` and emits a bounded,
+redacted ``pdd.checkup.agentic.v1`` JSON artifact. It performs no subprocess
+calls, no GitHub API calls, and has no side effects beyond building the
+artifact object. Secret scrubbing is delegated to
+``pdd.checkup_review_loop._scrub_secrets`` (imported lazily so this module and
+``checkup_review_loop`` can depend on each other without an import cycle).
+
+This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
+(:data:`AGENTIC_AUTHORITY_STATUSES`). Hosted consumers (the pdd_cloud
+``checkup_verdict_engine``) mirror the tuple verbatim and MUST NOT extend it.
+"""
+
+import logging
+import re
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Module constants
+# ---------------------------------------------------------------------------
+
+AGENTIC_V1_SCHEMA = "pdd.checkup.agentic.v1"
+FINDING_TEXT_MAX_CHARS = 2000
+
+# The closed tuple of the five canonical-vs-agentic authority statuses, in this
+# exact spelling. This tuple is the single source of truth for the authority
+# vocabulary; downstream (pdd_cloud) mirrors it verbatim and never extends it.
+AGENTIC_AUTHORITY_STATUSES = (
+    "canonical_pass_agentic_mirror_clean",
+    "canonical_pass_agentic_mirror_blocking",
+    "canonical_unknown_agentic_fallback_pass",
+    "canonical_unknown_agentic_fallback_blocking",
+    "canonical_fail_agentic_not_authoritative",
+)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic v2 models
+# ---------------------------------------------------------------------------
+
+
+class AgenticLayer1(BaseModel):
+    """Layer-1 (PR-scoped checkup) outcome block."""
+
+    status: str
+    blockers: List[str] = Field(default_factory=list)
+
+
+class AgenticReviewer(BaseModel):
+    """Per-reviewer summary row."""
+
+    name: str
+    command: str
+    status: str
+    finding_count: int = 0
+    blocking_count: int = 0
+
+
+class AgenticFinding(BaseModel):
+    """A single normalized reviewer finding."""
+
+    reviewer: str
+    severity: str
+    blocking: bool
+    path: Optional[str] = None
+    line: Optional[int] = None
+    summary: str = ""
+    suggested_fix: str = ""
+
+
+class AgenticFixAttempt(BaseModel):
+    """One fixer attempt record (never populated in nofix mode; R3)."""
+
+    provider: str
+    status: str
+    changed_files: List[str] = Field(default_factory=list)
+    commit_sha: Optional[str] = None
+
+
+class AgenticValidationResult(BaseModel):
+    """Validation-after-fix outcome block."""
+
+    status: str
+    evidence: List[str] = Field(default_factory=list)
+
+
+class AgenticFreshFinalReview(BaseModel):
+    """Fresh final review (new context/session) outcome block."""
+
+    provider: str
+    status: str
+    finding_count: int = 0
+
+
+class AgenticVerdict(BaseModel):
+    """Final agentic verdict block."""
+
+    decision: str
+    reason: str = ""
+
+
+class AgenticBudget(BaseModel):
+    """Budget-cap booleans, computed fresh at artifact-build time (R5)."""
+
+    max_rounds_reached: bool = False
+    max_minutes_reached: bool = False
+    max_cost_reached: bool = False
+
+
+class AgenticV1Artifact(BaseModel):
+    """Top-level ``pdd.checkup.agentic.v1`` artifact.
+
+    ``schema_version`` (not ``schema``) is a constant equal to
+    :data:`AGENTIC_V1_SCHEMA`; ``schema`` would shadow the Pydantic v2
+    ``BaseModel.schema`` attribute and emit a warning. The serialized JSON key
+    is ``schema_version`` (R1). ``authority`` is always a member of
+    :data:`AGENTIC_AUTHORITY_STATUSES` (R6).
+    """
+
+    schema_version: str = AGENTIC_V1_SCHEMA
+    owner: str = ""
+    repo: str = ""
+    pr_number: int = 0
+    head_sha: str = ""
+    mode: str = "fix"
+    status: str = ""
+    authority: str = AGENTIC_AUTHORITY_STATUSES[0]
+    layer1: AgenticLayer1 = Field(default_factory=lambda: AgenticLayer1(status="unknown"))
+    reviewers: List[AgenticReviewer] = Field(default_factory=list)
+    findings: List[AgenticFinding] = Field(default_factory=list)
+    fix_attempts: List[AgenticFixAttempt] = Field(default_factory=list)
+    validation_after_fix: AgenticValidationResult = Field(
+        default_factory=lambda: AgenticValidationResult(status="not_run")
+    )
+    fresh_final_review: AgenticFreshFinalReview = Field(
+        default_factory=lambda: AgenticFreshFinalReview(provider="", status="missing")
+    )
+    verdict: AgenticVerdict = Field(default_factory=lambda: AgenticVerdict(decision="unknown"))
+    budget: AgenticBudget = Field(default_factory=AgenticBudget)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _scrub(text: str) -> str:
+    """Route free text through the review-loop secret scrubber (lazy import)."""
+    if not text:
+        return ""
+    try:
+        from .checkup_review_loop import _scrub_secrets
+
+        return _scrub_secrets(text)
+    except Exception:  # pragma: no cover - defensive: never crash the caller
+        return text
+
+
+def _bounded(text: str) -> str:
+    """Scrub and cap a free-text field at :data:`FINDING_TEXT_MAX_CHARS`."""
+    scrubbed = _scrub(str(text or ""))
+    if len(scrubbed) > FINDING_TEXT_MAX_CHARS:
+        return scrubbed[:FINDING_TEXT_MAX_CHARS]
+    return scrubbed
+
+
+_BLOCKING_SEVERITIES = {"blocker", "critical"}
+_SEVERITY_RE = re.compile(r"\b(blocker|critical|high|medium|major|low|minor|nit|info)\b", re.IGNORECASE)
+_PATH_LINE_RE = re.compile(r"([\w./\-]+\.\w+):(\d+)")
+
+
+def _resolve_authority(canonical_status: str, agentic_blocking: bool) -> str:
+    """Map the canonical final-gate outcome and the agentic mirror outcome onto
+    exactly one member of :data:`AGENTIC_AUTHORITY_STATUSES` (R6).
+
+    ``canonical_status`` is normalized to ``"pass"``, ``"fail"``, or
+    ``"unknown"`` (any unrecognized value fails closed to ``"unknown"``). A
+    canonical ``fail`` is authoritative regardless of the agentic outcome and
+    always resolves to ``canonical_fail_agentic_not_authoritative``.
+    """
+    normalized = str(canonical_status or "").strip().lower()
+    if normalized not in ("pass", "fail", "unknown"):
+        normalized = "unknown"
+    blocking = bool(agentic_blocking)
+
+    if normalized == "fail":
+        return "canonical_fail_agentic_not_authoritative"
+    if normalized == "pass":
+        return (
+            "canonical_pass_agentic_mirror_blocking"
+            if blocking
+            else "canonical_pass_agentic_mirror_clean"
+        )
+    # unknown
+    return (
+        "canonical_unknown_agentic_fallback_blocking"
+        if blocking
+        else "canonical_unknown_agentic_fallback_pass"
+    )
+
+
+def _normalize_findings(text: str, reviewer_name: str) -> List[AgenticFinding]:
+    """Best-effort parser that extracts structured findings from reviewer output.
+
+    On parse failure returns ``[]`` (the caller then sets the reviewer status to
+    ``degraded``; R4). Every free-text field is scrubbed and capped at
+    :data:`FINDING_TEXT_MAX_CHARS`.
+    """
+    findings: List[AgenticFinding] = []
+    raw = text or ""
+    if not str(raw).strip():
+        return []
+    try:
+        for line in str(raw).splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            sev_match = _SEVERITY_RE.search(stripped)
+            if not sev_match:
+                continue
+            severity = sev_match.group(1).lower()
+            path: Optional[str] = None
+            line_no: Optional[int] = None
+            loc_match = _PATH_LINE_RE.search(stripped)
+            if loc_match:
+                path = loc_match.group(1)
+                try:
+                    line_no = int(loc_match.group(2))
+                except (TypeError, ValueError):
+                    line_no = None
+            findings.append(
+                AgenticFinding(
+                    reviewer=reviewer_name,
+                    severity=severity,
+                    blocking=severity in _BLOCKING_SEVERITIES,
+                    path=path,
+                    line=line_no,
+                    summary=_bounded(stripped),
+                    suggested_fix="",
+                )
+            )
+    except Exception:  # pragma: no cover - defensive: parse failure -> []
+        logger.warning("Finding normalization failed for reviewer %s", reviewer_name)
+        return []
+    return findings
+
+
+def _deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding]:
+    """Deduplicate on ``(reviewer, path, line, severity)``; prose-only findings
+    (no path/line) dedup on the first 64 characters of ``summary``.
+    """
+    seen: set = set()
+    deduped: List[AgenticFinding] = []
+    for finding in findings:
+        if finding.path is None and finding.line is None:
+            key: Any = ("prose", finding.reviewer, finding.severity, (finding.summary or "")[:64])
+        else:
+            key = (finding.reviewer, finding.path, finding.line, finding.severity)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped
+
+
+def _coerce_str(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    return str(value)
+
+
+def _canonical_status_from_gate(final_gate_report: Any) -> str:
+    """Derive ``pass``/``fail``/``unknown`` from a Layer-1/final-gate report."""
+    if not isinstance(final_gate_report, dict):
+        return "unknown"
+    for key in ("layer1_status", "status", "final_gate_status"):
+        raw = str(final_gate_report.get(key, "") or "").strip().lower()
+        if raw in ("pass", "passed", "clean", "success", "ok"):
+            return "pass"
+        if raw in ("fail", "failed", "blocked", "error"):
+            return "fail"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Public builder
+# ---------------------------------------------------------------------------
+
+
+def build_agentic_v1_artifact(
+    *,
+    loop_state: Any,
+    config: Any,
+    context: Any,
+    final_gate_report: Any,
+) -> AgenticV1Artifact:
+    """Assemble the bounded/redacted ``pdd.checkup.agentic.v1`` artifact.
+
+    Pure data assembly from review-loop state. Graceful degradation: extraction
+    failures log a WARNING and fall back to safe defaults; this function never
+    crashes the caller.
+    """
+    # --- mode (R3): nofix never carries fix attempts ----------------------
+    no_fix = bool(getattr(config, "no_fix", False)) or bool(getattr(config, "review_only", False))
+    mode = "nofix" if no_fix else "fix"
+
+    # --- identity/context -------------------------------------------------
+    owner = _coerce_str(getattr(context, "pr_owner", "") or getattr(context, "repo_owner", ""))
+    repo = _coerce_str(getattr(context, "pr_repo", "") or getattr(context, "repo_name", ""))
+    try:
+        pr_number = int(getattr(context, "pr_number", 0) or 0)
+    except (TypeError, ValueError):
+        pr_number = 0
+    head_sha = _coerce_str(
+        getattr(loop_state, "verified_head_sha", None)
+        or getattr(loop_state, "remote_pr_head_sha", None)
+        or getattr(loop_state, "reviewed_head_sha", None)
+        or ""
+    )
+
+    # --- reviewers + findings --------------------------------------------
+    reviewer_status: Dict[str, str] = dict(getattr(loop_state, "reviewer_status", {}) or {})
+    raw_outputs = list(getattr(loop_state, "raw_outputs", []) or [])
+    findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
+    for entry in raw_outputs:
+        try:
+            reviewer_name, output_text = entry[0], entry[1]
+        except (TypeError, IndexError, KeyError):
+            continue
+        parsed = _normalize_findings(_coerce_str(output_text), _coerce_str(reviewer_name))
+        findings_by_reviewer.setdefault(_coerce_str(reviewer_name), []).extend(parsed)
+
+    # Prefer already-structured loop findings when present.
+    structured: List[AgenticFinding] = []
+    for f in list(getattr(loop_state, "findings", []) or []):
+        try:
+            severity = _coerce_str(getattr(f, "severity", "") or "info").lower()
+            structured.append(
+                AgenticFinding(
+                    reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
+                    severity=severity,
+                    blocking=severity in _BLOCKING_SEVERITIES,
+                    path=(getattr(f, "location", None) or None),
+                    line=None,
+                    summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
+                    suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            continue
+
+    all_findings = _deduplicate_findings(
+        structured + [f for group in findings_by_reviewer.values() for f in group]
+    )
+
+    reviewers: List[AgenticReviewer] = []
+    reviewer_commands: Dict[str, str] = dict(getattr(config, "reviewer_commands", {}) or {})
+    for name, status in reviewer_status.items():
+        own = [f for f in all_findings if f.reviewer == name]
+        # R4: a reviewer whose output failed to parse (no findings extracted
+        # from a non-empty output) is degraded, never clean.
+        had_output = any(_coerce_str(o[0]) == name for o in raw_outputs if isinstance(o, (list, tuple)))
+        parse_failed = had_output and not findings_by_reviewer.get(name)
+        resolved_status = "degraded" if (parse_failed and status == "clean") else _coerce_str(status)
+        reviewers.append(
+            AgenticReviewer(
+                name=_coerce_str(name),
+                command=_coerce_str(reviewer_commands.get(name, "")),
+                status=resolved_status,
+                finding_count=len(own),
+                blocking_count=sum(1 for f in own if f.blocking),
+            )
+        )
+
+    # --- fix attempts (R3: empty in nofix) --------------------------------
+    fix_attempts: List[AgenticFixAttempt] = []
+    if not no_fix:
+        for fx in list(getattr(loop_state, "fixes", []) or []):
+            try:
+                fix_attempts.append(
+                    AgenticFixAttempt(
+                        provider=_coerce_str(
+                            getattr(fx, "fixer", None) or getattr(fx, "provider", "") or "unknown"
+                        ),
+                        status=_coerce_str(
+                            getattr(fx, "fixer_result", None) or getattr(fx, "push_status", "") or "unknown"
+                        ),
+                        changed_files=list(getattr(fx, "changed_files", []) or []),
+                        commit_sha=(
+                            getattr(fx, "pushed_head_sha", None)
+                            or getattr(fx, "local_fixer_commit_sha", None)
+                        ),
+                    )
+                )
+            except Exception:  # pragma: no cover - defensive
+                continue
+
+    # --- layer1 -----------------------------------------------------------
+    canonical_status = _canonical_status_from_gate(final_gate_report)
+    layer1_blockers: List[str] = []
+    if isinstance(final_gate_report, dict):
+        for blk in final_gate_report.get("blockers", []) or []:
+            layer1_blockers.append(_bounded(_coerce_str(blk)))
+    layer1 = AgenticLayer1(status=canonical_status, blockers=layer1_blockers)
+
+    # --- fresh final review ----------------------------------------------
+    fresh_status = _coerce_str(getattr(loop_state, "fresh_final_status", "missing") or "missing")
+    fresh_provider = _coerce_str(
+        getattr(config, "fresh_final_review_role", None)
+        or getattr(loop_state, "active_reviewer", "")
+        or ""
+    )
+    fresh_final_review = AgenticFreshFinalReview(
+        provider=fresh_provider,
+        status=fresh_status,
+        finding_count=sum(1 for f in all_findings if f.reviewer == "fresh-final"),
+    )
+
+    # --- validation after fix --------------------------------------------
+    verified = _coerce_str(getattr(loop_state, "verified_head_sha", "") or "")
+    validation_status = "verified" if verified else ("not_run" if no_fix else "unverified")
+    validation_after_fix = AgenticValidationResult(
+        status=validation_status,
+        evidence=[verified] if verified else [],
+    )
+
+    # --- agentic verdict + blocking signal --------------------------------
+    remaining_open = [f for f in all_findings if f.blocking]
+    stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
+    passed = (
+        fresh_status == "clean"
+        and not remaining_open
+        and not stop_reason
+    )
+    agentic_blocking = bool(remaining_open) or (fresh_status not in ("clean", "missing"))
+    decision = "pass" if passed else "block"
+    verdict = AgenticVerdict(decision=decision, reason=stop_reason)
+    status = "clean" if passed else "blocking"
+
+    # --- authority (R6) ---------------------------------------------------
+    authority = _resolve_authority(canonical_status, agentic_blocking)
+
+    # --- budget (R5: computed fresh from config caps vs actual) -----------
+    budget = AgenticBudget(
+        max_rounds_reached=bool(getattr(loop_state, "max_rounds_reached", False)),
+        max_minutes_reached=bool(getattr(loop_state, "max_duration_reached", False)),
+        max_cost_reached=bool(getattr(loop_state, "max_cost_reached", False)),
+    )
+
+    try:
+        return AgenticV1Artifact(
+            schema_version=AGENTIC_V1_SCHEMA,
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            mode=mode,
+            status=status,
+            authority=authority,
+            layer1=layer1,
+            reviewers=reviewers,
+            findings=all_findings,
+            fix_attempts=fix_attempts,
+            validation_after_fix=validation_after_fix,
+            fresh_final_review=fresh_final_review,
+            verdict=verdict,
+            budget=budget,
+        )
+    except Exception:  # pragma: no cover - defensive: always return a valid artifact
+        logger.warning("Falling back to a minimal agentic artifact after assembly error")
+        return AgenticV1Artifact(
+            schema_version=AGENTIC_V1_SCHEMA,
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            mode=mode,
+            authority=authority,
+        )

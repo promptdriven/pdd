@@ -10749,6 +10749,11 @@
             "name": "_deduplicate_findings",
             "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]",
             "returns": "List[AgenticFinding]"
+          },
+          {
+            "name": "_resolve_authority",
+            "signature": "(canonical_status: str, agentic_blocking: bool) -> str",
+            "returns": "one of AGENTIC_AUTHORITY_STATUSES"
           }
         ]
       }

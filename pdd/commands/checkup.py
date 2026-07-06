@@ -171,6 +171,41 @@ def _forward_subcommand_json(
     help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
 )
 @click.option(
+    "--agentic-review-loop",
+    "agentic_review_loop",
+    is_flag=True,
+    default=False,
+    help=(
+        "Standalone adversarial PR checkup (issue #1788). Implies --review-loop "
+        "and --json; requires --pr (--issue optional). Permits --no-fix for "
+        "report-only mode. Cannot be combined with --final-gate. Emits the "
+        "bounded pdd.checkup.agentic.v1 artifact to "
+        "./pdd-checkup-agentic-{pr}.json."
+    ),
+)
+@click.option(
+    "--adversarial-prompt",
+    "adversarial_prompt",
+    type=str,
+    default="find reasons not to merge the PR",
+    show_default=True,
+    help=(
+        "Adversarial instruction forwarded to all reviewers in "
+        "--agentic-review-loop mode."
+    ),
+)
+@click.option(
+    "--fresh-final-review",
+    "fresh_final_review",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Role to use for the fresh final review in --agentic-review-loop mode; "
+        "runs in a new context/session with no prior reviewer/fixer state."
+    ),
+)
+@click.option(
     "--final-gate",
     "final_gate",
     is_flag=True,
@@ -517,6 +552,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     test_scope: str,
     full_suite_source: str,
     review_loop: bool,
+    agentic_review_loop: bool,
+    adversarial_prompt: str,
+    fresh_final_review: Optional[str],
     final_gate: bool,
     review_only: bool,
     reviewers: str,
@@ -1061,10 +1099,30 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "TARGET (e.g., `pdd checkup <issue-url>`).",
             param_hint="'--issue'",
         )
+    # ``--agentic-review-loop`` (issue #1788) is a standalone adversarial PR
+    # checkup. It implies ``--review-loop`` and ``--json``, requires ``--pr``
+    # (``--issue`` optional — own-merits review), and permits ``--no-fix`` for
+    # report-only mode. It cannot be combined with the canonical ``--final-gate``
+    # (which owns its own review-loop as Layer 2). Its budget validation matches
+    # ``--review-loop`` (below) because it sets ``review_loop`` internally.
+    if agentic_review_loop:
+        if final_gate:
+            raise click.BadParameter(
+                "--agentic-review-loop cannot be combined with --final-gate.",
+                param_hint="'--agentic-review-loop'",
+            )
+        if not pr_mode:
+            raise click.BadParameter(
+                "--agentic-review-loop requires --pr.",
+                param_hint="'--agentic-review-loop'",
+            )
+        review_loop = True
+        as_json = True
     # ``--review-loop`` still requires BOTH ``--pr`` and ``--issue``: the
     # reviewer/report path is issue-coupled, so review-loop-without-issue is
     # deferred as a follow-up (#1292 sanctions deferring it).
-    if review_loop and (not pr_mode or issue_url_opt is None):
+    # ``--agentic-review-loop`` is exempt — it reviews the PR on its own merits.
+    if review_loop and not agentic_review_loop and (not pr_mode or issue_url_opt is None):
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
@@ -1139,7 +1197,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-only requires --review-loop.",
             param_hint="'--review-only'",
         )
-    if review_loop and no_fix and not review_only:
+    # ``--agentic-review-loop`` permits ``--no-fix`` (report-only adversarial
+    # checkup), so only the plain ``--review-loop`` owns-the-fixer rule applies.
+    if review_loop and not agentic_review_loop and no_fix and not review_only:
         raise click.BadParameter(
             "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
             param_hint="'--review-loop'",
@@ -1250,6 +1310,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
+            agentic_review_loop=agentic_review_loop,
+            adversarial_prompt=adversarial_prompt,
+            fresh_final_review_role=fresh_final_review,
             final_gate=final_gate,
             review_only=review_only,
             reviewers=reviewers,

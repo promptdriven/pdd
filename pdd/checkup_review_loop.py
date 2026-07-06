@@ -34,6 +34,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -725,6 +726,20 @@ class ReviewLoopConfig:
     # loop accepts ``reviewer == fixer`` for non-review-only runs and keeps
     # reviewer status/reporting distinct from fixer artifacts.
     allow_same_reviewer_fixer: bool = False
+    # APPENDED — issue #1788 agentic-review-loop knobs. Kept at the end of the
+    # field list so positional callers keep working unchanged.
+    # ``adversarial_prompt``: when set, injected into every reviewer, verifier,
+    # and fresh-final-reviewer prompt as ``Adversarial instruction: {…}`` so a
+    # standalone adversarial PR checkup can steer all reviewers ("find reasons
+    # not to merge the PR"). ``agentic_mode``: when True, the loop builds the
+    # bounded ``pdd.checkup.agentic.v1`` artifact via
+    # ``pdd.checkup_agentic_artifact.build_agentic_v1_artifact`` after the final
+    # report is assembled and writes it to ``./pdd-checkup-agentic-{pr}.json``
+    # (path echoed to stderr). ``fresh_final_review_role``: role override for the
+    # fresh final review in agentic mode, normalized via the role-alias table.
+    adversarial_prompt: Optional[str] = None
+    agentic_mode: bool = False
+    fresh_final_review_role: Optional[str] = None
 
 
 @dataclass
@@ -1996,8 +2011,56 @@ def run_checkup_review_loop(
         state.fresh_final_status = "clean"
 
     report = _finalize(context, state, roles, artifacts_dir)
+    _maybe_write_agentic_artifact(context, config, state)
     _post_review_loop_report(context, report, use_github_state)
     return True, report, state.total_cost, state.last_model
+
+
+def _maybe_write_agentic_artifact(
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+) -> Optional[str]:
+    """Emit the bounded ``pdd.checkup.agentic.v1`` artifact in agentic mode.
+
+    Issue #1788: when ``config.agentic_mode`` is set, build the bounded/redacted
+    artifact from loop state and write it to ``./pdd-checkup-agentic-{pr}.json``,
+    echoing the path to stderr. Best-effort: never crash the review loop. Returns
+    the written path (as a string) or ``None`` when nothing was written.
+    """
+    if not getattr(config, "agentic_mode", False):
+        return None
+    try:
+        from .checkup_agentic_artifact import build_agentic_v1_artifact
+
+        final_gate_report: Optional[Dict[str, Any]] = None
+        raw_evidence = (getattr(context, "layer1_step5_evidence", "") or "").strip()
+        if raw_evidence:
+            try:
+                parsed = json.loads(raw_evidence)
+                if isinstance(parsed, dict):
+                    final_gate_report = {
+                        "layer1_status": str(parsed.get("status", "") or "unknown"),
+                        "blockers": [],
+                    }
+            except json.JSONDecodeError:
+                final_gate_report = None
+
+        artifact = build_agentic_v1_artifact(
+            loop_state=state,
+            config=config,
+            context=context,
+            final_gate_report=final_gate_report,
+        )
+        out_path = Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
+        out_path.write_text(
+            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
+        )
+        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
+        return str(out_path)
+    except Exception as exc:  # pragma: no cover - defensive: never break the loop
+        print(f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr)
+        return None
 
 
 def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
@@ -2010,6 +2073,36 @@ def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
         raw_items = list(value)
     reviewers = _normalize_reviewers(raw_items)
     return tuple(reviewers or DEFAULT_REVIEWERS)
+
+
+def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]:
+    """Parse ``role:/slash-command`` tokens into a ``{role: command}`` mapping.
+
+    Accepts the same comma-separated string or sequence as
+    :func:`parse_reviewers` (e.g. ``"codex:/review,claude:/code-review"``) and
+    returns the normalized role mapped to its slash command
+    (``{"codex": "/review", "claude": "/code-review"}``). A role token without a
+    ``:/slash-command`` suffix maps to ``""``. Unknown/malformed roles are
+    dropped. The role is normalized with the same alias table as
+    :func:`parse_reviewers`, so the mapping keys always match the resolved roles.
+    """
+    if value is None:
+        return {}
+    raw_items = value.split(",") if isinstance(value, str) else list(value)
+    commands: Dict[str, str] = {}
+    for raw in raw_items:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        role_part, sep, command_part = token.partition(":")
+        normalized = _normalize_reviewers([role_part])
+        if not normalized:
+            continue
+        role = normalized[0]
+        command = command_part.strip() if sep else ""
+        # First spelling of a role wins, mirroring parse_reviewers ordering.
+        commands.setdefault(role, command)
+    return commands
 
 
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
@@ -2085,6 +2178,11 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     normalized: List[str] = []
     for reviewer in reviewers:
         item = str(reviewer or "").strip().lower()
+        # Strip an optional ``:/slash-command`` suffix (e.g. ``codex:/review``)
+        # so a reviewer spec that pins a per-role slash command still resolves
+        # to the plain role. ``parse_reviewer_commands`` recovers the command.
+        if ":" in item:
+            item = item.split(":", 1)[0].strip()
         if not item:
             continue
         if item == "chatgpt":
@@ -3719,10 +3817,20 @@ def _review_prompt(
         )
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
+    # Issue #1788: in --agentic-review-loop mode an adversarial instruction is
+    # injected into every reviewer, verifier, and fresh-final-reviewer prompt so
+    # the reviewers actively hunt for reasons not to merge. Untrusted operator
+    # text; render as an explicit instruction block, not as data to obey blindly.
+    adversarial_block = ""
+    if getattr(config, "adversarial_prompt", None):
+        adversarial_block = (
+            f"\n\nAdversarial instruction: {config.adversarial_prompt}\n"
+        )
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
 
 Mode: {mode}
 Round: {round_number}
+{adversarial_block}
 
 You are a reviewer only. Do not edit files. Inspect the PR against the original
 issue and the existing codebase. Find only actionable issues that matter before

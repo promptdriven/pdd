@@ -13707,3 +13707,45 @@ class TestReviewLoopFailureCategory2047:
             _review_loop_failure_category(ReviewLoopState(), True, [sot])
             == FINAL_GATE_CATEGORY_PASSED
         )
+
+
+# ---------------------------------------------------------------------------
+# parse_reviewer_commands + role:/command stripping (issue #1788)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reviewer_commands_maps_role_to_slash_command():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands("codex:/review,claude:/code-review") == {
+        "codex": "/review",
+        "claude": "/code-review",
+    }
+
+
+def test_parse_reviewer_commands_plain_role_maps_to_empty():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands("codex,claude:/code-review") == {
+        "codex": "",
+        "claude": "/code-review",
+    }
+    assert parse_reviewer_commands(None) == {}
+    assert parse_reviewer_commands("") == {}
+
+
+def test_parse_reviewers_strips_slash_command_suffix():
+    from pdd.checkup_review_loop import parse_reviewers
+
+    # role:/command tokens resolve to the plain role; plain tokens unchanged.
+    assert parse_reviewers("codex:/review,claude:/code-review") == ("codex", "claude")
+    assert parse_reviewers("codex,claude") == ("codex", "claude")
+
+
+def test_review_loop_config_agentic_fields_default_off():
+    from pdd.checkup_review_loop import ReviewLoopConfig
+
+    cfg = ReviewLoopConfig()
+    assert cfg.adversarial_prompt is None
+    assert cfg.agentic_mode is False
+    assert cfg.fresh_final_review_role is None
