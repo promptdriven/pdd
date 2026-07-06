@@ -1,0 +1,266 @@
+"""Run orchestration (design.md §3.2 stage 4).
+
+For each (scenario, size, trial):
+
+1. verify the manifest against ``manifests.lock`` (freeze enforcement),
+2. materialize a fresh variant (sha-verified) and ``git init`` a baseline,
+3. start the recording proxy (and, for the ``mock`` arm, the mock provider),
+4. run the agent (mock behavior or an external command with the proxy's
+   base URL injected into its environment),
+5. run visible tests and the hidden verifier (hidden tree never enters the
+   variant),
+6. attribute snapshots, analyze the iteration trajectory, and write one run
+   record (JSONL line) plus raw artifacts under ``reports/<run_id>/``.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from harness.context_snapshots.attribution import TreeIndex, extract_payload_text
+from harness.context_snapshots.iteration_analyzer import analyze_run
+from harness.context_snapshots.proxy import RecordingProxy
+from harness.distractors.manifest import load_manifest, manifest_sha256, verify_lockfile
+from harness.runner.metrics import build_run_record, read_changed_paths
+from harness.runner.mock_agent import MockAgent, MockModelServer
+from harness.runner.variant_builder import materialize_variant
+
+
+@dataclass
+class RunConfig:
+    scenario_dir: Path  # holds core/, hidden/, scenario.json, task.md, (pool/)
+    distractors_dir: Path  # ManifestWriter output (manifests/ + generated/ + lock)
+    reports_dir: Path
+    work_root: Path  # fresh variants are materialized under here
+    arm: str = "mock"  # "mock" or "command"
+    agent_command: list[str] | None = None  # for arm="command"; {workdir} expanded
+    upstream_base_url: str | None = None  # real provider for arm="command"
+    mock_behavior: str = "oracle"  # oracle | wrong_file | noop
+    mock_read_distractor_count: int = 2
+    timeout_seconds: float = 1800.0
+    check_baseline: bool = True  # assert visible-pass/hidden-fail before the agent
+
+    def __post_init__(self) -> None:
+        for name in ("scenario_dir", "distractors_dir", "reports_dir", "work_root"):
+            setattr(self, name, Path(getattr(self, name)))
+
+
+@dataclass
+class TrialResult:
+    record: dict
+    report_dir: Path
+
+
+class ExperimentRunner:
+    def __init__(self, config: RunConfig) -> None:
+        self.config = config
+        self.scenario = json.loads(
+            (config.scenario_dir / "scenario.json").read_text(encoding="utf-8")
+        )
+
+    # -- helpers -------------------------------------------------------------
+
+    def _run(self, command: list[str], cwd: Path, env_extra: dict | None = None,
+             timeout: float | None = None) -> subprocess.CompletedProcess:
+        import os
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(cwd / "src")
+        env.update(env_extra or {})
+        return subprocess.run(
+            command, cwd=str(cwd), env=env, capture_output=True, text=True,
+            timeout=timeout,
+        )
+
+    def _visible_pass(self, workdir: Path) -> bool:
+        result = self._run(self.scenario["visible_tests"]["command"], cwd=workdir)
+        return result.returncode == 0
+
+    def _hidden_pass(self, workdir: Path) -> bool:
+        hidden_dir = self.config.scenario_dir / self.scenario["hidden_verifier"]["path"]
+        import os
+
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(workdir / "src")
+        result = subprocess.run(
+            self.scenario["hidden_verifier"]["command"],
+            cwd=str(hidden_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+
+    def _git(self, workdir: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", *args], cwd=str(workdir), check=True, capture_output=True,
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin",
+                 "GIT_AUTHOR_NAME": "harness", "GIT_AUTHOR_EMAIL": "harness@local",
+                 "GIT_COMMITTER_NAME": "harness", "GIT_COMMITTER_EMAIL": "harness@local",
+                 "HOME": str(workdir)},
+        )
+
+    # -- the run -------------------------------------------------------------
+
+    def run_trial(self, size: int, trial_index: int) -> TrialResult:
+        config = self.config
+        scenario_id = self.scenario["scenario_id"]
+        size_label = f"{size}x"
+        run_id = f"{scenario_id}.{size_label}.trial{trial_index}"
+        report_dir = config.reports_dir / run_id
+        if report_dir.exists():
+            shutil.rmtree(report_dir)
+        report_dir.mkdir(parents=True)
+
+        # 1. Freeze enforcement.
+        manifest_path = (
+            config.distractors_dir / "manifests" / f"{scenario_id}.{size_label}.json"
+        )
+        lock_path = config.distractors_dir / "manifests.lock"
+        if not verify_lockfile(manifest_path, lock_path):
+            raise RuntimeError(
+                f"freeze violation: {manifest_path.name} not verified by {lock_path}"
+            )
+        manifest = load_manifest(manifest_path)
+
+        # 2. Materialize + baseline.
+        workdir = config.work_root / run_id
+        if workdir.exists():
+            shutil.rmtree(workdir)
+        materialize_variant(
+            core_root=config.scenario_dir / self.scenario["core_path"],
+            manifest=manifest,
+            destination=workdir,
+            pool_root=(
+                config.scenario_dir / self.scenario["pool_path"]
+                if self.scenario.get("pool_path")
+                else None
+            ),
+            distractors_dir=config.distractors_dir,
+        )
+        self._git(workdir, "init", "-q")
+        self._git(workdir, "add", "-A")
+        self._git(workdir, "commit", "-qm", "pre-run baseline")
+
+        if config.check_baseline:
+            if not self._visible_pass(workdir):
+                raise RuntimeError("baseline violation: visible tests fail pre-run")
+            if self._hidden_pass(workdir):
+                raise RuntimeError("baseline violation: hidden verifier passes pre-run")
+
+        # 3. Instrumentation.
+        mock_server = None
+        upstream = config.upstream_base_url
+        if config.arm == "mock":
+            mock_server = MockModelServer()
+            upstream = mock_server.start()
+        proxy = RecordingProxy(
+            upstream_base_url=upstream,
+            archive_dir=report_dir,
+            run_id=run_id,
+        )
+        proxy_url = proxy.start()
+
+        # 4. Agent.
+        timed_out = False
+        started = time.monotonic()
+        try:
+            if config.arm == "mock":
+                distractor_reads = [
+                    f["upstream_path"] for f in manifest["files"]
+                ][: config.mock_read_distractor_count]
+                agent = MockAgent(
+                    proxy_base_url=proxy_url,
+                    workdir=workdir,
+                    behavior=config.mock_behavior,
+                    files_to_read=distractor_reads + list(self.scenario["target_files"]),
+                    oracle_edit=self.scenario.get("oracle_edit"),
+                    wrong_file=(manifest["files"][0]["upstream_path"]
+                                if manifest["files"] else None),
+                )
+                task_brief = (
+                    config.scenario_dir / self.scenario["task_brief_path"]
+                ).read_text(encoding="utf-8")
+                agent.run(task_brief=task_brief)
+            else:
+                command = [
+                    part.replace("{workdir}", str(workdir))
+                    for part in (config.agent_command or [])
+                ]
+                try:
+                    self._run(
+                        command,
+                        cwd=workdir,
+                        env_extra={"OPENAI_BASE_URL": f"{proxy_url}/v1"},
+                        timeout=config.timeout_seconds,
+                    )
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+        finally:
+            wall_clock = time.monotonic() - started
+            proxy.stop()
+            if mock_server:
+                mock_server.stop()
+
+        # 5. Verification.
+        visible_pass = self._visible_pass(workdir)
+        hidden_pass = self._hidden_pass(workdir)
+        changed_paths = read_changed_paths(workdir)
+        (report_dir / "post_run.diff").write_text(
+            "\n".join(changed_paths) + "\n", encoding="utf-8"
+        )
+
+        # 6. Attribution + trajectory + record.
+        distractor_paths = [f["upstream_path"] for f in manifest["files"]]
+        tree_index = TreeIndex(workdir, distractor_paths=distractor_paths)
+        request_texts = [
+            extract_payload_text((report_dir / r.payload_path).read_bytes())
+            for r in proxy.records
+        ]
+        attributions = [tree_index.classify_text(text) for text in request_texts]
+        trajectory = analyze_run(proxy.records, attributions)
+
+        core_root = config.scenario_dir / self.scenario["core_path"]
+        core_files = [
+            p.relative_to(core_root).as_posix()
+            for p in core_root.rglob("*")
+            if p.is_file()
+        ]
+        record = build_run_record(
+            run_id=run_id,
+            scenario_id=scenario_id,
+            size=size_label,
+            size_multiplier=size,
+            trial_index=trial_index,
+            arm=config.arm,
+            manifest=manifest,
+            manifest_sha256=manifest_sha256(manifest_path),
+            records=proxy.records,
+            attributions=attributions,
+            trajectory=trajectory,
+            tree_index=tree_index,
+            request_texts=request_texts,
+            changed_paths=changed_paths,
+            target_files=self.scenario["target_files"],
+            allowed_edit_globs=self.scenario.get("allowed_edit_globs", []),
+            core_files=core_files,
+            visible_pass=visible_pass,
+            hidden_pass=hidden_pass,
+            timed_out=timed_out,
+            wall_clock_seconds=wall_clock,
+            timeout_seconds=config.timeout_seconds,
+        )
+        (report_dir / "run_record.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        with (config.reports_dir / "run_records.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, sort_keys=True) + "\n")
+        return TrialResult(record=record, report_dir=report_dir)
+
+    def run_cell(self, size: int, trials: int) -> list[TrialResult]:
+        return [self.run_trial(size, t) for t in range(trials)]

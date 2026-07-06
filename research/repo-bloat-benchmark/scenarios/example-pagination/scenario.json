@@ -1,0 +1,34 @@
+{
+  "scenario_id": "example-pagination",
+  "schema_version": 1,
+  "language": "python",
+  "purpose": "committed demo scenario for no-token pipeline validation (mock arm); real pilot scenarios are dependency-sliced PDD cores (design §4.1.0)",
+  "core_path": "core",
+  "pool_path": "pool",
+  "target_files": ["src/pager/pagination.py"],
+  "allowed_edit_globs": ["src/pager/**"],
+  "task_brief_path": "task.md",
+  "visible_tests": {
+    "command": ["python3", "-m", "pytest", "tests/visible", "-q"],
+    "expected_exit_code": 0
+  },
+  "hidden_verifier": {
+    "path": "hidden",
+    "command": ["python3", "-m", "pytest", ".", "-q"],
+    "mounted_into_agent_sandbox": false
+  },
+  "oracle_edit": {
+    "file": "src/pager/pagination.py",
+    "old": "return (len(items) + page_size) // page_size",
+    "new": "return (len(items) + page_size - 1) // page_size"
+  },
+  "seed": {
+    "target_site": "src/pager/pagination.py:count_pages",
+    "bug_class": "off_by_one",
+    "description": "ceiling division seeded as (n + d) // d instead of (n + d - 1) // d; correct only when n % d != 0 with the visible test's inputs"
+  },
+  "leak_denylist": [
+    "count_pages([1, 2, 3, 4], 2) == 2",
+    "count_pages([], 5) == 0"
+  ]
+}
