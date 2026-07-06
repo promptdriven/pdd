@@ -2614,6 +2614,7 @@ def run_agentic_sync(
     temperature: Optional[float] = None,
     context_override: Optional[str] = None,
     compressed_context: bool = False,
+    local: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -3021,6 +3022,10 @@ def run_agentic_sync(
         "temperature": temperature,
         "context": context_override,
         "compressed_context": compressed_context,
+        # Forward --local so child syncs skip PDD-cloud dispatch on argv, not
+        # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
+        # forwards this; the issue-URL path previously dropped it).
+        "local": local,
     }
 
     github_info = {

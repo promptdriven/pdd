@@ -778,7 +778,15 @@ def cli(
     ctx.obj["review_examples"] = review_examples
     if review_examples:
         ctx.obj["grounding_review_decisions"] = []
-    ctx.obj["local"] = bool(local or estimate_mode)
+    # PDD_FORCE_LOCAL env must behave like --local: the per-step cloud
+    # dispatchers (generateCode/crashCode/verifyCode/fixCode) gate on
+    # ctx.obj["local"], not on the env var, so an env-only force-local
+    # previously still attempted PDD-cloud auth — including an interactive
+    # GitHub device-flow hang outside CI. Truthy set matches sync_main.
+    env_force_local = os.environ.get(
+        "PDD_FORCE_LOCAL", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    ctx.obj["local"] = bool(local or estimate_mode or env_force_local)
     # Propagate --local flag to environment for llm_invoke cloud detection
     if local or estimate_mode:
         os.environ['PDD_FORCE_LOCAL'] = '1'
