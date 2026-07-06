@@ -220,6 +220,16 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             )
             # Print the error message safely escaped
             console.print(escape(str(exception)))
+        elif isinstance(exception, click.ClickException):
+            # A ClickException is a deliberate, user-facing error raised by a
+            # command (e.g. `pdd story link` on a missing file). It is not an
+            # internal fault, so report it plainly rather than as an
+            # "unexpected error". (UsageError, a ClickException subclass, is
+            # handled above and re-raised for its exit-code-2 semantics.)
+            console.print(
+                f"  [error]Error:[/error] {escape(exception.format_message())}",
+                style="error",
+            )
         elif isinstance(exception, KeyboardInterrupt):
             reason = error_record.get("reason")
             if reason:
