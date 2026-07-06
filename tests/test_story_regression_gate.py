@@ -67,6 +67,7 @@ from pdd.story_regression_gate import (
     changed_story_ids,
     classify_story,
     discover_story_markers,
+    discover_story_markers_all,
     evaluate_stories,
     load_story_regression_gate_config,
     resolve_story_regression_gate_mode,
@@ -186,6 +187,38 @@ def test_discover_duplicate_story_id_is_deterministic(tmp_path: Path):
     markers = discover_story_markers(tmp_path)
     assert markers["dup"].story_hash == "hashA"
     assert markers["dup"].test_file.endswith("test_a.py")
+
+
+def test_discover_all_keeps_every_duplicate_claim(tmp_path: Path):
+    # Issue #1857 G6: all claims are kept, in deterministic (file, line) order.
+    _write(tmp_path / "test_a.py", _test_module(_marked("dup", "hashA", "test_a")))
+    _write(tmp_path / "test_b.py", _test_module(_marked("dup", "hashB", "test_b")))
+    markers = discover_story_markers_all(tmp_path)
+    assert [m.story_hash for m in markers["dup"]] == ["hashA", "hashB"]
+
+
+def test_classify_ok_when_any_duplicate_claim_is_fresh(tmp_path: Path):
+    # Issue #1857 G1/G6: a stale duplicate that sorts first must not shadow a
+    # fresh sibling claim (the exact mechanism that shipped 4 stale seeds).
+    story = _write(tmp_path / "story__dup.md", FRESH_STORY)
+    fresh_hash = _story_content_hash(FRESH_STORY)
+    _write(tmp_path / "test_a.py", _test_module(_marked("dup", "0000000000000000", "test_stale")))
+    _write(tmp_path / "test_b.py", _test_module(_marked("dup", fresh_hash, "test_fresh")))
+
+    result = classify_story(story, discover_story_markers_all(tmp_path))
+    assert result.status == STATUS_STORY_REGRESSION_OK
+    assert result.recorded_hash == fresh_hash
+    assert result.test_name == "test_fresh"
+
+
+def test_classify_stale_when_no_duplicate_claim_matches(tmp_path: Path):
+    story = _write(tmp_path / "story__dup.md", FRESH_STORY)
+    _write(tmp_path / "test_a.py", _test_module(_marked("dup", "0000000000000000", "test_a")))
+    _write(tmp_path / "test_b.py", _test_module(_marked("dup", "1111111111111111", "test_b")))
+
+    result = classify_story(story, discover_story_markers_all(tmp_path))
+    assert result.status == STATUS_STORY_REGRESSION_STALE
+    assert "2 claiming tests" in result.detail
 
 
 # --------------------------------------------------------------------------- #

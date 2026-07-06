@@ -18,7 +18,8 @@ with and without secrets.
 Public API
 ----------
 story_id_from_path(path) -> str
-discover_story_markers(tests_dir) -> dict[str, StoryMarker]
+discover_story_markers_all(tests_dir) -> dict[str, list[StoryMarker]]
+discover_story_markers(tests_dir) -> dict[str, StoryMarker]  (first-wins compat view)
 classify_story(story_path, markers, *, story_text=None) -> StoryRegressionResult
 evaluate_stories(*, stories_dir, tests_dir, only_story_ids) -> list[StoryRegressionResult]
 changed_story_ids(project_root, *, base_ref) -> Optional[set[str]]
@@ -259,17 +260,19 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
     return found
 
 
-def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
+def discover_story_markers_all(tests_dir) -> Dict[str, List[StoryMarker]]:
     """AST-scan *tests_dir* for ``@pytest.mark.story`` markers, keyed by story_id.
 
     Never imports or executes test modules. Returns ``{}`` when the directory
-    is missing or empty. When multiple tests claim the same ``story_id`` the
-    first by (file path, line) wins, so the result is deterministic.
+    is missing or empty. A story may legitimately be claimed by several tests;
+    every claim is kept, in deterministic (file path, line) order, so
+    classification can reconcile duplicates instead of letting one shadow the
+    rest (issue #1857 G6/G1).
     """
     base = Path(tests_dir)
     if not base.exists() or not base.is_dir():
         return {}
-    markers: Dict[str, StoryMarker] = {}
+    markers: Dict[str, List[StoryMarker]] = {}
     for py in sorted(base.rglob("*.py")):
         try:
             source = py.read_text(encoding="utf-8")
@@ -278,8 +281,21 @@ def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
         for marker in sorted(
             _markers_in_source(source, str(py)), key=lambda m: m.lineno
         ):
-            markers.setdefault(marker.story_id, marker)
+            markers.setdefault(marker.story_id, []).append(marker)
     return markers
+
+
+def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
+    """Backward-compatible view of :func:`discover_story_markers_all`.
+
+    When multiple tests claim the same ``story_id`` the first by
+    (file path, line) wins. Prefer ``discover_story_markers_all`` — a single
+    first-wins marker lets a stale duplicate shadow a fresh sibling.
+    """
+    return {
+        story_id: claims[0]
+        for story_id, claims in discover_story_markers_all(tests_dir).items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +305,18 @@ def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
 
 def classify_story(
     story_path,
-    markers: Dict[str, StoryMarker],
+    markers: Dict[str, object],
     *,
     story_text: Optional[str] = None,
 ) -> StoryRegressionResult:
-    """Classify a single story against the discovered markers."""
+    """Classify a single story against the discovered markers.
+
+    ``markers`` values may be a single :class:`StoryMarker` (legacy
+    ``discover_story_markers`` shape) or a list of them
+    (``discover_story_markers_all``). A story with several claiming tests is
+    OK when *any* claim records an acceptable hash — a stale duplicate must
+    not shadow a fresh sibling (issue #1857 G6/G1).
+    """
     path = Path(story_path)
     story_id = story_id_from_path(path)
     if story_text is None:
@@ -306,8 +329,16 @@ def classify_story(
         except OSError:
             pass
 
-    marker = markers.get(story_id)
-    if marker is None:
+    claimed = markers.get(story_id)
+    claims: List[StoryMarker]
+    if claimed is None:
+        claims = []
+    elif isinstance(claimed, StoryMarker):
+        claims = [claimed]
+    else:
+        claims = list(claimed)
+
+    if not claims:
         return StoryRegressionResult(
             story_id=story_id,
             story_path=str(path),
@@ -319,7 +350,22 @@ def classify_story(
             detail="No @pytest.mark.story regression test resolves to this story.",
         )
 
-    if not marker.story_hash:
+    fresh = next((m for m in claims if m.story_hash in acceptable_hashes), None)
+    if fresh is not None:
+        return StoryRegressionResult(
+            story_id=story_id,
+            story_path=str(path),
+            status=STATUS_STORY_REGRESSION_OK,
+            current_hash=current_hash,
+            recorded_hash=fresh.story_hash,
+            test_file=fresh.test_file,
+            test_name=fresh.test_name,
+            detail="Story has a fresh regression test.",
+        )
+
+    hashed = next((m for m in claims if m.story_hash), None)
+    if hashed is None:
+        marker = claims[0]
         return StoryRegressionResult(
             story_id=story_id,
             story_path=str(path),
@@ -331,30 +377,19 @@ def classify_story(
             detail="Regression test records no story_hash; cannot prove freshness.",
         )
 
-    if marker.story_hash not in acceptable_hashes:
-        return StoryRegressionResult(
-            story_id=story_id,
-            story_path=str(path),
-            status=STATUS_STORY_REGRESSION_STALE,
-            current_hash=current_hash,
-            recorded_hash=marker.story_hash,
-            test_file=marker.test_file,
-            test_name=marker.test_name,
-            detail=(
-                f"Story changed since the regression test was generated "
-                f"(recorded {marker.story_hash}, now {current_hash})."
-            ),
-        )
-
+    suffix = f" across {len(claims)} claiming tests" if len(claims) > 1 else ""
     return StoryRegressionResult(
         story_id=story_id,
         story_path=str(path),
-        status=STATUS_STORY_REGRESSION_OK,
+        status=STATUS_STORY_REGRESSION_STALE,
         current_hash=current_hash,
-        recorded_hash=marker.story_hash,
-        test_file=marker.test_file,
-        test_name=marker.test_name,
-        detail="Story has a fresh regression test.",
+        recorded_hash=hashed.story_hash,
+        test_file=hashed.test_file,
+        test_name=hashed.test_name,
+        detail=(
+            f"Story changed since the regression test was generated "
+            f"(recorded {hashed.story_hash}, now {current_hash}{suffix})."
+        ),
     )
 
 
@@ -369,7 +404,7 @@ def evaluate_stories(
     ``only_story_ids`` restricts evaluation to that set, e.g. to scope the gate
     to the stories touched by a pull request.
     """
-    markers = discover_story_markers(tests_dir or _DEFAULT_TESTS_DIR)
+    markers = discover_story_markers_all(tests_dir or _DEFAULT_TESTS_DIR)
     wanted = set(only_story_ids) if only_story_ids is not None else None
     results: List[StoryRegressionResult] = []
     for story_path in discover_story_files(stories_dir):
