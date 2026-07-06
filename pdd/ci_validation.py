@@ -780,6 +780,8 @@ def run_github_checks_gate(
     head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
         repo_owner, repo_name, pr_number, cwd
     )
+    if not head_sha:
+        head_sha = _get_head_sha(cwd)
     source_name = "required GitHub checks" if required_only else "GitHub checks"
 
     if not head_sha:
