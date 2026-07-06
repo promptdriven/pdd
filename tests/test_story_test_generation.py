@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pdd.story_regression import build_story_map
 from pdd.story_regression_gate import (
     STATUS_MISSING,
@@ -81,6 +83,35 @@ def test_generate_text_pins_when_no_entry_point(tmp_path: Path) -> None:
     text = result.test_file.read_text(encoding="utf-8")
     assert "_bundle_hash() == PDD_STORY_HASH" in text
     assert "result = story_result" not in text
+
+
+def test_generate_story_regression_test_rejects_malformed_story(tmp_path: Path) -> None:
+    """A story with no ## Oracle / ## Acceptance Criteria / ## Story clauses must
+    raise rather than emit a tautological (self-satisfying) test."""
+    stories = tmp_path / "user_stories"
+    stories.mkdir(parents=True)
+    bad = stories / "story__bad.md"
+    bad.write_text("garbage no sections here", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no ## Oracle"):
+        generate_story_regression_test(bad)
+    assert not (tmp_path / "tests" / "story_regression").exists()
+
+
+def test_generate_story_regression_test_pins_story_sentence_without_contract(tmp_path: Path) -> None:
+    """A well-formed human story (## Story only, no contract) still generates,
+    pinning the story sentence rather than the whole raw file."""
+    stories = tmp_path / "user_stories"
+    stories.mkdir(parents=True)
+    story = stories / "story__demo.md"
+    story.write_text(
+        "# User Story: demo\n\n## Story\n\nAs a user, I can run the demo.\n",
+        encoding="utf-8",
+    )
+
+    result = generate_story_regression_test(story)
+    text = result.test_file.read_text(encoding="utf-8")
+    assert "As a user, I can run the demo." in text
 
 
 def test_story_regression_gate_detects_missing_passing_and_stale(tmp_path: Path) -> None:

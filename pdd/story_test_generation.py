@@ -259,7 +259,19 @@ def generate_story_regression_test(
     rule_ids = sorted({match.group(0).upper().replace("-", "") for match in _RULE_RE.finditer(covers_text)})
     if not oracle_items:
         story_sections = _sections(story_text)
-        oracle_items = _bullets(_section(story_sections, "Story")) or [story_text.strip()]
+        oracle_items = _bullets(_section(story_sections, "Story"))
+    if not oracle_items:
+        # Refuse to emit a test whose only assertion is that the raw story text
+        # contains itself — that is a tautology that can never catch a
+        # regression. A malformed story (no ## Oracle / ## Acceptance Criteria /
+        # ## Story clauses in the story or its contract) is a user error, not a
+        # generation target.
+        raise ValueError(
+            f"Story {story_path.name} has no ## Oracle, ## Acceptance Criteria, "
+            "or ## Story clauses to assert. Add at least a ## Story sentence "
+            "(and ideally an ## Oracle / ## Acceptance Criteria contract) before "
+            "generating a regression test."
+        )
 
     output_path = _resolve_output(story_path, output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
