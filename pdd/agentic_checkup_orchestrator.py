@@ -1338,9 +1338,9 @@ def _step7_human_success_report_passed(
     if re.search(r"\b[1-9]\d*\s+(?:failed|failures)\b", lower):
         return False
     test_pass_markers = (
-        "tests pass",
-        "test suite pass",
-        re.search(r"\b\d+\s+passed,\s*0\s+failed\b", lower),
+        "tests pass" in lower,
+        "test suite pass" in lower,
+        bool(re.search(r"\b\d+\s+passed,\s*0\s+failed\b", lower)),
     )
     if not any(test_pass_markers):
         return False

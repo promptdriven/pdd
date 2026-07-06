@@ -35,6 +35,7 @@ from pdd.agentic_checkup_orchestrator import (
     _pr_base_tracking_ref,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
+    _step7_human_success_report_passed,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -3614,6 +3615,26 @@ def _pr_patches_1212(
 
 class TestTargetedPrStep7Exit:
     """Targeted PR mode can exit on the structured Step 7 verdict."""
+
+    def test_hosted_human_step7_requires_test_pass_evidence(self):
+        missing_test_pass_evidence = (
+            "## Step 7/8: Verification & Final Report\n\n"
+            "### Overall Status\n"
+            "All findings resolved. No remaining issues.\n\n"
+            "### Test Results\n"
+            "**Failed:** 0\n"
+            "**New failures:** 0\n\n"
+            "### Acceptance Criteria Verification\n"
+            "issue_aligned: true\n\n"
+            "### Summary\n"
+            "All fixed. The working tree is clean.\n"
+        )
+
+        assert _step7_human_success_report_passed(
+            missing_test_pass_evidence,
+            pr_mode=True,
+            has_issue=True,
+        ) is False
 
     def test_hosted_human_step7_pass_exits_without_legacy_marker(self, tmp_path):
         labels: List[str] = []

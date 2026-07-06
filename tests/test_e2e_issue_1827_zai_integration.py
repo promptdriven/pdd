@@ -39,31 +39,36 @@ _CODING_URL = "https://api.z.ai/api/coding/paas/v4"
 # Minimal CSV header matching what llm_invoke._load_model_data expects.
 _CSV_HEADER = (
     "provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,"
-    "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only\n"
+    "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only,context_limit\n"
 )
 
 _GENERAL_ROW = (
     f"Z.AI,openai/glm-5.2,0.80,2.56,1510,1510,static-prefix,"
-    f"{_GENERAL_URL},ZAI_API_KEY,0,False,effort,,False\n"
+    f"{_GENERAL_URL},ZAI_API_KEY,0,False,effort,,False,\n"
 )
 
 _CODING_PLAN_ROW = (
     f"Z.AI Coding Plan,openai/glm-5.2,0.0,0.0,1510,1510,static-prefix,"
-    f"{_CODING_URL},ZAI_API_KEY,0,False,effort,,False\n"
+    f"{_CODING_URL},ZAI_API_KEY,0,False,effort,,False,\n"
 )
 
 # A deliberate near-miss: same bare model name under a different provider that
 # should NOT be selected when the Z.AI-specific alternatives are tried.
 _OPENROUTER_LOOKALIKE_ROW = (
     "OpenRouter,openrouter/z-ai/glm-5.2,0.90,2.70,1480,1480,static,"
-    ",OPENROUTER_API_KEY,0,False,none,,False\n"
+    ",OPENROUTER_API_KEY,0,False,none,,False,\n"
 )
 
 # Old-style zai/ prefix row — looks related but is a different model string.
 _ZAI_PREFIX_ROW = (
     f"Zai,zai/glm-5.2,0.80,2.56,1480,1480,static-prefix,"
-    f",ZAI_API_KEY,0,False,effort,,False\n"
+    f",ZAI_API_KEY,0,False,effort,,False,\n"
 )
+
+
+def test_mock_csv_header_matches_canonical_model_catalog_schema():
+    """The shared mock catalog must not drift from the production CSV schema."""
+    assert _CSV_HEADER.strip().split(",") == gmc.CSV_FIELDNAMES
 
 
 def _make_mock_completion(content="OK"):
@@ -143,7 +148,8 @@ def test_mandatory_rows_selectable_when_zai_key_present(tmp_path, monkeypatch):
             f"{seed['provider']},{seed['model']},"
             f"{seed['input']},{seed['output']},"
             f"{seed['coding_arena_elo']},{seed['coding_arena_elo']},static-prefix,"
-            f"{seed['base_url']},{seed['api_key']},0,False,effort,,False\n"
+            f"{seed['base_url']},{seed['api_key']},0,False,effort,,False,"
+            f"{seed.get('context_limit', '')}\n"
         ),
         encoding="utf-8",
     )
