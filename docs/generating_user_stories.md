@@ -134,7 +134,9 @@ pdd test --from-story user_stories/story__checkout_total.md \
   --output tests/story_regression/test_story_checkout_total.py
 ```
 
-The contract must include a machine-readable `## Entry Point` section:
+`pdd test --from-story` generates in one of two modes, chosen from the contract:
+
+**Behavioral (preferred).** If the contract declares a machine-readable `## Entry Point`, the generated test imports the callable, invokes it, and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result` — a true executable oracle that goes red when the *behavior* regresses.
 
 ```markdown
 ## Entry Point
@@ -153,7 +155,11 @@ Optional `## Seams` bullets patch runtime boundaries before the entry point is c
 - checkout_app.TAX_RATE = 0
 ```
 
-`## Oracle` and `## Negative Cases` bullets are Python assertion expressions over `result`, the return value from the entry point. Generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`, so `make regression-stories`, story coverage, and the stale/missing gate can trace them back to the source story.
+`## Oracle` and `## Negative Cases` bullets are then Python assertion expressions over `result`, the return value from the entry point.
+
+**Text-pin (fallback).** If the contract has no `## Entry Point`, the generated test pins the story+contract bundle instead: it asserts a content hash and the presence of each `## Oracle` / `## Negative Cases` clause. This still gives deterministic **staleness** detection — the test goes red when the story or contract text drifts — but it does not exercise runtime behavior. Prefer adding an `## Entry Point` when you want outcome-level (behavioral) coverage.
+
+Either way, generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`, so `make regression-stories`, story coverage, and the stale/missing gate can trace them back to the source story.
 
 Run `pdd test` with `--issue` and one or more `.prompt` files. The prompt files
 are the **validation targets** the story will be linked to — they are *not* shown
