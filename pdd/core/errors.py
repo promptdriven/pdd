@@ -213,6 +213,14 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             )
             # click.UsageError should typically exit with 2, so we re-raise it
             raise exception
+        elif isinstance(exception, click.ClickException):
+            # A plain ClickException is a validated, user-facing error raised
+            # deliberately by a command (e.g. "Story file not found") — report
+            # it as a normal error, not an "unexpected" one.
+            console.print(
+                f"  [error]Error:[/error] {escape(exception.format_message())}",
+                style="error",
+            )
         elif isinstance(exception, MarkupError):
             console.print(
                 "  [error]Markup Error:[/error] Invalid Rich markup encountered.",

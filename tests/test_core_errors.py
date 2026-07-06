@@ -138,6 +138,20 @@ def test_handle_error_keyboard_interrupt_messages(mock_console):
 
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
+def test_handle_error_click_exception_is_not_unexpected(mock_console):
+    """A plain ClickException is a validated error, not an 'unexpected' one (issue #1857 G4)."""
+    from pdd.core.errors import handle_error
+
+    exc = click.ClickException("Story file not found: user_stories/story__nope.md")
+    handle_error(exc, "story", quiet=False)
+
+    output = _console_output(mock_console)
+    assert "An unexpected error occurred" not in output
+    assert "Story file not found: user_stories/story__nope.md" in output
+    assert "Error:" in output
+
+
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
 @patch.object(_generate_module, 'code_generator_main')
 def test_keyboard_interrupt_reports_correct_command_name(
