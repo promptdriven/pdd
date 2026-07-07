@@ -734,12 +734,18 @@ class ReviewLoopConfig:
     # not to merge the PR"). ``agentic_mode``: when True, the loop builds the
     # bounded ``pdd.checkup.agentic.v1`` artifact via
     # ``pdd.checkup_agentic_artifact.build_agentic_v1_artifact`` after the final
-    # report is assembled and writes it to ``./pdd-checkup-agentic-{pr}.json``
-    # (path echoed to stderr). ``fresh_final_review_role``: role override for the
-    # fresh final review in agentic mode, normalized via the role-alias table.
+    # report is assembled. By default it writes to
+    # ``./pdd-checkup-agentic-{pr}.json``; hosted callers may set
+    # ``agentic_artifact_path`` to an exact env-provided path.
+    # ``fresh_final_review_role``: role override for the fresh final review in
+    # agentic mode, normalized via the role-alias table.
     adversarial_prompt: Optional[str] = None
     agentic_mode: bool = False
     fresh_final_review_role: Optional[str] = None
+    # APPENDED — issue #1881 hosted pdd_cloud env contract. When non-empty and
+    # ``agentic_mode`` is enabled, write the agentic artifact exactly here
+    # instead of the manual-mode default filename.
+    agentic_artifact_path: Optional[str] = None
     # APPENDED — issue #1788. Normalized ``{role: /slash-command}`` mapping parsed
     # from a ``--reviewers codex:/review,claude:/code-review`` spec (via
     # ``parse_reviewer_commands``). Surfaced verbatim in the agentic artifact's
@@ -835,7 +841,7 @@ def _layer1_step5_evidence_findings(
             area="test",
             evidence="\n".join(evidence_lines),
             finding=(
-                "Layer 1 Step 5 shell-first test execution failed before " "Layer 2."
+                "Layer 1 Step 5 shell-first test execution failed before Layer 2."
             ),
             required_fix=(
                 "Fix the code or tests causing this command to fail, then rerun "
@@ -1216,7 +1222,7 @@ def run_checkup_review_loop(
         state.reviewer_status[reviewer] = "findings"
         if config.review_only:
             state.stop_reason = (
-                "Review-only mode: Layer 1 Step 5 shell evidence reported " "failures."
+                "Review-only mode: Layer 1 Step 5 shell evidence reported failures."
             )
             report = _finalize(context, state, roles, artifacts_dir)
             _post_review_loop_report(context, report, use_github_state)
@@ -2106,9 +2112,7 @@ def _maybe_run_fresh_final_review_override(
         if open_findings:
             state.reviewer_status[role] = "findings"
             state.fresh_final_status = "findings"
-            state.stop_reason = (
-                f"Fresh final reviewer {role} reported findings."
-            )
+            state.stop_reason = f"Fresh final reviewer {role} reported findings."
         else:
             state.reviewer_status[role] = "clean"
             state.fresh_final_status = "clean"
@@ -2127,9 +2131,12 @@ def _maybe_write_agentic_artifact(
     """Emit the bounded ``pdd.checkup.agentic.v1`` artifact in agentic mode.
 
     Issue #1788: when ``config.agentic_mode`` is set, build the bounded/redacted
-    artifact from loop state and write it to ``./pdd-checkup-agentic-{pr}.json``,
-    echoing the path to stderr. Best-effort: never crash the review loop. Returns
-    the written path (as a string) or ``None`` when nothing was written.
+    artifact from loop state. Manual ``--agentic-review-loop`` writes to
+    ``./pdd-checkup-agentic-{pr}.json``. Hosted pdd_cloud runs (issue #1881) pass
+    ``config.agentic_artifact_path`` from ``PDD_AGENTIC_CHECKUP_ARTIFACT_PATH``;
+    that exact path is used and parent directories are created. Best-effort:
+    never crash the review loop. Returns the written path (as a string) or
+    ``None`` when nothing was written.
     """
     if not getattr(config, "agentic_mode", False):
         return None
@@ -2151,7 +2158,9 @@ def _maybe_write_agentic_artifact(
                         blockers.append(_scrub_secrets(str(blk)))
                     for finding in parsed.get("findings", []) or []:
                         if isinstance(finding, dict):
-                            text = finding.get("finding") or finding.get("summary") or ""
+                            text = (
+                                finding.get("finding") or finding.get("summary") or ""
+                            )
                             if text:
                                 blockers.append(_scrub_secrets(str(text)))
                     if not blockers and status in _LAYER1_STEP5_ACTIONABLE_STATUSES:
@@ -2176,14 +2185,24 @@ def _maybe_write_agentic_artifact(
             context=context,
             final_gate_report=final_gate_report,
         )
-        out_path = Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
+        configured_path = str(
+            getattr(config, "agentic_artifact_path", "") or ""
+        ).strip()
+        out_path = (
+            Path(configured_path)
+            if configured_path
+            else Path.cwd() / f"pdd-checkup-agentic-{context.pr_number}.json"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
             json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
         )
         print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
         return str(out_path)
     except Exception as exc:  # pragma: no cover - defensive: never break the loop
-        print(f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr)
+        print(
+            f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr
+        )
         return None
 
 
@@ -2240,12 +2259,16 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
+        else legacy_roles[0]
+        if legacy_roles
+        else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
+        else legacy_roles[1]
+        if len(legacy_roles) > 1
+        else DEFAULT_FIXER
     )
 
     if (
@@ -4195,8 +4218,7 @@ def _fix_prompt(
     layer1_step5_block = ""
     if context.layer1_step5_evidence:
         layer1_step5_block = (
-            "\nLayer 1 Step 5 shell-first evidence:\n"
-            f"{context.layer1_step5_evidence}\n"
+            f"\nLayer 1 Step 5 shell-first evidence:\n{context.layer1_step5_evidence}\n"
         )
     return f"""Act as {fixer}, fixing findings from {reviewer} in PDD checkup review-loop mode.
 
@@ -4444,9 +4466,7 @@ def _is_resolved_non_actionable_finding(finding: ReviewFinding) -> bool:
     if not _is_noop_required_fix(finding.required_fix):
         return False
     text = "\n".join(
-        part
-        for part in (finding.finding, finding.evidence)
-        if part and part.strip()
+        part for part in (finding.finding, finding.evidence) if part and part.strip()
     )
     if not text:
         return False
@@ -5445,9 +5465,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[
-                    finding.key
-                ] += f" Fixer rationale was: {rationale}"
+                state.reviewer_feedback_by_key[finding.key] += (
+                    f" Fixer rationale was: {rationale}"
+                )
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:

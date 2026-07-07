@@ -619,6 +619,77 @@ class TestRunAgenticCheckup:
         assert config.no_fix is True
         assert config.review_only is True
 
+    @patch("pdd.agentic_checkup.load_final_state")
+    @patch("pdd.agentic_checkup.clear_final_state")
+    @patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None)
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch(
+        "pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}'
+    )
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_final_gate_env_contract_enables_agentic_artifact_path(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+        mock_fetch_pr_context,
+        mock_review_loop,
+        mock_layer1_evidence,
+        mock_clear_final_state,
+        mock_load_final_state,
+        monkeypatch,
+    ):
+        issue_data = {
+            "title": "Check {workflow}",
+            "body": "check {value}",
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_orchestrator.return_value = (True, "layer 1 passed", 0.10, "claude")
+        mock_review_loop.return_value = (True, "review report", 0.20, "codex")
+        mock_load_final_state.side_effect = [
+            None,
+            {
+                "fresh_final_status": "clean",
+                "reviewer_status": {"codex": "clean"},
+                "active_reviewer": "codex",
+                "findings": [],
+                "issue_aligned": True,
+            },
+        ]
+        artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", artifact_path)
+
+        success, msg, cost, model = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "Final gate" in msg
+        assert cost == pytest.approx(0.30)
+        assert model == "codex"
+        config = mock_review_loop.call_args.kwargs["config"]
+        assert config.agentic_mode is True
+        assert config.agentic_artifact_path == artifact_path
+        assert config.review_only is False
+        assert config.no_fix is False
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(

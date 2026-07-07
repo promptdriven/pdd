@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -64,6 +65,34 @@ from .prompt_repair import (
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag_enabled(value: Optional[str]) -> bool:
+    """Return True for the small truthy vocabulary used by hosted env flags."""
+    return str(value or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _hosted_agentic_artifact_path(project_root: Path) -> Optional[str]:
+    """Resolve the pdd_cloud fallback/mirror artifact path env contract.
+
+    ``PDD_CHECKUP_FALLBACK_MIRROR=1`` requests the additive
+    ``pdd.checkup.agentic.v1`` artifact while preserving canonical checkup
+    authority. ``PDD_AGENTIC_CHECKUP_ARTIFACT_PATH`` is the hosted
+    caller-controlled destination; if an operator accidentally omits it, fall
+    back to the same deterministic path pdd_cloud documents instead of silently
+    disabling artifact emission.
+    """
+    if not _env_flag_enabled(os.environ.get("PDD_CHECKUP_FALLBACK_MIRROR")):
+        return None
+    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", "")).strip()
+    if configured:
+        return configured
+    return str(
+        project_root / ".pdd" / "artifacts" / "agentic_checkup_fallback_mirror.json"
+    )
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -171,7 +200,7 @@ def _post_checkup_comment(
 
 def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) -> None:
     """Post an error comment on the GitHub issue."""
-    body = "## PDD Checkup - Error\n\n" f"```\n{message[:1000]}\n```\n"
+    body = f"## PDD Checkup - Error\n\n```\n{message[:1000]}\n```\n"
     _run_gh_command(
         [
             "api",
@@ -367,8 +396,7 @@ def _classify_layer1_failure_category(message: str) -> str:
     text = (message or "").lower()
     if (
         _layer1_failure_is_provider_or_timeout(message)
-        or
-        "verdict json could not be parsed" in text
+        or "verdict json could not be parsed" in text
         or "empty step 7 output" in text
         or "could not be parsed" in text
         or "empty step-7" in text
@@ -407,7 +435,7 @@ def _format_github_checks_gate_failure_report(
 ) -> str:
     """Render a parseable final-gate failure report before Layer 2 starts."""
     finding = _markdown_table_cell(
-        "GitHub checks gate failed before Layer 2: " f"{github_checks_message}"
+        f"GitHub checks gate failed before Layer 2: {github_checks_message}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -478,7 +506,7 @@ def _format_layer1_failure_report(
     if len(payload_reason) > 4000:
         payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
     finding = _markdown_table_cell(
-        "Layer 1 checkup failed before Layer 2: " f"{payload_reason}"
+        f"Layer 1 checkup failed before Layer 2: {payload_reason}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -871,9 +899,7 @@ def run_agentic_checkup(
         comments_text = _fetch_comments(comments_url) if comments_url else ""
 
         raw_full_content = (
-            f"Title: {raw_title}\n"
-            f"Description:\n{body}\n\n"
-            f"Comments:\n{comments_text}"
+            f"Title: {raw_title}\nDescription:\n{body}\n\nComments:\n{comments_text}"
         )
         effective_issue_url = issue_url
     else:
@@ -908,6 +934,8 @@ def run_agentic_checkup(
 
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
+
+    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
 
     full_suite_source = (full_suite_source or "local").strip().lower()
     if full_suite_source not in {"local", "github-checks"}:
@@ -1037,6 +1065,7 @@ def run_agentic_checkup(
             test_scope=test_scope,
             layer1_step5_evidence=layer1_step5_evidence,
         )
+        hosted_agentic_mode = hosted_agentic_artifact_path is not None
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
             reviewer=reviewer,
@@ -1060,16 +1089,24 @@ def run_agentic_checkup(
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
-            # Issue #1788 — agentic-review-loop knobs. ``agentic_mode`` drives the
-            # bounded ``pdd.checkup.agentic.v1`` artifact write; the adversarial
-            # instruction and fresh-final-review role steer the reviewers. These
-            # only take effect in ``--agentic-review-loop`` mode — a plain
-            # ``--review-loop`` must never inherit the adversarial steer.
-            adversarial_prompt=(adversarial_prompt if agentic_review_loop else None),
-            agentic_mode=agentic_review_loop,
-            fresh_final_review_role=(
-                fresh_final_review_role if agentic_review_loop else None
+            # Issue #1788 / #1881 — ``agentic_mode`` drives the bounded
+            # ``pdd.checkup.agentic.v1`` artifact write. Explicit
+            # ``--agentic-review-loop`` keeps its manual artifact behavior; the
+            # hosted pdd_cloud env contract turns this on for canonical
+            # final-gate/review-loop execution and writes to the env-provided
+            # path without changing checkup authority.
+            adversarial_prompt=(
+                adversarial_prompt
+                if (agentic_review_loop or hosted_agentic_mode)
+                else None
             ),
+            agentic_mode=(agentic_review_loop or hosted_agentic_mode),
+            fresh_final_review_role=(
+                fresh_final_review_role
+                if (agentic_review_loop or hosted_agentic_mode)
+                else None
+            ),
+            agentic_artifact_path=hosted_agentic_artifact_path,
             # Per-role slash commands parsed from ``--reviewers codex:/review,...``
             # so the agentic artifact records each reviewer's command.
             reviewer_commands=parse_reviewer_commands(reviewers),

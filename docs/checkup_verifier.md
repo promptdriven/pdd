@@ -65,8 +65,15 @@ pdd checkup --pr <PR_URL> \
 Emits a bounded/redacted `pdd.checkup.agentic.v1` JSON artifact containing
 Layer 1 gate results, structured `findings[]`, `fix_attempts[]`,
 `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget` blocks.
-The artifact is written to stdout (with `--json`) and to
-`./pdd-checkup-agentic-{pr_number}.json` for hosted (`pdd_cloud`) consumption.
+Manual `--agentic-review-loop` writes the artifact to stdout (with `--json`) and
+to `./pdd-checkup-agentic-{pr_number}.json`.
+
+Hosted `pdd_cloud` integration uses the canonical final-gate command instead of
+a second CLI invocation. When `PDD_CHECKUP_FALLBACK_MIRROR=1` is present,
+`pdd checkup --pr <PR_URL> --issue <ISSUE_URL> --final-gate` writes the same
+bounded `pdd.checkup.agentic.v1` artifact to exactly
+`PDD_AGENTIC_CHECKUP_ARTIFACT_PATH`. That artifact is additive mirror/fallback
+evidence; the canonical final-gate verdict remains authoritative.
 Exit 0 only when verdict is `pass`; non-zero for `failed`, `needs_human`,
 `error`, `timeout`, or `budget_exhausted` outcomes.
 
