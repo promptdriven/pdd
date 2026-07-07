@@ -49,6 +49,7 @@ def calibrate(run_dir: Path, arm: dict, registered_fingerprint: str | None) -> d
 
     responses_analyses = []
     payload_sha_ok = True
+    every_snapshot_has_response = bool(snapshots)
     for snap in snapshots:
         payload = run_dir / snap["payload_path"]
         if not payload.is_file() or (
@@ -60,6 +61,8 @@ def calibrate(run_dir: Path, arm: dict, registered_fingerprint: str | None) -> d
             responses_analyses.append(
                 _analyze_response_body(response.read_bytes(), "text/event-stream")
             )
+        else:
+            every_snapshot_has_response = False
 
     models_seen = {snap.get("model") for snap in snapshots}
     checks = {
@@ -70,7 +73,10 @@ def calibrate(run_dir: Path, arm: dict, registered_fingerprint: str | None) -> d
         "model_matches_pin": models_seen == {arm["model_id"]},
         "usage_on_every_request": bool(snapshots)
         and all(s.get("input_tokens") is not None for s in snapshots),
-        "streamed_responses_parse": bool(responses_analyses)
+        # Every request must have an on-disk response that parses to usage —
+        # a snapshot whose response body is missing can no longer be skipped.
+        "response_parsed_for_every_request": every_snapshot_has_response
+        and len(responses_analyses) == len(snapshots)
         and all(a["input_tokens"] is not None for a in responses_analyses),
         "cli_version_matches_pin": record.get("cli_version")
         == arm["pinned_cli_version"],
@@ -104,9 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     arm.pop("_comment", None)
     registered = None
     if args.registration:
-        registered = json.loads(args.registration.read_text())[
-            "registered_env_fingerprint"
-        ]
+        reg = json.loads(args.registration.read_text())
+        # Only a binary-verified registration (register_env with the pinned
+        # CLI installed) is accepted; a development-only record carries no
+        # `registered_env_fingerprint` key and yields NO-GO.
+        if reg.get("valid_for_runs") is True:
+            registered = reg.get("registered_env_fingerprint")
     verdict = calibrate(args.run_dir, arm, registered)
     if args.json:
         args.json.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")

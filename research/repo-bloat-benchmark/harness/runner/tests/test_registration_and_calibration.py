@@ -45,9 +45,22 @@ def test_register_emits_stable_fingerprint_matching_freeze_config(tmp_path):
     arm_path = _arm_file(tmp_path, cli)
     record = register(arm_path)
     assert record["cli_version_verified"] == "codex-cli 9.9.9-test"
+    assert record["valid_for_runs"] is True
+    assert record["binary_check_skipped"] is False
     expected = load_arm_config(arm_path).fingerprint()
     assert record["registered_env_fingerprint"] == expected
     assert register(arm_path)["registered_env_fingerprint"] == expected
+
+
+def test_skip_binary_check_record_is_not_valid_for_runs(tmp_path):
+    cli = _write_fake_cli(tmp_path, "codex-cli 9.9.9-test")
+    arm_path = _arm_file(tmp_path, cli)
+    record = register(arm_path, check_binary=False)
+    assert record["valid_for_runs"] is False
+    assert record["binary_check_skipped"] is True
+    # The authoritative key is absent — no consumer can mistake this for real.
+    assert "registered_env_fingerprint" not in record
+    assert "unverified_fingerprint" in record
 
 
 def test_register_aborts_on_version_mismatch(tmp_path):
@@ -139,3 +152,13 @@ def test_calibration_no_go_on_empty_run_dir(tmp_path):
     verdict = calibrate(empty, _ARM, _FINGERPRINT)
     assert verdict["go"] is False
     assert verdict["checks"]["snapshots_present"] is False
+
+
+def test_calibration_no_go_when_a_snapshot_response_is_missing(tmp_path):
+    run_dir = _build_run_dir(tmp_path)
+    # Delete the response body but leave the snapshot metadata (which still
+    # carries input_tokens) — this must NO-GO, not be silently skipped.
+    (run_dir / "payloads" / "00001.response.body").unlink()
+    verdict = calibrate(run_dir, _ARM, _FINGERPRINT)
+    assert verdict["checks"]["response_parsed_for_every_request"] is False
+    assert verdict["go"] is False

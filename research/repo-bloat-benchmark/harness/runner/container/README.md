@@ -2,62 +2,73 @@
 
 The env-var egress guard in `env_freeze.py` is the *portable* layer; it
 stops proxy-honoring HTTP stacks but is not kernel enforcement. This
-directory is the **hard tier**: pilot cells run inside a Docker network
-namespace with **no route to the outside world**.
+directory is the **hard tier**: the agent runs in a Docker network namespace
+with **no route to the outside world and no route to the egress gateway** —
+so it cannot fetch external help *and* cannot bypass the recording proxy.
 
-## Topology
+## Why three namespaces (and not one)
+
+An earlier single-network design ran the agent as a subprocess of the runner,
+sharing one netns. Because the gateway was reachable on that network, the
+agent could have talked to the gateway directly and reached the provider
+**without being recorded**. The recording-completeness guarantee then rested
+only on the env-var guard, not on the kernel. This topology fixes that: the
+agent is a **separate container** whose only network has no gateway on it.
 
 ```
-                 rb-internal (internal: true — Docker attaches NO gateway)
-   ┌──────────────────────────────┐
-   │ runner: harness + pinned     │        rb-egress (NAT)
-   │ codex; agent subprocess      │   ┌─────────────────────┐
-   │ shares this netns.           │──▶│ gateway: tinyproxy,  │──▶ api.openai.com:443
-   │ RecordingProxy (in-process)  │   │ FilterDefaultDeny,   │     (and nothing else)
-   │ forwards via HTTPS_PROXY.    │   │ ConnectPort 443      │
-   └──────────────────────────────┘   └─────────────────────┘
+   rb-sandbox (internal: true)              rb-proxy-egress (internal: true)      rb-egress (NAT)
+ ┌────────────────────────┐               ┌──────────────────────────┐        ┌──────────────┐
+ │ agent: pinned codex     │──────────────│ runner: harness +         │────────│ gateway:      │──▶ api.openai.com:443
+ │ under §8.1.1 frozen env │  OPENAI_BASE  │ in-process RecordingProxy │ HTTPS_ │ tinyproxy ACL │    (and nothing else)
+ │ ONLY reaches the proxy  │  _URL=runner  │ (binds 0.0.0.0)           │ PROXY  │ provider-only │
+ └────────────────────────┘               └──────────────────────────┘        └──────────────┘
+   no gateway, no egress                    forwards recorded traffic only
 ```
 
-- The **agent** runs as a subprocess of the runner and therefore inside the
-  same no-egress netns: even a client that ignores every proxy variable has
-  no route out. The §8.1.1 frozen agent env additionally black-holes proxy
-  vars, so the two tiers compose.
-- The **runner process** (not the agent) carries `HTTPS_PROXY=gateway:8888`
-  so its in-process RecordingProxy can forward captured requests to the
-  provider — every byte on the only egress path is recorded first.
-- The **gateway ACL** (`tinyproxy.conf` + `filter`) refuses CONNECT to
-  anything but the pinned provider host on 443.
+- The **agent** container joins `rb-sandbox` only. It has **no interface** on
+  `rb-proxy-egress`, so it kernel-cannot address the gateway; its single
+  reachable peer is the runner's recording proxy
+  (`OPENAI_BASE_URL=runner:<port>`). Every provider request is recorded
+  before it can leave.
+- The **runner** joins `rb-sandbox` (to receive agent traffic) and
+  `rb-proxy-egress` (to forward it). Only the *runner* env carries
+  `HTTPS_PROXY=gateway:8888`; the frozen agent env black-holes proxy vars and
+  the agent is in a different container anyway.
+- The **gateway** ACL (`tinyproxy.conf` + `filter`) refuses CONNECT to
+  anything but the pinned provider host on 443, with `Allow` bounded to the
+  proxy-egress subnet as defense in depth.
+
+The runner binds the recording proxy to `0.0.0.0` (via
+`RunConfig.proxy_host`, set from `RB_PROXY_HOST` in the compose env) so the
+agent container can reach it; on a non-container run it stays on loopback.
 
 ## Verify (Linux/CI or the pilot machine; no API key, no billing)
 
 ```bash
 cd research/repo-bloat-benchmark/harness/runner/container
 docker compose build
-docker compose run --rm runner python3 harness/runner/container/egress_check.py
+# From the AGENT namespace — the one that must be locked down:
+docker compose run --rm agent  python3 harness/runner/container/egress_check.py --role agent
+# From the RUNNER namespace — the gateway ACL itself:
+docker compose run --rm runner python3 harness/runner/container/egress_check.py --role runner
 ```
 
-`egress_check.py` must print `EGRESS LOCKDOWN VERIFIED`: no direct egress at
-the kernel level, gateway reachable, CONNECT to the pinned provider allowed,
-CONNECT elsewhere refused, loopback intact. **Run it before every pilot
-session** — it is the container-tier analogue of the §6.6 calibration gate.
-
-Then, inside the same service, the normal sequence applies (all still
-zero-billing except the final calibration request):
-
-```bash
-docker compose run --rm runner python3 -m harness.runner.register_env \
-    --arm harness/runner/pilot_arm_codex.json --out registered_env.json
-docker compose run --rm runner python3 -m harness.runner.preflight \
-    --config scenarios/pdd-find-section/preflight.json
-# one paid calibration request + GO/NO-GO (see first_run_calibration.py),
-# then the pilot cells.
-```
+Both must print `EGRESS LOCKDOWN … VERIFIED`. The **agent** role asserts: no
+TCP/UDP/IPv6 egress, the gateway is **unreachable** from the agent, the
+recording proxy **is** reachable, loopback works. The **runner** role
+asserts the gateway grants the pinned provider and refuses every other host.
+**Run both before every pilot session** — the container-tier analogue of the
+§6.6 calibration gate.
 
 ## Status / provenance
 
-Authored and reviewed on macOS where Docker is unavailable; the compose
-topology (`internal: true` ⇒ no gateway on the benchmark network) is
-standard Docker semantics, and `egress_check.py` verifies it **empirically
-on the pilot machine** rather than trusting configuration. Until that check
-has been run on the pilot machine, treat the tier as *implemented but not
-yet field-verified* — the check is mandatory, not optional.
+Authored and reviewed on macOS where Docker is unavailable. The compose
+topology relies only on standard Docker semantics (`internal: true` networks
+attach no gateway; a container reaches only networks it joins), and
+`egress_check.py` verifies the actual runtime properties **empirically on the
+pilot machine** rather than trusting configuration. Until both roles have
+printed VERIFIED on a Docker host, treat the tier as *implemented, field
+verification pending* — running both checks is mandatory, not optional. The
+`Allow` CIDRs and the `runner:8080` proxy port assume Docker's default
+address pools; adjust if your daemon differs (the checks will catch a
+mismatch).

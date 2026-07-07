@@ -70,5 +70,55 @@ def test_pool_files_are_verbatim_upstream(scenario_id):
         )
 
 
+def _target_basenames() -> set[str]:
+    names = set()
+    for scenario_id in PILOT_SCENARIOS:
+        scenario = json.loads(
+            (BENCH_ROOT / "scenarios" / scenario_id / "scenario.json").read_text()
+        )
+        for target in scenario["target_files"]:
+            names.add(Path(target).name)
+    return names
+
+
+@pytest.mark.parametrize("scenario_id", PILOT_SCENARIOS)
+def test_pool_has_no_sibling_target_module(scenario_id):
+    """A scenario's distractor pool must not ship another scenario's target
+    module (which would leak the sibling's solved code — adversarial #5)."""
+    targets = _target_basenames()
+    pool = BENCH_ROOT / "scenarios" / scenario_id / "pool" / "src" / "pdd"
+    for pool_file in pool.glob("*.py"):
+        assert pool_file.name not in targets, (
+            f"{scenario_id} pool ships target module {pool_file.name}"
+        )
+
+
+def test_no_scenario_denylist_string_leaks_into_any_agent_visible_tree():
+    """No pilot scenario's leak-denylist string may appear in ANY scenario's
+    agent-visible content (pool + generated distractors) — cross-scenario
+    contamination guard (adversarial #5)."""
+    denylists = {}
+    for scenario_id in PILOT_SCENARIOS:
+        lines = (BENCH_ROOT / "scenarios" / scenario_id / "leak_denylist.txt").read_text()
+        denylists[scenario_id] = [
+            l.strip() for l in lines.splitlines() if l.strip()
+        ]
+    visible_files = []
+    for scenario_id in PILOT_SCENARIOS:
+        visible_files += list(
+            (BENCH_ROOT / "scenarios" / scenario_id / "pool").rglob("*.py")
+        )
+        visible_files += list(
+            (BENCH_ROOT / "distractors" / scenario_id / "generated").rglob("*.py")
+        )
+    blobs = {f: f.read_text(encoding="utf-8", errors="replace") for f in visible_files}
+    for owner, needles in denylists.items():
+        for needle in needles:
+            for path, blob in blobs.items():
+                assert needle not in blob, (
+                    f"denylist string from {owner} leaked into {path}"
+                )
+
+
 def test_calibration_gate_still_green(tmp_path):
     assert calibration_gate(tmp_path)["pass"]

@@ -13,7 +13,7 @@
   "core_path": "core",
   "pool_path": "pool",
   "target_files": ["src/pdd/language_extensions.py"],
-  "allowed_edit_globs": ["src/pdd/**"],
+  "allowed_edit_globs": ["src/pdd/*.py"],
   "task_brief_path": "task.md",
   "visible_tests": {
     "command": ["{python}", "-m", "pytest", "tests/visible", "-q"],
@@ -36,9 +36,10 @@
   },
   "leak_denylist": [
     "bundled_extension(\"YAML\") == \"yml\"",
-    "resolves_to_its_first_row",
+    "first_row_wins_for_every_duplicated_language",
     "language not in mapping",
     "first row wins",
-    "first match wins"
+    "first match wins",
+    "language and language not in mapping"
   ]
 }

@@ -127,6 +127,20 @@ def test_condition4_leakage_rejected(checker):
     assert any(v.condition == 4 for v in violations)
 
 
+def test_condition4_leakage_rejected_after_whitespace_and_case_reflow(checker):
+    # Adversarial review #8: a paraphrase that only reflows whitespace / case
+    # must not smuggle a hidden-assertion string past the gate.
+    violations = checker.check(
+        _ok_candidate(
+            content=(
+                "def helper():\n"
+                "    assert   SLICE_PAGE([1,  2, 3], 1, 2)  ==  [3]\n"
+            )
+        )
+    )
+    assert any(v.condition == 4 for v in violations)
+
+
 def test_condition5_path_tell_rejected(checker):
     violations = checker.check(
         _ok_candidate(destination_path="src/pkg/distractor_ledger.py")

@@ -20,11 +20,11 @@ closure carries a data file.
   recall-risk gradient (see the audit for the rationale).
 - **Committed manifests**: `../../distractors/pdd-language-extensions/`
   (ladder 1x–50x + `manifests.lock`). **Tolerance is 10%** for this scenario
-  (recorded per-manifest in `size_token_tolerance_pct`): the 2x step's
-  residual (~90 tokens) is below the template generator's minimum viable
-  module, so the 2% default cannot converge — a documented §9
-  infeasibility accommodation. Analysis is unaffected: fits and thresholds
-  use the exact measured `distractor_tokens_on_disk`, not the target.
+  (recorded per-manifest in `size_token_tolerance_pct`): its core is the
+  smallest of the three, so a single regrow/template unit can overshoot the
+  tight 2% band at low ladder steps — the 10% band keeps every step
+  convergent. Analysis is unaffected: fits and thresholds use the exact
+  measured `distractor_tokens_on_disk`, not the target.
 
 Regenerate / gate (no model tokens):
 

@@ -54,6 +54,45 @@ def test_gateway_connect_parses_allow_and_deny(monkeypatch):
         gateway.close()
 
 
+def test_runner_checks_pass_with_conforming_gateway(monkeypatch):
+    """Runner role: ACL gateway grants the provider, refuses other hosts."""
+    gateway = _FakeGateway(allowed_host="api.openai.com")
+    monkeypatch.setattr(egress_check, "GATEWAY", f"127.0.0.1:{gateway.port}")
+    monkeypatch.setattr(egress_check, "PROVIDER_HOST", "api.openai.com")
+    # Force the "outside" probes to unroutable addresses so they fail fast.
+    monkeypatch.setattr(egress_check, "OUTSIDE_TCP_PROBES", (("192.0.2.1", 443),))
+    monkeypatch.setattr(egress_check, "OUTSIDE_UDP_PROBES", (("192.0.2.2", 53),))
+    monkeypatch.setattr(egress_check, "OUTSIDE_IPV6_PROBES", (("2001:db8::1", 443),))
+    monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
+    try:
+        checks = egress_check.runner_checks()
+        assert checks["gateway_reachable"] is True
+        assert checks["gateway_allows_pinned_provider"] is True
+        assert checks["gateway_blocks_other_hosts"] is True
+    finally:
+        gateway.close()
+
+
+def test_agent_checks_flag_reachable_gateway_as_failure(monkeypatch):
+    """Agent role: a REACHABLE gateway is a lockdown failure (bypass path)."""
+    gateway = _FakeGateway(allowed_host="api.openai.com")
+    monkeypatch.setattr(egress_check, "GATEWAY", f"127.0.0.1:{gateway.port}")
+    monkeypatch.setattr(egress_check, "PROXY", f"127.0.0.1:{gateway.port}")
+    monkeypatch.setattr(egress_check, "OUTSIDE_TCP_PROBES", (("192.0.2.1", 443),))
+    monkeypatch.setattr(egress_check, "OUTSIDE_UDP_PROBES", (("192.0.2.2", 53),))
+    monkeypatch.setattr(egress_check, "OUTSIDE_IPV6_PROBES", (("2001:db8::1", 443),))
+    monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
+    try:
+        checks = egress_check.agent_checks()
+        # gateway is reachable here → the bypass guard must report failure...
+        assert checks["gateway_unreachable_from_agent"] is False
+        # ...while the proxy-reachable and loopback checks still pass.
+        assert checks["recording_proxy_reachable"] is True
+        assert checks["loopback_works"] is True
+    finally:
+        gateway.close()
+
+
 def test_gateway_connect_none_when_gateway_down(monkeypatch):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))

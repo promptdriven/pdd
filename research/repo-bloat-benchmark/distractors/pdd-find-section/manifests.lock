@@ -1,11 +1,11 @@
 {
   "manifests": {
-    "pdd-find-section.10x.json": "269f85786d16dec40f6496c038856181744eb17b533f2ac1115de4bfe63eb6b6",
+    "pdd-find-section.10x.json": "6641e795f78e2d37ca59b27c71bb77a1a88f6179352f14effb616182ec107198",
     "pdd-find-section.1x.json": "c8e30e0f6d698d48131d454f4b1dd49708ccb9e8bb723a640154bdb526f605c1",
-    "pdd-find-section.20x.json": "e6711e844e1d11482aa9a971e15ebd4151282c263c6bd82fd82c135d66be7048",
-    "pdd-find-section.2x.json": "8153998cacc168d36325628aa02e201833898aebb2861190e750d0a870695ecb",
-    "pdd-find-section.50x.json": "b3bfef937028143e510e3a0c71bcba97fbd13363207a2844b4b6c01820ac9085",
-    "pdd-find-section.5x.json": "652bb9cfdee0067afe022dc0dd0f7f7e36710b502decc0da71dee71a2b85d727"
+    "pdd-find-section.20x.json": "3b1107bb7823dbfc95e507817d3de523ea7e5cf601e142b8e0b1b3698badd040",
+    "pdd-find-section.2x.json": "1ae458b0dd6e10d702fb227bf8bf739a4063433f8a3ceeb685bf0954cd00e4eb",
+    "pdd-find-section.50x.json": "366100a98d1a6076680bdd57fd97454bc2e18d1734724f5d30202c7367941cbc",
+    "pdd-find-section.5x.json": "e296132099650147e4747f39883cad43091e500a48a0f5b653f50c45c6b4e613"
   },
   "schema_version": 1
 }

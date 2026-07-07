@@ -264,21 +264,27 @@ def test_command_arm_runs_frozen(frozen_run):
     assert record["failure_class"] == "localization_miss"
 
 
-def test_command_arm_nonzero_exit_aborts_before_record(frozen_run):
+def test_command_arm_nonzero_exit_is_recorded_not_cell_killing(frozen_run):
+    # Adversarial review #4: a crashed agent must be a RECORDED failed run
+    # (so the cell continues and the data survives), not a cell-killing
+    # exception. Diagnostics still land in agent_process.json; the home is
+    # still destroyed.
     runner, freeze, tmp_path = frozen_run
     runner.config.agent_command = [
         "{python}",
         "-c",
         "import sys; print('agent exploded', file=sys.stderr); raise SystemExit(3)",
     ]
-    with pytest.raises(RuntimeError, match="exit 3"):
-        runner.run_trial(1, 0)
-    report_dir = tmp_path / "reports" / "example-pagination.1x.trial0"
-    process = json.loads((report_dir / "agent_process.json").read_text())
+    result = runner.run_trial(1, 0)
+    record = result.record
+    assert record["agent_error"] is True
+    assert record["failure_class"] == "agent_error"
+    assert not record["hidden_pass"]
+    process = json.loads((result.report_dir / "agent_process.json").read_text())
     assert process["returncode"] == 3
     assert "agent exploded" in process["stderr"]
-    assert not (report_dir / "run_record.json").exists()
-    assert not (report_dir / "codex_home").exists()
+    assert (result.report_dir / "run_record.json").exists()
+    assert not (result.report_dir / "codex_home").exists()
 
 
 def test_registered_fingerprint_mismatch_aborts_before_agent(frozen_run):

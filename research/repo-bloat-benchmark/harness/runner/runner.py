@@ -33,6 +33,23 @@ from harness.runner.mock_agent import MockAgent, MockModelServer
 from harness.runner.variant_builder import materialize_variant
 
 
+def verifier_env(src_path: Path) -> dict:
+    """Environment for visible/hidden verification (design §4.1.2 determinism).
+
+    Built from the operator environment but with ``PYTEST_*`` scrubbed, so an
+    ambient ``PYTEST_ADDOPTS`` (e.g. ``-k`` / ``-p``) cannot silently change
+    which assertions run — a run's pass/fail must depend only on the code and
+    the committed scenario, never on the shell it was launched from. Combined
+    with the per-``hidden/`` and per-``core/`` ``pytest.ini``, verification is
+    isolated from the surrounding repo's pytest config as well.
+    """
+    import os
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
+    env["PYTHONPATH"] = str(src_path)
+    return env
+
+
 @dataclass
 class RunConfig:
     scenario_dir: Path  # holds core/, hidden/, scenario.json, task.md, (pool/)
@@ -53,6 +70,11 @@ class RunConfig:
     freeze: FreezeConfig | None = None
     registered_env_fingerprint: str | None = None
     allow_unfrozen_command: bool = False
+    # Interface the recording proxy binds to. Default loopback (agent is a
+    # local subprocess). In the container hard tier (harness/runner/container),
+    # the agent runs in a separate no-egress netns and reaches the proxy over
+    # the sandbox network, so the proxy binds to the sandbox-facing address.
+    proxy_host: str = "127.0.0.1"
 
     def __post_init__(self) -> None:
         for name in ("scenario_dir", "distractors_dir", "reports_dir", "work_root"):
@@ -102,10 +124,7 @@ class ExperimentRunner:
 
     def _run(self, command: list[str], cwd: Path, env_extra: dict | None = None,
              timeout: float | None = None) -> subprocess.CompletedProcess:
-        import os
-
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(cwd / "src")
+        env = verifier_env(cwd / "src")
         env.update(env_extra or {})
         return subprocess.run(
             self._expand_command(command, cwd),
@@ -117,19 +136,16 @@ class ExperimentRunner:
         )
 
     def _visible_pass(self, workdir: Path) -> bool:
-        result = self._run(self.scenario["visible_tests"]["command"], cwd=workdir)
-        return result.returncode == 0
+        spec = self.scenario["visible_tests"]
+        result = self._run(spec["command"], cwd=workdir)
+        return result.returncode == spec.get("expected_exit_code", 0)
 
     def _hidden_pass(self, workdir: Path) -> bool:
         hidden_dir = self.config.scenario_dir / self.scenario["hidden_verifier"]["path"]
-        import os
-
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(workdir / "src")
         result = subprocess.run(
             self._expand_command(self.scenario["hidden_verifier"]["command"], workdir),
             cwd=str(hidden_dir),
-            env=env,
+            env=verifier_env(workdir / "src"),
             capture_output=True,
             text=True,
         )
@@ -202,11 +218,13 @@ class ExperimentRunner:
             upstream_base_url=upstream,
             archive_dir=report_dir,
             run_id=run_id,
+            host=config.proxy_host,
         )
         proxy_url = proxy.start()
 
         # 4. Agent.
         timed_out = False
+        agent_error = False
         frozen: FrozenEnvironment | None = None
         env_fingerprint: str | None = None
         cli_version: str | None = None
@@ -273,15 +291,13 @@ class ExperimentRunner:
                         encoding="utf-8",
                     )
                     if completed.returncode != 0:
-                        stderr_tail = (completed.stderr or completed.stdout or "").strip()
-                        if len(stderr_tail) > 500:
-                            stderr_tail = stderr_tail[-500:]
-                        raise RuntimeError(
-                            "agent command failed "
-                            f"(exit {completed.returncode}); see "
-                            f"{report_dir / 'agent_process.json'}"
-                            + (f": {stderr_tail}" if stderr_tail else "")
-                        )
+                        # A crashed/refused agent is a recorded failed run, not
+                        # a cell-killing exception: raising here would abort
+                        # every later trial in the cell and lose their data
+                        # mid-pilot. The trial is flagged agent_error, its
+                        # diagnostics are in agent_process.json, and the cell
+                        # continues.
+                        agent_error = True
                 except subprocess.TimeoutExpired:
                     timed_out = True
                     (report_dir / "agent_process.json").write_text(
@@ -355,6 +371,7 @@ class ExperimentRunner:
             visible_pass=visible_pass,
             hidden_pass=hidden_pass,
             timed_out=timed_out,
+            agent_error=agent_error,
             wall_clock_seconds=wall_clock,
             timeout_seconds=config.timeout_seconds,
             env_fingerprint_sha256=env_fingerprint,

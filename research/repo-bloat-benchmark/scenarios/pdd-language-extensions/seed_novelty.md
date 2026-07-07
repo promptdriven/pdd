@@ -47,3 +47,9 @@ methodology note can exploit).
   test (`test_yaml_first_match_is_yml` — moved, strengthened, into the
   hidden verifier) and (b) the CSV-unreadable fallback test, which imports
   sync/generation modules outside this slice's closure.
+- The hidden verifier (2026-07-07 adversarial hardening) loads the agent's
+  fixed module against its OWN crafted CSV (two duplicated languages, one not
+  named in `task.md`), through the public `bundled_extension` only — so it
+  cannot be gamed by editing the shipped CSV, hardcoding YAML, or renaming
+  module internals. `allowed_edit_globs` is narrowed to `src/pdd/*.py` so a
+  CSV edit is classified as a wrong-file edit.

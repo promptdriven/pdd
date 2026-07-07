@@ -30,3 +30,14 @@ def basic_pop_strip_1(records, config):
             break
         selected.append(record)
     return selected
+
+def basic_strip_multiple_2(records, config):
+    """Apply the strip multiple policy to incoming records."""
+    selected = []
+    for record in records:
+        if getattr(record, 'strip_flag', False) and config.strict_basic:
+            continue
+        if len(selected) >= config.basic_limit:
+            break
+        selected.append(record)
+    return selected

@@ -2,9 +2,20 @@
   "budget_met": true,
   "core_loc": 199,
   "core_tokens": 1696,
-  "distractor_loc": 151,
-  "distractor_tokens_on_disk": 1665,
+  "distractor_loc": 176,
+  "distractor_tokens_on_disk": 1721,
   "files": [
+    {
+      "content_path": null,
+      "import_group": "g3598de18",
+      "loc": 77,
+      "mode": "regrow",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
+    },
     {
       "content_path": null,
       "import_group": "g6eeb5704",
@@ -17,45 +28,23 @@
       "upstream_path": "src/pdd/get_lint_commands.py"
     },
     {
-      "content_path": null,
-      "import_group": "gc89479b6",
-      "loc": 28,
-      "mode": "regrow",
-      "sha256": "973fc53d8e0a0c24401a52f5a565598aeb5436fec4e0ab0314afb2983580fc47",
-      "source_path": "src/pdd/find_section.py",
-      "tier": "same-package",
-      "tokens": 240,
-      "upstream_path": "src/pdd/find_section.py"
-    },
-    {
-      "content_path": null,
-      "import_group": "gdb0528fa",
-      "loc": 35,
-      "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
-      "source_path": "src/pdd/comment_line.py",
-      "tier": "same-package",
-      "tokens": 461,
-      "upstream_path": "src/pdd/comment_line.py"
-    },
-    {
-      "content_path": "generated/pdd-failure-classification/2x/src/handler/classification_handler_1.py",
+      "content_path": "generated/pdd-failure-classification/2x/src/service/str_service_0.py",
       "import_group": "g-template",
-      "loc": 22,
+      "loc": 33,
       "mode": "template",
-      "sha256": "f055e18882681b28bc5d755d171fa0675447163391a7aafb25546532c23df406",
+      "sha256": "691fdd231169af40b6e04785aef025af6e83b5e3c6f1470b87ac290078ecdc92",
       "source_path": null,
       "tier": "same-layer",
-      "tokens": 144,
-      "upstream_path": "src/handler/classification_handler_1.py"
+      "tokens": 232,
+      "upstream_path": "src/service/str_service_0.py"
     }
   ],
   "mode_counts": {
     "mutate": 0,
-    "regrow": 3,
+    "regrow": 2,
     "template": 1
   },
-  "realized_total_tokens": 3361,
+  "realized_total_tokens": 3417,
   "rejected": [],
   "scenario_id": "pdd-failure-classification",
   "schema_version": 3,

@@ -2,30 +2,41 @@
   "budget_met": true,
   "core_loc": 108,
   "core_tokens": 1004,
-  "distractor_loc": 466,
-  "distractor_tokens_on_disk": 4235,
+  "distractor_loc": 380,
+  "distractor_tokens_on_disk": 3906,
   "files": [
     {
       "content_path": null,
-      "import_group": "g48ee8993",
-      "loc": 110,
+      "import_group": "g3598de18",
+      "loc": 77,
       "mode": "regrow",
-      "sha256": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 912,
-      "upstream_path": "src/pdd/failure_classification.py"
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
     },
     {
       "content_path": null,
-      "import_group": "gc89479b6",
-      "loc": 28,
+      "import_group": "g6eeb5704",
+      "loc": 66,
       "mode": "regrow",
-      "sha256": "973fc53d8e0a0c24401a52f5a565598aeb5436fec4e0ab0314afb2983580fc47",
-      "source_path": "src/pdd/find_section.py",
+      "sha256": "3f48c9f1d209d09754f53f07c6196288ae8ff0e239e8020f4b370ddf36285f45",
+      "source_path": "src/pdd/get_lint_commands.py",
       "tier": "same-package",
-      "tokens": 240,
-      "upstream_path": "src/pdd/find_section.py"
+      "tokens": 820,
+      "upstream_path": "src/pdd/get_lint_commands.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "ga888d780",
+      "loc": 59,
+      "mode": "regrow",
+      "sha256": "1e464b0e63e8f7a48727a0b2c0cd5e91ae766bd8182c205bf069aa8f6ad81351",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 438,
+      "upstream_path": "src/pdd/json_atomic.py"
     },
     {
       "content_path": null,
@@ -39,56 +50,34 @@
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
-      "content_path": "generated/pdd-language-extensions/5x/src/pdd/failure_classification_str.py",
+      "content_path": "generated/pdd-language-extensions/5x/src/pdd/compression_reporting_row.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "959bcd81f31f3f9c10a7ddd6f2a93f621222440ed040d036826bd4a6e934feac",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "8cd316a144d4736f68afc1c9205ac585f41160a904d5c8600c852d00916bf02c",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 928,
-      "upstream_path": "src/pdd/failure_classification_str.py"
+      "tokens": 676,
+      "upstream_path": "src/pdd/compression_reporting_row.py"
     },
     {
-      "content_path": "generated/pdd-language-extensions/5x/src/pdd/find_section_known.py",
+      "content_path": "generated/pdd-language-extensions/5x/src/pdd/get_lint_commands_language.py",
       "import_group": "g-mutate",
-      "loc": 33,
+      "loc": 66,
       "mode": "mutate",
-      "sha256": "76771abab196791ddf7adf91e703d0e6ace78bece15fcb3565ac35f4a739b82a",
-      "source_path": "src/pdd/find_section.py",
+      "sha256": "2c3e1898aa8ab7115b4b7820d8c789d06145cd22e60332bb7d068e63995bbe1e",
+      "source_path": "src/pdd/get_lint_commands.py",
       "tier": "same-package",
-      "tokens": 268,
-      "upstream_path": "src/pdd/find_section_known.py"
-    },
-    {
-      "content_path": "generated/pdd-language-extensions/5x/src/pdd/comment_line_leading.py",
-      "import_group": "g-mutate",
-      "loc": 40,
-      "mode": "mutate",
-      "sha256": "585d9794ddf771ef0f65f918d9af0a8e7919c2937f8d9e243fe8918f071c79b9",
-      "source_path": "src/pdd/comment_line.py",
-      "tier": "same-package",
-      "tokens": 498,
-      "upstream_path": "src/pdd/comment_line_leading.py"
-    },
-    {
-      "content_path": "generated/pdd-language-extensions/5x/src/pdd/failure_classification_lru.py",
-      "import_group": "g-mutate",
-      "loc": 110,
-      "mode": "mutate",
-      "sha256": "f85ccc6d0169782a4b69f595088f7a9093d9434ed379b723a70980b6045465cf",
-      "source_path": "src/pdd/failure_classification.py",
-      "tier": "same-package",
-      "tokens": 928,
-      "upstream_path": "src/pdd/failure_classification_lru.py"
+      "tokens": 842,
+      "upstream_path": "src/pdd/get_lint_commands_language.py"
     }
   ],
   "mode_counts": {
-    "mutate": 4,
-    "regrow": 3,
+    "mutate": 2,
+    "regrow": 4,
     "template": 0
   },
-  "realized_total_tokens": 5239,
+  "realized_total_tokens": 4910,
   "rejected": [],
   "scenario_id": "pdd-language-extensions",
   "schema_version": 3,

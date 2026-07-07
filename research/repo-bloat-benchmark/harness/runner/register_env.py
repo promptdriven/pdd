@@ -61,10 +61,19 @@ def register(arm_path: Path, check_binary: bool = True) -> dict:
                 "— install the pinned build; do not re-pin casually"
             )
         result["cli_version_verified"] = found
-    fingerprint = config.fingerprint()
-    if config.fingerprint() != fingerprint:
-        raise FreezeViolation("fingerprint not stable across derivations")
-    result["registered_env_fingerprint"] = fingerprint
+        result["binary_check_skipped"] = False
+        result["valid_for_runs"] = True
+        # Only a binary-verified registration carries the fingerprint that
+        # downstream consumers accept.
+        result["registered_env_fingerprint"] = config.fingerprint()
+    else:
+        # Development-only derivation (pinned CLI not installed). Emit the
+        # fingerprint under a non-authoritative key so no consumer that keys
+        # on `registered_env_fingerprint` can mistake this for a real
+        # registration.
+        result["binary_check_skipped"] = True
+        result["valid_for_runs"] = False
+        result["unverified_fingerprint"] = config.fingerprint()
     result["env_allowlist_values"] = {
         name: os.environ.get(name) for name in sorted(config.env_allowlist)
     }
@@ -90,9 +99,15 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.out:
         args.out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-    print(f"registered_env_fingerprint: {record['registered_env_fingerprint']}")
-    print("Paste into the experiment config as \"registered_env_fingerprint\" "
-          "alongside \"freeze\" (the arm config's fields).")
+    if record["valid_for_runs"]:
+        print(f"registered_env_fingerprint: {record['registered_env_fingerprint']}")
+        print("Paste into the experiment config as \"registered_env_fingerprint\" "
+              "alongside \"freeze\" (the arm config's fields).")
+        return 0
+    print(f"unverified_fingerprint: {record['unverified_fingerprint']}", file=sys.stderr)
+    print("NOT a valid registration (pinned CLI not verified); this record is "
+          "development-only and is rejected by the runner and calibration.",
+          file=sys.stderr)
     return 0
 
 

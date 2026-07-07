@@ -1,11 +1,11 @@
 {
   "manifests": {
-    "pdd-failure-classification.10x.json": "d7ddcf2cda43a13dbf73822cf3a723fe714160c3b8f0f16da60c4f17ea0ca02f",
+    "pdd-failure-classification.10x.json": "900f6fda00087f94a24284bc0dcaa09cef13a928edba0e635e4b07b1065d0a7f",
     "pdd-failure-classification.1x.json": "212447d250194742263f56942d682cb3a276b0615e21ae30ae9b2bc335789b38",
-    "pdd-failure-classification.20x.json": "7c2706e2c63b488bfc58a6fac2d0041df112a0f6265747287af8bfe928a94026",
-    "pdd-failure-classification.2x.json": "af6c00c7c394fe01b45daa4ff539ace8a2f703c5f43f038f29055811b30dad96",
-    "pdd-failure-classification.50x.json": "f81c3ac6a3e2a76f7e83407d0ef22ad79bfc9b90bcb639969490894471c00121",
-    "pdd-failure-classification.5x.json": "32bd4db1a007f388e3cb739d066b27384705be3557ab54798f05ddecc8ceb2f7"
+    "pdd-failure-classification.20x.json": "1139c7851bb06a39a19a4c79f3dc2d2f82c688c8030db724f99de6a566036dbf",
+    "pdd-failure-classification.2x.json": "ef1a20f02c7166203b077940af4efca3b39a217d65459d7ae4b5b8bbbbb867e8",
+    "pdd-failure-classification.50x.json": "8983d6d8f4d1111aca8b7348dda61a27bd3073f352f4ea90c0e9787cd5a0d766",
+    "pdd-failure-classification.5x.json": "05ba1cae5066dfc0eafbaf9d41575e100593fbfbbc39fe841bec5b1e284a6d85"
   },
   "schema_version": 1
 }
