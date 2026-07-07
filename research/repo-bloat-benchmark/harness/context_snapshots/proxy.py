@@ -87,8 +87,13 @@ def _extract_tool_calls(obj: dict[str, Any]) -> list[str]:
             name = ((call or {}).get("function") or {}).get("name")
             if name:
                 names.append(str(name))
-    # Responses API: output[] items typed *_call
-    for item in obj.get("output") or []:
+    # Responses API: output[] items typed *_call, plus the single `item` of a
+    # streamed `response.output_item.*` SSE event (§6.6 calibration caught
+    # that tool calls can arrive only via those events).
+    candidates = list(obj.get("output") or [])
+    if isinstance(obj.get("item"), dict):
+        candidates.append(obj["item"])
+    for item in candidates:
         if not isinstance(item, dict):
             continue
         item_type = str(item.get("type", ""))

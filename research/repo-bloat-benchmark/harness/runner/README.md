@@ -98,6 +98,28 @@ with `allow_unfrozen_command=true`. Per trial the runner then:
 The egress guard is the portable layer (honored by mainstream HTTP stacks,
 not kernel enforcement); the Linux-container network lockdown remains the
 hard tier for pilot runs, and session-log reconciliation detects bypass
-either way. Exact Codex config key names are best-effort until the build is
-pinned — the fingerprint covers the rendered config, so any adjustment is a
-new registered environment by construction.
+either way. Codex config key names are validated against the pinned build
+(`CODEX_PIN.md`) — the fingerprint covers the rendered config, so any
+adjustment is a new registered environment by construction.
+
+## Pre-run gates (design §4.1.2 + §6.6) — `preflight.py`
+
+Before any model run, the same experiment config the pilot will use must
+pass:
+
+```bash
+python3 -m harness.runner.preflight --config experiment.json --json preflight.json
+```
+
+- **Oracle-equivalence sweep** — for every `(scenario, size)` on the ladder:
+  manifest verified against `manifests.lock`, variant materialized, hidden
+  tree asserted absent, core files asserted byte-identical to the 1x core,
+  baseline invariant (visible PASS / hidden FAIL), oracle invariant (after
+  `oracle_edit`: visible PASS / hidden PASS), with the runtime fingerprint
+  recorded per cell.
+- **Instrumentation calibration** — proxy fidelity against fixed fixtures in
+  both wire shapes (Responses SSE and chat-completions JSON): byte-exact
+  archive, sha256 fidelity, `usage` extraction, edit-tool-call detection.
+  FS-tap assertions apply only when that tier is enabled (it is not).
+
+Exit code 0 iff every gate passes; zero model tokens.
