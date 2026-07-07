@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.256.dev8",
+  "timestamp": "2026-07-02T01:34:15+00:00",
+  "command": "sync",
+  "prompt_hash": "14c89fd999c471f4844603b078489d54feb4426b8c9c036c4649f9af82251b5e",
+  "code_hash": "7f71dc63a8ca9878ad1829a641facacc8da2ebd2b68c555a1c998b6afa9aabd4",
+  "example_hash": "b14adf53f8cf3910e73964df32883c2c610325a38c597c8001f50730edcaed33",
+  "test_hash": "206e2a932f80c86feed1b7cd281268bb4163e59ea58a4d52b5d0a5cb38a2d3b7",
+  "test_files": {
+    "test_agentic_reviewer.py": "206e2a932f80c86feed1b7cd281268bb4163e59ea58a4d52b5d0a5cb38a2d3b7"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/contract_ir.py": "0d3392ec8990ac0ff6ddb4a00fee3c6719395f046a59a263ade7d8676e3648e9",
+    "pdd/llm_invoke.py": "c7f13fe2b45b5aa6ba8d3870afce4de2f767d9596cb03563db8db3422af66f40"
+  }
+}
