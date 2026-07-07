@@ -647,27 +647,27 @@ class PDDCLI(click.Group):
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
-    ctx: click.Context,
-    force: bool,
-    strength: float,
-    temperature: float,
-    verbose: bool,
-    quiet: bool,
-    color: Optional[bool],
-    output_cost: Optional[str],
-    estimate: bool,
-    estimate_json: bool,
-    review_examples: bool,
-    local: bool,
-    time: Optional[float], # Type hint is Optional[float]
-    context_override: Optional[str],
-    list_contexts: bool,
-    core_dump: bool,
-    keep_core_dumps: int,
-    compress_examples: Optional[bool],
-    compress_test_context: Optional[bool],
-    context_compression: Optional[str],
-    compression_fallback: Optional[str],
+    ctx: Optional[click.Context] = None,
+    force: bool = False,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    color: Optional[bool] = None,
+    output_cost: Optional[str] = None,
+    estimate: bool = False,
+    estimate_json: bool = False,
+    review_examples: bool = False,
+    local: bool = False,
+    time: Optional[float] = None, # Type hint is Optional[float]
+    context_override: Optional[str] = None,
+    list_contexts: bool = False,
+    core_dump: bool = True,
+    keep_core_dumps: int = 10,
+    compress_examples: Optional[bool] = None,
+    compress_test_context: Optional[bool] = None,
+    context_compression: Optional[str] = None,
+    compression_fallback: Optional[str] = None,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -964,7 +964,11 @@ def _normalized_results_should_exit_nonzero(
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
-def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
+def process_commands(
+    ctx: Optional[click.Context] = None,
+    results: Optional[List[Optional[Tuple[Any, float, str]]]] = None,
+    **kwargs,
+):
     """
     Processes results returned by executed commands and prints a summary.
     Receives a list of tuples, typically (result, cost, model_name),
