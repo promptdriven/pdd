@@ -24,6 +24,7 @@ Honesty notes (mirrored in the design):
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,6 +70,35 @@ class Attribution:
     def distractor_share(self) -> float:
         total = self.total_tokens
         return self.distractor_tokens / total if total > 0 else 0.0
+
+
+def extract_payload_text(payload_bytes: bytes) -> str:
+    """Collect every string value from a JSON request body.
+
+    Message/tool content lives in JSON string values where newlines are
+    escaped; joining the collected strings restores real newlines so the
+    line index can match surfaced file content. Non-JSON bodies are returned
+    decoded as-is.
+    """
+    raw = payload_bytes.decode("utf-8", errors="replace")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    parts: list[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, str):
+            parts.append(node)
+        elif isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return "\n".join(parts)
 
 
 class TreeIndex:
@@ -146,9 +176,31 @@ class TreeIndex:
         return result
 
     def classify_request_payload(self, payload_bytes: bytes) -> Attribution:
-        """Attribute a raw archived request body (JSON or free text)."""
-        text = payload_bytes.decode("utf-8", errors="replace")
-        return self.classify_text(text)
+        """Attribute an archived request body (JSON payloads are unwrapped).
+
+        A raw JSON request escapes newlines inside message strings, which
+        would defeat line matching — so string values are extracted first
+        (``extract_payload_text``) and classified with real newlines.
+        """
+        return self.classify_text(extract_payload_text(payload_bytes))
+
+    def matched_distractor_lines(self, text: str) -> set[str]:
+        """Normalized distractor-only lines present in ``text``.
+
+        Used for de-duplicated pool coverage
+        (``distractor_unique_tokens_entered_context``, design §6.1): the union
+        of these keys across a run's requests, token-estimated once, cannot
+        grow with repeated resurfacing of the same content.
+        """
+        keys: set[str] = set()
+        for line in text.splitlines():
+            norm = normalize_line(line)
+            if len(norm) < self.min_line_len:
+                continue
+            entry = self._index.get(norm)
+            if entry is not None and entry[1] and not entry[0]:
+                keys.add(norm)
+        return keys
 
 
 def reconcile_with_usage(
