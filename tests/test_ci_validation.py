@@ -409,8 +409,35 @@ def test_github_checks_gate_fails_when_checks_missing(tmp_path: Path) -> None:
     assert "missing or unreadable" in message
 
 
-def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None:
-    """Skipped GitHub checks are not full-suite evidence."""
+def test_github_checks_gate_ignores_nonapplicable_skipped_checks(
+    tmp_path: Path,
+) -> None:
+    """Skipped/neutral REST check runs do not block when applicable checks pass."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "migrated workflow", "state": "NEUTRAL", "bucket": "skipped", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", checks)):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert "Ignored non-applicable skipped/neutral checks" in message
+    assert "included skipped checks" not in message
+
+
+def test_github_checks_gate_fails_when_all_checks_skipped(tmp_path: Path) -> None:
+    """Skipped GitHub checks alone are not applicable full-suite evidence."""
     skipped_checks = [
         {"name": "full suite", "state": "SKIPPING", "bucket": "skipping", "link": ""}
     ]
@@ -426,7 +453,62 @@ def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None
         )
 
     assert success is False
-    assert "skipped checks" in message
+    assert "only skipped/neutral non-applicable checks" in message
+    assert "requires at least one applicable passing check" in message
+
+
+@pytest.mark.parametrize("state", ["FAILURE", "CANCELLED", "TIMED_OUT"])
+def test_github_checks_gate_fails_when_any_applicable_check_failed(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    """Real failed/cancelled/timed-out checks still block the strict gate."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "full suite", "state": state, "bucket": "fail", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("failed", checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "GitHub checks failed" in message
+    assert "full suite" in message
+    assert "Ignored non-applicable skipped/neutral checks" in message
+
+
+def test_github_checks_gate_fails_when_any_applicable_check_pending(
+    tmp_path: Path,
+) -> None:
+    """Pending applicable checks still block the strict gate."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "slow suite", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("pending", checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "were pending, stale, or not reported" in message
+    assert "slow suite" in message
+    assert "Ignored non-applicable skipped/neutral checks" in message
 
 
 def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
