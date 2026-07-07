@@ -1,7 +1,7 @@
 """
 Real-LLM regression tests for issue #939: call-site enumeration and retry safety.
 
-Two tests, each making one change() call + one cheap LLM-as-judge call:
+Two tests, each making one change() call + deterministic output checks:
 1. Call-site enumeration — verifies the LLM lists all 4 call sites by name
 2. Retry safety — verifies the LLM specifies a max retry count AND fallback
 
@@ -9,12 +9,13 @@ Requires: PDD_RUN_REAL_LLM_TESTS=1 or --run-all
 """
 
 import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
 
 from pdd.change import change
-from pdd.llm_invoke import llm_invoke
 
 RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
 
@@ -28,61 +29,114 @@ def _skip_unless_real() -> None:
         )
 
 
-class JudgmentResult(BaseModel):
-    """Structured output for LLM-as-judge evaluation."""
+@dataclass(frozen=True)
+class JudgmentResult:
+    """Structured result for deterministic release-gate evaluation."""
+
     passed: bool
     reasoning: str
 
 
-_CONTRADICTION_PHRASES = [
-    "criterion is met",
-    "criterion is clearly met",
-    "is satisfied",
-    "explicitly defines",
-    "the answer is yes",
-    "does meet",
-    "does satisfy",
+CALL_SITE_NAMES = ("ingest", "transform", "export_csv", "audit_log")
+
+_RETRY_BOUND_PATTERNS = [
+    re.compile(
+        r"\b(?:retry|retries|attempt|attempts)\s+"
+        r"(?:up\s+to\s+|at\s+most\s+|no\s+more\s+than\s+)?\d+\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:up\s+to|at\s+most|no\s+more\s+than|max(?:imum)?(?:\s+of)?)\s+"
+        r"\d+\s+(?:retry|retries|attempt|attempts|time|times)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b\d+\s+(?:retry|retries|attempt|attempts|tries|time|times)\b",
+        re.IGNORECASE,
+    ),
 ]
 
+_RETRY_EXHAUSTION_PATTERN = re.compile(
+    r"\b(?:"
+    r"exhaust(?:ed|s|ion)?|"
+    r"after\s+all\s+(?:retry\s+)?attempts?|"
+    r"after\s+all\s+retries|"
+    r"after\s+\d+\s+(?:failed\s+)?(?:retry\s+)?attempts?|"
+    r"all\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
+    r"all\s+\d+\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
+    r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
+    r"\d+(?:st|nd|rd|th)\s+attempt|"
+    r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
+    r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
+    r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
+    r"(?:is\s+|are\s+|has\s+been\s+)?(?:reached|exceeded|exhausted)|"
+    r"(?:retry\s+)?limit\s+(?:is\s+|has\s+been\s+)?(?:reached|exceeded)|"
+    r"(?:final|last)\s+(?:retry\s+)?attempt|"
+    r"if\s+(?:it\s+)?still\s+fail(?:s|ed)?|"
+    r"still\s+(?:encounter|encounters|raise|raises)\s+"
+    r"(?:a\s+)?(?:connection\s+)?(?:error|exception)|"
+    r"final\s+(?:connection\s+)?(?:error|exception)|"
+    r"when\s+(?:all\s+)?(?:retry\s+)?attempts?\s+fail|"
+    r"stop\s+retrying"
+    r")\b",
+    re.IGNORECASE,
+)
 
-def _judge(prompt_output: str, question: str) -> JudgmentResult:
-    """Use a cheap LLM to judge whether the output meets a criterion.
+_FALLBACK_ACTION_PATTERN = re.compile(
+    r"\b(?:raise|return|log|skip|abort|surface|propagate|fail|error|exception|fallback)\b",
+    re.IGNORECASE,
+)
 
-    Retries once at higher strength if the reasoning contradicts the verdict.
-    """
-    for attempt, strength in enumerate([0.3, 0.5]):
-        result = llm_invoke(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a strict test evaluator. Answer the question about "
-                        "the provided text. Set passed=true only if the criterion is "
-                        "clearly and unambiguously met. Be strict. "
-                        "IMPORTANT: Your 'passed' boolean MUST be consistent with "
-                        "your reasoning. If your reasoning concludes the criterion "
-                        "is met, set passed=true."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"TEXT:\n{prompt_output}\n\nQUESTION:\n{question}",
-                },
-            ],
-            output_pydantic=JudgmentResult,
-            strength=strength,
-            temperature=0.0,
-            verbose=False,
+
+def _judge_call_site_names(prompt_output: str) -> JudgmentResult:
+    """Check that all target call-site names appear literally in the output."""
+    missing = [
+        name
+        for name in CALL_SITE_NAMES
+        if not re.search(rf"\b{re.escape(name)}\b", prompt_output)
+    ]
+    if missing:
+        return JudgmentResult(
+            passed=False,
+            reasoning="Missing required call-site name(s): " + ", ".join(missing),
         )
-        judgment: JudgmentResult = result["result"]
+    return JudgmentResult(
+        passed=True,
+        reasoning="All required call-site names are present.",
+    )
 
-        # Detect reasoning/verdict contradiction and retry with stronger model
-        if not judgment.passed and attempt == 0:
-            reasoning_lower = judgment.reasoning.lower()
-            if any(phrase in reasoning_lower for phrase in _CONTRADICTION_PHRASES):
-                continue  # retry with higher strength
-        return judgment
-    return judgment
+
+def _judge_retry_bound(prompt_output: str) -> JudgmentResult:
+    """Check that retry guidance has an explicit numeric limit."""
+    if any(pattern.search(prompt_output) for pattern in _RETRY_BOUND_PATTERNS):
+        return JudgmentResult(
+            passed=True,
+            reasoning="A numeric retry limit is present.",
+        )
+    return JudgmentResult(
+        passed=False,
+        reasoning="No explicit numeric retry limit found.",
+    )
+
+
+def _judge_retry_fallback(prompt_output: str) -> JudgmentResult:
+    """Check that retry exhaustion has explicit fallback behavior."""
+    has_exhaustion = bool(_RETRY_EXHAUSTION_PATTERN.search(prompt_output))
+    has_action = bool(_FALLBACK_ACTION_PATTERN.search(prompt_output))
+    if has_exhaustion and has_action:
+        return JudgmentResult(
+            passed=True,
+            reasoning="Retry exhaustion and fallback behavior are both present.",
+        )
+    missing = []
+    if not has_exhaustion:
+        missing.append("retry exhaustion condition")
+    if not has_action:
+        missing.append("fallback action")
+    return JudgmentResult(
+        passed=False,
+        reasoning="Missing " + " and ".join(missing) + ".",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +235,70 @@ pipeline.
 # ---------------------------------------------------------------------------
 
 
+class TestDeterministicChangeJudges:
+    """Unit coverage for release-gate judges used by the real LLM tests."""
+
+    def test_change_prompt_requires_retry_safety_in_final_prompt(self) -> None:
+        template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
+
+        assert "final modified_prompt itself" in template
+        assert "concrete numeric retry limit" in template
+        assert "maximum of 3 attempts" in template
+        assert "after all attempts fail" in template
+
+    def test_call_site_judge_requires_all_names(self) -> None:
+        judgment = _judge_call_site_names(
+            "Update ingest, transform, export_csv, and audit_log callers."
+        )
+        assert judgment.passed
+
+        missing = _judge_call_site_names("Update ingest, transform, and export_csv.")
+        assert not missing.passed
+        assert "audit_log" in missing.reasoning
+
+    def test_retry_bound_judge_requires_numeric_limit(self) -> None:
+        judgment = _judge_retry_bound("Retry up to 3 times before failing.")
+        assert judgment.passed
+
+        missing = _judge_retry_bound("Retry with exponential backoff before failing.")
+        assert not missing.passed
+        assert "numeric" in missing.reasoning
+
+    def test_retry_fallback_judge_requires_exhaustion_and_action(self) -> None:
+        judgment = _judge_retry_fallback(
+            "After all retry attempts are exhausted, raise a clear error."
+        )
+        assert judgment.passed
+
+        ordinal = _judge_retry_fallback(
+            "If the pipeline fails on the 3rd attempt, stop retrying and "
+            "raise the final connection exception."
+        )
+        assert ordinal.passed
+
+        final_attempt = _judge_retry_fallback(
+            "Retry up to 3 times. If the final attempt still encounters a "
+            "connection error, re-raise the exception."
+        )
+        assert final_attempt.passed
+
+        retry_limit = _judge_retry_fallback(
+            "Use a maximum of 3 attempts and return an error when the retry "
+            "limit is reached."
+        )
+        assert retry_limit.passed
+
+        numeric_all_attempts = _judge_retry_fallback(
+            "If all 3 attempts fail, the final connection error must be "
+            "raised to the caller."
+        )
+        assert numeric_all_attempts.passed
+
+        missing = _judge_retry_fallback("Retry up to 3 times.")
+        assert not missing.passed
+        assert "exhaust" in missing.reasoning
+
+
 @pytest.mark.real
 class TestCallSiteEnumeration:
     """Verify the LLM enumerates each call site when changing a function's return type."""
@@ -197,15 +315,7 @@ class TestCallSiteEnumeration:
             verbose=False,
         )
 
-        judgment = _judge(
-            modified_prompt,
-            "Does this text explicitly mention ALL FOUR of these function "
-            "names by name: ingest, transform, export_csv, audit_log? "
-            "Each name must appear literally in the text (in any context — "
-            "as a call site, as a definition, in a list, etc.), not just as "
-            "a vague collective reference like 'all call sites' or "
-            "'the pipeline functions'.",
-        )
+        judgment = _judge_call_site_names(modified_prompt)
         assert judgment.passed, (
             f"LLM did not enumerate all 4 call sites. "
             f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
@@ -228,25 +338,16 @@ class TestRetrySafety:
             verbose=False,
         )
 
-        bound_judgment = _judge(
-            modified_prompt,
-            "Does this text specify a concrete maximum number of retry "
-            "attempts (e.g., 'retry up to 3 times', 'max 5 attempts')? "
-            "There must be an explicit numeric limit, not just the word 'retry'.",
-        )
+        bound_judgment = _judge_retry_bound(modified_prompt)
         assert bound_judgment.passed, (
             f"LLM did not specify a retry bound. "
-            f"Judge: {bound_judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
+            f"Judge: {bound_judgment.reasoning} | Model: {model}, cost: ${cost:.4f} | "
+            f"Output excerpt: {modified_prompt[:1000]}"
         )
 
-        fallback_judgment = _judge(
-            modified_prompt,
-            "Does this text define what should happen when all retry "
-            "attempts are exhausted (e.g., raise an exception, log and "
-            "skip, return an error)? There must be explicit fallback "
-            "behavior, not just 'retry N times'.",
-        )
+        fallback_judgment = _judge_retry_fallback(modified_prompt)
         assert fallback_judgment.passed, (
             f"LLM did not define fallback behavior. "
-            f"Judge: {fallback_judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
+            f"Judge: {fallback_judgment.reasoning} | Model: {model}, cost: ${cost:.4f} | "
+            f"Output excerpt: {modified_prompt[:1000]}"
         )
