@@ -1,0 +1,51 @@
+<pdd-reason>Implements the Python AST policy backend that walks generated Python code and detects capability violations declared in ContractEffectIR.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "PythonAstPolicyBackend.analyze", "signature": "(self, artifact_path: str, contract_ir: ContractEffectIR) -> list[PolicyFinding]", "returns": "list[PolicyFinding]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>policy_backends/__init___python.prompt</pdd-dependency>
+<pdd-dependency>capability_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/policy_backends/python_ast.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+Implements `PythonAstPolicyBackend(PolicyBackend)` with `target = "python"`. Walks the Python AST of a generated artifact file and checks for violations of each MUST_NOT `EffectItem` in the supplied `ContractEffectIR`. Returns a list of `PolicyFinding` objects — one per detected violation.
+
+This module MUST NOT import from `pdd.contract_check` or `pdd.contract_ir`. It depends only on `PolicyBackend`, `PolicyFinding` (from `.`), and `ContractEffectIR`, `EffectItem` (from `..capability_ir`).
+
+% Requirements
+1. `PythonAstPolicyBackend` extends `PolicyBackend` with `target = "python"`.
+2. `analyze(self, artifact_path: str, contract_ir: ContractEffectIR) -> list[PolicyFinding]`:
+   - Parse the file at `artifact_path` with `ast.parse`. On `SyntaxError` or `OSError`, return a single `PolicyFinding` with `severity="error"`, `rule="artifact_unparseable"` (or `"artifact_unreadable"` for OSError), `effect={"action": "parse", "resource": "artifact"}`, a clear message, and a best-effort location. Do not propagate exceptions; an artifact that cannot be inspected must fail closed rather than silently passing policy.
+   - Iterate over `contract_ir.effects` — each is an `EffectItem` with `modal` and `action`/`resource` fields.
+   - For each `EffectItem` where `modal` is `"MUST_NOT"` (case-insensitive comparison), apply the matching AST check below.
+   - Collect all `PolicyFinding` objects and return them.
+3. AST checks — map `EffectItem.action` (lowercased, stripped) to detection logic:
+   - `"import"` or `"use"` with a recognized forbidden module (e.g., `smtplib`, `ftplib`, `subprocess`, any value in `EffectItem.resource`): detect `ast.Import` and `ast.ImportFrom` nodes whose module name matches `EffectItem.resource`.
+   - `"access"` with resource containing `"os.environ"`, `"environment"`, or `"env"`: detect `ast.Attribute` nodes where the value is `ast.Name(id="os")` and `attr == "environ"`; `ast.Subscript`/`ast.Call` patterns for `os.environ[...]` and `os.environ.get(...)`; `from os import environ` followed by `environ[...]` or `environ.get(...)`; and `os.getenv(...)` / `from os import getenv` followed by `getenv(...)`.
+   - `"write"` with resource containing `"file"` or `"open"`: detect `ast.Call` nodes where the function is `ast.Name(id="open")` or `ast.Attribute(attr="open")` and any argument string literal is `"w"`, `"a"`, `"wb"`, or `"ab"` (write/append modes).
+   - `"call"` or `"send"` with resource containing `"smtp"` or `"email"` or `"mail"`: detect `ast.Import`/`ast.ImportFrom` for `smtplib`, `ast.Call` to `smtplib.*`, and mail-send methods such as `.sendmail(...)` or `.send_message(...)`.
+   - `"call"`, `"send"`, `"post"`, `"get"`, or `"request"` with resource containing `"api"`, `"http"`, `"https"`, `"network"`, `"external"`, `"url"`, or `"webhook"`: detect imports or calls for common HTTP clients (`requests`, `httpx`, `urllib`, `aiohttp`) including chained calls like `requests.post(...)`, `httpx.get(...)`, and `urllib.request.urlopen(...)`.
+   - `"log"` or `"emit"` with resource containing `"secret"` or `"token"` or `"key"`: detect `ast.Call` nodes to `logging.*` or `logger.*` — flag as a `"warning"` severity finding (cannot statically determine the logged content, so this is advisory).
+   - For any unrecognized action/resource combination, skip silently (no finding, no error).
+4. Each `PolicyFinding` must include:
+   - `severity`: `"error"` for structural violations (import, write, call); `"warning"` for advisory checks (logging).
+   - `effect`: `{"action": effect_item.action, "resource": effect_item.resource}`.
+   - `rule`: use `getattr(effect_item, 'rule_id', None) or getattr(effect_item, 'rule', 'unknown')` to tolerate either `rule_id` or `rule` field name on `EffectItem` (the exact field name is unverified until the sibling `capability_ir` module is generated).
+   - `message`: a short, human-readable description including the line number and detected pattern.
+   - `location`: `{"file": artifact_path, "line": <ast_node.lineno>, "symbol": <enclosing function or class name, or None>}`.
+5. Helper `_enclosing_symbol(tree: ast.AST, lineno: int) -> str | None`: walk all function and class definitions to find the nearest enclosing name for a given line number.
+6. The backend MUST tolerate artifact files that are empty or contain only whitespace — return an empty list.
+
+% Deliverables
+- Code: `pdd/policy_backends/python_ast.py`
