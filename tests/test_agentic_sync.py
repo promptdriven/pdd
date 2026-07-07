@@ -5539,6 +5539,46 @@ class TestPddChangedModulesFastPath:
         result["mock_agentic_task"].assert_not_called()
         assert result["mock_dry_run"].call_args.kwargs["modules"] == ["current_module"]
 
+    def test_any_unresolvable_env_entry_fails_even_with_valid_entries(
+        self, monkeypatch, tmp_path
+    ):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo,missing_module",
+            architecture=[{"filename": "foo_python.prompt", "dependencies": []}],
+            filter_synced=["foo"],
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is False
+        assert msg == "PDD_CHANGED_MODULES contained unresolved module targets: ['missing_module']"
+        assert "LLM identified no modules to sync" not in msg
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
+    def test_runtime_template_env_entry_has_specific_diagnostic(
+        self, monkeypatch, tmp_path
+    ):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo_LLM",
+            architecture=[{"filename": "foo_LLM.prompt", "dependencies": []}],
+            filter_synced=["foo_LLM"],
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is False
+        assert msg == "PDD_CHANGED_MODULES contained unresolved module targets: ['foo_LLM']"
+        assert "already synced" not in msg
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
     def test_oversized_identify_context_is_not_constructed_when_env_is_valid(
         self, monkeypatch, tmp_path
     ):
@@ -5592,6 +5632,7 @@ class TestPddChangedModulesFastPath:
         assert cost == pytest.approx(0.0)
         assert model == ""
         result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
 
     def test_env_fast_path_prints_selected_modules(self, monkeypatch, tmp_path, capsys):
         result = self._run_with_env(

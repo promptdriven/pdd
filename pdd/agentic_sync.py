@@ -2893,6 +2893,14 @@ def run_agentic_sync(
         # Issues that touch only runtime *_LLM.prompt templates are a successful
         # no-op — those templates are already consumed directly by their owning
         # code modules and there is nothing to regenerate.
+        if changed_modules_env_used:
+            msg = (
+                "PDD_CHANGED_MODULES contained unresolved module targets: "
+                f"{dropped_llm_templates or changed_modules_env_modules}"
+            )
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, llm_cost, provider
         msg = "All modules are already synced — nothing to do."
         if not quiet:
             console.print(f"[green]{msg}[/green]")
@@ -2916,13 +2924,16 @@ def run_agentic_sync(
                 f"architecture entries ({choice_list}). Use a path-qualified name.[/yellow]"
             )
 
-    if not modules_to_sync:
-        if changed_modules_env_used:
-            unresolved = invalid_basenames + list(ambiguous_basenames.keys())
-            if not unresolved:
-                unresolved = changed_modules_env_modules
+    if changed_modules_env_used:
+        unresolved = dropped_llm_templates + invalid_basenames + list(ambiguous_basenames.keys())
+        if unresolved:
             msg = f"PDD_CHANGED_MODULES contained unresolved module targets: {unresolved}"
-        elif ambiguous_basenames:
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, llm_cost, provider
+
+    if not modules_to_sync:
+        if ambiguous_basenames:
             details = "; ".join(
                 f"'{name}' -> {', '.join(choices)}"
                 for name, choices in ambiguous_basenames.items()
