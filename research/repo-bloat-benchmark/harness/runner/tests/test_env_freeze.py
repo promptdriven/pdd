@@ -6,6 +6,7 @@ guarantees held *inside* the agent process.
 """
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,11 +20,12 @@ from harness.runner.env_freeze import (
     capture_cli_version,
     egress_guard_env,
 )
+from harness.runner.cli import load_experiment_config
 from harness.runner.mock_agent import MockModelServer
 from harness.runner.runner import ExperimentRunner, RunConfig
 
 FAKE_VERSION = "codex-cli 0.0-test"
-VERSION_COMMAND = ["python3", "-c", f"print('{FAKE_VERSION}')"]
+VERSION_COMMAND = [sys.executable, "-c", f"print('{FAKE_VERSION}')"]
 
 
 def _freeze_config(**overrides):
@@ -94,7 +96,7 @@ def test_version_mismatch_aborts(tmp_path):
 
 def test_version_command_failure_aborts():
     with pytest.raises(FreezeViolation, match="cannot capture|failed"):
-        capture_cli_version(["python3", "-c", "raise SystemExit(3)"])
+        capture_cli_version([sys.executable, "-c", "raise SystemExit(3)"])
 
 
 # -- fresh home + ephemerality ------------------------------------------------
@@ -116,8 +118,9 @@ def test_collect_and_destroy_archives_then_deletes(tmp_path):
     sessions.mkdir()
     (sessions / "rollout.jsonl").write_text('{"type": "session_meta"}\n')
     archived = env.collect_and_destroy()
-    assert archived == ["sessions/rollout.jsonl"]
+    assert archived == ["config.toml", "sessions/rollout.jsonl"]
     assert not env.home_dir.exists()  # nothing can leak into a later run
+    assert (tmp_path / "codex_home_artifacts" / "config.toml").is_file()
     assert (tmp_path / "codex_home_artifacts" / "sessions" / "rollout.jsonl").is_file()
 
 
@@ -125,6 +128,7 @@ def test_collect_and_destroy_archives_then_deletes(tmp_path):
 
 
 def test_environment_is_allowlist_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", "/ambient-home-should-not-leak")
     monkeypatch.setenv("SUPER_SECRET_TOKEN", "leak-me")
     monkeypatch.setenv("FAKE_API_KEY", "sk-test")
     env = FrozenEnvironment(
@@ -133,6 +137,7 @@ def test_environment_is_allowlist_only(tmp_path, monkeypatch):
     variables = env.environment()
     assert "SUPER_SECRET_TOKEN" not in variables  # dropped: not allowlisted
     assert variables["FAKE_API_KEY"] == "sk-test"  # the one permitted secret
+    assert variables["HOME"] == str(env.home_dir)
     assert variables["CODEX_HOME"] == str(env.home_dir)
     assert variables["OPENAI_BASE_URL"] == "http://127.0.0.1:4321/v1"
     assert "PATH" in variables
@@ -166,6 +171,7 @@ from pathlib import Path
 
 home = Path(os.environ["CODEX_HOME"])
 assert [p.name for p in home.iterdir()] == ["config.toml"], "home not fresh"
+assert os.environ["HOME"] == os.environ["CODEX_HOME"], "HOME not isolated"
 assert "SUPER_SECRET_TOKEN" not in os.environ, "env not sanitized"
 assert os.environ["HTTPS_PROXY"].endswith(":9"), "egress guard missing"
 
@@ -209,7 +215,7 @@ def frozen_run(tmp_path, monkeypatch):
         reports_dir=tmp_path / "reports",
         work_root=tmp_path / "work",
         arm="command",
-        agent_command=["python3", "-c", AGENT_SCRIPT],
+        agent_command=["{python}", "-c", AGENT_SCRIPT],
         upstream_base_url=upstream_url,
         freeze=freeze,
         registered_env_fingerprint=freeze.fingerprint(),
@@ -241,8 +247,131 @@ def test_command_arm_runs_frozen(frozen_run):
     assert record["failure_class"] == "localization_miss"
 
 
+def test_command_arm_nonzero_exit_aborts_before_record(frozen_run):
+    runner, freeze, tmp_path = frozen_run
+    runner.config.agent_command = [
+        "{python}",
+        "-c",
+        "import sys; print('agent exploded', file=sys.stderr); raise SystemExit(3)",
+    ]
+    with pytest.raises(RuntimeError, match="exit 3"):
+        runner.run_trial(1, 0)
+    report_dir = tmp_path / "reports" / "example-pagination.1x.trial0"
+    process = json.loads((report_dir / "agent_process.json").read_text())
+    assert process["returncode"] == 3
+    assert "agent exploded" in process["stderr"]
+    assert not (report_dir / "run_record.json").exists()
+    assert not (report_dir / "codex_home").exists()
+
+
 def test_registered_fingerprint_mismatch_aborts_before_agent(frozen_run):
     runner, freeze, tmp_path = frozen_run
     runner.config.registered_env_fingerprint = "0" * 64
     with pytest.raises(FreezeViolation, match="fingerprint mismatch"):
         runner.run_trial(1, 0)
+    report_dir = tmp_path / "reports" / "example-pagination.1x.trial0"
+    assert not (report_dir / "codex_home").exists()
+
+
+def test_command_arm_requires_freeze_unless_explicit_dev_mode(tmp_path):
+    with pytest.raises(ValueError, match='must be "mock" or "command"'):
+        RunConfig(
+            scenario_dir=SCENARIO_DIR,
+            distractors_dir=tmp_path / "distractors",
+            reports_dir=tmp_path / "reports",
+            work_root=tmp_path / "work",
+            arm="commnad",
+            agent_command=["{python}", "-c", "print('dev')"],
+        )
+
+    with pytest.raises(ValueError, match="requires RunConfig.freeze"):
+        RunConfig(
+            scenario_dir=SCENARIO_DIR,
+            distractors_dir=tmp_path / "distractors",
+            reports_dir=tmp_path / "reports",
+            work_root=tmp_path / "work",
+            arm="command",
+            agent_command=["{python}", "-c", "print('dev')"],
+        )
+
+    with pytest.raises(ValueError, match="requires registered_env_fingerprint"):
+        RunConfig(
+            scenario_dir=SCENARIO_DIR,
+            distractors_dir=tmp_path / "distractors",
+            reports_dir=tmp_path / "reports",
+            work_root=tmp_path / "work",
+            arm="command",
+            agent_command=["{python}", "-c", "print('dev')"],
+            freeze=_freeze_config(),
+        )
+
+    config = RunConfig(
+        scenario_dir=SCENARIO_DIR,
+        distractors_dir=tmp_path / "distractors",
+        reports_dir=tmp_path / "reports",
+        work_root=tmp_path / "work",
+        arm="command",
+        agent_command=["{python}", "-c", "print('dev')"],
+        allow_unfrozen_command=True,
+    )
+    assert config.allow_unfrozen_command
+
+
+def test_cli_loads_freeze_config_from_json(tmp_path):
+    freeze = _freeze_config()
+    config_path = tmp_path / "experiment.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "scenario_dir": str(SCENARIO_DIR),
+                "distractors_dir": str(tmp_path / "distractors"),
+                "reports_dir": str(tmp_path / "reports"),
+                "work_root": str(tmp_path / "work"),
+                "arm": "command",
+                "agent_command": ["{python}", "-c", "print('ok')"],
+                "upstream_base_url": "http://127.0.0.1:1",
+                "freeze": {
+                    "pinned_cli_version": freeze.pinned_cli_version,
+                    "cli_version_command": freeze.cli_version_command,
+                    "model_id": freeze.model_id,
+                    "reasoning_effort": freeze.reasoning_effort,
+                    "api_key_env_var": freeze.api_key_env_var,
+                },
+                "registered_env_fingerprint": freeze.fingerprint(),
+                "sizes": [1, 5],
+                "trials": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run_config, sizes, trials = load_experiment_config(config_path)
+
+    assert isinstance(run_config.freeze, FreezeConfig)
+    assert run_config.registered_env_fingerprint == freeze.fingerprint()
+    assert sizes == [1, 5]
+    assert trials == 2
+
+
+def test_run_config_coerces_freeze_dict_for_programmatic_callers(tmp_path):
+    freeze = _freeze_config()
+    config = RunConfig(
+        scenario_dir=SCENARIO_DIR,
+        distractors_dir=tmp_path / "distractors",
+        reports_dir=tmp_path / "reports",
+        work_root=tmp_path / "work",
+        arm="command",
+        agent_command=["{python}", "-c", "print('ok')"],
+        upstream_base_url="http://127.0.0.1:1",
+        freeze={
+            "pinned_cli_version": freeze.pinned_cli_version,
+            "cli_version_command": freeze.cli_version_command,
+            "model_id": freeze.model_id,
+            "reasoning_effort": freeze.reasoning_effort,
+            "api_key_env_var": freeze.api_key_env_var,
+        },
+        registered_env_fingerprint=freeze.fingerprint(),
+    )
+
+    assert isinstance(config.freeze, FreezeConfig)

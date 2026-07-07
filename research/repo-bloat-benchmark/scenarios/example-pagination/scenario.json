@@ -9,12 +9,12 @@
   "allowed_edit_globs": ["src/pager/**"],
   "task_brief_path": "task.md",
   "visible_tests": {
-    "command": ["python3", "-m", "pytest", "tests/visible", "-q"],
+    "command": ["{python}", "-m", "pytest", "tests/visible", "-q"],
     "expected_exit_code": 0
   },
   "hidden_verifier": {
     "path": "hidden",
-    "command": ["python3", "-m", "pytest", ".", "-q"],
+    "command": ["{python}", "-m", "pytest", ".", "-q"],
     "mounted_into_agent_sandbox": false
   },
   "oracle_edit": {

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,7 +40,7 @@ class RunConfig:
     reports_dir: Path
     work_root: Path  # fresh variants are materialized under here
     arm: str = "mock"  # "mock" or "command"
-    agent_command: list[str] | None = None  # for arm="command"; {workdir} expanded
+    agent_command: list[str] | None = None  # for arm="command"; placeholders expanded
     upstream_base_url: str | None = None  # real provider for arm="command"
     mock_behavior: str = "oracle"  # oracle | wrong_file | noop
     mock_read_distractor_count: int = 2
@@ -51,10 +52,26 @@ class RunConfig:
     # match the built environment or the run aborts.
     freeze: FreezeConfig | None = None
     registered_env_fingerprint: str | None = None
+    allow_unfrozen_command: bool = False
 
     def __post_init__(self) -> None:
         for name in ("scenario_dir", "distractors_dir", "reports_dir", "work_root"):
             setattr(self, name, Path(getattr(self, name)))
+        if isinstance(self.freeze, dict):
+            self.freeze = FreezeConfig(**self.freeze)
+        if self.arm not in {"mock", "command"}:
+            raise ValueError('RunConfig.arm must be "mock" or "command"')
+        if self.arm == "command" and not self.allow_unfrozen_command:
+            if self.freeze is None:
+                raise ValueError(
+                    'arm="command" requires RunConfig.freeze; set '
+                    "allow_unfrozen_command=True only for harness development runs"
+                )
+            if not self.registered_env_fingerprint:
+                raise ValueError(
+                    'arm="command" requires registered_env_fingerprint; set '
+                    "allow_unfrozen_command=True only for harness development runs"
+                )
 
 
 @dataclass
@@ -72,6 +89,17 @@ class ExperimentRunner:
 
     # -- helpers -------------------------------------------------------------
 
+    def _expand_command(self, command: list[str], workdir: Path) -> list[str]:
+        """Expand harness command placeholders.
+
+        ``{python}`` pins scenario/test helper commands to the interpreter
+        running the harness, avoiding ambient ``python3`` mismatches.
+        """
+        return [
+            part.replace("{workdir}", str(workdir)).replace("{python}", sys.executable)
+            for part in command
+        ]
+
     def _run(self, command: list[str], cwd: Path, env_extra: dict | None = None,
              timeout: float | None = None) -> subprocess.CompletedProcess:
         import os
@@ -80,7 +108,11 @@ class ExperimentRunner:
         env["PYTHONPATH"] = str(cwd / "src")
         env.update(env_extra or {})
         return subprocess.run(
-            command, cwd=str(cwd), env=env, capture_output=True, text=True,
+            self._expand_command(command, cwd),
+            cwd=str(cwd),
+            env=env,
+            capture_output=True,
+            text=True,
             timeout=timeout,
         )
 
@@ -95,7 +127,7 @@ class ExperimentRunner:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(workdir / "src")
         result = subprocess.run(
-            self.scenario["hidden_verifier"]["command"],
+            self._expand_command(self.scenario["hidden_verifier"]["command"], workdir),
             cwd=str(hidden_dir),
             env=env,
             capture_output=True,
@@ -198,10 +230,7 @@ class ExperimentRunner:
                 ).read_text(encoding="utf-8")
                 agent.run(task_brief=task_brief)
             else:
-                command = [
-                    part.replace("{workdir}", str(workdir))
-                    for part in (config.agent_command or [])
-                ]
+                command = self._expand_command(config.agent_command or [], workdir)
                 if config.freeze is not None:
                     frozen = FrozenEnvironment(
                         config=config.freeze,
@@ -221,7 +250,7 @@ class ExperimentRunner:
                     agent_env = dict(os.environ)
                     agent_env["OPENAI_BASE_URL"] = f"{proxy_url}/v1"
                 try:
-                    subprocess.run(
+                    completed = subprocess.run(
                         command,
                         cwd=str(workdir),
                         env=agent_env,
@@ -229,16 +258,53 @@ class ExperimentRunner:
                         text=True,
                         timeout=config.timeout_seconds,
                     )
+                    (report_dir / "agent_process.json").write_text(
+                        json.dumps(
+                            {
+                                "command": command,
+                                "returncode": completed.returncode,
+                                "stdout": completed.stdout,
+                                "stderr": completed.stderr,
+                                "timed_out": False,
+                            },
+                            indent=2,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    if completed.returncode != 0:
+                        stderr_tail = (completed.stderr or completed.stdout or "").strip()
+                        if len(stderr_tail) > 500:
+                            stderr_tail = stderr_tail[-500:]
+                        raise RuntimeError(
+                            "agent command failed "
+                            f"(exit {completed.returncode}); see "
+                            f"{report_dir / 'agent_process.json'}"
+                            + (f": {stderr_tail}" if stderr_tail else "")
+                        )
                 except subprocess.TimeoutExpired:
                     timed_out = True
-                finally:
-                    if frozen is not None:
-                        archived = frozen.collect_and_destroy()
-                        (report_dir / "codex_home_manifest.json").write_text(
-                            json.dumps({"archived": archived}, indent=2) + "\n",
-                            encoding="utf-8",
+                    (report_dir / "agent_process.json").write_text(
+                        json.dumps(
+                            {
+                                "command": command,
+                                "returncode": None,
+                                "stdout": None,
+                                "stderr": None,
+                                "timed_out": True,
+                            },
+                            indent=2,
                         )
+                        + "\n",
+                        encoding="utf-8",
+                    )
         finally:
+            if frozen is not None and frozen.home_dir.exists():
+                archived = frozen.collect_and_destroy()
+                (report_dir / "codex_home_manifest.json").write_text(
+                    json.dumps({"archived": archived}, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             wall_clock = time.monotonic() - started
             proxy.stop()
             if mock_server:
