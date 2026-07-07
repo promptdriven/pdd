@@ -28,16 +28,19 @@
 #   18. test_diagnostics_bedrock_checks_all_vars: Bedrock model → all three env vars checked in output.
 #   19. test_diagnostics_vertex_bad_creds_file: GOOGLE_APPLICATION_CREDENTIALS path invalid → warns in output.
 #   20. test_diagnostics_device_flow_no_key_needed: Empty api_key → output indicates no key needed.
+#   21. test_diagnostics_show_base_url_for_zai: Z.AI row → base URL shown in diagnostics output.
+#   22. test_zai_kwargs_include_base_url_and_api_base: Z.AI general API → litellm gets base_url and api_base.
+#   23. test_zai_coding_plan_kwargs_use_coding_endpoint: Z.AI Coding Plan → coding endpoint in kwargs.
 #
 # VI. Session Persistence
-#   21. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
+#   24. test_results_persist_across_picks: User tests model 1 then model 2 → both results shown in table.
 #
 # VII. CSV Loading Normalization
-#   22. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
+#   25. test_csv_normalizes_nan_strings_and_bad_numerics: NaN strings → "", bad numbers → 0.0.
 #
 # VIII. Pure Function Contracts
-#   23-28. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
-#   29-30. _calculate_cost: basic math, zero tokens.
+#   26-31. _classify_error: auth, connection refused, not found, timeout, rate limit, generic.
+#   32-33. _calculate_cost: basic math, zero tokens.
 
 """Tests for model_tester.py — behavioral tests driven through test_model_interactive()."""
 
@@ -157,6 +160,17 @@ DEVICE_FLOW_CSV = (
 LM_STUDIO_CSV = (
     "provider,model,api_key,input,output,base_url\n"
     "lm_studio,lm_studio/local-model,,0.0,0.0,\n"
+)
+
+ZAI_CSV = (
+    "provider,model,api_key,input,output,base_url\n"
+    "Z.AI,openai/glm-5.2,ZAI_API_KEY,1.0,3.2,https://api.z.ai/api/paas/v4\n"
+)
+
+ZAI_CODING_PLAN_CSV = (
+    "provider,model,api_key,input,output,base_url\n"
+    "Z.AI Coding Plan,openai/glm-5.2,ZAI_API_KEY,0.0,0.0,"
+    "https://api.z.ai/api/coding/paas/v4\n"
 )
 
 VERTEX_CSV = (
@@ -418,6 +432,62 @@ def test_diagnostics_device_flow_no_key_needed(tmp_path, monkeypatch):
     assert "Device flow" in output or "no key needed" in output
 
 
+def test_diagnostics_show_base_url_for_zai(tmp_path, monkeypatch):
+    """Z.AI model with explicit base_url → base URL shown in diagnostics."""
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-test")
+    output, _ = _run_interactive_capture(
+        tmp_path, ZAI_CSV, ["1", "q"], monkeypatch,
+    )
+    assert "api.z.ai" in output
+
+
+def test_zai_kwargs_include_base_url_and_api_base(tmp_path, monkeypatch):
+    """Z.AI row: litellm.completion must receive both base_url and api_base
+    set to the CSV endpoint, preventing silent provider mis-detection."""
+    mock_comp = MagicMock(return_value=_mock_litellm_success())
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-test")
+    _run_interactive_capture(
+        tmp_path, ZAI_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+    )
+    call_kwargs = mock_comp.call_args[1]
+    assert call_kwargs.get("base_url") == "https://api.z.ai/api/paas/v4", (
+        "base_url must be set to the Z.AI general API endpoint"
+    )
+    assert call_kwargs.get("api_base") == "https://api.z.ai/api/paas/v4", (
+        "api_base must be set to prevent LiteLLM provider mis-detection"
+    )
+    assert call_kwargs.get("api_key") == "sk-zai-test"
+
+
+def test_zai_coding_plan_kwargs_use_coding_endpoint(tmp_path, monkeypatch):
+    """Z.AI Coding Plan row: litellm.completion must use the coding endpoint,
+    not the general API endpoint."""
+    mock_comp = MagicMock(return_value=_mock_litellm_success())
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-test")
+    _run_interactive_capture(
+        tmp_path, ZAI_CODING_PLAN_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+    )
+    call_kwargs = mock_comp.call_args[1]
+    assert call_kwargs.get("base_url") == "https://api.z.ai/api/coding/paas/v4", (
+        "Coding Plan must use coding endpoint, not general API endpoint"
+    )
+    assert call_kwargs.get("api_base") == "https://api.z.ai/api/coding/paas/v4"
+
+
+def test_zai_coding_plan_displays_quota_backed_cost(tmp_path, monkeypatch):
+    """Coding Plan rows show quota-backed usage instead of fake per-token dollars."""
+    mock_comp = MagicMock(return_value=_mock_litellm_success(10, 5))
+    output, _ = _run_interactive_capture(
+        tmp_path, ZAI_CODING_PLAN_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"ZAI_API_KEY": "sk-zai-test"},
+    )
+    assert "quota" in output.lower()
+    assert "quota-backed" in output
+
+
 # ===========================================================================
 # VI. Session Persistence
 # ===========================================================================
@@ -437,6 +507,22 @@ def test_results_persist_across_picks(tmp_path, monkeypatch):
     )
     # litellm.completion should have been called twice (once per model)
     assert mock_comp.call_count == 2
+
+
+def test_zai_coding_plan_last_test_column_shows_quota_backed_after_refresh(tmp_path, monkeypatch):
+    """After testing a Coding Plan model, the refreshed table Last Test column must
+    show 'quota-backed' not '$0.0000' — re-rendering persisted results must not
+    reintroduce the misleading zero-dollar estimate.
+    """
+    mock_comp = MagicMock(return_value=_mock_litellm_success(10, 5))
+    # Test model 1 (Coding Plan), then 'q' to trigger a second table render before exit
+    output, _ = _run_interactive_capture(
+        tmp_path, ZAI_CODING_PLAN_CSV, ["1", "q"], monkeypatch,
+        mock_completion=mock_comp,
+        env_vars={"ZAI_API_KEY": "sk-zai-test"},
+    )
+    assert "quota-backed" in output
+    assert "$0.0000" not in output
 
 
 # ===========================================================================

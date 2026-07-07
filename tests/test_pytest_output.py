@@ -1,6 +1,7 @@
 import pytest
 import json
 import os
+import shlex
 import subprocess as real_subprocess
 from pathlib import Path
 from pdd.pytest_output import (
@@ -69,6 +70,23 @@ def test_run_pytest_and_capture_output_successful_run() -> None:
     # Warnings count may be non-zero due to pytest configuration warnings (unrelated to test)
     assert isinstance(result["test_results"][0]["warnings"], int)
     Path(test_file).unlink(missing_ok=True)
+
+
+def test_run_pytest_and_capture_output_includes_shell_quoted_command(tmp_path) -> None:
+    """The result exposes the exact pytest command for verifier diagnostics."""
+    test_dir = tmp_path / "dir with spaces"
+    test_dir.mkdir()
+    test_file = test_dir / "test_success.py"
+    test_file.write_text("def test_pass():\n    assert True\n")
+
+    result = run_pytest_and_capture_output(str(test_file))
+
+    command = result["command"]
+    assert str(test_file) in shlex.split(command)
+    assert "-B" in shlex.split(command)
+    assert "-m" in shlex.split(command)
+    assert "pytest" in shlex.split(command)
+    assert any(part.startswith("--rootdir=") for part in shlex.split(command))
 
 
 def test_run_pytest_and_capture_output_failed_test() -> None:

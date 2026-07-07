@@ -76,6 +76,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 DEFAULT_PDS_CLAUDE_MODEL = "glm-5.2"
+DEFAULT_RELEASE_VIDEO_OUTPUT_DIR = ".pdd/release-videos"
 MIN_PDS_CLI_VERSION = (0, 1, 7)
 MIN_PDS_CLI_VERSION_TEXT = ".".join(str(part) for part in MIN_PDS_CLI_VERSION)
 PDS_VERSION_RE = re.compile(r"(?<!\d)(?P<version>\d+\.\d+\.\d+)(?!\d)")
@@ -199,7 +200,18 @@ def main(argv: list[str] | None = None) -> int:
         run_metadata_path = output_dir / "pds_run.json"
 
         context_path.write_text(context, encoding="utf8")
-        release_notes_path.write_text(release_notes_from_context(context), encoding="utf8")
+        if args.release_notes_path:
+            release_notes, source_release_notes_path = load_release_video_release_notes(
+                Path(args.release_notes_path),
+                repo,
+            )
+            print(
+                "release-video: using prewritten release notes from "
+                f"{source_release_notes_path}"
+            )
+        else:
+            release_notes = release_notes_from_context(context)
+        release_notes_path.write_text(release_notes, encoding="utf8")
         if args.script_path:
             raw_script, source_script_path = load_release_video_script_raw(
                 Path(args.script_path),
@@ -248,6 +260,10 @@ def main(argv: list[str] | None = None) -> int:
         response_path.write_text(json.dumps(response, indent=2, sort_keys=True) + "\n", encoding="utf8")
 
         youtube_url = find_youtube_url(response)
+        if release_video_response_is_pending(response):
+            print(f"Release video artifacts: {output_dir}")
+            print_pending_release_video_response(response)
+            return 0
         if args.target == "publish" and not args.dry_run and not youtube_url:
             raise ReleaseVideoError(
                 "PDS release-video publish completed but did not return a YouTube URL."
@@ -274,7 +290,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--changelog", default="CHANGELOG.md", help="Changelog file to attach.")
     parser.add_argument(
         "--output-dir",
-        default=".pdd/release-videos",
+        default=DEFAULT_RELEASE_VIDEO_OUTPUT_DIR,
         help="Directory for generated release-video artifacts.",
     )
     parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
@@ -311,6 +327,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=(
             "Use an existing release-video script instead of invoking Claude Code. "
             "Useful when reusing a generated artifact after Claude Code quota/auth failure."
+        ),
+    )
+    parser.add_argument(
+        "--release-notes-path",
+        default=os.environ.get("RELEASE_VIDEO_RELEASE_NOTES_PATH", ""),
+        help=(
+            "Use an existing release-notes artifact instead of regenerating "
+            "release notes from the current release context. Useful for exact "
+            "PDS selected-project recovery."
         ),
     )
     parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
@@ -705,6 +730,141 @@ def release_video_status_is_running(status: Any) -> bool:
     value = str(status or "").strip().lower()
     return value in RUNNING_PDS_STATUSES or (
         bool(value) and value not in TERMINAL_PDS_STATUSES
+    )
+
+
+def release_video_response_is_pending(response: dict[str, Any]) -> bool:
+    """Return True when PDS create is still active and must be recovered later."""
+    return response.get("pending") is True
+
+
+def print_pending_release_video_response(response: dict[str, Any]) -> None:
+    """Print operator recovery commands for a pending release video."""
+    pds_run_value = response.get("pdsRun")
+    pds_run = pds_run_value if isinstance(pds_run_value, dict) else {}
+    project_id = first_nonempty_string(response.get("projectId"), pds_run.get("projectId"))
+    run_id = first_nonempty_string(response.get("runId"), pds_run.get("runId"))
+    status = first_nonempty_string(response.get("status"), pds_run.get("status")) or "unknown"
+
+    print("release-video: PDS release-video create is still running; release video is pending.")
+    identity_parts = []
+    if project_id:
+        identity_parts.append(f"projectId={project_id}")
+    if run_id:
+        identity_parts.append(f"runId={run_id}")
+    identity_parts.append(f"status={status}")
+    print(f"release-video: {' '.join(identity_parts)}")
+
+    for label, key in (
+        ("status", "statusCommand"),
+        ("recover", "recoverCommand"),
+        ("watch", "watchCommand"),
+        ("backfill", "backfillCommand"),
+    ):
+        command = str(response.get(key) or "").strip()
+        if command:
+            print(f"{label}: {command}")
+
+
+def pending_release_video_make_prefix(output_dir: Any) -> str:
+    """Return a Make invocation prefix that preserves custom artifact roots."""
+    output_dir_text = str(output_dir or "").strip()
+    if not output_dir_text or output_dir_text == DEFAULT_RELEASE_VIDEO_OUTPUT_DIR:
+        return "make"
+    return f"make RELEASE_VIDEO_OUTPUT_DIR={shlex.quote(output_dir_text)}"
+
+
+def pending_release_video_status_command(tag: str, output_dir: Any) -> str:
+    """Return the Make target that refreshes persisted PDS run status."""
+    return (
+        f"{pending_release_video_make_prefix(output_dir)} "
+        f"release-video-status RELEASE_TAG={shlex.quote(tag)} "
+        "RELEASE_VIDEO_STATUS_QUERY=1"
+    )
+
+
+def pending_release_video_backfill_command(tag: str, output_dir: Any) -> str:
+    """Return the Make target used after the pending run publishes to YouTube."""
+    return (
+        f"{pending_release_video_make_prefix(output_dir)} "
+        "release-video-discord-backfill "
+        f"RELEASE_TAG={shlex.quote(tag)} RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>"
+    )
+
+
+def load_persisted_pds_run_metadata(path: Path | None) -> dict[str, Any]:
+    """Load a persisted PDS run sidecar, returning an empty dict on failure."""
+    if path is None:
+        return {}
+    try:
+        raw = path.read_text(encoding="utf8")
+    except OSError:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def pending_pds_create_response_from_sidecar(
+    *,
+    path: Path | None,
+    tag: str,
+    reason: str,
+    message: str,
+    output_dir: Any,
+) -> dict[str, Any] | None:
+    """Build a nonfatal pending response when sidecar status is still active."""
+    metadata = load_persisted_pds_run_metadata(path)
+    if not metadata or not release_video_status_is_running(metadata.get("status")):
+        return None
+
+    run_id = str(metadata.get("runId") or "").strip()
+    project_id = str(metadata.get("projectId") or "").strip()
+    status = str(metadata.get("status") or "").strip()
+    response: dict[str, Any] = {
+        "ok": False,
+        "pending": True,
+        "reason": reason,
+        "message": redact_secret_text(message),
+        "tag": tag,
+        "status": status,
+        "pdsRun": metadata,
+        "statusCommand": pending_release_video_status_command(tag, output_dir),
+        "backfillCommand": pending_release_video_backfill_command(tag, output_dir),
+    }
+    if run_id:
+        response["runId"] = run_id
+    if project_id:
+        response["projectId"] = project_id
+    for key in ("recoverCommand", "watchCommand"):
+        command = str(metadata.get(key) or "").strip()
+        if command:
+            response[key] = command
+    return response
+
+
+def pds_create_has_project_exists_conflict(completed: subprocess.CompletedProcess[str]) -> bool:
+    """Return True when PDS create failed because the release project exists."""
+    combined = f"{completed.stderr}\n{completed.stdout}".lower()
+    return (
+        "release_video_existing_project_metadata_mismatch" in combined
+        or "project-exists" in combined
+        or "project exists" in combined
+        or ("project" in combined and "already exists" in combined)
+        or ("metadata" in combined and "conflict" in combined)
+    )
+
+
+def pds_create_has_timeout_failure(completed: subprocess.CompletedProcess[str]) -> bool:
+    """Return True when PDS create failed through a timeout-shaped exit."""
+    combined = f"{completed.stderr}\n{completed.stdout}".lower()
+    return (
+        completed.returncode == 124
+        or "timed out" in combined
+        or "timeout" in combined
+        or "deadline exceeded" in combined
     )
 
 
@@ -1666,6 +1826,18 @@ def load_release_video_script_raw(script_path: Path, cwd: Path) -> tuple[str, Pa
     return raw_script, path
 
 
+def load_release_video_release_notes(release_notes_path: Path, cwd: Path) -> tuple[str, Path]:
+    """Load a prewritten release-notes artifact for selected-project recovery."""
+    path = resolve_release_video_release_notes_path(release_notes_path, cwd)
+    try:
+        release_notes = path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise ReleaseVideoError(
+            f"Could not read release-video release notes {path}: {exc}"
+        ) from exc
+    return release_notes, path
+
+
 def resolve_release_video_script_path(script_path: Path, cwd: Path) -> Path:
     if script_path.is_absolute():
         if script_path.exists():
@@ -1680,6 +1852,26 @@ def resolve_release_video_script_path(script_path: Path, cwd: Path) -> Path:
             return candidate.resolve()
     tried = "\n".join(str(candidate) for candidate in candidates)
     raise ReleaseVideoError(f"Release-video script override not found. Tried:\n{tried}")
+
+
+def resolve_release_video_release_notes_path(release_notes_path: Path, cwd: Path) -> Path:
+    if release_notes_path.is_absolute():
+        if release_notes_path.exists():
+            return release_notes_path
+        raise ReleaseVideoError(
+            f"Release-video release notes override not found: {release_notes_path}"
+        )
+    candidates = [
+        cwd / release_notes_path,
+        REPO_ROOT / release_notes_path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    tried = "\n".join(str(candidate) for candidate in candidates)
+    raise ReleaseVideoError(
+        f"Release-video release notes override not found. Tried:\n{tried}"
+    )
 
 
 def render_release_video_prompt(context: str, prompt_template: Path, cwd: Path) -> str:
@@ -1805,6 +1997,15 @@ def create_release_video(
                 file=sys.stderr,
             )
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        pending_response = pending_pds_create_response_from_sidecar(
+            path=persisted_run_metadata_path,
+            tag=tag,
+            reason="pds_create_timeout_active_run",
+            message=message,
+            output_dir=getattr(args, "output_dir", DEFAULT_RELEASE_VIDEO_OUTPUT_DIR),
+        )
+        if pending_response:
+            return pending_response
         raise ReleaseVideoError(message) from exc
     persisted_run_metadata_path = persist_pds_run_metadata_from_output(
         completed=completed,
@@ -1832,6 +2033,23 @@ def create_release_video(
             message += f" {hint}"
         if persisted_run_metadata_path:
             message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        is_timeout_failure = pds_create_has_timeout_failure(completed)
+        is_project_exists_conflict = pds_create_has_project_exists_conflict(completed)
+        if is_timeout_failure or is_project_exists_conflict:
+            reason = (
+                "pds_create_timeout_active_run"
+                if is_timeout_failure
+                else "pds_create_project_exists_active_run"
+            )
+            pending_response = pending_pds_create_response_from_sidecar(
+                path=persisted_run_metadata_path,
+                tag=tag,
+                reason=reason,
+                message=message,
+                output_dir=getattr(args, "output_dir", DEFAULT_RELEASE_VIDEO_OUTPUT_DIR),
+            )
+            if pending_response:
+                return pending_response
         raise ReleaseVideoError(message)
     try:
         parsed = parse_pds_create_response(completed.stdout)

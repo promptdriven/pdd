@@ -45,6 +45,13 @@
      - Exit code 1 if no valid token available.
      - With --format=json, output: {"token": "...", "expires_at": "..."}
 
+  6. **clear-cache**:
+     - Click subcommand named "clear-cache" that deletes the cached JWT token file at `JWT_CACHE_FILE`.
+     - If no cache file exists, report that no JWT cache was found and exit successfully.
+     - Before deleting, best-effort report cache details from the cached token, including audience and expired vs. minutes remaining when available.
+     - On success, confirm the cache was cleared and print re-authentication guidance.
+     - If deletion fails with `OSError`, print the failure message and exit with code 1.
+
 % Dependencies
   <auth_service><include select="def:get_auth_status,def:logout,def:verify_auth,def:get_jwt_cache_info,def:has_refresh_token,def:get_cached_jwt">context/auth_service_example.py</include></auth_service>
   <get_jwt_token><include select="def:get_jwt_token,class:AuthError">context/get_jwt_token_example.py</include></get_jwt_token>

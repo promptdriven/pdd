@@ -8,12 +8,13 @@
     - 'coding_arena_elo': Raw Arena/static ELO score (e.g., 1300) (Integer, nullable)
     - 'model_rank_score': Primary selection rank. DeepSWE rows use 10000 + solve_rate_percent * 100; Arena/static fallback rows use raw ELO.
     - 'model_rank_source': Source label for model_rank_score (e.g., deepswe-solve-rate, arena-elo-fallback, static)
-    - 'api_key': Name of the environment variable holding the API key (e.g., OPENAI_API_KEY)
     - 'base_url': Optional base URL for specific providers (e.g., Azure, Ollama)
+    - 'api_key': Name of the environment variable holding the API key (e.g., OPENAI_API_KEY)
     - 'max_reasoning_tokens': Optional maximum tokens for internal reasoning (Integer, nullable)
     - 'structured_output': Boolean indicating if the model reliably supports structured output (True/False)
     - 'reasoning_type': Reasoning control type (none, effort, budget, adaptive)
     - 'location': Optional Vertex AI location override
     - 'interactive_only': Boolean (True/False). True for providers that require interactive human auth or a running local server (e.g. github_copilot device-flow OAuth, chatgpt subscription / codex login, lm_studio, ollama). Such rows hang in non-interactive contexts, so model selection skips them by default unless PDD_ALLOW_INTERACTIVE is set. Defaults to False for keyed providers.
+    - 'context_limit': Optional integer. Per-model context window override in tokens. When present and > 0, this value takes precedence over litellm's built-in model info for context window validation and estimate reporting. Leave blank (empty) for most models; populate only when litellm's reported context limit for that model is incorrect, missing, or needs to be pinned to a specific value.
 
 % Search the internet to get this data. Check to make sure this is valid CSV format

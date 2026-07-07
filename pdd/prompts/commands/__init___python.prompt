@@ -12,6 +12,7 @@
 </pdd-interface>
 <pdd-dependency>commands/replay_python.prompt</pdd-dependency>
 <pdd-dependency>commands/context_python.prompt</pdd-dependency>
+<pdd-dependency>commands/contracts_python.prompt</pdd-dependency>
 <pdd-dependency>commands/story_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
@@ -35,10 +36,10 @@
     - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `preprocess` (from `.misc`)
-    - `replay` (from `.replay`)
-    - `context` (from `.context`)
     - `extracts` (from `.extracts`)
     - `report_core` (from `.report`)
+    - `replay` (from `.replay`)
+    - `context` (from `.context`)
     - `install_completion_cmd` (as `name="install_completion"`), `verify` (from `.utility`)
     - `which` (from `.which`)
     - `templates_group` (from `.templates`)

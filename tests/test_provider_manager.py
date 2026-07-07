@@ -121,7 +121,7 @@ def _read_user_csv(temp_home):
 
 
 def test_write_csv_atomic_preserves_interactive_only(tmp_path):
-    """Provider-manager rewrites must not re-enable device/local rows."""
+    """Provider-manager rewrites must not drop catalog-only routing metadata."""
     csv_path = tmp_path / "llm_model.csv"
 
     _write_csv_atomic(csv_path, [
@@ -135,12 +135,15 @@ def test_write_csv_atomic_preserves_interactive_only(tmp_path):
             "model_rank_source": "deepswe-solve-rate",
             "api_key": "",
             "interactive_only": "True",
+            "context_limit": "1000000",
         }
     ])
 
     rows = list(csv.DictReader(csv_path.open(encoding="utf-8", newline="")))
     assert "interactive_only" in rows[0]
     assert rows[0]["interactive_only"] == "True"
+    assert "context_limit" in rows[0]
+    assert rows[0]["context_limit"] == "1000000"
 
 
 # ---------------------------------------------------------------------------

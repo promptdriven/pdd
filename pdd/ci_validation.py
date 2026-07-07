@@ -772,14 +772,16 @@ def run_github_checks_gate(
 ) -> Tuple[bool, str, str]:
     """Strict final-gate check over GitHub PR checks.
 
-    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed:
-    missing, unreadable, skipped, pending, failed, stale, or wrong-head checks
-    all fail because this path uses GitHub checks as the full-suite source of
-    truth.
+    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed.
+    Missing, unreadable, pending, failed, stale, or wrong-head checks fail.
+    In the all-check-runs path, skipped/neutral REST check runs are ignored as
+    non-applicable evidence, but at least one applicable check run must pass.
     """
     head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
         repo_owner, repo_name, pr_number, cwd
     )
+    if not head_sha:
+        head_sha = _get_head_sha(cwd)
     source_name = "required GitHub checks" if required_only else "GitHub checks"
 
     if not head_sha:
@@ -809,16 +811,20 @@ def run_github_checks_gate(
             head_sha=head_sha,
             quiet=quiet,
         )
-    summary = _render_check_summary(checks)
     skipped = [
         check
         for check in checks
         if check.get("bucket", "").lower() in SKIP_BUCKETS
         or check.get("state", "").lower() in SKIP_BUCKETS
     ]
+    applicable_checks = [check for check in checks if check not in skipped]
+    evaluation_checks = checks if required_only else applicable_checks
+    summary = _render_check_summary(checks)
+    evaluation_summary = _render_check_summary(evaluation_checks)
+    ignored_summary = _render_check_summary(skipped)
     unknown = [
         check
-        for check in checks
+        for check in evaluation_checks
         if check.get("bucket", "").lower() not in (
             FINAL_GATE_PASS_BUCKETS
             | FAIL_BUCKETS
@@ -827,31 +833,112 @@ def run_github_checks_gate(
             | ACTION_REQUIRED_BUCKETS
         )
     ]
+    action_required = [
+        check
+        for check in evaluation_checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    failed = [
+        check
+        for check in evaluation_checks
+        if (
+            check.get("bucket", "").lower() in FAIL_BUCKETS
+            and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+        )
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    pending = [
+        check
+        for check in evaluation_checks
+        if check.get("bucket", "").lower() in PENDING_BUCKETS
+    ]
+    passed = [
+        check
+        for check in evaluation_checks
+        if check.get("bucket", "").lower() in FINAL_GATE_PASS_BUCKETS
+    ]
 
-    if status == "passed" and checks and not skipped and not unknown:
+    if (
+        not required_only
+        and status == "passed"
+        and passed
+        and not failed
+        and not pending
+        and not action_required
+        and not unknown
+    ):
+        message = f"{source_name} passed on PR head {head_sha[:8]}.\n{evaluation_summary}"
+        if skipped:
+            message += f"\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
+        return True, message, head_sha
+    if required_only and status == "passed" and checks and not skipped and not unknown:
         return True, f"{source_name} passed on PR head {head_sha[:8]}.\n{summary}", head_sha
     if status == "passed" and not checks:
         return False, f"{source_name} were missing for PR head {head_sha[:8]}.", head_sha
-    if skipped:
+    if not required_only and checks and not applicable_checks:
+        return (
+            False,
+            (
+                f"{source_name} had only skipped/neutral non-applicable checks "
+                f"on PR head {head_sha[:8]}; final gate requires at least one "
+                f"applicable passing check.\n{summary}"
+            ),
+            head_sha,
+        )
+    if required_only and skipped:
         return (
             False,
             f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
-    if status == "action_required":
+
+    def _with_ignored(message: str) -> str:
+        if not skipped or required_only:
+            return message
+        return f"{message}\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
+
+    if action_required or status == "action_required":
         return (
             False,
-            f"{source_name} require manual action on PR head {head_sha[:8]}:\n{summary}",
+            _with_ignored(
+                f"{source_name} require manual action on PR head {head_sha[:8]}:\n"
+                f"{evaluation_summary}"
+            ),
             head_sha,
         )
     if unknown:
         return (
             False,
-            f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n{summary}",
+            _with_ignored(
+                f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n"
+                f"{evaluation_summary}"
+            ),
+            head_sha,
+        )
+    if failed:
+        return (
+            False,
+            _with_ignored(
+                f"{source_name} failed on PR head {head_sha[:8]}:\n{evaluation_summary}"
+            ),
+            head_sha,
+        )
+    if pending:
+        return (
+            False,
+            _with_ignored(
+                f"{source_name} were pending, stale, or not reported for PR "
+                f"head {head_sha[:8]}:\n{evaluation_summary}"
+            ),
             head_sha,
         )
     if status == "failed":
-        return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
+        return (
+            False,
+            _with_ignored(f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}"),
+            head_sha,
+        )
     if status in {"no_checks", "unreadable"}:
         return (
             False,
