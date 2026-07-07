@@ -173,9 +173,40 @@ def _bounded(text: str) -> str:
     return scrubbed
 
 
-_BLOCKING_SEVERITIES = {"blocker", "critical"}
+# Fallback blocking-severity set, kept byte-for-byte in sync with
+# ``pdd.checkup_review_loop.DEFAULT_BLOCKING_SEVERITIES``. The artifact's
+# blocking classification MUST mirror the review-loop's own gating policy
+# (``_required_findings`` gates on ``config.blocking_severities``), otherwise the
+# machine-readable artifact can report a false clean/pass for a PR that the
+# canonical loop still treats as blocked (e.g. an open ``medium`` finding). This
+# default is only used when the supplied ``config`` carries no explicit
+# ``blocking_severities`` tuple.
+_DEFAULT_BLOCKING_SEVERITIES = ("blocker", "critical", "medium")
 _SEVERITY_RE = re.compile(r"\b(blocker|critical|high|medium|major|low|minor|nit|info)\b", re.IGNORECASE)
 _PATH_LINE_RE = re.compile(r"([\w./\-]+\.\w+):(\d+)")
+
+
+def _blocking_severities(config: Any) -> set:
+    """Return the lowercased set of severities the review loop treats as blocking.
+
+    Mirrors ``pdd.checkup_review_loop._required_findings``, which gates
+    unresolved findings on ``config.blocking_severities``. Falls back to
+    :data:`_DEFAULT_BLOCKING_SEVERITIES` (the canonical
+    ``ReviewLoopConfig`` default) when the config exposes no explicit tuple, so
+    the artifact's ``blocking`` flags never under-report relative to the loop's
+    own policy.
+    """
+    severities = getattr(config, "blocking_severities", None)
+    if severities:
+        try:
+            resolved = {
+                str(sev).strip().lower() for sev in severities if str(sev).strip()
+            }
+        except TypeError:
+            resolved = set()
+        if resolved:
+            return resolved
+    return {sev.lower() for sev in _DEFAULT_BLOCKING_SEVERITIES}
 
 
 def _resolve_authority(canonical_status: str, agentic_blocking: bool) -> str:
@@ -208,13 +239,27 @@ def _resolve_authority(canonical_status: str, agentic_blocking: bool) -> str:
     )
 
 
-def _normalize_findings(text: str, reviewer_name: str) -> List[AgenticFinding]:
+def _normalize_findings(
+    text: str,
+    reviewer_name: str,
+    blocking_severities: Optional[set] = None,
+) -> List[AgenticFinding]:
     """Best-effort parser that extracts structured findings from reviewer output.
 
     On parse failure returns ``[]`` (the caller then sets the reviewer status to
     ``degraded``; R4). Every free-text field is scrubbed and capped at
     :data:`FINDING_TEXT_MAX_CHARS`.
+
+    ``blocking_severities`` is the lowercased set of severities the review loop
+    treats as blocking (see :func:`_blocking_severities`); when omitted it
+    defaults to the canonical :data:`_DEFAULT_BLOCKING_SEVERITIES` so the
+    artifact's ``blocking`` flags mirror the loop's own gating policy.
     """
+    blocking = (
+        blocking_severities
+        if blocking_severities is not None
+        else {sev.lower() for sev in _DEFAULT_BLOCKING_SEVERITIES}
+    )
     findings: List[AgenticFinding] = []
     raw = text or ""
     if not str(raw).strip():
@@ -241,7 +286,7 @@ def _normalize_findings(text: str, reviewer_name: str) -> List[AgenticFinding]:
                 AgenticFinding(
                     reviewer=reviewer_name,
                     severity=severity,
-                    blocking=severity in _BLOCKING_SEVERITIES,
+                    blocking=severity in blocking,
                     path=path,
                     line=line_no,
                     summary=_bounded(stripped),
@@ -395,6 +440,10 @@ def build_agentic_v1_artifact(
     )
 
     # --- reviewers + findings --------------------------------------------
+    # Mirror the review loop's own blocking policy (``config.blocking_severities``
+    # via ``_required_findings``) so the artifact never under-reports blocking
+    # findings relative to the canonical loop (e.g. an open ``medium``).
+    blocking_severities = _blocking_severities(config)
     reviewer_status: Dict[str, str] = dict(getattr(loop_state, "reviewer_status", {}) or {})
     raw_outputs = list(getattr(loop_state, "raw_outputs", []) or [])
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
@@ -410,7 +459,9 @@ def build_agentic_v1_artifact(
         if not reviewer_name:
             continue
         reviewers_with_output.add(reviewer_name)
-        parsed = _normalize_findings(_coerce_str(output_text), reviewer_name)
+        parsed = _normalize_findings(
+            _coerce_str(output_text), reviewer_name, blocking_severities
+        )
         findings_by_reviewer.setdefault(reviewer_name, []).extend(parsed)
 
     # Prefer already-structured loop findings when present.
@@ -423,7 +474,7 @@ def build_agentic_v1_artifact(
             finding = AgenticFinding(
                 reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
                 severity=severity,
-                blocking=severity in _BLOCKING_SEVERITIES,
+                blocking=severity in blocking_severities,
                 path=(getattr(f, "location", None) or None),
                 line=None,
                 summary=_bounded(_coerce_str(getattr(f, "finding", ""))),

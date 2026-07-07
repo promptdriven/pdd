@@ -8,7 +8,8 @@
   "module": {
     "functions": [
       {"name": "build_agentic_v1_artifact", "signature": "(*, loop_state, config, context, final_gate_report) -> AgenticV1Artifact", "returns": "AgenticV1Artifact"},
-      {"name": "_normalize_findings", "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
+      {"name": "_normalize_findings", "signature": "(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
+      {"name": "_blocking_severities", "signature": "(config) -> set", "returns": "lowercased set of blocking severities"},
       {"name": "_deduplicate_findings", "signature": "(findings: List[AgenticFinding]) -> List[AgenticFinding]", "returns": "List[AgenticFinding]"},
       {"name": "_resolve_authority", "signature": "(canonical_status: str, agentic_blocking: bool) -> str", "returns": "one of AGENTIC_AUTHORITY_STATUSES"}
     ]
@@ -47,7 +48,7 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
    - `AgenticBudget(max_rounds_reached: bool, max_minutes_reached: bool, max_cost_reached: bool)`
    - `AgenticV1Artifact` — top-level artifact with fields: `schema_version: str` (constant `AGENTIC_V1_SCHEMA`; **not** `schema`, which shadows a Pydantic v2 `BaseModel` attribute and emits a warning — the serialized JSON key is `schema_version`), `owner: str`, `repo: str`, `pr_number: int`, `head_sha: str`, `mode: str` (`"fix"` or `"nofix"`), `status: str`, `authority: str` (one of `AGENTIC_AUTHORITY_STATUSES`), `layer1: AgenticLayer1`, `reviewers: List[AgenticReviewer]`, `findings: List[AgenticFinding]`, `fix_attempts: List[AgenticFixAttempt]`, `validation_after_fix: AgenticValidationResult`, `fresh_final_review: AgenticFreshFinalReview`, `verdict: AgenticVerdict`, `budget: AgenticBudget`.
 
-2. **`_normalize_findings(text: str, reviewer_name: str) -> List[AgenticFinding]`**: best-effort parser that extracts structured findings from reviewer output text. On parse failure returns `[]` (caller sets reviewer status to `degraded`). All free-text fields (`summary`, `suggested_fix`) are trimmed to `FINDING_TEXT_MAX_CHARS` and routed through `_scrub_secrets` (imported from `pdd.checkup_review_loop`).
+2. **`_normalize_findings(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]`**: best-effort parser that extracts structured findings from reviewer output text. On parse failure returns `[]` (caller sets reviewer status to `degraded`). All free-text fields (`summary`, `suggested_fix`) are trimmed to `FINDING_TEXT_MAX_CHARS` and routed through `_scrub_secrets` (imported from `pdd.checkup_review_loop`). A finding's `blocking` flag is set from whether its severity is in `blocking_severities` (see R7); when the argument is omitted it defaults to `_DEFAULT_BLOCKING_SEVERITIES`.
 
 3. **`_deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding]`**: deduplicates on `(reviewer, path, line, severity)` key; prose-only findings (no path/line) dedup on the first 64 characters of `summary`.
 
@@ -78,6 +79,8 @@ Not responsible for: running the review loop, posting to GitHub, calling subproc
 11. **R5 — Budget booleans at artifact time**: budget booleans are computed fresh from config caps vs actual elapsed values each time `build_agentic_v1_artifact` is called; they MUST NOT be read from persisted loop state.
 
 12. **R6 — Authority is closed and canonical-owned**: `authority` MUST be a member of `AGENTIC_AUTHORITY_STATUSES`, resolved only via `_resolve_authority`. A canonical `fail` MUST resolve to `canonical_fail_agentic_not_authoritative` regardless of the agentic outcome. This module owns the vocabulary; downstream consumers mirror it and never add values.
+
+13. **R7 — Blocking classification mirrors the review-loop policy**: an `AgenticFinding.blocking` flag MUST be derived from the same severity set the review loop gates on. Provide `_blocking_severities(config)`, returning the lowercased set from `config.blocking_severities` and falling back to `_DEFAULT_BLOCKING_SEVERITIES = ("blocker", "critical", "medium")` — byte-for-byte the `ReviewLoopConfig.blocking_severities` default (`pdd.checkup_review_loop.DEFAULT_BLOCKING_SEVERITIES`, gated in `_required_findings`). Apply this set to BOTH normalized raw findings (`_normalize_findings`) and already-structured loop findings. Never hardcode a narrower set such as `{"blocker", "critical"}`: doing so lets an open `medium` finding report as a clean canonical-mirror pass (`canonical_pass_agentic_mirror_clean`) while the canonical loop still treats it as blocking, giving hosted consumers a false clean/pass verdict. An open `medium` structured finding under the default config MUST yield a non-`passed` status, `verdict.decision == "block"`, and (on a canonical `pass`) `canonical_pass_agentic_mirror_blocking`.
 
 % Dependencies
 <pdd.checkup_review_loop>

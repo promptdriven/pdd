@@ -340,6 +340,68 @@ def test_build_artifact_status_vocab_matches_spec():
     assert nh.status == "needs_human"
 
 
+def test_build_artifact_open_medium_finding_is_blocking_under_default_policy():
+    # The artifact's blocking classification must mirror the review-loop policy
+    # (ReviewLoopConfig defaults blocking_severities to blocker/critical/medium).
+    # An open structured `medium` finding under the default config must NOT be
+    # reported as a clean canonical-mirror pass, otherwise hosted consumers get a
+    # false clean verdict for a PR the canonical loop still treats as blocked.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "findings"},
+            findings=[
+                SimpleNamespace(
+                    severity="medium",
+                    reviewer="codex",
+                    finding="material risk",
+                    required_fix="address it",
+                    location="a.py",
+                    status="open",
+                )
+            ],
+            fresh_final_status="clean",
+            stop_reason="findings remain",
+        ),
+        config=ReviewLoopConfig(agentic_mode=True),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    medium = next(f for f in art.findings if f.severity == "medium")
+    assert medium.blocking is True
+    assert art.status != "passed"
+    assert art.verdict.decision == "block"
+    assert art.authority == "canonical_pass_agentic_mirror_blocking"
+
+
+def test_build_artifact_blocking_severities_respects_config_override():
+    # A config that narrows blocking_severities to exclude `medium` must make an
+    # open medium finding non-blocking, proving the classification is driven by
+    # config policy rather than a hardcoded severity set.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "findings"},
+            findings=[
+                SimpleNamespace(
+                    severity="medium",
+                    reviewer="codex",
+                    finding="minor note",
+                    required_fix="optional",
+                    location="a.py",
+                    status="open",
+                )
+            ],
+            fresh_final_status="clean",
+            stop_reason="findings remain",
+        ),
+        config=ReviewLoopConfig(agentic_mode=True, blocking_severities=("blocker", "critical")),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    medium = next(f for f in art.findings if f.severity == "medium")
+    assert medium.blocking is False
+    assert art.authority == "canonical_pass_agentic_mirror_clean"
+
+
 def test_build_artifact_reviewer_command_populated():
     art = build_agentic_v1_artifact(
         loop_state=_state(reviewer_status={"codex": "clean", "claude": "clean"}),
