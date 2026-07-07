@@ -56,10 +56,14 @@ cat /tmp/rb-reports/report.md
 Set `"arm": "command"`, `"agent_command": ["codex", "exec", "--cd", "{workdir}", …]`
 and `"upstream_base_url": "https://api.openai.com"`. Command-arm runs require
 `RunConfig.freeze`; set `allow_unfrozen_command=true` only for harness
-development, never for pilot data. The runner injects `OPENAI_BASE_URL`
-pointing at the recording proxy; confirming the pinned Codex build honors that
-override is the §10 pre-run blocker. Nonzero agent exits abort the trial before
-a benchmark record is written and leave `agent_process.json` for diagnosis.
+development, never for pilot data. The runner routes the agent through the
+recording proxy via the generated frozen config's `model_providers` block
+(plus `OPENAI_BASE_URL`); that the pinned build honors this override is
+**confirmed** for `codex-cli 0.142.4` — see `CODEX_PIN.md` and
+`python3 -m harness.runner.codex_probe`, a zero-billing probe you can rerun
+against any candidate build before re-pinning. Nonzero agent exits abort the
+trial before a benchmark record is written and leave `agent_process.json`
+for diagnosis.
 
 Scenario verifier commands and command-arm `agent_command` entries may use
 `"{workdir}"` for the materialized variant and `"{python}"` for the Python
