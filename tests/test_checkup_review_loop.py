@@ -4887,6 +4887,163 @@ class TestParseHelpers:
         assert result.status == "clean"
         assert result.findings == []
 
+    def test_json_verified_fixed_findings_are_filtered_to_clean(self) -> None:
+        """Verifier rows that only confirm prior findings are fixed are not open bugs."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "Fresh review found no actionable issues.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "file",
+                        "location": "pdd/agentic_checkup_orchestrator.py:2109",
+                        "evidence": (
+                            "Adversarial probe confirmed: "
+                            "_step5_output_has_strong_pass_evidence("
+                            "'- Exit code: 0\\n- 5 passed, 0 failed in 3.21s') "
+                            "returns True."
+                        ),
+                        "finding": (
+                            "has_failure_marker pattern: Now correctly uses "
+                            "\\\\b[1-9]\\\\d*\\\\s+failed\\\\b. \u2713"
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                    {
+                        "severity": "medium",
+                        "area": "prompt",
+                        "location": "pdd/prompts/model_tester_python.prompt:42",
+                        "evidence": "The schema now includes context_limit.",
+                        "finding": (
+                            "model_tester_python.prompt inline CSV schema: "
+                            "Now includes context_limit as the 15th column. \u2713"
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "clean"
+        assert result.findings == []
+
+    def test_verified_fixed_filter_keeps_actionable_now_accepts_finding(self) -> None:
+        """Present-tense defect wording is not proof that a prior finding is fixed."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = (
+            "Finding: [P1] [api/auth.py:42](/tmp/w/api/auth.py:42) "
+            "The endpoint now accepts unauthenticated requests."
+        )
+
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert result.findings[0].location == "api/auth.py:42"
+        assert "unauthenticated" in result.findings[0].finding
+
+    def test_verified_fixed_filter_keeps_required_fix_with_follow_up(self) -> None:
+        """No-op-looking required-fix text with a follow-up action still blocks."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "A test follow-up remains.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "test",
+                        "location": "tests/test_widget.py:12",
+                        "evidence": "The parser behavior has been fixed.",
+                        "finding": "The prior crash is fixed.",
+                        "required_fix": (
+                            "No action required, but add a regression test for "
+                            "the missing case."
+                        ),
+                    }
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert "regression test" in result.findings[0].required_fix
+
+    def test_verified_fixed_filter_allows_benign_not_reproducible_wording(self) -> None:
+        """Resolved prose can contain benign 'not' phrases without blocking."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "Fresh review found no actionable issues.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "file",
+                        "location": "pdd/checkup_review_loop.py:4200",
+                        "evidence": (
+                            "The previous failure is not reproducible; "
+                            "the parser behavior has been fixed."
+                        ),
+                        "finding": "Prior parser failure is not reproducible.",
+                        "required_fix": "No action needed.",
+                    }
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "clean"
+        assert result.findings == []
+
+    def test_verified_fixed_filter_keeps_follow_up_action(self) -> None:
+        """A row with resolved prose plus a remaining action must still block."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "One issue remains.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "prompt",
+                        "location": "pdd/prompts/model_tester_python.prompt:42",
+                        "evidence": (
+                            "The parser now correctly accepts the extra column, "
+                            "but the prompt schema still omits context_limit."
+                        ),
+                        "finding": (
+                            "CSV parsing now works, but the inline schema still "
+                            "needs to list context_limit."
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    }
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert "context_limit" in result.findings[0].finding
+
     def test_markdown_external_status_finding_is_filtered_to_clean(self) -> None:
         """Markdown status-check findings should not keep the fixer looping."""
         from pdd.checkup_review_loop import _parse_review_output
@@ -11311,6 +11468,81 @@ class TestReviewLoopDeterministicGates:
         assert "fresh-final-review: clean" not in report
         # Gate finding must be in the rendered findings table.
         assert "gate:prettier-check" in report
+
+    def test_fallback_reviewer_resolved_rows_do_not_block_clean_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A fallback reviewer may summarize verified fixes without blocking."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch, fail_rounds=())
+
+        fallback_payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "Fresh review passed; prior findings are fixed.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "file",
+                        "location": "pdd/agentic_checkup_orchestrator.py:2109",
+                        "evidence": (
+                            "Adversarial probe confirmed the zero-failed "
+                            "summary returns True."
+                        ),
+                        "finding": (
+                            "has_failure_marker pattern: Now correctly uses "
+                            "\\\\b[1-9]\\\\d*\\\\s+failed\\\\b. \u2713"
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                    {
+                        "severity": "medium",
+                        "area": "prompt",
+                        "location": "pdd/prompts/model_tester_python.prompt:42",
+                        "evidence": "The schema now includes context_limit.",
+                        "finding": (
+                            "model_tester_python.prompt inline CSV schema: "
+                            "Now includes context_limit as the 15th column. \u2713"
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                ],
+            }
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, "Authentication failed", 0.0, role
+            return True, fallback_payload, 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                max_rounds=1,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        final_state_path = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+        )
+        final_state = json.loads(final_state_path.read_text(encoding="utf-8"))
+
+        assert success is True
+        assert "reviewer-status: codex=clean claude=clean fresh-final=clean" in report
+        assert "No findings remain." in report
+        assert final_state["reviewer_status"] == {"codex": "clean", "claude": "clean"}
+        assert final_state["fresh_final_status"] == "clean"
+        assert final_state["findings"] == []
 
     def test_no_gates_flag_preserves_legacy_behavior(
         self, monkeypatch: Any, tmp_path: Path

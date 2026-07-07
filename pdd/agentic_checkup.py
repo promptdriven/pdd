@@ -29,6 +29,8 @@ from .agentic_change import (
 from .agentic_checkup_orchestrator import (
     STEP5_SHELL_EVIDENCE_FILENAME,
     STEP5_SHELL_EVIDENCE_SCHEMA,
+    _is_provider_failure,
+    _is_step_timeout_failure,
     _load_step5_shell_evidence_from_memory,
     run_agentic_checkup_orchestrator,
 )
@@ -364,6 +366,8 @@ def _classify_layer1_failure_category(message: str) -> str:
     """
     text = (message or "").lower()
     if (
+        _layer1_failure_is_provider_or_timeout(message)
+        or
         "verdict json could not be parsed" in text
         or "empty step 7 output" in text
         or "could not be parsed" in text
@@ -638,6 +642,17 @@ def _review_loop_ship_verdict(
 _LAYER1_STEP5_ACTIONABLE_STATUSES = {"failed", "error", "timeout_partial"}
 
 
+def _layer1_failure_is_provider_or_timeout(message: str) -> bool:
+    """Return True when Layer 1 failed before producing a trustworthy verdict."""
+    text = message or ""
+    lowered = text.lower()
+    return (
+        _is_provider_failure(text)
+        or _is_step_timeout_failure(text)
+        or "agent providers unavailable" in lowered
+    )
+
+
 def _load_layer1_step5_evidence(
     project_root: Path,
     pr_number: Optional[int],
@@ -669,14 +684,21 @@ def _load_layer1_step5_evidence(
 
 def _layer1_step5_evidence_is_actionable(
     evidence: Optional[Dict[str, Any]],
+    *,
+    layer1_succeeded: bool = False,
+    layer1_message: str = "",
 ) -> bool:
     """Return True when shell-first Step 5 evidence should drive Layer 2."""
     if not isinstance(evidence, dict):
         return False
-    return (
-        str(evidence.get("status", "")).strip().lower()
-        in _LAYER1_STEP5_ACTIONABLE_STATUSES
-    )
+    if not layer1_succeeded and _layer1_failure_is_provider_or_timeout(layer1_message):
+        return False
+    status = str(evidence.get("status", "")).strip().lower()
+    if status not in _LAYER1_STEP5_ACTIONABLE_STATUSES:
+        return False
+    if layer1_succeeded and status == "timeout_partial":
+        return False
+    return True
 
 
 def _layer1_step5_evidence_for_review(
@@ -1190,6 +1212,9 @@ def run_agentic_checkup(
                 pr_repo=pr_repo,
                 pr_number=pr_number,
                 test_scope=test_scope,
+                defer_step5_to_github_checks=(
+                    final_gate and full_suite_source == "github-checks"
+                ),
                 start_step_override=start_step_override,
             )
         )
@@ -1205,7 +1230,11 @@ def run_agentic_checkup(
     )
     layer1_step5_evidence_for_review = (
         _layer1_step5_evidence_for_review(layer1_step5_evidence)
-        if _layer1_step5_evidence_is_actionable(layer1_step5_evidence)
+        if _layer1_step5_evidence_is_actionable(
+            layer1_step5_evidence,
+            layer1_succeeded=orch_success,
+            layer1_message=orch_message,
+        )
         else ""
     )
 

@@ -34,6 +34,7 @@
     Step 2. Explain in detail step by step what changes need to be made to the input_prompt to generate the modified_prompt based on Step 1. This step describes how to modify the input_prompt to generate the modified_prompt.
         - When introducing retry, reset, or loop-back logic, always specify a maximum retry count and define fallback behavior when retries are exhausted.
     Step 3. Generate the modified_prompt based on Step 2. Except for the change, the rest of the existing functionality of the input_prompt should remain. Structure the prompt similar to the example prompts, especially including the descriptions of the inputs and outputs.
+        - If Step 2 introduced retry, reset, or loop-back logic, the final modified_prompt itself must include a concrete numeric retry limit and exhausted-retry fallback behavior. Do not leave those safety constraints only in your Step 2 explanation. If the change_prompt does not specify a number, choose a conservative default such as "maximum of 3 attempts" and state what to do after all attempts fail.
 
     IMPORTANT: Output the modified prompt between these exact delimiters:
     <<<MODIFIED_PROMPT>>>

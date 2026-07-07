@@ -407,6 +407,40 @@ For a concrete, up-to-date reference of supported models and example rows, see t
 
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
+#### Z.AI (GLM Models)
+
+PDD supports two Z.AI API endpoints:
+
+- **General API** (`https://api.z.ai/api/paas/v4`) — standard prepaid/resource billing, suitable for general use.
+- **GLM Coding Plan** (`https://api.z.ai/api/coding/paas/v4`) — quota-backed subscription plan designed for coding workflows. Diagnostics show it as quota-backed rather than a per-token dollar estimate.
+
+Both endpoints use the same API key. To use the bundled GLM Coding Plan rows:
+
+```bash
+export ZAI_API_KEY=your_zai_api_key_here
+export PDD_MODEL_DEFAULT=glm-5.2
+```
+
+Or in your `.pddrc`:
+
+```yaml
+defaults:
+  model: glm-5.2
+```
+
+The bundled catalog includes rows for `Z.AI` (general API) and `Z.AI Coding Plan` providers. PDD stores these rows as OpenAI-compatible `openai/glm-5.2` model strings with explicit `base_url` values, and resolves a bare user default such as `glm-5.2` to the quota-backed Coding Plan row instead of falling through to an unrelated provider.
+
+To target the per-token General API endpoint (`https://api.z.ai/api/paas/v4`) instead of the Coding Plan endpoint, select the explicit OpenAI-compatible row:
+
+```bash
+export ZAI_API_KEY=your_zai_api_key_here
+export PDD_MODEL_DEFAULT=openai/glm-5.2
+```
+
+Structured-output forcing is disabled for Z.AI rows until Z.AI schema support is verified; `reasoning_effort` is enabled through PDD's normal `low`/`medium`/`high` effort mapping.
+
+Run `pdd setup` with `ZAI_API_KEY` set to have PDD detect Z.AI and include it in the provider configuration.
+
 ## Troubleshooting Common Installation Issues
 
 1. **Command not found**
@@ -3596,6 +3630,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments before GitHub comment polling; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_WORKFLOW_STATE`**: Hidden GitHub comment marker used to persist and resume agentic workflow state across machines. Users normally do not set this directly; delete the state comment only when intentionally forcing a clean restart.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
+- **`PDD_GITHUB_TOKEN`**: Legacy GitHub personal access token used by agentic orchestrators (checkup, e2e fix) as a fallback when `GH_TOKEN` and `GITHUB_TOKEN` are not set. Checked after `GH_TOKEN` and `GITHUB_TOKEN` in the token resolution order; prefer those standard variables for new setups. No default; only used if explicitly set.
 
 **Mid-run issue comment steering** (issue-driven orchestrators): humans comment on the GitHub issue to steer a run in progress. The CLI drains comments at step boundaries (separate from `PDD_USER_FEEDBACK`, which is only for between-run retries). `/stop` and label removal cancel jobs in **pdd_cloud**, not via organic comments. Clarification pauses (`STOP_CONDITION`) resume when new comments arrive; workflow state uses `last_steered_comment_id` for idempotency. Automated orchestrator wiring checks live in `tests/test_mid_run_steer_orchestrator_integration.py`; see `docs/mid_run_steering_validation.md`.
 

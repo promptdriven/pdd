@@ -1882,10 +1882,18 @@ def _build_estimate_payload(
         else None
     )
 
-    pricing = _completion_cost_from_pricing_api(
-        input_tokens,
-        predicted_output_tokens,
-        model_name,
+    # Quota/subscription-backed providers have no per-token list price.
+    # Skip the pricing API so cost fields stay null (unknown_cost=True).
+    _provider_str = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    _is_quota_provider = "coding plan" in _provider_str
+    pricing = (
+        None
+        if _is_quota_provider
+        else _completion_cost_from_pricing_api(
+            input_tokens,
+            predicted_output_tokens,
+            model_name,
+        )
     )
 
     input_rate = None
@@ -2899,7 +2907,8 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
 
         # Convert numeric columns, handling potential errors
         numeric_cols = ['input', 'output', 'coding_arena_elo', 'model_rank_score',
-                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens']
+                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens',
+                        'context_limit']
         for col in numeric_cols:
             if col in df.columns:
                 # Use errors='coerce' to turn unparseable values into NaN
@@ -3045,6 +3054,28 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     if not base_model_name:
         return []
     alternatives: List[Tuple[str, str]] = []
+    z_ai_openai_compatible_models = {
+        "glm-5.2",
+        "glm-5-turbo",
+        "glm-5.1",
+        "glm-5",
+        "glm-4.7",
+    }
+    if base_model_name in z_ai_openai_compatible_models:
+        # Z.AI's current GLM endpoints are OpenAI-compatible, so the catalog
+        # stores them as openai/<model> with endpoint-specific base_url rows.
+        # Try those rows before the generic surrogate-base fallback so a user
+        # default like PDD_MODEL_DEFAULT=glm-5.2 cannot silently select an
+        # unrelated first CSV row. Coding Plan is first because its rows are
+        # quota-backed and are the ZCode-specific path from issue #1827; a
+        # user CSV containing only the general row still resolves on the
+        # second alternative.
+        alternatives.extend(
+            [
+                (f"openai/{base_model_name}", "Z.AI Coding Plan"),
+                (f"openai/{base_model_name}", "Z.AI"),
+            ]
+        )
     for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
         if base_model_name.startswith(prefix):
             # Strip the prefix; only consider rows from the matching provider.
@@ -5566,7 +5597,9 @@ def llm_invoke(
                     # call (e.g. github_copilot device-code OAuth) can't wedge
                     # the entire LLM invocation. See pdd/server/token_counter.py.
                     token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
-                    context_limit = get_context_limit(model_name_litellm)
+                    context_limit = _catalog_context_limit(model_info)
+                    if context_limit is None:
+                        context_limit = get_context_limit(model_name_litellm)
                     token_count_for_attribution = token_count
                     context_limit_for_attribution = context_limit
 
