@@ -1776,6 +1776,16 @@ class TestTimeouts:
                 f"Step {label}: expected timeout={expected}, got {timeout}"
             )
 
+    def test_checkup_steps_disable_git_worktree_env(self, mock_dependencies, default_args):
+        """Checkup agent steps must not leak GIT_WORK_TREE into repo test suites."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        assert mock_run.call_count > 0
+        for call_obj in mock_run.call_args_list:
+            assert call_obj.kwargs.get("set_git_work_tree") is False
+
     def test_timeout_adder_applied(self, mock_dependencies, default_args):
         """timeout_adder should be added to each step's timeout."""
         mock_run, _, _, _ = mock_dependencies
