@@ -39,6 +39,14 @@ class JudgmentResult:
 
 CALL_SITE_NAMES = ("ingest", "transform", "export_csv", "audit_log")
 
+_CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
+    r"\b(?:unpack|destructur\w*|capture|assign|use|check|inspect|handle|"
+    r"update|adapt|adjust|modify)\b.{0,120}\b(?:is_valid|reason)\b|"
+    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack|destructur\w*|capture|"
+    r"assign|use|check|inspect|handle|update|adapt|adjust|modify)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _RETRY_BOUND_PATTERNS = [
     re.compile(
         r"\b(?:retry|retries|attempt|attempts)\s+"
@@ -89,7 +97,7 @@ _FALLBACK_ACTION_PATTERN = re.compile(
 
 
 def _judge_call_site_names(prompt_output: str) -> JudgmentResult:
-    """Check that all target call-site names appear literally in the output."""
+    """Check that every named call site is told to handle the new tuple."""
     missing = [
         name
         for name in CALL_SITE_NAMES
@@ -100,9 +108,17 @@ def _judge_call_site_names(prompt_output: str) -> JudgmentResult:
             passed=False,
             reasoning="Missing required call-site name(s): " + ", ".join(missing),
         )
+    if not _CALL_SITE_TUPLE_HANDLING_PATTERN.search(prompt_output):
+        return JudgmentResult(
+            passed=False,
+            reasoning=(
+                "Missing instructions for callers to handle the new "
+                "(is_valid, reason) tuple."
+            ),
+        )
     return JudgmentResult(
         passed=True,
-        reasoning="All required call-site names are present.",
+        reasoning="All required call-site names and tuple-handling instructions are present.",
     )
 
 
@@ -248,13 +264,28 @@ class TestDeterministicChangeJudges:
 
     def test_call_site_judge_requires_all_names(self) -> None:
         judgment = _judge_call_site_names(
-            "Update ingest, transform, export_csv, and audit_log callers."
+            "Update ingest, transform, export_csv, and audit_log so each "
+            "caller unpacks (is_valid, reason) and checks is_valid."
         )
         assert judgment.passed
 
-        missing = _judge_call_site_names("Update ingest, transform, and export_csv.")
+        missing = _judge_call_site_names(
+            "Update ingest, transform, and export_csv so each caller "
+            "unpacks (is_valid, reason)."
+        )
         assert not missing.passed
         assert "audit_log" in missing.reasoning
+
+    def test_call_site_judge_rejects_name_only_output(self) -> None:
+        unchanged = _judge_call_site_names(CALL_SITE_INPUT_PROMPT)
+        assert not unchanged.passed
+        assert "tuple" in unchanged.reasoning
+
+        copied_inputs = _judge_call_site_names(
+            CALL_SITE_INPUT_PROMPT + "\n" + CALL_SITE_CHANGE_PROMPT
+        )
+        assert not copied_inputs.passed
+        assert "tuple" in copied_inputs.reasoning
 
     def test_retry_bound_judge_requires_numeric_limit(self) -> None:
         judgment = _judge_retry_bound("Retry up to 3 times before failing.")
