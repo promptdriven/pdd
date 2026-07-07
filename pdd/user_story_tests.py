@@ -1561,6 +1561,10 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 )
                 if not quiet:
                     rprint(f"[bold]FAIL[/bold] {story_path}")
+                    rprint("")
+                    rprint("  Missing or stale behavior:")
+                    rprint(f"  - {results[-1]['error']}")
+                    rprint(f"  Next step:  pdd fix {story_path}")
                 if fail_fast:
                     break
                 continue
@@ -1603,6 +1607,15 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         if not quiet:
             status = "PASS" if passed else "FAIL"
             rprint(f"[bold]{status}[/bold] {story_path}")
+            if not passed:
+                rprint("")
+                rprint("  Linked prompts:")
+                for _p in story_prompt_files:
+                    rprint(f"  - {_p}")
+                rprint("  Missing or stale behavior:")
+                for _change in changes_list:
+                    rprint(f"  - {_change['change_instructions']}")
+                rprint(f"  Next step:  pdd fix {story_path}")
 
         if fail_fast and not passed:
             break

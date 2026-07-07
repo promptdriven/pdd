@@ -1773,6 +1773,116 @@ def test_user_story_fix_without_contract_passes_story_directly(tmp_path):
     assert mock_change.call_args[1]["change_prompt_file"] == str(story_path)
 
 
+# Issue #1873 — diagnostic failure output
+
+
+def test_failure_diagnostic_output_quiet_false(tmp_path, capsys, monkeypatch):
+    """R1: full diagnostic block appears on failure when quiet=False."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__failure.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support for X"}
+    ]
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (changes, 0.5, "gpt-test")
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+        )
+
+    assert passed is False
+    captured = capsys.readouterr()
+    # Normalize output: rprint may wrap long paths across lines.
+    out = captured.out.replace("\n", "")
+    assert "FAIL" in out
+    assert "user_stories/story__failure.md" in out
+    assert "Linked prompts:" in out
+    assert "prompts/foo_python.prompt" in out
+    assert "Missing or stale behavior:" in out
+    assert "prompts/foo_python.prompt: Add support for X" in out
+    assert "Next step:" in out
+    assert "pdd fix user_stories/story__failure.md" in out
+
+
+def test_failure_diagnostic_output_quiet_true(tmp_path, capsys, monkeypatch):
+    """R2: diagnostic block is suppressed when quiet=True."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__failure.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    changes = [
+        {"prompt_name": "foo_python.prompt", "change_instructions": "Add support for X"}
+    ]
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = (changes, 0.5, "gpt-test")
+        passed, results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=True,
+        )
+
+    assert passed is False
+    captured = capsys.readouterr()
+    out = captured.out
+    assert "Linked prompts:" not in out
+    assert "Missing or stale behavior:" not in out
+    assert "Next step:" not in out
+
+
+def test_failure_diagnostic_metadata_resolution_failure(tmp_path, capsys, monkeypatch):
+    """R1 metadata-resolution path: diagnostic block uses error message when no prompts resolved."""
+    monkeypatch.chdir(tmp_path)
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__noprompts.md"
+    story.write_text(
+        "As a user...\n<!-- pdd-story-prompts: nonexistent_python.prompt -->\n",
+        encoding="utf-8",
+    )
+
+    passed, results, _cost, _model = run_user_story_tests(
+        prompts_dir="prompts",
+        stories_dir="user_stories",
+        quiet=False,
+    )
+
+    assert passed is False
+    captured = capsys.readouterr()
+    # Normalize output: rprint may wrap long paths across lines.
+    out = captured.out.replace("\n", "")
+    assert "FAIL" in out
+    assert "Linked prompts:" in out
+    assert "none resolved from pdd-story-prompts metadata" in out
+    assert "unresolved: nonexistent_python.prompt" in out
+    assert "Missing or stale behavior:" in out
+    assert "Next step:" in out
+    assert "pdd fix user_stories/story__noprompts.md" in out
+
+
 def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch):
     """Explicit --prompt inputs must all be linked, without an LLM call.
 

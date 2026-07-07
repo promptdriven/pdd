@@ -248,6 +248,23 @@ appear exactly once with a comma-separated "Scope" column listing all dev units.
 Single-unit stories appear normally. Do not double-count a cross-unit story across
 multiple dev-unit lanes.
 
+<contract_rules>
+R1 (MUST): When a story fails and `quiet` is false, print after `FAIL {story_path}`:
+a blank line; a `Linked prompts:` block with one `- {path}` line per entry in
+`story_prompt_files`; a `Missing or stale behavior:` block with one
+`- {prompt}: {change["change_instructions"]}` line per entry in `changes_list`,
+where `{prompt}` is the change's `prompt_name` resolved to one of the evaluated
+prompt paths when possible; and the line `Next step:  pdd fix {story_path}` using
+a story path relative to the current working directory when possible. Display all
+dynamic diagnostic values literally, preserving characters such as `[tenant]` in
+paths or behavior text. On the metadata-resolution failure path (no prompts
+resolved), still print `Linked prompts:` with a
+`- none resolved from pdd-story-prompts metadata` line plus one
+`- unresolved: {ref}` line per unresolved metadata ref, and use `result["error"]`
+as the single `Missing or stale behavior:` line.
+R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
+</contract_rules>
+
 % Requirements
 1. **Story and prompt discovery**
    - Story directory defaults to `user_stories` and supports `PDD_USER_STORIES_DIR`.

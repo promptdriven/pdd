@@ -763,6 +763,11 @@ Commands:
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
 - Story validation prints PASS/FAIL and exits non-zero if any story fails. `pdd detect --stories` does not support `--output`; use `--evidence` to write machine-readable run evidence.
 
+Failure output:
+- When a story fails, `pdd detect --stories` prints the linked prompt paths,
+  a concise description of the missing or stale behavior, and a
+  `pdd fix user_stories/story__<slug>.md` next-step command.
+
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:
   `<!-- pdd-story-prompts: prompts/a_python.prompt, prompts/b_python.prompt -->`

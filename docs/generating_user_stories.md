@@ -277,6 +277,23 @@ Story mode prints PASS/FAIL for each story and exits non-zero if any story
 fails. `--output` is not supported with `--stories`; use `--evidence` when CI
 needs a machine-readable run manifest.
 
+When a story fails, the output names every linked prompt that was evaluated,
+describes the missing or stale behavior, and suggests the exact command to
+repair it:
+
+```
+FAIL user_stories/story__my_feature.md
+
+  Linked prompts:
+  - prompts/my_feature_python.prompt
+  Missing or stale behavior:
+  - prompts/my_feature_python.prompt: The prompt no longer guarantees the user receives a confirmation message after the action completes.
+  Next step:  pdd fix user_stories/story__my_feature.md
+```
+
+Run the `pdd fix` command shown in the output to apply the story back to the
+prompts and re-validate.
+
 `pdd change` also runs story validation after a prompt modification, so stories
 act as a regression gate during normal development.
 
