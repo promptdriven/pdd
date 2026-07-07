@@ -40,6 +40,7 @@ def _mark_command_failed(ctx: click.Context) -> None:
     if isinstance(ctx.obj, dict):
         ctx.obj["_command_failed"] = True
 
+
 @click.command("detect")
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.option(

@@ -72,8 +72,9 @@ def _capture_summary(invoked_subcommands, results):
         with ctx:
             try:
                 process_commands(results=results)
-            except click.exceptions.Exit:
-                pass
+            except click.exceptions.Exit as exc:
+                if exc.exit_code != 1:
+                    raise
             
     return ["".join(str(arg) for arg in call.args) for call in mock_print.call_args_list]
 
