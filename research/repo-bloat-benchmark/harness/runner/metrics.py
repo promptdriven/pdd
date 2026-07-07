@@ -120,6 +120,8 @@ def build_run_record(
     wall_clock_seconds: float,
     timeout_seconds: float,
     context_overflow: bool = False,
+    env_fingerprint_sha256: str | None = None,
+    cli_version: str | None = None,
 ) -> dict:
     """Assemble one design-§6.3 run record (JSONL-ready dict)."""
     records = sorted(records, key=lambda r: r.ordinal)
@@ -208,6 +210,10 @@ def build_run_record(
         "timeout_seconds": timeout_seconds,
         "manifest_sha256": manifest_sha256,
         "fs_tap_enabled": False,
+        # §8.1.1: null means the run was NOT environment-frozen (mock arm or
+        # harness development); real pilot records must carry both values.
+        "env_fingerprint_sha256": env_fingerprint_sha256,
+        "cli_version": cli_version,
         # Cost.
         "iterations_total": trajectory.iterations_total,
         "iterations_before_first_edit": trajectory.iterations_before_first_edit,
