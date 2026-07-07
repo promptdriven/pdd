@@ -433,7 +433,7 @@ def test_github_checks_gate_ignores_nonapplicable_skipped_checks(
     assert success is True
     assert head_sha == "sha123"
     assert "passed on PR head sha123" in message
-    assert "Ignored non-applicable skipped/neutral checks" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
     assert "included skipped checks" not in message
 
 
@@ -483,7 +483,7 @@ def test_github_checks_gate_fails_when_any_applicable_check_failed(
     assert success is False
     assert "GitHub checks failed" in message
     assert "full suite" in message
-    assert "Ignored non-applicable skipped/neutral checks" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
 
 
 def test_github_checks_gate_fails_when_any_applicable_check_pending(
@@ -509,7 +509,7 @@ def test_github_checks_gate_fails_when_any_applicable_check_pending(
     assert success is False
     assert "were pending, stale, or not reported" in message
     assert "slow suite" in message
-    assert "Ignored non-applicable skipped/neutral checks" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
 
 
 def test_github_checks_gate_required_only_fails_unknown_check_bucket(

@@ -870,8 +870,8 @@ def run_github_checks_gate(
         def _with_surface(message: str) -> str:
             if non_applicable:
                 message += (
-                    "\n\nIgnored non-applicable skipped/neutral checks:\n"
-                    f"{ignored_summary}"
+                    "\n\nIgnored non-applicable skipped/neutral/manual-action "
+                    f"checks:\n{ignored_summary}"
                 )
             if unknown:
                 message += (
@@ -889,6 +889,10 @@ def run_github_checks_gate(
                 ),
                 head_sha,
             )
+        # Pending applicable checks still BLOCK (deliberate deviation from issue
+        # #1902's "wait then ignore"): a genuinely stuck required check must not
+        # be shipped. The poller already waited out its timeout before returning
+        # these as pending.
         if pending:
             return (
                 False,
