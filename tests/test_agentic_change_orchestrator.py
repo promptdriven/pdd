@@ -2863,6 +2863,96 @@ def test_valid_resume_when_issue_unchanged(mock_dependencies, temp_cwd):
     # The key indicator is that steps 1-4 were skipped (workflow resumed, not restarted).
 
 
+def test_bot_only_updated_at_drift_resumes_without_clearing(mock_dependencies, temp_cwd):
+    """#1738 end-to-end: when the issue ``updated_at`` drifted only because of
+    PDD's own bot/progress/state comments, the orchestrator must RESUME the saved
+    workflow (skip steps 1-4) instead of clearing and restarting from step 1.
+
+    Drives the real ``issue_update_should_clear_workflow_state`` ->
+    ``drain_issue_steers`` path with the GitHub comment fetch mocked to return
+    only ignored PDD comments — including a hidden state comment whose edit
+    ``updated_at`` (12:05:00Z) is later than the issue ``updated_at`` (11:59:30Z),
+    exactly the shape observed on promptdriven/pdd_cloud#2516.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+
+    stored_ts = "2024-01-01T10:00:00Z"
+    initial_state = {
+        "issue_number": 555,
+        "last_completed_step": 4,
+        "step_outputs": {"1": "out1", "2": "out2", "3": "out3", "4": "out4"},
+        "total_cost": 1.0,
+        "model_used": "gpt-4",
+        "issue_updated_at": stored_ts,
+        "last_steered_comment_id": "1000",
+        "last_steer_at": stored_ts,
+        "steer_cursor_seeded": True,
+    }
+    mock_load_state.return_value = (initial_state, 12345)
+
+    bot_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 5/13: Implement fix",
+            "created_at": "2024-01-02T11:59:00Z",
+            "updated_at": "2024-01-02T11:59:00Z",
+        },
+        {
+            # Hidden state comment edited after posting: its updated_at is ahead
+            # of the issue updated_at (comment edits don't bump issue.updated_at).
+            "id": 1002,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2024-01-02T11:59:30Z",
+            "updated_at": "2024-01-02T12:05:00Z",
+        },
+    ]
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_CREATED: new.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "Arch updated", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created https://github.com/test/repo/pull/789", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # issue.updated_at drifted to the last new bot comment's created_at.
+    current_ts = "2024-01-02T11:59:30Z"
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/bin/gh"), \
+         patch(
+             "pdd.agentic_common._fetch_issue_comments_via_gh",
+             return_value=(bot_comments, None),
+         ):
+        success, _, cost, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=555,
+            issue_author="me",
+            issue_title="Bot Drift Test",
+            issue_updated_at=current_ts,
+            cwd=temp_cwd,
+        )
+
+    assert success is True
+
+    # Resumed from the cached step: steps 1-4 skipped (NOT restarted at step 1).
+    labels_called = [call.kwargs.get("label") for call in mock_run.call_args_list]
+    assert "step1" not in labels_called, "bot-only drift must not restart from step 1"
+    assert "step4" not in labels_called, "bot-only drift must not re-run cached steps"
+    assert "step5" in labels_called, "workflow should resume from the cached step"
+
+
 def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_cwd):
     """
     Test that old state without issue_updated_at field still works
@@ -4478,6 +4568,46 @@ def test_check_hard_stop_step4_requires_stop_condition_tag():
     )
 
 
+def test_check_hard_stop_step4_route_redirect_marker():
+    """Step 4 ROUTE_REDIRECT: bug_fix is a hard stop even without STOP_CONDITION."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    output = (
+        "ROUTE_REDIRECT: bug_fix\n"
+        "ROUTE_RATIONALE: issue reports the generated CLI crashes with KeyError"
+    )
+
+    result = _check_hard_stop(4, output)
+    assert result == "Runtime bug route needed: issue reports the generated CLI crashes with KeyError"
+
+
+def test_check_hard_stop_step4_route_redirect_marker_must_be_line_anchored():
+    """Negated prose mentioning ROUTE_REDIRECT must not stop valid change requests."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    output = (
+        "<step_report>\n"
+        "## Step 4: Requirements Clarity Check\n"
+        "\n"
+        "**Status:** Requirements Clear\n"
+        "\n"
+        "No ROUTE_REDIRECT: bug_fix is needed because this is a source-truth change.\n"
+        "</step_report>"
+    )
+
+    assert _check_hard_stop(4, output) is None
+
+
+def test_check_hard_stop_step4_runtime_route_stop_condition():
+    """Step 4 also accepts the runtime-route STOP_CONDITION safety marker."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert (
+        _check_hard_stop(4, "STOP_CONDITION: Runtime bug route needed")
+        == "Runtime bug route needed: use pdd bug followed by pdd fix"
+    )
+
+
 def test_check_hard_stop_step7_requires_stop_condition_tag():
     """
     _check_hard_stop should only trigger for Step 7 when the output contains
@@ -4571,6 +4701,19 @@ def test_step4_prompt_has_stop_condition_instruction():
     assert "CRITICAL" in prompt_content
 
 
+def test_step4_prompt_redirects_runtime_symptoms_to_bug_fix():
+    """Step 4 prompt must redirect runtime bugs away from change/sync."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step4_clarify_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    assert "Route safety check before clarity analysis" in prompt_content
+    assert "structural runtime signals > behavioral runtime" in prompt_content
+    assert "ROUTE_REDIRECT: bug_fix" in prompt_content
+    assert "ROUTE_RATIONALE:" in prompt_content
+    assert "STOP_CONDITION: Runtime bug route needed" in prompt_content
+    assert "`pdd bug {issue_url}` followed by `pdd fix {issue_url}`" in prompt_content
+
+
 def test_change_step_prompts_do_not_post_github_comments_directly():
     """Successful step progress comments are orchestrator-owned."""
     prompts_dir = Path(__file__).parent.parent / "pdd" / "prompts"
@@ -4638,6 +4781,98 @@ def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
     assert success is False
     assert "Stopped at step 4" in msg
     assert mocks["run"].call_count == 4
+
+
+def test_step4_route_redirect_stops_change_workflow(mock_dependencies, temp_cwd):
+    """A runtime-bug redirect at Step 4 must stop before change implementation."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, **kwargs):
+        if label == "step4":
+            return (
+                True,
+                "ROUTE_REDIRECT: bug_fix\n"
+                "ROUTE_RATIONALE: issue reports the generated CLI crashes",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/901",
+        issue_content="The prompt should be updated because the generated CLI crashes.",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=901,
+        issue_author="user",
+        issue_title="Generated CLI crashes",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 4" in msg
+    assert "Runtime bug route needed" in msg
+    assert mocks["run"].call_count == 4
+
+
+def test_step4_source_truth_route_continues_end_to_end_with_negated_redirect_marker(
+    mock_dependencies,
+    temp_cwd,
+):
+    """A source-truth change mentioning no redirect needed must reach PR creation."""
+    mocks = mock_dependencies
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False, **kwargs):
+        if label == "step4":
+            return (
+                True,
+                "<step_report>\n"
+                "## Step 4: Requirements Clarity Check\n"
+                "\n"
+                "**Status:** Requirements Clear\n"
+                "\n"
+                "No ROUTE_REDIRECT: bug_fix is needed because this is a "
+                "source-truth requirement with no current runtime failure.\n"
+                "</step_report>",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/source_truth_python.prompt", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/o/r/pull/901", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/o/r/issues/902",
+        issue_content="Add a new prompt requirement so future generated code supports JSON output.",
+        repo_owner="o",
+        repo_name="r",
+        issue_number=902,
+        issue_author="user",
+        issue_title="Add source truth requirement",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    labels = [call.kwargs.get("label") for call in mocks["run"].call_args_list]
+    assert success is True
+    assert "PR Created: https://github.com/o/r/pull/901" in msg
+    assert "prompts/source_truth_python.prompt" in files
+    assert "step13" in labels
 
 
 def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):

@@ -1295,6 +1295,92 @@ def _steer_body_for_llm(body: str) -> str:
     return process_pdd_tags(body).strip()
 
 
+def _comment_activity_timestamp(comment: Dict[str, Any]) -> Optional[str]:
+    """Return the timestamp GitHub uses for issue-comment ``since`` filtering."""
+    updated_at = comment.get("updated_at")
+    if updated_at:
+        return str(updated_at)
+    created_at = comment.get("created_at")
+    if created_at:
+        return str(created_at)
+    return None
+
+
+def _parse_github_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_after(candidate: Optional[str], baseline: Optional[str]) -> bool:
+    if not candidate or not baseline:
+        return False
+    candidate_dt = _parse_github_timestamp(candidate)
+    baseline_dt = _parse_github_timestamp(baseline)
+    if candidate_dt is not None and baseline_dt is not None:
+        return candidate_dt > baseline_dt
+    return str(candidate) > str(baseline)
+
+
+def _timestamp_at_or_before(candidate: Optional[str], baseline: Optional[str]) -> bool:
+    """True when *candidate* is at or before *baseline* (both GitHub timestamps).
+
+    Returns False when either value is missing so an absent baseline never
+    silently explains a drift.
+    """
+    if not candidate or not baseline:
+        return False
+    candidate_dt = _parse_github_timestamp(candidate)
+    baseline_dt = _parse_github_timestamp(baseline)
+    if candidate_dt is not None and baseline_dt is not None:
+        return candidate_dt <= baseline_dt
+    return str(candidate) <= str(baseline)
+
+
+def _issue_comments_since_query(since: Optional[str]) -> Optional[str]:
+    """Step the GitHub comments ``since`` cursor back slightly.
+
+    GitHub filters issue comments by update time at second precision. Querying
+    one second before the stored cursor avoids missing comments edited/created
+    in the same second; local id/timestamp checks keep the drain idempotent.
+    """
+    parsed = _parse_github_timestamp(since)
+    if parsed is None:
+        return since
+    query_time = (parsed - timedelta(seconds=1)).replace(microsecond=0)
+    return query_time.isoformat().replace("+00:00", "Z")
+
+
+def _is_ignored_github_steer_comment(comment: Dict[str, Any]) -> bool:
+    """True for GitHub comments that are PDD/state/progress noise, not steers."""
+    user = comment.get("user", {}) or {}
+    if user.get("type") == "Bot":
+        return True
+
+    body = str(comment.get("body", "") or "")
+    return _is_pdd_status_comment_body(body)
+
+
+def _is_pdd_status_comment_body(body: str) -> bool:
+    """True for PDD-generated state/progress/status comment bodies."""
+    if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
+        return True
+    if "PDD-INCREMENTAL-STATUS" in body:
+        return True
+    if "PDD_WORKFLOW_STATE" in body:
+        return True
+    return bool(re.search(r"^## Step \d+/\d+:", body, re.MULTILINE))
+
+
 STEER_STATE_KEYS = (
     "last_steered_comment_id",
     "last_steer_at",
@@ -1381,6 +1467,17 @@ def issue_update_should_clear_workflow_state(
         repo_owner, repo_name, issue_number, scratch, cwd=cwd
     )
     if pending:
+        merge_steer_state(scratch, state)
+        return False
+    # Issue #1738: the ``updated_at`` drift is harmless when it is fully
+    # explained by PDD's own ignored bot/state/progress comments. ``drain`` has
+    # advanced ``last_steer_at`` to the latest ignored comment activity it
+    # observed (created *or* edited), so preserve state whenever the issue
+    # timestamp is at or before that activity. Editing a comment does not bump
+    # the issue ``updated_at`` (only new comments / body / title / label edits
+    # do), so a genuine external edit pushes ``updated_at`` strictly past all
+    # observed comment activity and still clears.
+    if _timestamp_at_or_before(current_updated_at, scratch.get("last_steer_at")):
         merge_steer_state(scratch, state)
         return False
 
@@ -6711,10 +6808,10 @@ def _run_interactive_pty_until_reply(
     """Run an interactive CLI under a PTY until the MCP reply file appears.
 
     When ``stall_timeout`` is set, a no-progress watchdog (issue #1714) aborts
-    the run if the session transcript stops growing for that many seconds — a
-    parked TUI keeps the PTY busy with spinner frames, so only transcript growth
-    counts as real progress. ``None`` (default) leaves the run bounded solely by
-    the hard ``timeout``.
+    the run if the session transcript cannot be located or stops growing for
+    that many seconds — a parked TUI keeps the PTY busy with spinner frames, so
+    only transcript availability/growth counts as real progress. ``None``
+    (default) leaves the run bounded solely by the hard ``timeout``.
 
     When ``session_id`` is provided, the loop also fast-fails on a post-launch
     authentication failure (Issue #1365): a revoked or logged-out interactive
@@ -6798,9 +6895,7 @@ def _run_interactive_pty_until_reply(
                     # the watchdog the first time the transcript can actually be
                     # read — baselining its current size so pre-existing content on
                     # a resumed session is not mistaken for growth, and starting the
-                    # stall clock from this moment. If the transcript can never be
-                    # located the watchdog stays disarmed and the run falls back to
-                    # the hard timeout (never a spurious kill of a healthy run).
+                    # stall clock from this moment.
                     if not stall_armed:
                         stall_armed = True
                         stall_last_size = current_size
@@ -6822,6 +6917,17 @@ def _run_interactive_pty_until_reply(
                     if auth_failure is not None and quiescent:
                         _terminate_pty_proc_graceful(proc)
                         return False, auth_failure, 0.0, None
+                elif _stall_watchdog_triggered(start, now, stall_timeout):
+                    _terminate_pty_proc_graceful(proc)
+                    tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                    return (
+                        False,
+                        f"Claude interactive mode stalled: session transcript was "
+                        f"not located for {stall_timeout:.0f}s (issue #1714 "
+                        f"no-progress watchdog). Output tail: {tail}",
+                        0.0,
+                        None,
+                    )
                 next_auth_check = now + INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS
 
             # Issue #1714 no-progress watchdog: abort a stalled run (transcript
@@ -8170,11 +8276,12 @@ def seed_issue_steer_cursor(
             cid_val = 0
         if cid_val > max_id_val:
             max_id_val = cid_val
-        created_at = comment.get("created_at")
-        if created_at and (
-            latest_timestamp is None or created_at > latest_timestamp
+        activity_at = _comment_activity_timestamp(comment)
+        if activity_at and (
+            latest_timestamp is None
+            or _timestamp_after(activity_at, latest_timestamp)
         ):
-            latest_timestamp = created_at
+            latest_timestamp = activity_at
 
     if max_id_val >= 0:
         state["last_steered_comment_id"] = str(max_id_val)
@@ -8287,6 +8394,8 @@ def drain_issue_steers(
                 if cid_val <= last_id_val:
                     continue
                 raw_body = str(entry.get("body", ""))
+                if _is_pdd_status_comment_body(raw_body):
+                    continue
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
@@ -8322,7 +8431,7 @@ def drain_issue_steers(
         repo_name,
         issue_number,
         cwd=cwd,
-        since=since if since else None,
+        since=_issue_comments_since_query(since) if since else None,
     )
     if comments is None:
         return []
@@ -8344,26 +8453,33 @@ def drain_issue_steers(
             cid_val = int(cid) if cid is not None else 0
         except (ValueError, TypeError):
             cid_val = 0
+        activity_at = _comment_activity_timestamp(comment)
+
         if cid_val <= last_id_val:
+            if (
+                _is_ignored_github_steer_comment(comment)
+                and activity_at
+                and (
+                    latest_timestamp is None
+                    or _timestamp_after(activity_at, latest_timestamp)
+                )
+            ):
+                latest_timestamp = activity_at
+            continue
+
+        if cid_val > max_id_val:
+            max_id_val = cid_val
+        if activity_at and (
+            latest_timestamp is None
+            or _timestamp_after(activity_at, latest_timestamp)
+        ):
+            latest_timestamp = activity_at
+
+        if _is_ignored_github_steer_comment(comment):
             continue
 
         user = comment.get("user", {}) or {}
-        if user.get("type") == "Bot":
-            continue
-
         body = str(comment.get("body", "") or "")
-
-        # Filter out PDD state/progress markers and bot/status comments.
-        if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
-            continue
-        if "PDD-INCREMENTAL-STATUS" in body:
-            continue
-        if "PDD_WORKFLOW_STATE" in body:
-            continue
-        if re.search(r"^## Step \d+/\d+:", body, re.MULTILINE):
-            continue
-
-        created_at = comment.get("created_at")
         author = str(user.get("login", "unknown") or "unknown")
 
         new_steers.append(
@@ -8374,14 +8490,11 @@ def drain_issue_steers(
             )
         )
 
-        if cid_val > max_id_val:
-            max_id_val = cid_val
-        if latest_timestamp is None or (created_at and created_at > latest_timestamp):
-            latest_timestamp = created_at
-
-    if new_steers:
+    if max_id_val > last_id_val:
         state["last_steered_comment_id"] = str(max_id_val)
+    if latest_timestamp and latest_timestamp != since:
         state["last_steer_at"] = latest_timestamp
+    if new_steers:
         state["steer_generation"] = state.get("steer_generation", 0) + 1
         return new_steers
 

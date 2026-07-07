@@ -36,7 +36,8 @@ Business-value requirements:
 Visual requirements:
 - Use the PDS script format exactly:
   - Every spoken narration block starts with `NARRATOR:` on its own line.
-  - Every non-spoken visual cue starts with `VISUAL:` on its own line.
+  - Every non-spoken visual cue is written on one line as `VISUAL: <cue text>`.
+- Do not put `VISUAL:` by itself with the cue text on the next line.
 - Visual cues must be detailed enough for an automated video generator to create relevant scenes.
 - For every `VISUAL:` cue, include specific screen/UI/content direction, not generic phrases.
 - Prefer visuals that reveal the product and workflow: terminal commands, before/after output, GitHub release page, changelog snippets, failing/passing checks, audit files, config snippets, PR/issue references, diagrams of the workflow, and short code/doc excerpts.

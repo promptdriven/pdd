@@ -1,6 +1,7 @@
 """Tests for pdd.agentic_checkup_orchestrator module."""
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -10,11 +11,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pdd.agentic_common import DEFAULT_MAX_RETRIES
 from pdd.agentic_checkup_orchestrator import (
+    CHECKUP_STEP_STALL_TIMEOUTS,
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
+    STEP_ID_MAP,
     STEP_ORDER,
     TOTAL_STEPS,
+    _CHECKUP_STEPS,
+    _build_state,
     _copy_uncommitted_changes,
     _discard_clean_run_side_effects,
     _format_pr_changed_files_for_prompt,
@@ -30,6 +36,7 @@ from pdd.agentic_checkup_orchestrator import (
     _pr_base_tracking_ref,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
+    _step7_human_success_report_passed,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -71,6 +78,28 @@ STEP5_CLEAN_OUTPUT = (
 
 
 class TestStep5ShellFirstEvidence:
+    def test_targeted_step5_can_defer_to_github_checks(self, tmp_path):
+        context = {
+            "pr_mode": "true",
+            "pr_test_scope": "targeted",
+            "defer_step5_to_github_checks": "true",
+            "pr_changed_files": "Base: main\n- M: pdd/provider.py",
+        }
+
+        result = _targeted_non_code_step5_result(
+            context,
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is not None
+        success, output, cost, model = result
+        assert success is True
+        assert cost == 0.0
+        assert model == "deterministic-step5-github-checks"
+        assert "GitHub checks gate" in output
+        assert "status: pass" in output
+
     def test_selects_existing_python_tests_from_changed_modules(self, tmp_path):
         (tmp_path / "pdd").mkdir()
         (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -93,7 +122,9 @@ class TestStep5ShellFirstEvidence:
             encoding="utf-8",
         )
         env_token = "customToken123456789"
+        gh_env_token = "anotherCustomToken987654321"
         gh_token = "ghp_" + "A" * 36
+        monkeypatch.setenv("GH_TOKEN", gh_env_token)
         monkeypatch.setenv("GITHUB_TOKEN", env_token)
         context = {
             "pr_mode": "true",
@@ -106,6 +137,7 @@ class TestStep5ShellFirstEvidence:
             stdout=(
                 "FAILED tests/test_widget.py::test_breaks\n"
                 f"Authorization: Bearer {gh_token}\n"
+                f"gh env token: {gh_env_token}\n"
                 f"env token: {env_token}\n"
             ),
             stderr="",
@@ -139,8 +171,10 @@ class TestStep5ShellFirstEvidence:
         assert "tests/test_widget.py::test_breaks" in memory_text
         artifact_text = memory_text
         assert gh_token not in artifact_text
+        assert gh_env_token not in artifact_text
         assert env_token not in artifact_text
         assert gh_token not in context["step5_shell_evidence"]
+        assert gh_env_token not in context["step5_shell_evidence"]
         assert env_token not in context["step5_shell_evidence"]
         assert run_mock.call_args.args[0][-1] == "tests/test_widget.py"
 
@@ -1756,6 +1790,50 @@ class TestTimeouts:
             expected = CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + 100.0
             assert timeout == expected
 
+    def test_reasoning_steps_pass_no_progress_watchdog(
+        self, mock_dependencies, default_args
+    ):
+        """Discovery-style checkup steps should fail fast on transcript stalls."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        calls_by_label = {
+            call_obj.kwargs.get("label", ""): call_obj
+            for call_obj in mock_run.call_args_list
+        }
+
+        assert calls_by_label["step1"].kwargs.get("stall_timeout") == (
+            CHECKUP_STEP_STALL_TIMEOUTS[1]
+        )
+        assert calls_by_label["step2"].kwargs.get("stall_timeout") == (
+            CHECKUP_STEP_STALL_TIMEOUTS[2]
+        )
+        assert calls_by_label["step3_iter1"].kwargs.get("stall_timeout") is None
+        assert calls_by_label["step5_iter1"].kwargs.get("stall_timeout") is None
+        assert calls_by_label["step7_iter1"].kwargs.get("stall_timeout") is None
+
+    def test_step5_and_step7_use_single_provider_attempts(
+        self, mock_dependencies, default_args
+    ):
+        """Provider-timeout-sensitive gates should not silently retry."""
+        mock_run, _, _, _ = mock_dependencies
+
+        run_agentic_checkup_orchestrator(**default_args)
+
+        for call_obj in mock_run.call_args_list:
+            label = call_obj.kwargs.get("label", "")
+            max_retries = call_obj.kwargs.get("max_retries")
+            timeout = call_obj.kwargs.get("timeout")
+            if label.startswith("step7"):
+                assert max_retries == 1
+                assert timeout == CHECKUP_STEP_TIMEOUTS[7]
+            elif label.startswith("step5"):
+                assert max_retries == 1
+                assert timeout == CHECKUP_STEP_TIMEOUTS[5]
+            else:
+                assert max_retries == DEFAULT_MAX_RETRIES
+
 
 # ---------------------------------------------------------------------------
 # Consecutive Provider Failure Abort
@@ -1813,6 +1891,164 @@ class TestProviderFailureAbort:
         # Steps 1-2 fail but don't hit 3 consecutive, then steps 3+ succeed.
         assert success is True
         assert mock_run.call_count == 10
+
+    def test_step7_provider_timeout_aborts_without_restarting_fix_loop(
+        self, mock_dependencies, default_args
+    ):
+        """A final verification provider timeout is infrastructure, not a fix loop."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "gpt-4")
+            if label.startswith("step7"):
+                return (
+                    False,
+                    "All agent providers failed: anthropic: Claude interactive mode timed out",
+                    0.0,
+                    "",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 7" in msg
+        assert "timed out" in msg
+        assert "step3_iter2" not in labels
+
+    def test_step5_provider_timeout_aborts_without_running_fixer(
+        self, mock_dependencies, default_args
+    ):
+        """A test-step provider timeout must not be handed to Step 6 as test output."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    "All agent providers failed: anthropic: Claude interactive mode timed out",
+                    0.0,
+                    "",
+                )
+            if label.startswith("step7"):
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "timed out" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
+
+    def test_step5_provider_timeout_dominates_test_like_tail(
+        self, mock_dependencies, default_args
+    ):
+        """Provider timeout stays terminal even when its output tail has pytest text."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    (
+                        "All agent providers failed: anthropic: Claude interactive "
+                        "mode timed out. Output tail:\n"
+                        "FAILED tests/test_agentic_checkup.py::test_probe\n"
+                        "short test summary info"
+                    ),
+                    0.0,
+                    "",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "timed out" in msg
+        assert "no fixer step was started" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
+
+    def test_step5_interactive_timeout_aborts_without_running_fixer(
+        self, mock_dependencies, default_args
+    ):
+        """A provider timeout string without the provider-exhaustion sentinel is terminal."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    "anthropic: Claude interactive mode timed out. Output tail: spinner",
+                    0.0,
+                    "",
+                )
+            if label.startswith("step7"):
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "timed out" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
+
+    def test_step5_unsuccessful_gate_aborts_without_sentinel(
+        self, mock_dependencies, default_args
+    ):
+        """A Step 5 provider failure is infrastructure even without a stable marker."""
+        mock_run, _, _, _ = mock_dependencies
+        labels: List[str] = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if label.startswith("step5"):
+                return (
+                    False,
+                    "Provider returned no usable Step 5 verdict. Output tail: spinner",
+                    0.0,
+                    "",
+                )
+            if label.startswith("step7"):
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Step 5" in msg
+        assert "Test execution did not complete" in msg
+        assert not any(label.startswith("step6") for label in labels)
+        assert not any(label.startswith("step7") for label in labels)
 
 
 # ---------------------------------------------------------------------------
@@ -3425,6 +3661,63 @@ def _pr_patches_1212(
 
 class TestTargetedPrStep7Exit:
     """Targeted PR mode can exit on the structured Step 7 verdict."""
+
+    def test_hosted_human_step7_requires_test_pass_evidence(self):
+        missing_test_pass_evidence = (
+            "## Step 7/8: Verification & Final Report\n\n"
+            "### Overall Status\n"
+            "All findings resolved. No remaining issues.\n\n"
+            "### Test Results\n"
+            "**Failed:** 0\n"
+            "**New failures:** 0\n\n"
+            "### Acceptance Criteria Verification\n"
+            "issue_aligned: true\n\n"
+            "### Summary\n"
+            "All fixed. The working tree is clean.\n"
+        )
+
+        assert _step7_human_success_report_passed(
+            missing_test_pass_evidence,
+            pr_mode=True,
+            has_issue=True,
+        ) is False
+
+    def test_hosted_human_step7_pass_exits_without_legacy_marker(self, tmp_path):
+        labels: List[str] = []
+        hosted_step7_pass = (
+            "## Step 7: Verify Fixes - Fix-Verify Iteration 1\n\n"
+            "**Status:** All findings resolved. Tests pass.\n\n"
+            "### Findings from Previous Review\n"
+            "- Both prior medium findings are resolved and verified.\n\n"
+            "### Test Results\n"
+            "**Total:** 147 passed, 0 failed, 1 pre-existing warning\n\n"
+            "### Acceptance Criteria Verification\n"
+            "| Criterion | Test | Status |\n"
+            "| Z.AI Coding Plan endpoint | E2E integration tests | Pass |\n\n"
+            "### Summary\n"
+            "No remaining issues. Both medium-severity findings from the previous "
+            "review loop are resolved and verified. The working tree is clean. "
+            "All 147 Z.AI-related tests pass.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            labels.append(kwargs.get("label", ""))
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, hosted_step7_pass, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "step7_iter1" in labels
+        assert "step3_iter2" not in labels
 
     def test_structured_targeted_pass_exits_without_legacy_marker(self, tmp_path):
         labels: List[str] = []
@@ -5810,6 +6103,162 @@ class TestIssue1215Round8Step5MissingFailureSignal:
     `failure_signal` block must fail closed — the fixer must run rather
     than the run being declared clean on broken tests."""
 
+    def test_provider_success_hosted_pass_evidence_without_signal_skips_fixer(
+        self, tmp_path
+    ):
+        invoked = []
+        hosted_pass_output = (
+            "## Step 5/8: Test Execution\n\n"
+            "### Results Summary\n"
+            "- **Total:** 1206 tests\n"
+            "- **Passed:** 1206\n"
+            "- **Failed:** 0\n"
+            "- **Skipped:** 3 (pre-existing interactive-only model tests, unrelated to PR)\n"
+            "- **Errors:** 0\n\n"
+            "### Batch Details\n"
+            "| Batch | Tests | Result |\n"
+            "|-------|-------|--------|\n"
+            "| Z.AI integration + catalog + model tester + pass evidence | "
+            "tests/test_e2e_issue_1827_zai_integration.py, "
+            "test_generate_model_catalog.py, test_model_tester.py, "
+            "test_agentic_checkup_step5_pass_evidence.py | 154 passed in 3.07s |\n"
+            "| LLM invoke + provider + update costs + track cost + token counter | "
+            "test_llm_invoke.py, test_provider_manager.py, test_update_model_costs.py, "
+            "test_track_cost.py, server/test_token_counter.py | 521 passed, 2 skipped in 15.42s |\n"
+            "| Checkup PR mode + final gate + agentic checkup + checkup review loop | "
+            "test_checkup_pr_mode.py, test_final_pr_gate.py, test_agentic_checkup.py, "
+            "test_checkup_review_loop.py | 531 passed, 1 skipped in 209.42s |\n\n"
+            "### Failures\n"
+            "*(none)*\n\n"
+            "### Z.AI-specific test confirmation\n"
+            "All Z.AI GLM Coding Plan tests confirmed passing:\n"
+            "- `test_zai_coding_plan_kwargs_use_coding_endpoint` passed\n"
+            "- All E2E integration tests in test_e2e_issue_1827_zai_integration.py passed\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, hosted_pass_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert 6.1 not in invoked, (
+            "Strong hosted pass evidence without failure_signal must be treated "
+            f"as a prompt-contract defect, not a test failure; steps={invoked}"
+        )
+        assert 7 in invoked
+
+    def test_provider_success_targeted_pass_summary_without_signal_skips_fixer(
+        self, tmp_path
+    ):
+        invoked = []
+        hosted_targeted_pass_output = (
+            "## Step 5: Test Suite Results\n\n"
+            "**Status:** All targeted tests passed - no failures\n\n"
+            "The full test suite for PR #1831 timed out in the shell-first pass "
+            "(180s limit).\n\n"
+            "| Test Batch | Result |\n"
+            "|------------|--------|\n"
+            "| `tests/test_provider_manager.py` + `tests/server/test_token_counter.py` | "
+            "passed |\n\n"
+            "All Z.AI GLM Coding Plan tests confirmed passing.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, hosted_targeted_pass_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "test_scope": "targeted"}
+            )
+
+        assert success is True, msg
+        assert 6.1 not in invoked, (
+            "Strong targeted hosted pass evidence without failure_signal must "
+            f"skip speculative fixes; steps={invoked}"
+        )
+        assert 7 in invoked
+
+    def test_provider_success_targeted_all_tests_pass_total_line_skips_fixer(
+        self, tmp_path
+    ):
+        invoked = []
+        hosted_targeted_pass_output = (
+            "## Step 5: Test Suite Results\n\n"
+            "**Status:** All tests pass — no failures\n\n"
+            "The full targeted test suite for PR #1831 was run in batches "
+            "(the prior shell run timed out at 180s due to the large "
+            "`test_agentic_checkup_orchestrator.py` suite taking ~7.5 minutes "
+            "alone).\n\n"
+            "| Test File(s) | Result |\n"
+            "|---|---|\n"
+            "| `tests/test_agentic_checkup.py` | 43 passed |\n"
+            "| `tests/test_agentic_checkup_orchestrator.py` | 259 passed |\n\n"
+            "**Total: 1468 passed, 3 skipped, 0 failed**\n\n"
+            "No test failures. The PR #1831 changes are test-clean across all "
+            "targeted test files.\n"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            invoked.append(step_num)
+            if step_num == 5:
+                return (True, hosted_targeted_pass_output, 0.1, "model")
+            if step_num == 6.1:
+                return (True, "FILES_MODIFIED: pdd/main.py\n", 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=[],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path, "test_scope": "targeted"}
+            )
+
+        assert success is True, msg
+        assert 6.1 not in invoked, (
+            "Strong targeted hosted aggregate pass evidence without "
+            f"failure_signal must skip speculative fixes; steps={invoked}"
+        )
+        assert 7 in invoked
+
     def test_provider_success_no_failure_signal_block_invokes_fixer(self, tmp_path):
         invoked = []
 
@@ -6759,6 +7208,21 @@ class TestNumstatRenameParsing:
 class TestStep7PassedMeritReview:
     """The Step 7 verdict gate under #1292's optional-issue PR mode."""
 
+    HOSTED_VERIFY_FIXES_REPORT = (
+        "## Step 7: Verify Fixes - Fix-Verify Iteration 1\n\n"
+        "**Status:** All findings resolved. Tests pass.\n\n"
+        "### Findings from Previous Review\n"
+        "- Both prior medium findings are resolved and verified.\n\n"
+        "### Test Results\n"
+        "**Total:** 147 passed, 0 failed, 1 pre-existing warning\n\n"
+        "### Acceptance Criteria Verification\n"
+        "| Criterion | Test | Status |\n"
+        "| Z.AI Coding Plan endpoint | E2E integration tests | Pass |\n\n"
+        "### Summary\n"
+        "No remaining issues. Both medium-severity findings from the previous "
+        "review loop are resolved and verified. The working tree is clean. "
+        "All 147 Z.AI-related tests pass.\n"
+    )
     MERIT_VERDICT = (
         '```json\n'
         '{"success": true, "message": "ok", "issues": [], "changed_files": []}\n'
@@ -6926,6 +7390,31 @@ class TestStep7PassedMeritReview:
 
         passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
         assert not passed  # issue_aligned still required by default
+
+    def test_hosted_verify_fixes_human_report_passes_without_json(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.HOSTED_VERIFY_FIXES_REPORT,
+            pr_mode=True,
+            has_issue=True,
+        )
+        assert passed, reason
+
+    def test_hosted_verify_fixes_human_report_requires_issue_alignment(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        unaligned_report = self.HOSTED_VERIFY_FIXES_REPORT.replace(
+            "### Acceptance Criteria Verification\n",
+            "",
+        )
+
+        passed, _reason = _step7_passed(
+            unaligned_report,
+            pr_mode=True,
+            has_issue=True,
+        )
+        assert not passed
 
     def test_targeted_pr_blocks_out_of_diff_critical_without_structured_reason(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -7286,3 +7775,334 @@ class TestCompanionSourceOfTruthPaths2047:
 
         monkeypatch.setattr(orch, "_load_prompt_source_map", lambda _wt: None)
         assert orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"}) == set()
+
+
+# ---------------------------------------------------------------------------
+# Per-step telemetry (issue #1709) — step_telemetry persisted in workflow state
+# so pdd_cloud durable runs can attribute cost/status/model to each CLI step.
+# ---------------------------------------------------------------------------
+
+
+def _capture_saved_states(default_args, **extra_args):
+    """Run the orchestrator, capturing every persisted workflow-state dict.
+
+    Patches ``save_workflow_state`` (called on every ``_save_state``) and
+    deep-copies each state via a JSON round-trip, because the live
+    ``step_telemetry`` list is mutated in place across saves.
+    """
+    captured: List[dict] = []
+
+    def _capture(**kwargs):
+        captured.append(json.loads(json.dumps(kwargs["state"])))
+        return kwargs.get("github_comment_id")
+
+    args = {**default_args, **extra_args}
+    with patch(
+        "pdd.agentic_checkup_orchestrator.save_workflow_state", side_effect=_capture
+    ):
+        result = run_agentic_checkup_orchestrator(**args)
+    return result, captured
+
+
+def _final_telemetry(captured: List[dict]) -> List[dict]:
+    """Return the telemetry list from the captured state with the most entries."""
+    if not captured:
+        return []
+    richest = max(captured, key=lambda s: len(s.get("step_telemetry", [])))
+    return richest.get("step_telemetry", [])
+
+
+class TestStepTelemetry:
+    def test_step_id_map_is_corrected_and_stable(self):
+        """STEP_ID_MAP mirrors the real ``steps`` slugs, not pdd-change names."""
+        # Keys cover exactly STEP_ORDER (no extra/missing internal numbers).
+        assert set(STEP_ID_MAP.keys()) == set(STEP_ORDER)
+        # Issue #1709's correction: steps 1-4 are discover/deps/build/interfaces,
+        # NOT request_resolved/plan_built/research/requirements_clear.
+        assert STEP_ID_MAP[1] == "discover"
+        assert STEP_ID_MAP[2] == "deps"
+        assert STEP_ID_MAP[3] == "build"
+        assert STEP_ID_MAP[4] == "interfaces"
+        assert STEP_ID_MAP[5] == "test"
+        assert STEP_ID_MAP[6.1] == "fix"
+        assert STEP_ID_MAP[6.2] == "regression_tests"
+        assert STEP_ID_MAP[6.3] == "e2e_tests"
+        assert STEP_ID_MAP[7] == "verify"
+        assert STEP_ID_MAP[8] == "create_pr"
+        # No id encodes a STEP_ORDER float position (e.g. "5", "6_1", "6.1").
+        for slug in STEP_ID_MAP.values():
+            assert not slug.replace("_", "").replace(".", "").isdigit()
+
+    def test_step_order_and_id_map_derive_from_single_table(self):
+        """STEP_ORDER and STEP_ID_MAP derive from _CHECKUP_STEPS, so the step
+        number/slug/description triple has exactly one source of truth and the
+        derived structures cannot drift from it."""
+        assert STEP_ORDER == [num for num, _slug, _desc in _CHECKUP_STEPS]
+        assert STEP_ID_MAP == {num: slug for num, slug, _desc in _CHECKUP_STEPS}
+        # Slugs are unique (a duplicate would collide telemetry step_ids).
+        slugs = [slug for _num, slug, _desc in _CHECKUP_STEPS]
+        assert len(slugs) == len(set(slugs))
+        # Every step carries a non-empty human description for the telemetry
+        # ``name`` fallback.
+        assert all(desc for _num, _slug, desc in _CHECKUP_STEPS)
+
+    def test_build_state_round_trips_step_telemetry(self):
+        """``_build_state`` surfaces the param and defaults to [] when None."""
+        entry = {
+            "step_id": "fix",
+            "internal_step": 6.1,
+            "name": "Fixing discovered issues",
+            "status": "completed",
+            "cost_usd": 0.1842,
+            "model": "claude-opus-4-8",
+            "iteration": 1,
+            "completed_at": "2026-06-22T20:12:20+00:00",
+        }
+        state = _build_state(
+            1, "url", 6.1, {"6_1": "out"}, 0.1842, "claude-opus-4-8", None,
+            step_telemetry=[entry],
+        )
+        assert state["step_telemetry"] == [entry]
+        # Existing keys are untouched (purely additive).
+        assert state["total_cost"] == 0.1842
+        assert state["last_completed_step"] == 6.1
+        assert state["step_outputs"] == {"6_1": "out"}
+
+        # Omitting the param yields an empty list, not a missing key — so a
+        # consumer can always read ``state["step_telemetry"]``.
+        bare = _build_state(1, "url", 0, {}, 0.0, "unknown", None)
+        assert bare["step_telemetry"] == []
+
+    def test_completed_run_records_per_step_telemetry(self, mock_dependencies, default_args):
+        """A full run writes a telemetry entry per reached step with stable ids,
+        and ``sum(cost_usd)`` reconciles with the persisted ``total_cost``."""
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry to be persisted"
+
+        valid_ids = set(STEP_ID_MAP.values())
+        for entry in telemetry:
+            assert entry["step_id"] in valid_ids
+            assert entry["status"] in {"completed", "failed", "skipped"}
+            assert isinstance(entry["cost_usd"], (int, float))
+            assert isinstance(entry["model"], str)
+            assert "completed_at" in entry
+
+        # Every once-only linear step is recorded as completed.
+        recorded = {e["step_id"] for e in telemetry}
+        for slug in ("discover", "deps", "build", "interfaces", "test", "verify", "create_pr"):
+            assert slug in recorded
+
+        # Reconciliation invariant (issue #1709 AC): the telemetry costs sum to
+        # the persisted cumulative total for a fresh (non-resumed) run.
+        richest = max(captured, key=lambda s: len(s.get("step_telemetry", [])))
+        assert sum(e["cost_usd"] for e in telemetry) == pytest.approx(
+            richest["total_cost"]
+        )
+
+    def test_no_fix_records_skipped_steps(self, mock_dependencies, default_args):
+        """--no-fix bypass sites record status='skipped', cost_usd=0 entries."""
+        _result, captured = _capture_saved_states(default_args, no_fix=True)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry even in --no-fix mode"
+
+        by_id = {}
+        for entry in telemetry:
+            by_id[entry["step_id"]] = entry
+
+        # Fix sub-steps and PR creation are skipped, not run.
+        for slug in ("fix", "regression_tests", "e2e_tests", "create_pr"):
+            assert slug in by_id, f"missing skipped entry for {slug}"
+            assert by_id[slug]["status"] == "skipped"
+            assert by_id[slug]["cost_usd"] == 0.0
+            assert by_id[slug]["model"] == ""
+
+    def test_resume_preserves_prior_telemetry_without_duplication(
+        self, mock_dependencies, default_args
+    ):
+        """A state file with partial telemetry is preserved across a re-run —
+        already-completed entries are neither dropped nor duplicated."""
+        cwd = default_args["cwd"]
+        state_dir = _get_state_dir(cwd)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        seed = _build_state(
+            default_args["issue_number"],
+            default_args["issue_url"],
+            2,  # last_completed_step: discover + deps done
+            {"1": "discovered", "2": "audited"},
+            0.2,
+            "gpt-4",
+            None,
+            mode="issue",
+            step_telemetry=[
+                {
+                    "step_id": "discover", "internal_step": 1, "name": "Discover",
+                    "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+                    "iteration": 1, "completed_at": "2026-06-22T20:10:00+00:00",
+                },
+                {
+                    "step_id": "deps", "internal_step": 2, "name": "Deps",
+                    "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+                    "iteration": 1, "completed_at": "2026-06-22T20:10:30+00:00",
+                },
+            ],
+        )
+        state_file = state_dir / f"checkup_state_{default_args['issue_number']}.json"
+        state_file.write_text(json.dumps(seed), encoding="utf-8")
+
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+
+        # The two seeded entries survive resume — exactly once each.
+        discover = [e for e in telemetry if e["step_id"] == "discover"]
+        deps = [e for e in telemetry if e["step_id"] == "deps"]
+        assert len(discover) == 1
+        assert len(deps) == 1
+        assert discover[0]["completed_at"] == "2026-06-22T20:10:00+00:00"
+
+    # -- issue #1709 item 1: started_at on every entry --------------------
+
+    def test_every_entry_has_ordered_started_and_completed_at(
+        self, mock_dependencies, default_args
+    ):
+        """Every telemetry entry from a full run carries both timestamps,
+        with ``started_at <= completed_at`` (issue #1709 item 1)."""
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry to be persisted"
+
+        for entry in telemetry:
+            assert "started_at" in entry, f"missing started_at: {entry}"
+            assert "completed_at" in entry
+            # ISO-8601 strings are lexically orderable when same offset/format.
+            started = _dt.datetime.fromisoformat(entry["started_at"])
+            completed = _dt.datetime.fromisoformat(entry["completed_at"])
+            assert started <= completed, (
+                f"started_at must not be after completed_at: {entry}"
+            )
+
+    def test_skipped_entry_started_equals_completed(
+        self, mock_dependencies, default_args
+    ):
+        """Skipped steps never begin, so ``started_at == completed_at``
+        (zero-duration marker rather than a missing field)."""
+        _result, captured = _capture_saved_states(default_args, no_fix=True)
+        telemetry = _final_telemetry(captured)
+        skipped = [e for e in telemetry if e["status"] == "skipped"]
+        assert skipped, "expected skipped entries in --no-fix mode"
+        for entry in skipped:
+            assert "started_at" in entry
+            assert entry["started_at"] == entry["completed_at"]
+
+    def test_started_at_backward_compatible_load(self):
+        """A pre-follow-up entry (no ``started_at``) still round-trips through
+        ``_build_state`` unchanged — old state files must keep loading."""
+        legacy = {
+            "step_id": "discover", "internal_step": 1, "name": "Discover",
+            "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+            "iteration": 1, "completed_at": "2026-06-22T20:10:00+00:00",
+        }
+        state = _build_state(
+            1, "url", 1, {}, 0.1, "gpt-4", None, step_telemetry=[legacy],
+        )
+        assert state["step_telemetry"] == [legacy]
+        assert "started_at" not in state["step_telemetry"][0]
+
+
+# ---------------------------------------------------------------------------
+# Per-step telemetry embedded into the Step-7 final report (issue #1709 item 3)
+# ---------------------------------------------------------------------------
+
+
+def _sample_telemetry() -> List[dict]:
+    return [
+        {
+            "step_id": "discover", "internal_step": 1, "name": "Discover",
+            "status": "completed", "cost_usd": 0.1234, "model": "gpt-4",
+            "iteration": 1, "started_at": "2026-06-22T20:10:00+00:00",
+            "completed_at": "2026-06-22T20:10:05+00:00",
+        },
+        {
+            "step_id": "verify", "internal_step": 7, "name": "Verify",
+            "status": "completed", "cost_usd": 0.5, "model": "claude-opus-4-8",
+            "iteration": 1, "started_at": "2026-06-22T20:12:00+00:00",
+            "completed_at": "2026-06-22T20:12:30+00:00",
+        },
+    ]
+
+
+class TestReportTelemetryEmbedding:
+    def test_json_report_block_gains_step_telemetry(self):
+        """The structured JSON report in step7_output gets a top-level
+        ``step_telemetry`` array (issue #1709 item 3)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "Verification complete.\n"
+            "```json\n"
+            '{"success": true, "issue_aligned": true, "issues": []}\n'
+            "```"
+        )
+        telemetry = _sample_telemetry()
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=telemetry
+        )
+        # The embedded JSON block now parses with the telemetry array.
+        from pdd.agentic_checkup import _extract_json_from_text
+        payload = _extract_json_from_text(body)
+        assert payload is not None
+        assert payload["success"] is True
+        assert payload["step_telemetry"] == telemetry
+        # Original keys are preserved (purely additive).
+        assert payload["issue_aligned"] is True
+
+    def test_markdown_section_present(self):
+        """A compact per-step telemetry table is appended to the report."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "All Issues Fixed\n"
+            "```json\n"
+            '{"success": true, "issues": []}\n'
+            "```"
+        )
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=_sample_telemetry()
+        )
+        assert "Per-Step Telemetry" in body
+        # Slug, status, model, and a timestamp all surface in the table.
+        assert "discover" in body
+        assert "claude-opus-4-8" in body
+        assert "2026-06-22T20:12:30+00:00" in body
+        assert "0.1234" in body
+
+    def test_report_unchanged_without_telemetry(self):
+        """Omitting telemetry reproduces the legacy report verbatim
+        (backward-compatible)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "All Issues Fixed\n"
+            "```json\n"
+            '{"success": true, "issues": []}\n'
+            "```"
+        )
+        legacy = _format_pr_mode_final_report(step7_output, "")
+        with_empty = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=[]
+        )
+        assert legacy == with_empty
+        assert "Per-Step Telemetry" not in legacy
+
+    def test_report_without_json_block_still_gets_markdown(self):
+        """A Step-7 output with no parseable JSON block keeps its body and
+        still gains the markdown telemetry table (JSON injection is a no-op,
+        the human-readable surface still carries the data)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = "Plain-text verdict with no JSON block."
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=_sample_telemetry()
+        )
+        assert "Plain-text verdict" in body
+        assert "Per-Step Telemetry" in body

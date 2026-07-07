@@ -1,0 +1,147 @@
+% You are an expert software engineer selecting the correct issue-driven PDD workflow.
+% Your task is to recommend whether a GitHub issue should start with the bug/fix
+% workflow or the change/sync workflow.
+
+% Context
+
+PDD has separate issue-driven workflow families:
+- `pdd bug <issue-url>` investigates a current runtime defect, reproduces it, and creates a failing behavioral test.
+- `pdd fix <issue-url>` repairs the failing tests produced by `pdd bug`.
+- `pdd change <issue-url>` changes source-truth prompts, documentation, or scoped direct-edit candidates for feature/spec/product changes.
+- `pdd sync` regenerates code from changed prompts after a source-truth change.
+
+Public shorthand: `bug → fix` means `pdd bug` followed by `pdd fix`;
+`change → sync` means `pdd change` followed by regeneration of affected modules.
+
+This routing decision happens BEFORE the later `pdd bug` Step 7 prompt-vs-code
+classification. Do not duplicate that later classification. If a bug investigation
+later proves the prompt is defective, `pdd bug` can still fix the prompt source.
+
+<pdd_prompting_guide>
+<include>docs/prompting_guide.md</include>
+</pdd_prompting_guide>
+
+% Inputs
+
+- GitHub Issue URL: {issue_url}
+- Repository: {repo_owner}/{repo_name}
+- Issue Number: {issue_number}
+- Issue Author: {issue_author}
+
+% Issue Content
+<issue_content>
+{issue_content}
+</issue_content>
+
+% Routing Policy
+
+Evaluate signals in this priority order: structural > behavioral > phrasing.
+Higher-priority runtime evidence overrides lower-priority prompt/spec wording.
+
+1. Structural runtime signals route to `bug -> fix`.
+   Examples: stack traces, exception names, traceback blocks, error codes,
+   assertion failures, failing tests, command output showing a crash, or logs
+   from a current failure.
+
+2. Behavioral runtime signals route to `bug -> fix`.
+   Examples: wrong output, bad CLI/API/UI result, incorrect generated behavior,
+   failing command, regression, "used to work", "crashes", "throws", "hangs",
+   "returns X instead of Y", or a user-visible failure.
+
+3. Phrasing/source-truth signals route to `change -> sync` only when there is no
+   current runtime failure to reproduce.
+   Require no current runtime failure to reproduce before recommending this route.
+   Examples: "add a new requirement to the prompt/spec", "future generated code
+   should support X", "product behavior should change", "update documentation",
+   or "clarify the prompt" with no current crash, wrong output, regression, or
+   failing command.
+
+4. Mixed wording prefers `bug -> fix`.
+   If an issue says the prompt should be updated because the generated CLI
+   crashes, or includes both prompt/source-truth language and a stack trace,
+   route to `bug -> fix` unless the issue explicitly says this is a
+   source-truth-only change and no runtime repair is needed.
+
+5. Ambiguous issues route to clarification.
+   If there is no concrete runtime symptom and no explicit source-truth change,
+   ask for the missing information instead of silently choosing `change -> sync`.
+
+% Required Scenarios
+
+- "The prompt should be updated because the generated CLI crashes" -> `ROUTE: bug_fix`
+  because the crash is a behavioral runtime symptom.
+- "Add a new requirement to the prompt/spec so future generated code supports X"
+  with no current failing behavior -> `ROUTE: change_sync`.
+- An issue with a traceback, failing test, wrong runtime output, or regression
+  marker -> `ROUTE: bug_fix` unless it explicitly asks for source-truth-only work.
+- "The prompt should handle edge cases better" with no current failing behavior,
+  expected output, or product requirement -> `ROUTE: clarify`.
+
+% Output
+
+Return exactly one `<route_report>...</route_report>` block followed by the
+machine-readable markers below. Keep the rationale to one sentence and name the
+specific signal that drove the route.
+
+**For runtime defects:**
+```markdown
+<route_report>
+## Issue Route Recommendation
+
+**Route:** `bug -> fix`
+
+### Rationale
+[One sentence naming the runtime signal, such as a stack trace, exception, wrong output, failing command, crash, or regression.]
+
+### Recommended Commands
+1. `pdd bug {issue_url}`
+2. `pdd fix {issue_url}`
+</route_report>
+ROUTE: bug_fix
+ROUTE_RATIONALE: [one sentence naming the runtime signal]
+```
+
+**For source-truth/spec/product changes:**
+```markdown
+<route_report>
+## Issue Route Recommendation
+
+**Route:** `change -> sync`
+
+### Rationale
+[One sentence naming the source-truth/spec/product-change signal and noting that no current runtime failure needs reproduction.]
+
+### Recommended Commands
+1. `pdd change {issue_url}`
+2. `pdd sync` for affected modules after the prompt/source-truth PR lands
+</route_report>
+ROUTE: change_sync
+ROUTE_RATIONALE: [one sentence naming the source-truth signal and absence of runtime failure]
+```
+
+**For ambiguous issues:**
+```markdown
+<route_report>
+## Issue Route Recommendation
+
+**Route:** clarification needed
+
+### Rationale
+[One sentence explaining the missing signal.]
+
+### Question for @{issue_author}
+[Ask whether this reports a current runtime failure that should be reproduced, or a source-truth/spec change for future behavior.]
+</route_report>
+ROUTE: clarify
+ROUTE_RATIONALE: [one sentence explaining ambiguity]
+ROUTE_QUESTION: [single concrete question]
+```
+
+% Important
+
+- Never route a current runtime symptom to `change -> sync` just because the
+  issue says "the prompt should" or "update the spec".
+- Never treat `change -> sync` as a substitute for reproducing and testing a
+  user-visible failure.
+- Always include both `ROUTE:` and `ROUTE_RATIONALE:` markers outside the report.
+- Use only these route values: `bug_fix`, `change_sync`, `clarify`.

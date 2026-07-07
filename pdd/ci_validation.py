@@ -25,6 +25,71 @@ FAIL_BUCKETS = {"fail", "cancel"}
 PENDING_BUCKETS = {"pending"}
 SKIP_BUCKETS = {"skip", "skipped", "skipping"}
 FINAL_GATE_PASS_BUCKETS = {"pass"}
+ACTION_REQUIRED_STATES = {"action_required"}
+ACTION_REQUIRED_BUCKETS = {"action_required"}
+FAILURE_STATES = {"failure", "failed", "cancelled", "canceled", "timed_out", "startup_failure"}
+KNOWN_CHECK_BUCKETS = PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS | ACTION_REQUIRED_BUCKETS
+ACTIONABLE_FAILURE_LOG_MARKERS = (
+    "assertionerror",
+    "build failed",
+    "can't resolve",
+    "cannot find module",
+    "cannot resolve",
+    "compilation failed",
+    "could not resolve",
+    "eslint",
+    "failed to compile",
+    "flake8",
+    "go test",
+    "importerror",
+    "javac",
+    "module not found",
+    "modulenotfounderror",
+    "mvn test",
+    "mypy",
+    "npm err!",
+    "pnpm test",
+    "pytest",
+    "ruff",
+    "syntaxerror",
+    "test failed",
+    "tests failed",
+    "traceback (most recent call last)",
+    "tsc ",
+    "unittest",
+    "yarn test",
+)
+GENERIC_CI_CHECK_NAME_MARKERS = (
+    "actions",
+    "build",
+    "check",
+    "ci",
+    "continuous integration",
+    "pipeline",
+    "workflow",
+)
+EXTERNAL_CI_CHECK_NAME_MARKERS = (
+    "auth",
+    "auto-heal",
+    "cloud build",
+    "deploy",
+    "firebase",
+    "gcbrun",
+    "google",
+    "preview",
+)
+ACTIONABLE_CHECK_NAME_MARKERS = (
+    "eslint",
+    "flake8",
+    "lint",
+    "mypy",
+    "pytest",
+    "ruff",
+    "test",
+    "tsc",
+    "typecheck",
+    "unit",
+)
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
@@ -203,11 +268,12 @@ def _check_run_bucket(status: str, conclusion: str) -> str:
         return "pass"
     if normalized_conclusion in {"skipped", "neutral"}:
         return "skipped"
+    if normalized_conclusion in ACTION_REQUIRED_STATES:
+        return "action_required"
     if normalized_conclusion in {
         "failure",
         "cancelled",
         "timed_out",
-        "action_required",
         "startup_failure",
     }:
         return "fail"
@@ -257,6 +323,180 @@ def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: str) -> Optional[str]:
+    """Return a reason when a CI failure is clearly external/manual setup."""
+    haystack = f"{_render_check_summary(checks)}\n{failure_logs or ''}".lower()
+    if not haystack.strip():
+        return None
+    if any(marker in (failure_logs or "").lower() for marker in ACTIONABLE_FAILURE_LOG_MARKERS):
+        return None
+    if not _failed_check_set_is_pure_external_setup(checks):
+        return None
+
+    google_auth_action = "google-github-actions/auth" in haystack
+    missing_google_auth_inputs = (
+        "credentials_json" in haystack
+        and "workload_identity_provider" in haystack
+        and (
+            "must specify exactly one" in haystack
+            or "not supplied" in haystack
+            or "not provided" in haystack
+            or "not set" in haystack
+            or "secret" in haystack
+        )
+    )
+    if google_auth_action and missing_google_auth_inputs:
+        return (
+            "GitHub Actions Google authentication is missing or empty "
+            "(`credentials_json` / `workload_identity_provider`)."
+        )
+
+    firebase_secret_failure = (
+        ("firebase_service_account" in haystack or "firebase service account" in haystack)
+        and (
+            "secret" in haystack
+            or "secrets." in haystack
+            or "service account" in haystack
+        )
+        and any(
+            marker in haystack
+            for marker in (
+                "not supplied",
+                "not provided",
+                "not configured",
+                "not set",
+                "empty",
+                "unavailable",
+                "not found",
+                "does not exist",
+            )
+        )
+    )
+    if firebase_secret_failure:
+        return "Firebase deployment credentials are missing from the CI environment."
+
+    secrets_unavailable_for_event = (
+        "secrets are not passed" in haystack
+        or "secret is not available" in haystack
+        or "secrets are unavailable" in haystack
+    )
+    if secrets_unavailable_for_event and any(
+        marker in haystack
+        for marker in ("github action", "github actions", "workflow", "fork", "pull request")
+    ):
+        return "GitHub Actions secrets are unavailable for this workflow event."
+
+    integration_permission_failure = (
+        "resource not accessible by integration" in haystack
+        and any(marker in haystack for marker in ("github", "check", "workflow", "pull request"))
+    )
+    if integration_permission_failure:
+        return "The GitHub integration token lacks permission to access this CI resource."
+
+    return None
+
+
+def _failed_check_set_is_pure_external_setup(checks: List[Dict[str, str]]) -> bool:
+    """True when failed check names do not indicate code/test failures."""
+    failed_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in FAIL_BUCKETS
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    if not failed_checks:
+        return False
+
+    for check in failed_checks:
+        name = check.get("name", "").strip().lower()
+        if any(marker in name for marker in ACTIONABLE_CHECK_NAME_MARKERS):
+            return False
+        if not any(
+            marker in name
+            for marker in EXTERNAL_CI_CHECK_NAME_MARKERS + GENERIC_CI_CHECK_NAME_MARKERS
+        ):
+            return False
+    return True
+
+
+def _load_ci_config(cwd: Path) -> Dict[str, Any]:
+    """Load the optional root-level .pddrc CI config."""
+    try:
+        from .construct_paths import _find_pddrc_file, _load_pddrc_config
+
+        pddrc_path = _find_pddrc_file(cwd)
+        if pddrc_path is None:
+            return {}
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:  # noqa: BLE001 — CI config is optional best-effort input
+        return {}
+
+    ci_config = config.get("ci", {})
+    if not isinstance(ci_config, dict):
+        return {}
+    return ci_config
+
+
+def _external_ci_setup_fail_open_enabled(cwd: Path) -> bool:
+    """Return whether failed external setup/auth checks may be inconclusive."""
+    return _load_ci_config(cwd).get("external_setup_fail_open") is True
+
+
+def _configured_manual_trigger_comments(cwd: Path, checks: List[Dict[str, str]]) -> List[str]:
+    """Return configured manual CI trigger comments for the observed checks."""
+    ci_config = _load_ci_config(cwd)
+    comments: List[str] = []
+    action_required_checks = [
+        check
+        for check in checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    unmatched_action_required_check = False
+    manual_triggers = ci_config.get("manual_triggers")
+    if isinstance(manual_triggers, dict):
+        for check in action_required_checks:
+            check_name = check.get("name", "").strip().lower()
+            matched_check = False
+            if check_name:
+                for pattern, comment in manual_triggers.items():
+                    pattern_text = str(pattern).strip().lower()
+                    comment_text = str(comment).strip()
+                    if pattern_text and pattern_text in check_name and comment_text:
+                        if comment_text not in comments:
+                            comments.append(comment_text)
+                        matched_check = True
+            if not matched_check:
+                unmatched_action_required_check = True
+    elif action_required_checks:
+        unmatched_action_required_check = True
+
+    comment = ci_config.get("manual_trigger_comment")
+    if unmatched_action_required_check and isinstance(comment, str) and comment.strip():
+        fallback_comment = comment.strip()
+        if fallback_comment not in comments:
+            comments.append(fallback_comment)
+    return comments
+
+
+def _configured_manual_trigger_comment(cwd: Path, checks: List[Dict[str, str]]) -> Optional[str]:
+    """Return the first configured manual CI trigger comment for compatibility."""
+    comments = _configured_manual_trigger_comments(cwd, checks)
+    return comments[0] if comments else None
+
+
+def _next_configured_manual_trigger_comment(
+    cwd: Path,
+    checks: List[Dict[str, str]],
+    posted_comments: set[str],
+) -> Optional[str]:
+    """Return the next configured manual trigger that has not been posted."""
+    for comment in _configured_manual_trigger_comments(cwd, checks):
+        if comment not in posted_comments:
+            return comment
+    return None
+
+
 def _render_stale_head_summary(
     *,
     pr_number: int,
@@ -279,13 +519,49 @@ def _render_stale_head_summary(
 def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
     """Classify `gh pr checks` output using both exit code and bucket values."""
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
+    unknown_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in KNOWN_CHECK_BUCKETS
+        and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+    ]
+    pending_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in PENDING_BUCKETS
+    ]
+    action_required_checks = [
+        check
+        for check in checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    real_failures = [
+        check
+        for check in checks
+        if (
+            check.get("bucket", "").lower() in FAIL_BUCKETS
+            and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+        )
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    non_success_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in PASS_BUCKETS
+        and check.get("bucket", "").lower() not in SKIP_BUCKETS
+    ]
 
-    if any(bucket in FAIL_BUCKETS for bucket in buckets):
+    if real_failures:
         return "failed"
+    if unknown_checks:
+        return "failed"
+    if pending_checks:
+        return "pending"
+    if action_required_checks and len(action_required_checks) == len(non_success_checks):
+        return "action_required"
     if checks and all(bucket in PASS_BUCKETS for bucket in buckets):
         return "passed"
-    if any(bucket in PENDING_BUCKETS for bucket in buckets):
-        return "pending"
 
     if returncode == 0:
         return "passed"
@@ -387,6 +663,8 @@ def _poll_required_checks(
 
         if status == "failed":
             return status, latest_checks
+        if status == "action_required" and matched_expected_head:
+            return status, latest_checks
         if status == "passed" and matched_expected_head:
             return status, latest_checks
 
@@ -455,7 +733,7 @@ def _poll_check_runs_for_head(
         saw_checks = saw_checks or bool(latest_checks)
         if latest_checks:
             status = _classify_check_result(result.returncode, latest_checks)
-            if status in {"passed", "failed"}:
+            if status in {"passed", "failed", "action_required"}:
                 return status, latest_checks
 
         if result.returncode != 0:
@@ -494,14 +772,16 @@ def run_github_checks_gate(
 ) -> Tuple[bool, str, str]:
     """Strict final-gate check over GitHub PR checks.
 
-    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed:
-    missing, unreadable, skipped, pending, failed, stale, or wrong-head checks
-    all fail because this path uses GitHub checks as the full-suite source of
-    truth.
+    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed.
+    Missing, unreadable, pending, failed, stale, or wrong-head checks fail.
+    In the all-check-runs path, skipped/neutral REST check runs are ignored as
+    non-applicable evidence, but at least one applicable check run must pass.
     """
     head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
         repo_owner, repo_name, pr_number, cwd
     )
+    if not head_sha:
+        head_sha = _get_head_sha(cwd)
     source_name = "required GitHub checks" if required_only else "GitHub checks"
 
     if not head_sha:
@@ -531,39 +811,134 @@ def run_github_checks_gate(
             head_sha=head_sha,
             quiet=quiet,
         )
-    summary = _render_check_summary(checks)
     skipped = [
         check
         for check in checks
         if check.get("bucket", "").lower() in SKIP_BUCKETS
         or check.get("state", "").lower() in SKIP_BUCKETS
     ]
+    applicable_checks = [check for check in checks if check not in skipped]
+    evaluation_checks = checks if required_only else applicable_checks
+    summary = _render_check_summary(checks)
+    evaluation_summary = _render_check_summary(evaluation_checks)
+    ignored_summary = _render_check_summary(skipped)
     unknown = [
         check
-        for check in checks
+        for check in evaluation_checks
         if check.get("bucket", "").lower() not in (
-            FINAL_GATE_PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS
+            FINAL_GATE_PASS_BUCKETS
+            | FAIL_BUCKETS
+            | PENDING_BUCKETS
+            | SKIP_BUCKETS
+            | ACTION_REQUIRED_BUCKETS
         )
     ]
+    action_required = [
+        check
+        for check in evaluation_checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    failed = [
+        check
+        for check in evaluation_checks
+        if (
+            check.get("bucket", "").lower() in FAIL_BUCKETS
+            and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+        )
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    pending = [
+        check
+        for check in evaluation_checks
+        if check.get("bucket", "").lower() in PENDING_BUCKETS
+    ]
+    passed = [
+        check
+        for check in evaluation_checks
+        if check.get("bucket", "").lower() in FINAL_GATE_PASS_BUCKETS
+    ]
 
-    if status == "passed" and checks and not skipped and not unknown:
+    if (
+        not required_only
+        and status == "passed"
+        and passed
+        and not failed
+        and not pending
+        and not action_required
+        and not unknown
+    ):
+        message = f"{source_name} passed on PR head {head_sha[:8]}.\n{evaluation_summary}"
+        if skipped:
+            message += f"\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
+        return True, message, head_sha
+    if required_only and status == "passed" and checks and not skipped and not unknown:
         return True, f"{source_name} passed on PR head {head_sha[:8]}.\n{summary}", head_sha
     if status == "passed" and not checks:
         return False, f"{source_name} were missing for PR head {head_sha[:8]}.", head_sha
-    if skipped:
+    if not required_only and checks and not applicable_checks:
+        return (
+            False,
+            (
+                f"{source_name} had only skipped/neutral non-applicable checks "
+                f"on PR head {head_sha[:8]}; final gate requires at least one "
+                f"applicable passing check.\n{summary}"
+            ),
+            head_sha,
+        )
+    if required_only and skipped:
         return (
             False,
             f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
+
+    def _with_ignored(message: str) -> str:
+        if not skipped or required_only:
+            return message
+        return f"{message}\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
+
+    if action_required or status == "action_required":
+        return (
+            False,
+            _with_ignored(
+                f"{source_name} require manual action on PR head {head_sha[:8]}:\n"
+                f"{evaluation_summary}"
+            ),
+            head_sha,
+        )
     if unknown:
         return (
             False,
-            f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n{summary}",
+            _with_ignored(
+                f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n"
+                f"{evaluation_summary}"
+            ),
+            head_sha,
+        )
+    if failed:
+        return (
+            False,
+            _with_ignored(
+                f"{source_name} failed on PR head {head_sha[:8]}:\n{evaluation_summary}"
+            ),
+            head_sha,
+        )
+    if pending:
+        return (
+            False,
+            _with_ignored(
+                f"{source_name} were pending, stale, or not reported for PR "
+                f"head {head_sha[:8]}:\n{evaluation_summary}"
+            ),
             head_sha,
         )
     if status == "failed":
-        return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
+        return (
+            False,
+            _with_ignored(f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}"),
+            head_sha,
+        )
     if status in {"no_checks", "unreadable"}:
         return (
             False,
@@ -891,6 +1266,7 @@ def run_ci_validation_loop(
     fix_attempt = 0
     last_failures: List[Dict[str, str]] = []
     last_summary = "No required CI checks were reported."
+    posted_manual_trigger_comments: set[str] = set()
 
     while True:
         head_sha = (
@@ -1035,6 +1411,63 @@ def run_ci_validation_loop(
                 ),
                 total_cost,
             )
+        if status == "action_required":
+            trigger_comment = _next_configured_manual_trigger_comment(
+                cwd,
+                checks,
+                posted_manual_trigger_comments,
+            )
+            if trigger_comment:
+                trigger_posted = False
+                try:
+                    trigger_posted = post_pr_comment(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        pr_number=pr_number,
+                        body=trigger_comment,
+                        cwd=cwd,
+                    )
+                except Exception:  # noqa: BLE001 — fall back to inconclusive reporting below
+                    trigger_posted = False
+
+                if trigger_posted:
+                    posted_manual_trigger_comments.add(trigger_comment)
+                    if not quiet:
+                        console.print(
+                            "[yellow]Posted configured manual CI trigger comment; "
+                            "waiting for checks to re-run...[/yellow]"
+                        )
+                    time.sleep(INITIAL_POLL_DELAY_SECONDS)
+                    continue
+
+            last_failures = checks
+            last_summary = _render_check_summary(checks)
+            note = (
+                f"Required CI checks for PR #{pr_number} require manual action "
+                "or an external trigger before they can complete. Treating CI "
+                "as inconclusive and proceeding: these checks are not code "
+                "failures for the automated CI-fix loop to repair. Last "
+                f"observed status:\n{last_summary}"
+            )
+            try:
+                post_pr_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    body=note,
+                    cwd=cwd,
+                )
+            except Exception:  # noqa: BLE001 — informational note is best-effort
+                pass
+            return (
+                True,
+                (
+                    "Required CI checks require manual action or an external "
+                    "trigger; proceeding — external CI is best-effort and "
+                    "treated as inconclusive."
+                ),
+                total_cost,
+            )
         if status == "stale_head":
             last_failures = checks
             last_summary = _render_check_summary(last_failures)
@@ -1050,6 +1483,44 @@ def run_ci_validation_loop(
 
         last_failures = checks
         last_summary = _render_check_summary(last_failures)
+        ci_failure_logs = _collect_failure_logs(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            cwd=cwd,
+            head_sha=head_sha,
+            failures=last_failures,
+        )
+        external_reason = None
+        if _external_ci_setup_fail_open_enabled(cwd):
+            external_reason = _classify_external_ci_failure(last_failures, ci_failure_logs)
+        if external_reason:
+            note = (
+                f"Required CI checks for PR #{pr_number} failed for an external "
+                f"CI setup reason: {external_reason} Treating CI as inconclusive "
+                "and proceeding: this is not a code failure for the automated "
+                "CI-fix loop to repair. Last observed status:\n"
+                f"{last_summary}"
+            )
+            try:
+                post_pr_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    body=note,
+                    cwd=cwd,
+                )
+            except Exception:  # noqa: BLE001 — informational note is best-effort
+                pass
+            return (
+                True,
+                (
+                    "Required CI checks failed for an external CI setup reason; "
+                    "proceeding — external CI is best-effort and treated as "
+                    "inconclusive."
+                ),
+                total_cost,
+            )
+
         if fix_attempt >= max_retries:
             post_ci_failure_comment(
                 repo_owner=repo_owner,
@@ -1062,13 +1533,6 @@ def run_ci_validation_loop(
             return False, last_summary, total_cost
 
         fix_attempt += 1
-        ci_failure_logs = _collect_failure_logs(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            cwd=cwd,
-            head_sha=head_sha,
-            failures=last_failures,
-        )
 
         if not quiet:
             console.print(

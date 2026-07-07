@@ -94,6 +94,7 @@ RELEASE_VIDEO_PRIVACY ?= unlisted
 RELEASE_VIDEO_DRY_RUN ?= 0
 RELEASE_VIDEO_PROJECT_ID ?=
 RELEASE_VIDEO_SCRIPT_PATH ?=
+RELEASE_VIDEO_RELEASE_NOTES_PATH ?=
 RELEASE_VIDEO_IDEMPOTENCY_KEY ?=
 RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE ?=
 RELEASE_VIDEO_ATTEMPT_ID ?=
@@ -102,8 +103,10 @@ RELEASE_VIDEO_FORCE_REGENERATE ?= 0
 RELEASE_VIDEO_METADATA_CONFLICT ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
+RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
+RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
 CLAUDE_CLI ?= claude
-PDS_CLI ?= pds
+PDS_CLI ?= npx -y @promptdriven/pds@0.1.7 --timeout 120s
 PDS_API_URL ?= https://video.promptdriven.ai
 SOPS ?= sops
 SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
@@ -769,9 +772,12 @@ check-release-video-config:
 	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
 	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	RELEASE_VIDEO="$(RELEASE_VIDEO)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
 	python scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
 
 check-release-claude-oauth-config:
@@ -856,11 +862,15 @@ release-video:
 	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
 	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
 	RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)" \
+	RELEASE_VIDEO_PDS_CREATE_TIMEOUT="$(RELEASE_VIDEO_PDS_CREATE_TIMEOUT)" \
+	RELEASE_VIDEO_RELEASE_NOTES_PATH="$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
 	python scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
 		--script-path "$(RELEASE_VIDEO_SCRIPT_PATH)" \
+		--release-notes-path "$(RELEASE_VIDEO_RELEASE_NOTES_PATH)" \
 		--pds-cli "$(PDS_CLI)" \
+		--pds-claude-model "$(RELEASE_VIDEO_PDS_CLAUDE_MODEL)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)" \
 		--preset "$(RELEASE_VIDEO_PRESET)" \
 		--target "$(RELEASE_VIDEO_TARGET)" \

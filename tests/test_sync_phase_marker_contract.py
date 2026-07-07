@@ -97,17 +97,31 @@ def test_phase_markers_match_dispatched_operations(workspace, capsys):
         executed.append("auto-deps")
         return {"success": True, "cost": 0.01, "model": "mock-model"}
 
-    with patch("pdd.sync_orchestration.sync_determine_operation", side_effect=planner), \
-         patch("pdd.sync_orchestration.auto_deps_main", side_effect=make_deps), \
-         patch("pdd.sync_orchestration.code_generator_main", side_effect=make_code), \
-         patch("pdd.sync_orchestration.context_generator_main", side_effect=make_example), \
-         patch("pdd.sync_orchestration.cmd_test_main", side_effect=make_test), \
-         patch("pdd.sync_orchestration.fix_verification_main",
-               return_value={"success": True, "cost": 0.0, "model": "mock-model"}), \
-         patch("pdd.sync_orchestration.crash_main",
-               return_value={"success": True, "cost": 0.0, "model": "mock-model"}), \
-         patch("pdd.sync_orchestration.fix_main",
-               return_value={"success": True, "cost": 0.0, "model": "mock-model"}):
+    with patch.dict(
+        sync_orchestration.__globals__,
+        {
+            "sync_determine_operation": planner,
+            "auto_deps_main": make_deps,
+            "code_generator_main": make_code,
+            "context_generator_main": make_example,
+            "cmd_test_main": make_test,
+            "fix_verification_main": lambda *_a, **_k: {
+                "success": True,
+                "cost": 0.0,
+                "model": "mock-model",
+            },
+            "crash_main": lambda *_a, **_k: {
+                "success": True,
+                "cost": 0.0,
+                "model": "mock-model",
+            },
+            "fix_main": lambda *_a, **_k: {
+                "success": True,
+                "cost": 0.0,
+                "model": "mock-model",
+            },
+        },
+    ):
         result = sync_orchestration(
             basename=BASENAME, language="python",
             budget=10.0, max_attempts=5, quiet=True,  # quiet => headless, no TUI
@@ -141,9 +155,14 @@ def test_no_phase_marker_without_a_dispatch(workspace, capsys):
                             confidence=0.99, estimated_cost=0.0)
 
     ran = []
-    with patch("pdd.sync_orchestration.sync_determine_operation", side_effect=planner), \
-         patch("pdd.sync_orchestration.code_generator_main", side_effect=lambda *a, **k: ran.append("generate")), \
-         patch("pdd.sync_orchestration.cmd_test_main", side_effect=lambda *a, **k: ran.append("test")):
+    with patch.dict(
+        sync_orchestration.__globals__,
+        {
+            "sync_determine_operation": planner,
+            "code_generator_main": lambda *_a, **_k: ran.append("generate"),
+            "cmd_test_main": lambda *_a, **_k: ran.append("test"),
+        },
+    ):
         sync_orchestration(basename=BASENAME, language="python",
                            budget=10.0, max_attempts=5, quiet=True)
 
