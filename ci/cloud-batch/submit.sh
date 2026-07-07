@@ -11,6 +11,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-7200}"  # Real LLM shards can exceed 30 minutes.
+SPOT_PROVISIONING_MODEL="${PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL:-SPOT}"
+
+case "${SPOT_PROVISIONING_MODEL}" in
+    SPOT|STANDARD) ;;
+    *)
+        echo "Invalid PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL='${SPOT_PROVISIONING_MODEL}'. Expected SPOT or STANDARD." >&2
+        exit 2
+        ;;
+esac
 
 # Portable timeout (macOS lacks GNU timeout)
 _with_timeout() {
@@ -159,6 +168,7 @@ _render_template() {
     sed \
         -e "s|{{PROJECT_ID}}|${PROJECT_ID}|g" \
         -e "s|{{REGION}}|${REGION}|g" \
+        -e "s|{{SPOT_PROVISIONING_MODEL}}|${SPOT_PROVISIONING_MODEL}|g" \
         -e "s|{{RESULTS_GCS_PATH}}|${RESULTS_GCS_PATH}|g" \
         -e "s|{{SOURCE_GCS_PATH}}|${SOURCE_GCS_PATH}|g" \
         "$1" > "$2"
@@ -168,9 +178,11 @@ _render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-spot.json
 _render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
-# Main SPOT job (76 tasks — everything except the slow sync_regression case_1)
+# Main job (76 tasks — everything except the slow sync_regression case_1).
+# It defaults to SPOT for normal cloud-test runs, but release gates can opt into
+# STANDARD with PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL=STANDARD.
 JOB_NAME_SPOT="${JOB_NAME}"
-echo "=== Submitting SPOT job: ${JOB_NAME_SPOT} (76 tasks) ==="
+echo "=== Submitting ${SPOT_PROVISIONING_MODEL} job: ${JOB_NAME_SPOT} (76 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_SPOT}" \
     --project="${PROJECT_ID}" \
     --location="${REGION}" \

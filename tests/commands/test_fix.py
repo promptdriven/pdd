@@ -83,6 +83,11 @@ import pdd.commands as _commands_package
 importlib.reload(_commands_package)
 if "pdd.cli" in sys.modules:
     importlib.reload(sys.modules["pdd.cli"])
+if "pdd.sync_orchestration" in sys.modules:
+    # pdd.commands.sync imports sync_orchestration while operation_log is mocked
+    # above. Reload it after restoring real modules so later sync tests do not
+    # inherit mocked metadata helpers.
+    importlib.reload(sys.modules["pdd.sync_orchestration"])
 
 del importlib
 del (
