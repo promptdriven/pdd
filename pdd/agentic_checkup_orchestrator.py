@@ -3319,6 +3319,7 @@ def _run_single_step(
         max_retries=CHECKUP_STEP_MAX_RETRIES.get(step_num, DEFAULT_MAX_RETRIES),
         reasoning_time=reasoning_time,
         steers=steers,
+        set_git_work_tree=False,
     )
     return (success, output, cost, model)
 
