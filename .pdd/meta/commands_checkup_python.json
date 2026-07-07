@@ -2,12 +2,12 @@
   "pdd_version": "0.0.288.dev0",
   "timestamp": "2026-07-06T22:20:51.580832+00:00",
   "command": "test",
-  "prompt_hash": "1ce59d24437002cb1d48a36bfcae3fff7e08c78ace99c5292f4d8effe904e06b",
-  "code_hash": "8f95e3a25c6db983b6852e99c2cd8a9353e66fc99b82065c74b04ed0f247fcd0",
+  "prompt_hash": "7877bb17caf66acc9d2855f11efe570020472551e41a07c43410105f7d1a0f3f",
+  "code_hash": "215c421ea3347cf55f46689eacc64edc7048a3f43bbd6d8afe9642ec647bfa37",
   "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
-  "test_hash": "4ed14e07d1d595794c0522c660f2aaa7731654a527e3ba5be50d14155941f3cf",
+  "test_hash": "354a62086518613583bd3389f33ca7b15bddd4d6bd571fbbc9465978a483665c",
   "test_files": {
-    "test_checkup.py": "4ed14e07d1d595794c0522c660f2aaa7731654a527e3ba5be50d14155941f3cf",
+    "test_checkup.py": "354a62086518613583bd3389f33ca7b15bddd4d6bd571fbbc9465978a483665c",
     "test_checkup_contracts.py": "084bbe8a423e7b2aa151bc5138837ade7f8e77790e8f7222baa4b37ba0dd6279",
     "test_checkup_interactive_demo.py": "77a9127e209175c38189e1cfd6476994493dc428bdf0054412e7476ba782cfb6",
     "test_checkup_simplify.py": "2a80956f21f2873e3eb48a113c6f756019db9e9b74b8a5e91e9052648caf8707"
