@@ -616,6 +616,7 @@ class TestRunAgenticCheckup:
 
         config = mock_review_loop.call_args.kwargs["config"]
         assert config.agentic_mode is True
+        assert config.no_fix is True
         assert config.review_only is True
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")

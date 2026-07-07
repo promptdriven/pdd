@@ -745,6 +745,15 @@ class ReviewLoopConfig:
     # ``parse_reviewer_commands``). Surfaced verbatim in the agentic artifact's
     # ``reviewers[].command``. Empty when no per-role commands were supplied.
     reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    # APPENDED — explicit no-fix alias used by report-only entrypoints. The loop
+    # itself is guarded by ``review_only``; mirror this flag there so any caller
+    # that constructs ``ReviewLoopConfig(no_fix=True)`` cannot invoke the fixer,
+    # commit, or push.
+    no_fix: bool = False
+
+    def __post_init__(self) -> None:
+        if self.no_fix:
+            self.review_only = True
 
 
 @dataclass

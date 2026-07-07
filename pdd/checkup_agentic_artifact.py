@@ -414,21 +414,27 @@ def build_agentic_v1_artifact(
         findings_by_reviewer.setdefault(reviewer_name, []).extend(parsed)
 
     # Prefer already-structured loop findings when present.
+    raw_structured_findings = list(getattr(loop_state, "findings", []) or [])
     structured: List[AgenticFinding] = []
-    for f in list(getattr(loop_state, "findings", []) or []):
+    open_structured: List[AgenticFinding] = []
+    for f in raw_structured_findings:
         try:
             severity = _coerce_str(getattr(f, "severity", "") or "info").lower()
-            structured.append(
-                AgenticFinding(
-                    reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
-                    severity=severity,
-                    blocking=severity in _BLOCKING_SEVERITIES,
-                    path=(getattr(f, "location", None) or None),
-                    line=None,
-                    summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
-                    suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
-                )
+            finding = AgenticFinding(
+                reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
+                severity=severity,
+                blocking=severity in _BLOCKING_SEVERITIES,
+                path=(getattr(f, "location", None) or None),
+                line=None,
+                summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
+                suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
             )
+            structured.append(finding)
+            finding_status = (
+                _coerce_str(getattr(f, "status", "open") or "open").strip().lower()
+            )
+            if finding_status != "fixed":
+                open_structured.append(finding)
         except Exception:  # pragma: no cover - defensive
             continue
 
@@ -536,7 +542,16 @@ def build_agentic_v1_artifact(
     # gate — ``run_checkup_review_loop`` sets it on EVERY exit path, including a
     # clean one (e.g. "Primary reviewer is clean."), so it is reported as the
     # verdict reason but never used to decide pass/fail.
-    remaining_open = [f for f in all_findings if f.blocking]
+    # ``all_findings`` intentionally preserves historical reviewer text for the
+    # artifact, including raw output from earlier rounds and structured findings
+    # whose loop status is now ``fixed``. The pass/fail signal must instead use
+    # the current unresolved loop state when it is available.
+    verdict_findings = (
+        _deduplicate_findings(open_structured)
+        if structured
+        else all_findings
+    )
+    remaining_open = [f for f in verdict_findings if f.blocking]
     stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
     passed = fresh_status == "clean" and not remaining_open
     agentic_blocking = bool(remaining_open) or (fresh_status not in ("clean", "missing"))

@@ -281,6 +281,36 @@ def test_build_artifact_passed_true_despite_nonempty_stop_reason():
     assert art.verdict.reason == "Primary reviewer is clean."
 
 
+def test_build_artifact_fixed_blockers_do_not_fail_clean_final_review():
+    # A successful fix cycle leaves historical blocker findings in loop state
+    # with status="fixed", and raw_outputs may still contain earlier reviewer
+    # prose. Those records remain useful artifact history, but they are not open
+    # blockers for the final verdict.
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "clean"},
+            findings=[
+                SimpleNamespace(
+                    severity="blocker",
+                    reviewer="codex",
+                    finding="old blocker",
+                    required_fix="fix it",
+                    location="a.py",
+                    status="fixed",
+                )
+            ],
+            raw_outputs=[("review:codex:round1", "blocker a.py:1 old blocker")],
+            fresh_final_status="clean",
+            stop_reason="Primary reviewer is satisfied after reviewing the fixer response.",
+        ),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.status == "passed"
+    assert art.verdict.decision == "pass"
+    assert art.authority == "canonical_pass_agentic_mirror_clean"
+
+
 def test_build_artifact_status_vocab_matches_spec():
     # blocking findings -> failed
     blocking = build_agentic_v1_artifact(
