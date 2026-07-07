@@ -1,23 +1,18 @@
-"""
-Example demonstrating how to use the code_generator_main module.
-
-This script sets up a mock environment containing a prompt file and then calls
-`code_generator_main` to generate code, simulating both full generation and
-architectural conformance checks.
-"""
-
 from __future__ import annotations
 
-import json
 import os
 import sys
+import json
 import pathlib
 import click
 from typing import Any, Dict
 
-# Ensure absolute reference for pdd package
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+# Dynamic path resolution to ensure 'pdd' is in sys.path
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.append(str(PROJECT_ROOT))
 
+# Import the main orchestration entry point and structured errors
 from pdd.code_generator_main import (
     code_generator_main,
     ArchitectureConformanceError,
@@ -25,32 +20,30 @@ from pdd.code_generator_main import (
     TestChurnError,
 )
 
-# Define output directory relative to this script
-OUTPUT_DIR = pathlib.Path(__file__).resolve().parent / "output"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-def setup_mock_files() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+def setup_mock_environment(output_dir: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """
-    Creates mock prompt, architecture.json, and existing code files inside the output directory
-    to prepare for the code generator execution.
+    Creates a mock prompt file and architecture.json to demonstrate conformance checking.
     """
-    # 1. Create architecture.json describing a module and its exported functions
-    arch_file = OUTPUT_DIR / "architecture.json"
-    arch_content = {
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Create a mock architecture contract requiring 'calculate_area' function
+    arch_file = output_dir / "architecture.json"
+    arch_data = {
         "modules": [
             {
-                "filename": "math_helper_Python.prompt",
-                "filepath": str(OUTPUT_DIR / "math_helper.py"),
-                "reason": "Helper module for math operations",
+                "filename": "geometry_math_Python.prompt",
+                "filepath": "output/geometry_math.py",
+                "reason": "Orchestrates simple geometry math calculations.",
                 "dependencies": [],
-                "tags": ["module", "python"],
+                "tags": ["geometry", "math"],
                 "interface": {
                     "type": "module",
                     "module": {
                         "functions": [
                             {
-                                "name": "calculate_factorial",
-                                "signature": "(n: int) -> int"
+                                "name": "calculate_area",
+                                "signature": "(width: float, height: float) -> float"
                             }
                         ]
                     }
@@ -58,117 +51,133 @@ def setup_mock_files() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
             }
         ]
     }
-    arch_file.write_text(json.dumps(arch_content, indent=2), encoding="utf-8")
+    arch_file.write_text(json.dumps(arch_data, indent=2), encoding="utf-8")
 
-    # 2. Create math_helper_Python.prompt with pdd-interface tags
-    prompt_file = OUTPUT_DIR / "math_helper_Python.prompt"
+    # 2. Create a mock .prompt file containing our target pdd-interface contract
+    prompt_file = output_dir / "geometry_math_Python.prompt"
     prompt_content = """---
-name: math_helper_Python
 language: Python
+output: output/geometry_math.py
 ---
+<pdd-reason>Provides area calculation routines.</pdd-reason>
+
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "calculate_factorial", "signature": "(n: int) -> int"}
+      {
+        "name": "calculate_area",
+        "signature": "(width: float, height: float) -> float"
+      }
     ]
   }
 }
 </pdd-interface>
 
-Generate a python function called calculate_factorial that calculates the factorial of n.
+Generate a Python function called `calculate_area` that multiplies width by height.
 """
     prompt_file.write_text(prompt_content, encoding="utf-8")
 
-    # 3. Create a sibling mock test file to bypass test churn gates if test files are modified
-    test_file = OUTPUT_DIR / "test_math_helper.py"
-    test_file.write_text("""def test_factorial():
-    from math_helper import calculate_factorial
-    assert calculate_factorial(5) == 120
-""", encoding="utf-8")
+    return prompt_file, arch_file
 
-    return prompt_file, arch_file, test_file
 
 def main() -> None:
-    print("=== PDD Code Generator Main Orchestrator Example ===\n")
+    """
+    Demonstrates how to run code_generator_main programmatically within a click Context.
+    """
+    print("=== Starting PDD Code Generator Main Example ===")
 
-    # Setup mock files for the generator to run against
-    prompt_file, arch_file, test_file = setup_mock_files()
-    output_code_path = OUTPUT_DIR / "math_helper.py"
+    # Ensure we are not fully using remote cloud services if keys are missing
+    # This forces local LLM execution / mock execution fallback in our test run
+    os.environ["PDD_FORCE_LOCAL"] = "1"
+    
+    # Define the output directory relative to this script
+    output_dir = SCRIPT_DIR / "output"
+    prompt_file, arch_file = setup_mock_environment(output_dir)
+    
+    resolved_output_path = str(output_dir / "geometry_math.py")
 
-    print(f"Mock environment setup:")
-    print(f"  Prompt File: {prompt_file.name}")
-    print(f"  Architecture Config: {arch_file.name}")
-    print(f"  Output Code Destination: {output_code_path.name}\n")
-
-    # Initialize a mock Click Context to carry cli parameters
-    # code_generator_main expects this structure to parse cli configuration values
-    ctx = click.Context(click.Command('generate'))
+    # Click commands require an active Context holding user flags
+    # We create a dummy context mimicking: pdd generate prompts/geometry_math_Python.prompt --local
+    ctx = click.Context(click.Command("generate"))
     ctx.obj = {
-        "local": True,           # Instructs generator to run locally rather than querying the cloud
-        "strength": 0.7,         # LLM reasoning strength (0.0 to 1.0)
-        "temperature": 0.0,      # LLM sampling temperature
-        "time": 0.25,            # LLM thinking budget / timeout scaling
-        "verbose": True,         # Print internal logging and step status
-        "force": True,           # Overwrite output files without prompting
-        "quiet": False           # Do not suppress console panel updates
+        "local": True,
+        "strength": 0.7,      # Model capability mapping parameter (0.0 to 1.0)
+        "temperature": 0.0,   # Determinism of output generation (0.0 to 2.0)
+        "time": 0.25,         # Budget for model thinking effort (0.0 to 1.0)
+        "verbose": True,
+        "force": True,
+        "quiet": False,
     }
 
-    # We need to temporarily point architecture.json parsing to our mock location
-    # code_generator_main defaults to looking at "architecture.json" in current working directory.
-    # For this example, we mock the current working directory or ensure our env is clean.
-    orig_cwd = os.getcwd()
-    os.chdir(str(OUTPUT_DIR))
+    print(f"\nInput prompt file: {prompt_file.name}")
+    print(f"Target output path: {resolved_output_path}")
+    print("Invoking Code Generation Orchestrator...")
 
-    print("Executing code_generator_main...")
     try:
-        # Inputs:
-        #   - ctx: Click Context holding CLI parameter overrides
-        #   - prompt_file: Filepath of the source .prompt template
-        #   - output: Overriding destination filepath (None defaults to front-matter/config paths)
-        #   - original_prompt_file_path: Used for incremental diff comparisons
-        #   - force_incremental_flag: Forces incremental diff update if True
-        #   - env_vars: Optional environment variables to substitute into prompt template placeholders
-        #
-        # Outputs:
-        #   - generated_code: The parsed, generated output string
-        #   - was_incremental: Boolean indicating if a patch was applied instead of full overwrite
-        #   - total_cost: Estimated monetary cost of the LLM generation (in USD)
-        #   - model_name: Name of the LLM model that performed the generation
+        # Invoke the generator main orchestration engine
+        # Returns: (generated_code, was_incremental, total_cost, model_name)
+        # Units:
+        #   total_cost: USD ($) incurred during the generation session.
         generated_code, was_incremental, total_cost, model_name = code_generator_main(
             ctx=ctx,
-            prompt_file=prompt_file.name,
-            output=str(output_code_path),
+            prompt_file=str(prompt_file),
+            output=resolved_output_path,
             original_prompt_file_path=None,
             force_incremental_flag=False,
             env_vars={},
-            language="python"
+            unit_test_file=None,
+            exclude_tests=True,
+            language="python",
+            output_from_config=False,
+            compress=False,
+            snapshot_context=False,
         )
 
-        print("\n--- Generation Output ---")
+        print("\n--- Generation Completed successfully ---")
+        print(f"Was Incremental Patched: {was_incremental}")
+        print(f"Incurred Cost: ${total_cost:.6f}")
         print(f"Model Used: {model_name}")
-        print(f"Generation Cost: ${total_cost:.6f}")
-        print(f"Incremental Patch Applied: {was_incremental}")
-        print(f"Generated Code Content:\n{generated_code}")
+        print("\nGenerated Content preview:")
+        print("-" * 40)
+        print(generated_code.strip())
+        print("-" * 40)
 
-    except ArchitectureConformanceError as e:
-        print(f"\n[Conformance Error] Generated code violated the interface contract:")
-        print(f"  Missing symbols: {e.missing_symbols}")
-        print(f"  Repair Directive:")
-        print(e.repair_directive)
-    except PublicSurfaceRegressionError as e:
-        print(f"\n[Regression Error] Public API surface was shrunk without BREAKING-CHANGE:")
-        print(f"  Removed: {e.removed_symbols}")
-        print(f"  Signatures Changed: {e.changed_signatures}")
-    except TestChurnError as e:
-        print(f"\n[Churn Error] Sibling test file was rewritten past the allowed threshold:")
-        print(f"  Churn Ratio: {e.churn_ratio:.2f} (Threshold: {e.threshold:.2f})")
+    except ArchitectureConformanceError as err:
+        print("\n[FAIL] Code violates the declared architecture contract!")
+        print(f"Error Message: {err}")
+        print(f"Expected Symbols: {err.expected_symbols}")
+        print(f"Missing Symbols: {err.missing_symbols}")
+        print(f"Model face repair directive:\n{err.repair_directive}")
+
+    except PublicSurfaceRegressionError as err:
+        print("\n[FAIL] Public surface regression detected (Backward compatibility broken)!")
+        print(f"Removed Symbols: {err.removed_symbols}")
+        print(f"Pre-surface size: {err.pre_surface_size} -> Post-surface: {err.post_surface_size}")
+        print(f"Repair instructions:\n{err.repair_directive}")
+
+    except TestChurnError as err:
+        print("\n[FAIL] Test modification limits exceeded!")
+        print(f"Churn Ratio: {err.churn_ratio:.2%}")
+        print(f"Line count pre: {err.pre_line_count} -> Post: {err.post_line_count}")
+
     finally:
-        # Restore original working directory
-        os.chdir(orig_cwd)
+        # Clean up mock workspace files
+        if prompt_file.exists():
+            prompt_file.unlink()
+        if arch_file.exists():
+            arch_file.unlink()
+        output_file = output_dir / "geometry_math.py"
+        if output_file.exists():
+            output_file.unlink()
+        if output_dir.exists():
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
+        print("\nTemporary mock directories cleaned up.")
 
-    print("\nExample execution completed successfully.")
 
 if __name__ == "__main__":
     main()

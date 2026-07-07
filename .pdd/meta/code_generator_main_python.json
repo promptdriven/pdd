@@ -1,29 +1,29 @@
 {
-  "pdd_version": "0.0.268",
-  "timestamp": "2026-06-09T23:30:32.073262+00:00",
+  "pdd_version": "0.0.297",
+  "timestamp": "2026-07-07T23:37:30.225239+00:00",
   "command": "example",
-  "prompt_hash": "9c646810b3e55fa6ba5c0bb1d8210e459446ffa6826c565d7012ea6bd55fb6d5",
-  "code_hash": "1293a25723fdcb7870711b4759248fe4681d5107cf2106feff61df57cb56ee96",
-  "example_hash": "25bb0d4b5fe4f31d0d4d3795d24e8e9bb2cd346c74e4fc916d0a9ba8590141be",
-  "test_hash": "3cc05a05384f982254fdb38d8a156fc7507a1dfec200fc91705d01fbbfad134d",
+  "prompt_hash": "2f34372fa6e5f4a7bc560fac698606b925e11d89c4e9bad76a501b40221e5fb0",
+  "code_hash": "f72c7dd444e88cdb0a77fe3cdf9b99e51aeb1c0371561f4a3c0f3204360be262",
+  "example_hash": "48d9a2e1435aec9cfd7e8071620407974e28df6dd1ceb7224caf94eec698ecf2",
+  "test_hash": "21a0833e886cc5aa31973c709c518145421bac0fe5f45115bc852268e859096c",
   "test_files": {
-    "test_code_generator_main.py": "3cc05a05384f982254fdb38d8a156fc7507a1dfec200fc91705d01fbbfad134d"
+    "test_code_generator_main.py": "21a0833e886cc5aa31973c709c518145421bac0fe5f45115bc852268e859096c"
   },
   "include_deps": {
     "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
     "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
-    "context/architecture_sync_example.py": "6e1f65de35fcf1dbd0def81710da6f378495b37187eb01cd01ef43f662d9f1ba",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "pdd/code_generator.py": "33235364b431edbb0fb1c4d8eb03fa21a3b776e07ea585530c19212da20c486d",
-    "pdd/code_generator_main.py": "1293a25723fdcb7870711b4759248fe4681d5107cf2106feff61df57cb56ee96",
-    "pdd/construct_paths.py": "832d478849bfe83c12d4a473c270902d0af0be577ae3276b07ef8a48c148d35f",
+    "pdd/code_generator_main.py": "f72c7dd444e88cdb0a77fe3cdf9b99e51aeb1c0371561f4a3c0f3204360be262",
+    "pdd/construct_paths.py": "7b42a002e4ecc27be4d517cbc07f1fc9425e795d4918714f382d2ed5ddd00eab",
     "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
-    "pdd/incremental_code_generator.py": "266a4bed6ea41519a1b1c3c33057cb33cffecd2a3075ee0c2f790798bfff4834",
-    "pdd/preprocess.py": "a6c86dd348d0028a0638114338013e4633fb66fa51f756bc30458f4dce833703",
+    "pdd/incremental_code_generator.py": "8dd5dd7f3016b8fae86056484fdc49b824405cdcd6911e8b8657d3e043b3b06d",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
     "pdd/python_env_detector.py": "cbe4044a83cd88a683f36d6ecfca245fef6a03ea2abc7f5c407636fccc051f35",
-    "prompts/context_snapshot_python.prompt": "d8e129b55b27814d16e7566f07dfdaae0cc6950352f351fd78cfeeab125a7cbf"
+    "prompts/context_snapshot_python.prompt": "05f46fa9adba7ed3c9c6088d150ad821c723e9d0a3efed9db2fe8a461386da9d"
   }
 }
