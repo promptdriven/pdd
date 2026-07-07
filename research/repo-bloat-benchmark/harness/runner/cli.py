@@ -18,8 +18,10 @@ with ``experiment.json``::
     }
 
 For a real agent arm set ``"arm": "command"`` plus ``"agent_command":
-["codex", "exec", "--cd", "{workdir}", "..."]`` and ``"upstream_base_url"``;
-the runner injects ``OPENAI_BASE_URL`` pointing at the recording proxy.
+["codex", "exec", "--cd", "{workdir}", "..."]``, ``"upstream_base_url"``,
+``"freeze"`` (a ``FreezeConfig`` JSON object), and
+``"registered_env_fingerprint"``; the runner injects ``OPENAI_BASE_URL``
+pointing at the recording proxy.
 """
 
 from __future__ import annotations
@@ -29,8 +31,19 @@ import json
 import sys
 from pathlib import Path
 
+from .env_freeze import FreezeConfig
 from .report import generate_report, load_run_records
 from .runner import ExperimentRunner, RunConfig
+
+
+def load_experiment_config(path: Path) -> tuple[RunConfig, list[int], int]:
+    """Load JSON config and coerce nested dataclass fields."""
+    config_data = json.loads(path.read_text(encoding="utf-8"))
+    sizes = config_data.pop("sizes", [1])
+    trials = config_data.pop("trials", 1)
+    if isinstance(config_data.get("freeze"), dict):
+        config_data["freeze"] = FreezeConfig(**config_data["freeze"])
+    return RunConfig(**config_data), sizes, trials
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -38,10 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args(argv)
 
-    config_data = json.loads(args.config.read_text(encoding="utf-8"))
-    sizes = config_data.pop("sizes", [1])
-    trials = config_data.pop("trials", 1)
-    run_config = RunConfig(**config_data)
+    run_config, sizes, trials = load_experiment_config(args.config)
     runner = ExperimentRunner(run_config)
 
     for size in sizes:

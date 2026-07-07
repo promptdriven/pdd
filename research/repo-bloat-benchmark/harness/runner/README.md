@@ -54,31 +54,42 @@ cat /tmp/rb-reports/report.md
 ## Running a real agent arm
 
 Set `"arm": "command"`, `"agent_command": ["codex", "exec", "--cd", "{workdir}", …]`
-and `"upstream_base_url": "https://api.openai.com"`. The runner injects
-`OPENAI_BASE_URL` pointing at the recording proxy; confirming the pinned
-Codex build honors that override is the §10 pre-run blocker.
+and `"upstream_base_url": "https://api.openai.com"`. Command-arm runs require
+`RunConfig.freeze`; set `allow_unfrozen_command=true` only for harness
+development, never for pilot data. The runner injects `OPENAI_BASE_URL`
+pointing at the recording proxy; confirming the pinned Codex build honors that
+override is the §10 pre-run blocker. Nonzero agent exits abort the trial before
+a benchmark record is written and leave `agent_process.json` for diagnosis.
+
+Scenario verifier commands and command-arm `agent_command` entries may use
+`"{workdir}"` for the materialized variant and `"{python}"` for the Python
+interpreter running the harness. Use `"{python}"` for committed Python
+scenario tests so local verification does not depend on whichever `python3`
+appears first on `PATH`.
 
 ### Run-environment freeze (design §8.1.1) — `env_freeze.py`
 
 Real command-arm runs must set `RunConfig.freeze` (a `FreezeConfig`) and
-should set `registered_env_fingerprint`. Per trial the runner then:
+`registered_env_fingerprint`, unless explicitly marked as harness-development
+with `allow_unfrozen_command=true`. Per trial the runner then:
 
 1. captures the CLI version and **aborts on any mismatch** with the pin;
 2. creates a **fresh per-run `CODEX_HOME`** containing only a generated
    config (pinned model + reasoning effort, web search off, history
    persistence off, no MCP servers unless the arm enumerates them, and the
    recording proxy as the model provider);
-3. runs the agent under a **sanitized allowlist environment** — the model API
-   key is the only permitted secret — plus an **egress guard** (proxy vars
-   black-hole all HTTP(S) except loopback, where the recording proxy
-   listens);
+3. runs the agent under a **sanitized allowlist environment** — `HOME` is
+   redirected to the fresh per-run home and the model API key is the only
+   permitted secret — plus an **egress guard** (proxy vars black-hole all
+   HTTP(S) except loopback, where the recording proxy listens);
 4. verifies the built environment's **fingerprint** (port-independent sha256
    of the frozen combination) against the registered value, recording it as
    `env_fingerprint_sha256` in the run record (`null` ⇒ the run was not
    frozen and its numbers are development-only);
-5. after the run, **archives** whatever the CLI wrote into its home
-   (session logs feed the session-parser bypass cross-check) and **deletes
-   the home** — ephemerality by destruction, not by trusting a flag.
+5. after the run, **archives** whatever the CLI wrote into its home, including
+   final `config.toml` bytes (session logs feed the session-parser bypass
+   cross-check), and **deletes the home** — ephemerality by destruction, not by
+   trusting a flag.
 
 The egress guard is the portable layer (honored by mainstream HTTP stacks,
 not kernel enforcement); the Linux-container network lockdown remains the

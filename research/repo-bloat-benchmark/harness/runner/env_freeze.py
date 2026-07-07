@@ -20,8 +20,9 @@ environment **frozen, isolated, and fingerprinted**:
   Codex build before real runs (design §10 still-to-confirm); the fingerprint
   makes any adjustment visible.
 - **Sanitized environment** — an allowlist of variable *names* is copied from
-  the parent environment; everything else is dropped. The single permitted
-  secret is the model API key, passed through by explicit name.
+  the parent environment; everything else is dropped. ``HOME`` is redirected
+  to the per-run home so ambient user config is not visible. The single
+  permitted secret is the model API key, passed through by explicit name.
 - **Egress guard** — proxy environment variables point all HTTP(S) traffic at
   an unroutable discard address, with ``NO_PROXY`` exempting only loopback
   (where the recording proxy listens). This is the *portable* layer: it is
@@ -29,8 +30,8 @@ environment **frozen, isolated, and fingerprinted**:
   Linux-container network lockdown remains the hard tier, and session-log
   reconciliation (harness.context_snapshots.session_parser) detects bypass.
 - **Fingerprint** — sha256 over the canonical frozen combination (CLI
-  version, model, effort, web search, MCP set, allowlist names, config
-  template with the per-run proxy port *held as a placeholder*, cache
+  version, model, effort, web search, MCP set, allowlist names and values,
+  config template with the per-run proxy port *held as a placeholder*, cache
   policy). Identical across cells and trials by construction; recorded as
   ``env_fingerprint_sha256`` in every run record, and asserted against the
   registered value before each run.
@@ -49,7 +50,7 @@ from urllib.parse import urlparse
 
 # Variable NAMES copied from the parent environment. Everything else is
 # dropped — no inherited dev shell (design §8.1.1 "Shell environment").
-DEFAULT_ENV_ALLOWLIST = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR")
+DEFAULT_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR")
 
 # All non-loopback HTTP(S) traffic is pointed here: TCP port 9 ("discard"),
 # nothing listens. Requests fail fast instead of leaving the machine.
@@ -122,9 +123,13 @@ class FreezeConfig:
             "web_search_enabled": self.web_search_enabled,
             "mcp_servers": sorted(self.mcp_servers),
             "env_allowlist": sorted(self.env_allowlist),
+            "env_allowlist_values": {
+                name: os.environ.get(name) for name in sorted(self.env_allowlist)
+            },
             "api_key_env_var": self.api_key_env_var,
             "cache_policy": self.cache_policy,
             "home_dir_env_var": self.home_dir_env_var,
+            "home_env_policy": "HOME is set to the fresh per-run home directory",
             "config_template": self.render_config("{PROXY_BASE_URL}"),
         }
         canonical = json.dumps(material, sort_keys=True)
@@ -210,6 +215,7 @@ class FrozenEnvironment:
                 env[name] = os.environ[name]
         if self.config.api_key_env_var and self.config.api_key_env_var in os.environ:
             env[self.config.api_key_env_var] = os.environ[self.config.api_key_env_var]
+        env["HOME"] = str(self.home_dir)
         env[self.config.home_dir_env_var] = str(self.home_dir)
         env["OPENAI_BASE_URL"] = f"{self.proxy_base_url}/v1"
         env.update(egress_guard_env(self.proxy_base_url))
@@ -232,7 +238,7 @@ class FrozenEnvironment:
         """Archive session artifacts, then delete the home (ephemerality).
 
         Everything the CLI wrote into its home during the run (session logs,
-        caches it created despite policy) is moved to
+        final config bytes, caches it created despite policy) is moved to
         ``<run_dir>/codex_home_artifacts/`` for the session-parser
         cross-check; the home itself is removed so nothing can leak into a
         later run. Returns the archived paths (home-relative).
@@ -243,8 +249,6 @@ class FrozenEnvironment:
         archived: list[str] = []
         for path in sorted(p for p in self.home_dir.rglob("*") if p.is_file()):
             rel = path.relative_to(self.home_dir)
-            if rel.as_posix() == "config.toml":
-                continue  # harness-authored; already covered by the fingerprint
             destination = archive / rel
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(path), destination)
