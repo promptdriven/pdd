@@ -2,19 +2,19 @@
   "budget_met": true,
   "core_loc": 148,
   "core_tokens": 1055,
-  "distractor_loc": 5358,
-  "distractor_tokens_on_disk": 50715,
+  "distractor_loc": 5378,
+  "distractor_tokens_on_disk": 50693,
   "files": [
     {
       "content_path": null,
-      "import_group": "g48ee8993",
-      "loc": 110,
+      "import_group": "g3598de18",
+      "loc": 77,
       "mode": "regrow",
-      "sha256": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 912,
-      "upstream_path": "src/pdd/failure_classification.py"
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
     },
     {
       "content_path": null,
@@ -29,6 +29,17 @@
     },
     {
       "content_path": null,
+      "import_group": "ga888d780",
+      "loc": 59,
+      "mode": "regrow",
+      "sha256": "1e464b0e63e8f7a48727a0b2c0cd5e91ae766bd8182c205bf069aa8f6ad81351",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 438,
+      "upstream_path": "src/pdd/json_atomic.py"
+    },
+    {
+      "content_path": null,
       "import_group": "gdb0528fa",
       "loc": 35,
       "mode": "regrow",
@@ -39,15 +50,15 @@
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_open.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_language.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "97d301900f11fdef9eef0a75b58631e533a3cd08d19f8b56d4b52d04776910f6",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "ab6dac7f9395604ae782f0ee0941ca3cbdd15a243c5d4505b18e0c026de7d027",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 931,
-      "upstream_path": "src/pdd/failure_classification_open.py"
+      "tokens": 685,
+      "upstream_path": "src/pdd/compression_reporting_language.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_raw.py",
@@ -61,6 +72,17 @@
       "upstream_path": "src/pdd/get_lint_commands_raw.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_section.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "3057efb9408bc4d2f8d90b89ec6f7d01b7b3316c5bbaabb30f915256091b4b71",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 442,
+      "upstream_path": "src/pdd/json_atomic_section.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_startswith.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -72,15 +94,15 @@
       "upstream_path": "src/pdd/comment_line_startswith.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_enumerate.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_open.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "29681be3e23aa257e4372da5749e9902567afb2125068fad673f335ed9e61b97",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "1ebe42aec7577e17164adff79b98ce135552929072aa66a9c02b17404fb3472e",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 950,
-      "upstream_path": "src/pdd/failure_classification_enumerate.py"
+      "tokens": 678,
+      "upstream_path": "src/pdd/compression_reporting_open.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_startswith.py",
@@ -94,6 +116,17 @@
       "upstream_path": "src/pdd/get_lint_commands_startswith.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_startswith.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "79be7e1bc558162fdaf338cae462c5b6decd9981324d3f6865865cbdd4ea5d43",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 443,
+      "upstream_path": "src/pdd/json_atomic_startswith.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_strip.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -105,15 +138,15 @@
       "upstream_path": "src/pdd/comment_line_strip.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_pop.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_empty.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "a5f71038c2686e59741a38373bb559d5bec359b5c37575c7ffa17d33fa1aec9b",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "eccc122f81e9b0f0abb7749c0aafd4bb07477120bafd462b7f02f89f9866d37e",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 928,
-      "upstream_path": "src/pdd/failure_classification_pop.py"
+      "tokens": 680,
+      "upstream_path": "src/pdd/compression_reporting_empty.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_lines.py",
@@ -127,6 +160,17 @@
       "upstream_path": "src/pdd/get_lint_commands_lines.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_expected.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "68c91765025552f0f0b9203101d435a3e5e5b3c9460315d20300a2b8823d9e25",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 442,
+      "upstream_path": "src/pdd/json_atomic_expected.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_len.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -138,15 +182,15 @@
       "upstream_path": "src/pdd/comment_line_len.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_append.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_section.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "73a347bb63fde53fbb38434968ecebc0e04073755975b84b37516b1c1c08e423",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "ec247bb35aff314d0b27f006baa67a83503b48edb12d2ba6260cb14167f03d2a",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 939,
-      "upstream_path": "src/pdd/failure_classification_append.py"
+      "tokens": 683,
+      "upstream_path": "src/pdd/compression_reporting_section.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_pop.py",
@@ -160,6 +204,17 @@
       "upstream_path": "src/pdd/get_lint_commands_pop.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_find.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "fdd153b3fcd2a609a73e1f5f92a74dcb3745a8160de6230270baedebf9fc389e",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_find.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_expected.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -171,15 +226,15 @@
       "upstream_path": "src/pdd/comment_line_expected.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_expected.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_fence.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "7310f287d814b5a731af3eec8dd45fafa098de287173d2839f03aab127d0963f",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "11e63522c7f84bec81a43a0b4b9bba3e1babf536c006dac8a7242ebfb3585981",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 946,
-      "upstream_path": "src/pdd/failure_classification_expected.py"
+      "tokens": 680,
+      "upstream_path": "src/pdd/compression_reporting_fence.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_language.py",
@@ -193,6 +248,17 @@
       "upstream_path": "src/pdd/get_lint_commands_language.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_blocks.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "298bc07d530877b95a0e7e3ffca59446975f9fa1d070c24f1f7b4c496e54637e",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 441,
+      "upstream_path": "src/pdd/json_atomic_blocks.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_nested.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -204,15 +270,15 @@
       "upstream_path": "src/pdd/comment_line_nested.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_index.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_found.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "0796dfda69308465ad0cd0b3ed9a3d48b1a579f3605d0222282006053004c6d5",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "528e67b82c7ebbec0360be3e0936733f39b4d334cd83beb871742581ce3d8afe",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 935,
-      "upstream_path": "src/pdd/failure_classification_index.py"
+      "tokens": 680,
+      "upstream_path": "src/pdd/compression_reporting_found.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_start.py",
@@ -226,6 +292,17 @@
       "upstream_path": "src/pdd/get_lint_commands_start.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_enumerate.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "30b870de3d071b5572f81c4d14729e6318cb7e2421e9b2195acb3410af0c7e8f",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 442,
+      "upstream_path": "src/pdd/json_atomic_enumerate.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_lines.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -237,15 +314,15 @@
       "upstream_path": "src/pdd/comment_line_lines.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_len.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_startswith.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "cb77f0d8170903d37a006d3677477a26768be086438cd41e72fd508d8b0e6cf1",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "e8e842e126e3037eb95599b19b66162a5ce21db4538764094de9ac33616e621f",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 928,
-      "upstream_path": "src/pdd/failure_classification_len.py"
+      "tokens": 688,
+      "upstream_path": "src/pdd/compression_reporting_startswith.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_basic.py",
@@ -259,6 +336,17 @@
       "upstream_path": "src/pdd/get_lint_commands_basic.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_basic.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "5c019d80834940708069ca52947f2555cbc850fcdcb723a2b89ce3587e0ce1cb",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_basic.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_found.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -270,15 +358,15 @@
       "upstream_path": "src/pdd/comment_line_found.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_section.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_multiple.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "b57556db15068fb928ca7e385611f82bf5b547799a1508b6cfcdbd2447296fd2",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "a41eb75aeb359f0e6d82bc9c0b4dcdb39281546e043cb0b378ced34bd60f9c67",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 942,
-      "upstream_path": "src/pdd/failure_classification_section.py"
+      "tokens": 685,
+      "upstream_path": "src/pdd/compression_reporting_multiple.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_len.py",
@@ -292,15 +380,37 @@
       "upstream_path": "src/pdd/get_lint_commands_len.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_empty.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_nested.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 59,
       "mode": "mutate",
-      "sha256": "5141c993e7c888d3a944c2b3da96ab8d91d831e310b19960de05889e3de495fd",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "fe38f35212897a20885e5112d5f58f08ba8e5d81cb119aaef01d31ffca09fec5",
+      "source_path": "src/pdd/json_atomic.py",
       "tier": "same-package",
-      "tokens": 935,
-      "upstream_path": "src/pdd/failure_classification_empty.py"
+      "tokens": 441,
+      "upstream_path": "src/pdd/json_atomic_nested.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_pop.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "c363ec79e8b6b10480f6cb4746d814a008e07a1ebd83f0611bf1bcef181fbb39",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 676,
+      "upstream_path": "src/pdd/compression_reporting_pop.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_raw.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "6b04375f187bc25a06be55334b003af34285cd4b7c7e8c93bfea2072af5e34f3",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_raw.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_open.py",
@@ -314,15 +424,15 @@
       "upstream_path": "src/pdd/comment_line_open.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_multiple.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_enumerate.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "540f3bcaa9602580597c4310d42cd1d96c9b495eaf3bfa4772c12e47d07f7221",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "16f8f5d14e9c1f3fd98711e6d449727becf3ff7290c2b5881fa220f1ec8de795",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 946,
-      "upstream_path": "src/pdd/failure_classification_multiple.py"
+      "tokens": 687,
+      "upstream_path": "src/pdd/compression_reporting_enumerate.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_multiple.py",
@@ -336,15 +446,15 @@
       "upstream_path": "src/pdd/get_lint_commands_multiple.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_strip.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_blocks.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "3d2ac7c4c2bfdeb0b01fa232b610612ae306dd739491850a4aacd6154b7a8778",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "487e743e2d5b156944ddabea54e822fa93cafa09b83c28b1bc6e1c874c0d7d01",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 935,
-      "upstream_path": "src/pdd/failure_classification_strip.py"
+      "tokens": 682,
+      "upstream_path": "src/pdd/compression_reporting_blocks.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_found.py",
@@ -358,6 +468,17 @@
       "upstream_path": "src/pdd/get_lint_commands_found.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_strip.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "9098eb6befb19a84c56636489ad6ff82159f72828c3d4ec3333bfc1f27991191",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_strip.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_language.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -369,15 +490,15 @@
       "upstream_path": "src/pdd/comment_line_language.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_sub.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_append.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "7f488391f3fb2276ca97e635aaaca9d624fa4ddc0f73e7f6397fef533297d145",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "b7b13f6d7a8366b63f741bdbd855c26a9a3ad90d31c1bcf9ac0433de5b7ab95d",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 928,
-      "upstream_path": "src/pdd/failure_classification_sub.py"
+      "tokens": 682,
+      "upstream_path": "src/pdd/compression_reporting_append.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_expected.py",
@@ -391,6 +512,39 @@
       "upstream_path": "src/pdd/get_lint_commands_expected.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_sub.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "c6d2ab4d2ff4593b569abc4ab690c440b857246eddd76c1b35b26ca7e78ef627",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 676,
+      "upstream_path": "src/pdd/compression_reporting_sub.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_sub.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "59ec992b64892ab7bfdf33e0562831bea6c0292db1bae759835a0f907d1a998c",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_sub.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_basic.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "d6aef1ffb44fedfd8873c52ff61644346c95e860623ca05180a65b9f1df381b4",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 680,
+      "upstream_path": "src/pdd/compression_reporting_basic.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_section.py",
       "import_group": "g-mutate",
       "loc": 66,
@@ -400,6 +554,17 @@
       "tier": "same-package",
       "tokens": 840,
       "upstream_path": "src/pdd/get_lint_commands_section.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_found.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "8580d7dea5e9b49f6e821213e8f96a3cbf6a87c16b5f7027db4bbf1a26379f65",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_found.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_section.py",
@@ -413,15 +578,26 @@
       "upstream_path": "src/pdd/comment_line_section.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_startswith.py",
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_find.py",
       "import_group": "g-mutate",
-      "loc": 110,
+      "loc": 77,
       "mode": "mutate",
-      "sha256": "5f1d5d5f948ee7a6f5a20465bd0720ba2f039db1a75a1037807b9fe5be598741",
-      "source_path": "src/pdd/failure_classification.py",
+      "sha256": "51aa65ddf32b304c518cbd678ef480a80fe99b5a3cd013afdb7fca17b819b083",
+      "source_path": "src/pdd/compression_reporting.py",
       "tier": "same-package",
-      "tokens": 954,
-      "upstream_path": "src/pdd/failure_classification_startswith.py"
+      "tokens": 678,
+      "upstream_path": "src/pdd/compression_reporting_find.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_append.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "5243e27547bc347a726c8ff680fd0b0db3afb755811943a0a5ce5f2073465711",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 441,
+      "upstream_path": "src/pdd/json_atomic_append.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_pop.py",
@@ -435,17 +611,6 @@
       "upstream_path": "src/pdd/comment_line_pop.py"
     },
     {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_fence.py",
-      "import_group": "g-mutate",
-      "loc": 110,
-      "mode": "mutate",
-      "sha256": "2baecf1ab20194e829ea354f3018f7bc68b03dc08849377389edd4783096a068",
-      "source_path": "src/pdd/failure_classification.py",
-      "tier": "same-package",
-      "tokens": 935,
-      "upstream_path": "src/pdd/failure_classification_fence.py"
-    },
-    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_enumerate.py",
       "import_group": "g-mutate",
       "loc": 66,
@@ -455,6 +620,17 @@
       "tier": "same-package",
       "tokens": 844,
       "upstream_path": "src/pdd/get_lint_commands_enumerate.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_pop.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "c33656cf4e9eb6505f167d94d2737d767dd574da7edd3f56d5dae7d1d933baf0",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_pop.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_blocks.py",
@@ -468,6 +644,28 @@
       "upstream_path": "src/pdd/comment_line_blocks.py"
     },
     {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/compression_reporting_start.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "da75eb561dfa85da5e7743ed49afffe34dec89fd62c56fe9dbc56fde3b816d1c",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 680,
+      "upstream_path": "src/pdd/compression_reporting_start.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/50x/src/pdd/json_atomic_index.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "f6e84601efc1ac8073084388425581574135753b974bd3b525d79ec18c12a5f0",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 440,
+      "upstream_path": "src/pdd/json_atomic_index.py"
+    },
+    {
       "content_path": "generated/pdd-find-section/50x/src/pdd/comment_line_enumerate.py",
       "import_group": "g-mutate",
       "loc": 40,
@@ -477,17 +675,6 @@
       "tier": "same-package",
       "tokens": 501,
       "upstream_path": "src/pdd/comment_line_enumerate.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/pdd/failure_classification_nested.py",
-      "import_group": "g-mutate",
-      "loc": 110,
-      "mode": "mutate",
-      "sha256": "67ca7ec6f9cf55f99e23a46f8866229acb4baf40c6c5c1dcabec3b47693e3087",
-      "source_path": "src/pdd/failure_classification.py",
-      "tier": "same-package",
-      "tokens": 939,
-      "upstream_path": "src/pdd/failure_classification_nested.py"
     },
     {
       "content_path": "generated/pdd-find-section/50x/src/pdd/get_lint_commands_sub.py",
@@ -664,69 +851,14 @@
       "tier": "same-layer",
       "tokens": 856,
       "upstream_path": "src/adapters/startswith_adapters_13.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/validation/basic_validation_14.py",
-      "import_group": "g-template",
-      "loc": 110,
-      "mode": "template",
-      "sha256": "9d08e6cc858cc3d962223ca1d47abbbeba77a9caf01d4589c8974a67bb1eea21",
-      "source_path": null,
-      "tier": "same-layer",
-      "tokens": 858,
-      "upstream_path": "src/validation/basic_validation_14.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/service/empty_service_15.py",
-      "import_group": "g-template",
-      "loc": 110,
-      "mode": "template",
-      "sha256": "c013eaf246f1327d8d5ed44cefbdfc3dbbe6cdd6ddd24bd071303beee24a8236",
-      "source_path": null,
-      "tier": "same-layer",
-      "tokens": 867,
-      "upstream_path": "src/service/empty_service_15.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/handler/language_handler_16.py",
-      "import_group": "g-template",
-      "loc": 110,
-      "mode": "template",
-      "sha256": "1f7ca56729866fdc147be7975250b373247aad983057446b81056425337a59ba",
-      "source_path": null,
-      "tier": "same-layer",
-      "tokens": 842,
-      "upstream_path": "src/handler/language_handler_16.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/helpers/multiple_helpers_17.py",
-      "import_group": "g-template",
-      "loc": 110,
-      "mode": "template",
-      "sha256": "654b5626fc5211dc35ae1609712f58335a74f0ac4e78600eae05fb3633d601c1",
-      "source_path": null,
-      "tier": "same-layer",
-      "tokens": 860,
-      "upstream_path": "src/helpers/multiple_helpers_17.py"
-    },
-    {
-      "content_path": "generated/pdd-find-section/50x/src/adapters/multiple_adapters_18.py",
-      "import_group": "g-template",
-      "loc": 33,
-      "mode": "template",
-      "sha256": "b438cc26ad93a835b68fe990b9104ee3b5f70fc4258795c1d443e6c52fa179c0",
-      "source_path": null,
-      "tier": "same-layer",
-      "tokens": 231,
-      "upstream_path": "src/adapters/multiple_adapters_18.py"
     }
   ],
   "mode_counts": {
-    "mutate": 43,
-    "regrow": 3,
-    "template": 19
+    "mutate": 59,
+    "regrow": 4,
+    "template": 14
   },
-  "realized_total_tokens": 51770,
+  "realized_total_tokens": 51748,
   "rejected": [],
   "scenario_id": "pdd-find-section",
   "schema_version": 3,

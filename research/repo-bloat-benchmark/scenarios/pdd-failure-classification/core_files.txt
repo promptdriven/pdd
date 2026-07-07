@@ -1,0 +1,5 @@
+# Core membership for scenario pdd-failure-classification (design §4.1.1 step 3).
+src/pdd/__init__.py          # slicing stub — upstream __init__ re-exports the CLI surface and is outside the closure
+src/pdd/failure_classification.py    # target (seeded); sliced from upstream pdd/failure_classification.py
+tests/visible/test_failure_classification.py  # subset of upstream tests (mixed-precedence cases withheld → hidden)
+core/pytest.ini             # local pytest config — isolates verification from the surrounding repo (§4.1.2)

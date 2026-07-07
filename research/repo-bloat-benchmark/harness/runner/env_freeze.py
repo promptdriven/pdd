@@ -132,9 +132,11 @@ class FreezeConfig:
         identical across all cells and trials of an arm by construction.
         """
         material = {
-            # v2: +context_window_tokens; config template validated against
-            # codex-cli 0.142.4 (wire_api responses, web_search string form).
-            "schema_version": 2,
+            # v3: +egress_guard (the black-hole address is a security boundary
+            # for proxy-honoring clients, so a change to it must move the
+            # fingerprint). v2 added context_window_tokens; config template
+            # validated against codex-cli 0.142.4.
+            "schema_version": 3,
             "pinned_cli_version": self.pinned_cli_version,
             "cli_version_command": list(self.cli_version_command),
             "model_id": self.model_id,
@@ -151,6 +153,10 @@ class FreezeConfig:
             "home_dir_env_var": self.home_dir_env_var,
             "home_env_policy": "HOME is set to the fresh per-run home directory",
             "config_template": self.render_config("{PROXY_BASE_URL}"),
+            # Port-independent shape of the egress guard (values, not the
+            # ephemeral proxy host), so tampering with the black-hole address
+            # is a fingerprint change.
+            "egress_guard": egress_guard_env("http://{PROXY_HOST}"),
         }
         canonical = json.dumps(material, sort_keys=True)
         return hashlib.sha256(canonical.encode()).hexdigest()

@@ -31,6 +31,11 @@ FORBIDDEN_BASENAMES = frozenset(
 # Condition 5: markers that would label a file as benchmark filler.
 TELL_MARKERS = ("distractor", "filler", "synthetic", "decoy", "padding", "noise_file")
 
+
+def _normalize_for_leak(text: str) -> str:
+    """Whitespace-collapsed, case-folded form for robust denylist matching."""
+    return re.sub(r"\s+", " ", text).strip().lower()
+
 # Condition 2 red flags: constructs whose presence needs manual review because
 # they can act at import/collection time even without being imported by core.
 _DYNAMIC_RED_FLAGS = (
@@ -184,9 +189,14 @@ class DefinitionChecker:
                             )
                         )
 
-        # 4. No leakage
+        # 4. No leakage. Match both verbatim and whitespace-collapsed /
+        # case-folded, so a paraphrase that only reflows whitespace or changes
+        # case cannot smuggle a hidden-assertion string past the gate.
+        content_norm = _normalize_for_leak(candidate.content)
         for needle in self.leak_denylist:
-            if needle and needle in candidate.content:
+            if not needle:
+                continue
+            if needle in candidate.content or _normalize_for_leak(needle) in content_norm:
                 violations.append(
                     Violation(4, f"{dest} contains denylisted hidden-assertion text")
                 )

@@ -51,6 +51,7 @@ from pathlib import Path
 from harness.context_snapshots.proxy import RecordingProxy
 from harness.distractors.manifest import load_manifest, verify_lockfile
 from harness.runner.cli import load_experiment_config
+from harness.runner.runner import verifier_env
 from harness.runner.variant_builder import materialize_variant
 
 
@@ -84,10 +85,9 @@ class _Verifier:
         ]
 
     def _run(self, command: list[str], cwd: Path, workdir: Path) -> bool:
-        import os
-
-        env = dict(os.environ)
-        env["PYTHONPATH"] = str(workdir / "src")
+        # Same PYTEST_*-scrubbed, PYTHONPATH-pinned env the runner uses, so the
+        # gate verifies under the exact conditions of a real run (§4.1.2).
+        env = verifier_env(workdir / "src")
         result = subprocess.run(
             self._expand(command, workdir),
             cwd=str(cwd),

@@ -4,3 +4,4 @@
 src/pdd/__init__.py          # slicing stub — upstream __init__ re-exports the CLI surface and is outside the closure
 src/pdd/find_section.py      # target (seeded); sliced from upstream pdd/find_section.py
 tests/visible/test_find_section.py   # subset of upstream tests/test_find_section.py (unclosed cases withheld → hidden)
+core/pytest.ini             # local pytest config — isolates verification from the surrounding repo (§4.1.2)

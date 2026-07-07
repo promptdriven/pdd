@@ -1,0 +1,11 @@
+{
+  "manifests": {
+    "pdd-language-extensions.10x.json": "631b86ff21d009c7c6d908962708f17282d673f18c8682d91db05c972a96e74b",
+    "pdd-language-extensions.1x.json": "83c0e6235ff0fc3d5f7efffbbbf483df68e096935da4360ceaa2af70e90cd6f1",
+    "pdd-language-extensions.20x.json": "081552264f0794b48240deae563f0c227980d931b226e064adb0d2eab3d35de9",
+    "pdd-language-extensions.2x.json": "aa62b1f62a4cfb4ddc95b0d7fe82b005dddb644ce079f53d5f98e3d01a396c43",
+    "pdd-language-extensions.50x.json": "71c6ea7b9be991d6e4783378663a42ba0268893f401e11b5fc4403585d299a84",
+    "pdd-language-extensions.5x.json": "5699bcc1cba0d807cde7045599e95cf121edafaa213ba54bd7bd432a9551b7cf"
+  },
+  "schema_version": 1
+}

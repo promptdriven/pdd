@@ -26,6 +26,7 @@ from harness.context_snapshots.iteration_analyzer import RunTrajectory
 from harness.context_snapshots.schema import SnapshotRecord
 
 FAILURE_CLASSES = (
+    "agent_error",
     "wrong_file_edit",
     "localization_miss",
     "context_overflow",
@@ -76,10 +77,15 @@ def classify_failure(
     edit_classes: dict[str, list[str]],
     target_read_into_context: bool,
     context_overflow: bool,
+    agent_error: bool = False,
 ) -> str | None:
     """One primary failure class per non-pass run (design §6.4)."""
     if hidden_pass:
         return None
+    if agent_error:
+        # The agent process crashed/refused (nonzero exit); its edits, if any,
+        # are not a meaningful localization signal.
+        return "agent_error"
     if edit_classes["forbidden"]:
         return "forbidden_access"
     if timed_out:
@@ -120,6 +126,7 @@ def build_run_record(
     wall_clock_seconds: float,
     timeout_seconds: float,
     context_overflow: bool = False,
+    agent_error: bool = False,
     env_fingerprint_sha256: str | None = None,
     cli_version: str | None = None,
 ) -> dict:
@@ -197,6 +204,7 @@ def build_run_record(
         edit_classes=edit_classes,
         target_read_into_context=target_read_into_context,
         context_overflow=context_overflow,
+        agent_error=agent_error,
     )
 
     # Evidence gating (design §6.2/§9): token-level penetration metrics and
@@ -260,6 +268,7 @@ def build_run_record(
         # Outcome.
         "visible_pass": visible_pass,
         "hidden_pass": hidden_pass,
+        "agent_error": agent_error,
         "failure_class": failure_class,
     }
 

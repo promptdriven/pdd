@@ -38,11 +38,17 @@ from .runner import ExperimentRunner, RunConfig
 
 def load_experiment_config(path: Path) -> tuple[RunConfig, list[int], int]:
     """Load JSON config and coerce nested dataclass fields."""
+    import os
+
     config_data = json.loads(path.read_text(encoding="utf-8"))
     sizes = config_data.pop("sizes", [1])
     trials = config_data.pop("trials", 1)
     if isinstance(config_data.get("freeze"), dict):
         config_data["freeze"] = FreezeConfig(**config_data["freeze"])
+    # Container hard tier sets RB_PROXY_HOST=0.0.0.0 so the agent container can
+    # reach the recording proxy; an explicit config value still wins.
+    if "proxy_host" not in config_data and os.environ.get("RB_PROXY_HOST"):
+        config_data["proxy_host"] = os.environ["RB_PROXY_HOST"]
     return RunConfig(**config_data), sizes, trials
 
 
