@@ -73,7 +73,10 @@ a second CLI invocation. When `PDD_CHECKUP_FALLBACK_MIRROR=1` is present,
 `pdd checkup --pr <PR_URL> --issue <ISSUE_URL> --final-gate` writes the same
 bounded `pdd.checkup.agentic.v1` artifact to exactly
 `PDD_AGENTIC_CHECKUP_ARTIFACT_PATH`. That artifact is additive mirror/fallback
-evidence; the canonical final-gate verdict remains authoritative.
+evidence; the canonical final-gate verdict remains authoritative. Hosted
+callers may also set `PDD_AGENTIC_CHECKUP_REVIEWERS`, for example
+`codex:/review,claude:/code-review`, to request provider-native review-command
+behavior for the mirror reviewers without running a second checkup command.
 Exit 0 only when verdict is `pass`; non-zero for `failed`, `needs_human`,
 `error`, `timeout`, or `budget_exhausted` outcomes.
 

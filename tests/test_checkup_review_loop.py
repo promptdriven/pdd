@@ -13981,6 +13981,40 @@ def test_parse_reviewers_strips_slash_command_suffix():
     assert parse_reviewers("codex,claude") == ("codex", "claude")
 
 
+def test_review_prompt_includes_reviewer_slash_command(tmp_path):
+    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(reviewer_commands={"codex": "/review"}),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" in prompt
+    assert "`/review`" in prompt
+    assert "do not return the slash command by itself" in prompt
+
+
+def test_review_prompt_omits_reviewer_slash_command_when_unconfigured(tmp_path):
+    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" not in prompt
+
+
 def test_review_loop_config_agentic_fields_default_off():
     from pdd.checkup_review_loop import ReviewLoopConfig
 

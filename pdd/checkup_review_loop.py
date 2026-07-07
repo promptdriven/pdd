@@ -2248,6 +2248,34 @@ def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]
     return commands
 
 
+def _reviewer_command_for_role(config: ReviewLoopConfig, role: str) -> str:
+    """Return the configured slash command for a normalized reviewer role."""
+    normalized = _normalize_reviewers([role])
+    if not normalized:
+        return ""
+    return str(config.reviewer_commands.get(normalized[0], "") or "").strip()
+
+
+def _reviewer_command_block(config: ReviewLoopConfig, role: str) -> str:
+    """Render the optional provider-native reviewer command instruction.
+
+    Issue #1884: hosted fallback/mirror checkup can ask reviewers to use
+    provider-native review modes such as ``/review`` or ``/code-review`` while
+    keeping canonical final-gate authority unchanged.
+    """
+    command = _reviewer_command_for_role(config, role)
+    if not command:
+        return ""
+    return (
+        "\n\nProvider-native review command requested for this reviewer: "
+        f"`{command}`.\n"
+        "Use the equivalent of that provider's code-review slash-command "
+        "workflow for this pass. If the hosted non-interactive runner cannot "
+        "execute slash commands literally, perform the same review behavior "
+        "from these instructions; do not return the slash command by itself.\n"
+    )
+
+
 def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     """Resolve the primary reviewer and fixer roles from new and legacy config."""
     legacy_roles = _normalize_reviewers(config.reviewers)
@@ -3977,11 +4005,12 @@ def _review_prompt(
         adversarial_block = (
             f"\n\nAdversarial instruction: {config.adversarial_prompt}\n"
         )
+    command_block = _reviewer_command_block(config, reviewer)
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
 
 Mode: {mode}
 Round: {round_number}
-{adversarial_block}
+{adversarial_block}{command_block}
 
 You are a reviewer only. Do not edit files. Inspect the PR against the original
 issue and the existing codebase. Find only actionable issues that matter before
