@@ -1,215 +1,157 @@
-"""Examples showing run_agentic_sync (issue URL) and run_global_sync (project-wide Tier 1)."""
+from __future__ import annotations
 
+import json
+import os
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-# Add the project root to sys.path
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+from rich.console import Console
 
-from pdd.agentic_sync import (
-    _is_github_issue_url,
-    _parse_llm_response,
-    run_agentic_sync,
-    run_global_sync,
-)
-from pdd.agentic_sync_runner import DepGraphFromArchitectureResult
+# Import the target orchestration functions from the agentic_sync module
+from pdd.agentic_sync import run_agentic_sync, run_global_sync
+
+console = Console()
 
 
-def main():
-    """Demonstrate the agentic sync workflow with mocked dependencies."""
+def create_mock_workspace(base_dir: Path) -> None:
+    """Create a mock workspace with a standard architecture.json, .pddrc, and prompts."""
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- URL Detection ---
-    # The sync command detects URLs vs basenames automatically
-    assert _is_github_issue_url("https://github.com/owner/repo/issues/42")
-    assert not _is_github_issue_url("my_module")
+    # 1. Create a mock .pddrc project configuration
+    pddrc_content = {
+        "version": "1.0",
+        "contexts": {
+            "default": {
+                "defaults": {
+                    "generate_output_path": "src/",
+                    "test_output_path": "tests/",
+                    "prompts_dir": "prompts/",
+                    "default_language": "python"
+                }
+            }
+        }
+    }
+    pddrc_file = base_dir / ".pddrc"
+    pddrc_file.write_text(json.dumps(pddrc_content, indent=2), encoding="utf-8")
 
-    # --- LLM Response Parsing ---
-    llm_response = (
-        'MODULES_TO_SYNC: ["auth", "user_service", "api_gateway"]\n\n'
-        'DEPS_VALID: true\n'
+    # 2. Create a mock architecture.json describing project modules
+    architecture_content = {
+        "modules": [
+            {
+                "filename": "calculator_python.prompt",
+                "filepath": "src/calculator.py",
+                "reason": "Core arithmetic service",
+                "dependencies": [],
+                "tags": ["module", "python"]
+            }
+        ]
+    }
+    arch_file = base_dir / "architecture.json"
+    arch_file.write_text(json.dumps(architecture_content, indent=2), encoding="utf-8")
+
+    # 3. Create a mock prompt file
+    prompts_dir = base_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    prompt_file = prompts_dir / "calculator_python.prompt"
+    prompt_file.write_text(
+        "<pdd-reason>Performs simple calculations.</pdd-reason>\n"
+        "<pdd-interface>\n"
+        "{\n"
+        '  "type": "module",\n'
+        '  "module": {\n'
+        '    "functions": [{"name": "add", "signature": "(a: int, b: int) -> int"}]\n'
+        "  }\n"
+        "}\n"
+        "</pdd-interface>\n",
+        encoding="utf-8"
     )
-    modules, deps_valid, corrections = _parse_llm_response(llm_response)
-    print(f"Modules to sync: {modules}")
-    print(f"Dependencies valid: {deps_valid}")
 
-    # --- Full Workflow (mocked) ---
-    issue_url = "https://github.com/example/repo/issues/100"
-    print(f"\nRunning agentic sync for: {issue_url}")
-    print("-" * 60)
 
-    with patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner_cls, \
-         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
-         patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
-         patch("pdd.agentic_sync._filter_already_synced") as mock_filter_synced, \
-         patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), \
-         patch("pdd.agentic_sync.load_prompt_template") as mock_template, \
-         patch("pdd.agentic_sync.run_agentic_task") as mock_task, \
-         patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
-         patch("pdd.agentic_sync._run_gh_command") as mock_gh, \
-         patch("pdd.agentic_sync._check_gh_cli", return_value=True):
+def mock_subprocess_run(args: list[str], **kwargs: any) -> MagicMock:
+    """Mock git and gh command execution for deterministic runs."""
+    cmd_str = " ".join(str(arg) for arg in args)
+    mock_res = MagicMock()
+    mock_res.returncode = 0
 
-        # Mock GitHub API
-        import json
-        mock_gh.return_value = (True, json.dumps({
-            "title": "Add caching layer",
-            "body": "We need Redis caching for auth and user_service",
-            "comments_url": "",
-        }))
+    if "git rev-parse --abbrev-ref HEAD" in cmd_str:
+        mock_res.stdout = "change/issue-42\n"
+    elif "git diff" in cmd_str:
+        # Mock changed files from the branch diff to detect our module
+        mock_res.stdout = "prompts/calculator_python.prompt\n"
+    elif "git show" in cmd_str:
+        # Mock architecture lookup from origin branch
+        mock_res.stdout = "{}"
+    elif "gh api" in cmd_str:
+        # Mock GitHub Issue payload
+        mock_res.stdout = json.dumps({
+            "title": "Implement addition functionality",
+            "body": "Add support for simple addition in calculator_python.prompt",
+            "comments_url": "https://api.github.com/repos/example/repo/issues/42/comments"
+        })
+    else:
+        mock_res.stdout = ""
 
-        # Mock architecture.json
-        mock_arch.return_value = (
-            [
-                {"filename": "auth_python.prompt", "dependencies": []},
-                {"filename": "user_service_python.prompt", "dependencies": ["auth_python.prompt"]},
-            ],
-            Path("/tmp/architecture.json"),
-        )
+    return mock_res
 
-        # Mock LLM response
-        mock_template.return_value = "template {issue_content} {architecture_json}"
-        mock_task.return_value = (
-            True,
-            'MODULES_TO_SYNC: ["auth", "user_service"]\nDEPS_VALID: true',
-            0.08,
-            "anthropic",
-        )
 
-        # Mock dependency graph and runner
-        mock_graph.return_value = DepGraphFromArchitectureResult(
-            {"auth": [], "user_service": ["auth"]},
-            [],
-        )
-        mock_dry_run.return_value = (
-            True,
-            {"auth": Path.cwd(), "user_service": Path.cwd()},
-            [],
-            0.0,
-        )
-        mock_filter_synced.return_value = ["auth", "user_service"]
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.50)
-        mock_runner_cls.return_value = mock_runner
+def main() -> None:
+    # Setup isolated mock project directory under ./output
+    output_dir = Path("./output").resolve()
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    create_mock_workspace(output_dir)
 
-        # --- EXECUTE THE MODULE ---
-        success, message, cost, model = run_agentic_sync(
-            issue_url=issue_url,
-            verbose=True,
-            quiet=False,
-            budget=10.0,
-            skip_verify=False,
-        )
+    console.print(f"[bold blue]Created Mock Project Workspace at:[/bold blue] {output_dir}\n")
 
-    # Output the results
-    print("\n--- Result Summary ---")
-    print(f"Success    : {success}")
-    print(f"Model Used : {model}")
-    print(f"Total Cost : ${cost:.2f}")
-    print(f"Message    : {message}")
+    # Change active directory to mock project so that path discovery works natively
+    original_cwd = Path.cwd()
+    os.chdir(output_dir)
 
-    # --- Global Sync (no-argument `pdd sync`) ---
-    print("\nRunning project-wide Tier 1 global sync (dry run)")
-    print("-" * 60)
+    # Patch necessary subprocesses and CLI availability checks
+    with patch("pdd.agentic_sync.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_sync.subprocess.run", side_effect=mock_subprocess_run), \
+         patch("pdd.agentic_sync._run_single_dry_run", return_value=(True, "")):
 
-    with patch("pdd.agentic_sync._find_project_root", return_value=Path("/tmp/proj")), \
-         patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
-         patch("pdd.agentic_sync._architecture_module_basenames") as mock_basenames, \
-         patch("pdd.agentic_sync._analyze_global_sync_modules") as mock_analyze, \
-         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
-         patch("pdd.agentic_sync._dependency_ordered_modules") as mock_order, \
-         patch("pdd.agentic_sync._print_global_sync_plan"):
-
-        mock_arch.return_value = (
-            {"modules": [
-                {"filename": "auth_python.prompt", "dependencies": []},
-                {"filename": "user_service_python.prompt",
-                 "dependencies": ["auth_python.prompt"]},
-            ]},
-            Path("/tmp/proj/architecture.json"),
-        )
-        mock_basenames.return_value = ["auth", "user_service"]
-
-        analysis = MagicMock()
-        analysis.modules_to_sync = ["auth", "user_service"]
-        analysis.module_cwds = {}
-        analysis.estimated_cost = 0.42
-        mock_analyze.return_value = analysis
-
-        mock_graph.return_value = DepGraphFromArchitectureResult(
-            {"auth": [], "user_service": ["auth"]},
-            [],
-        )
-        mock_order.return_value = ["auth", "user_service"]
-
-        # --- EXECUTE THE MODULE ---
-        success, message, cost, model = run_global_sync(
-            verbose=False,
-            quiet=True,
-            budget=20.0,
+        # -------------------------------------------------------------
+        # Demo 1: Project-Wide Tier 1 Global Sync (Dry-Run Mode)
+        # -------------------------------------------------------------
+        console.print("[bold green]--- 1. Executing Global Sync (Dry Run) ---[/bold green]")
+        success, msg, cost, mode = run_global_sync(
             dry_run=True,
-        )
-
-    print("\n--- Global Sync Result ---")
-    print(f"Success    : {success}")
-    print(f"Model Used : {model}")
-    print(f"Total Cost : ${cost:.2f}")
-    print(f"Message    : {message}")
-
-    # --- Durable Issue Sync (--durable) ---
-    # When durable=True, run_agentic_sync dispatches to DurableSyncRunner
-    # instead of AsyncSyncRunner. Module identification, dependency-graph
-    # construction, dry-run validation, fingerprint filtering, and initial
-    # cost accounting are all unchanged.
-    print("\nRunning durable agentic sync (mocked, --durable)")
-    print("-" * 60)
-
-    with patch("pdd.agentic_sync.DurableSyncRunner") as mock_durable_cls, \
-         patch("pdd.agentic_sync.AsyncSyncRunner") as mock_async_cls, \
-         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
-         patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
-         patch("pdd.agentic_sync._filter_already_synced") as mock_filter_synced, \
-         patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=["auth"]), \
-         patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
-         patch("pdd.agentic_sync._run_gh_command") as mock_gh, \
-         patch("pdd.agentic_sync._check_gh_cli", return_value=True):
-
-        import json
-        mock_gh.return_value = (True, json.dumps({
-            "title": "Durable rerun safety",
-            "body": "Cloud worker timed out; want resumable sync.",
-            "comments_url": "",
-        }))
-        mock_arch.return_value = (
-            [{"filename": "auth_python.prompt", "dependencies": []}],
-            Path("/tmp/architecture.json"),
-        )
-        mock_graph.return_value = DepGraphFromArchitectureResult({"auth": []}, [])
-        mock_dry_run.return_value = (True, {"auth": Path.cwd()}, [], 0.0)
-        mock_filter_synced.return_value = ["auth"]
-        mock_durable = MagicMock()
-        mock_durable.run.return_value = (True, "1 module checkpointed", 0.20)
-        mock_durable_cls.return_value = mock_durable
-
-        success, message, cost, model = run_agentic_sync(
-            issue_url="https://github.com/example/repo/issues/1328",
             verbose=False,
-            quiet=True,
-            budget=10.0,
-            durable=True,
-            durable_branch="sync/issue-1328",
-            no_resume=False,
-            durable_max_parallel=2,
+            quiet=False
         )
 
-        # Durable mode dispatches to DurableSyncRunner, not AsyncSyncRunner.
-        assert mock_durable_cls.called, "Expected DurableSyncRunner dispatch"
-        assert not mock_async_cls.called, "AsyncSyncRunner must not run in durable mode"
+        console.print(f"Success  : [cyan]{success}[/cyan]")
+        console.print(f"Message  : [cyan]{msg}[/cyan]")
+        console.print(f"Total Cost : [cyan]${cost:.5f}[/cyan]")
+        console.print(f"Mode     : [cyan]{mode}[/cyan]\n")
 
-    print("\n--- Durable Sync Result ---")
-    print(f"Success    : {success}")
-    print(f"Total Cost : ${cost:.2f}")
-    print(f"Message    : {message}")
+        # -------------------------------------------------------------
+        # Demo 2: GitHub Issue-driven Parallel Sync (Dry-Run Mode)
+        # -------------------------------------------------------------
+        console.print("[bold green]--- 2. Executing Agentic Sync from Issue URL (Dry Run) ---[/bold green]")
+        issue_url = "https://github.com/example/repo/issues/42"
+        
+        success, msg, cost, model = run_agentic_sync(
+            issue_url=issue_url,
+            dry_run=True,
+            use_github_state=False,  # Set local-only mode to prevent hitting remote APIs
+            quiet=False,
+            verbose=False
+        )
+
+        console.print(f"Success   : [cyan]{success}[/cyan]")
+        console.print(f"Message   : [cyan]{msg}[/cyan]")
+        console.print(f"Total Cost: [cyan]${cost:.5f}[/cyan]")
+        console.print(f"Model Used: [cyan]{model or 'global-sync'}[/cyan]\n")
+
+    # Restore the original current working directory and clean up
+    os.chdir(original_cwd)
+    shutil.rmtree(output_dir, ignore_errors=True)
+    console.print("[bold blue]Cleaned up temporary workspace files.[/bold blue]")
 
 
 if __name__ == "__main__":
