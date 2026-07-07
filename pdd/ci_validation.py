@@ -774,8 +774,13 @@ def run_github_checks_gate(
 
     Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed.
     Missing, unreadable, pending, failed, stale, or wrong-head checks fail.
-    In the all-check-runs path, skipped/neutral REST check runs are ignored as
-    non-applicable evidence, but at least one applicable check run must pass.
+    In the default all-check-runs path (``required_only=False``), skipped/neutral
+    and action_required REST check runs are non-applicable and never block; an
+    unrecognized ("") completed conclusion fails open (surfaced, not trusted as
+    a pass). The gate passes when at least one applicable check run passes or an
+    unrecognized conclusion is surfaced, and blocks on any applicable failed or
+    pending check. ``required_only=True`` stays strict: skipped, action_required,
+    and unknown checks all block.
     """
     head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
         repo_owner, repo_name, pr_number, cwd
@@ -817,31 +822,145 @@ def run_github_checks_gate(
         if check.get("bucket", "").lower() in SKIP_BUCKETS
         or check.get("state", "").lower() in SKIP_BUCKETS
     ]
-    applicable_checks = [check for check in checks if check not in skipped]
-    evaluation_checks = checks if required_only else applicable_checks
+    if not required_only:
+        # Issue #1902: the config-free final gate blocks only on POSITIVE
+        # evidence of failure, decided from each check run's own conclusion
+        # bucket (never check names, never the aggregate poll status for
+        # pass/fail). Non-applicable check runs never block and are surfaced:
+        # skipped/neutral runs (did not run) and action_required runs
+        # (manual/bot gates such as an idle auto-heal check that never
+        # self-resolves). An unrecognized ("") completed conclusion FAILS OPEN
+        # so a future GitHub conclusion enum value cannot silently false-block a
+        # healthy PR, but it is surfaced rather than trusted as a pass.
+        non_applicable = [
+            check
+            for check in checks
+            if check in skipped
+            or check.get("state", "").lower() in ACTION_REQUIRED_STATES
+            or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+        ]
+        applicable = [check for check in checks if check not in non_applicable]
+        failed = [
+            check
+            for check in applicable
+            if (
+                check.get("bucket", "").lower() in FAIL_BUCKETS
+                and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+            )
+            or check.get("state", "").lower() in FAILURE_STATES
+        ]
+        pending = [
+            check
+            for check in applicable
+            if check.get("bucket", "").lower() in PENDING_BUCKETS
+        ]
+        passed = [
+            check
+            for check in applicable
+            if check.get("bucket", "").lower() in FINAL_GATE_PASS_BUCKETS
+        ]
+        unknown = [
+            check
+            for check in applicable
+            if check.get("bucket", "").lower() not in KNOWN_CHECK_BUCKETS
+        ]
+        ignored_summary = _render_check_summary(non_applicable)
+        unknown_summary = _render_check_summary(unknown)
+
+        def _with_surface(message: str) -> str:
+            if non_applicable:
+                message += (
+                    "\n\nIgnored non-applicable skipped/neutral checks:\n"
+                    f"{ignored_summary}"
+                )
+            if unknown:
+                message += (
+                    "\n\nSurfaced unrecognized check conclusions (not treated "
+                    f"as failure):\n{unknown_summary}"
+                )
+            return message
+
+        if failed:
+            return (
+                False,
+                _with_surface(
+                    f"{source_name} failed on PR head {head_sha[:8]}:\n"
+                    f"{_render_check_summary(failed)}"
+                ),
+                head_sha,
+            )
+        if pending:
+            return (
+                False,
+                _with_surface(
+                    f"{source_name} were pending, stale, or not reported for PR "
+                    f"head {head_sha[:8]}:\n{_render_check_summary(pending)}"
+                ),
+                head_sha,
+            )
+        if passed or unknown:
+            passing_summary = (
+                _render_check_summary(passed) if passed else unknown_summary
+            )
+            if unknown and not quiet:
+                console.print(
+                    f"[yellow]Final gate passed with {len(unknown)} unrecognized "
+                    "check conclusion(s) surfaced (not treated as failure).[/yellow]"
+                )
+            return (
+                True,
+                _with_surface(
+                    f"{source_name} passed on PR head {head_sha[:8]}.\n"
+                    f"{passing_summary}"
+                ),
+                head_sha,
+            )
+        if checks:
+            return (
+                False,
+                (
+                    f"{source_name} had only skipped/neutral/manual-action "
+                    f"non-applicable checks on PR head {head_sha[:8]}; final gate "
+                    "requires at least one applicable passing check.\n"
+                    f"{_render_check_summary(checks)}"
+                ),
+                head_sha,
+            )
+        if status in {"no_checks", "unreadable"}:
+            return (
+                False,
+                (
+                    f"{source_name} were missing or unreadable for PR head "
+                    f"{head_sha[:8]}; final gate requires GitHub checks as "
+                    "full-suite truth."
+                ),
+                head_sha,
+            )
+        return (
+            False,
+            f"{source_name} were missing for PR head {head_sha[:8]}.",
+            head_sha,
+        )
+
+    # required_only=True strict path (the default required_only=False path
+    # returned above). Skipped and action_required checks both block here,
+    # unknown completed conclusions block, and at least one non-skipped passing
+    # required check must be present. Behavior preserved from the pre-#1902 gate.
     summary = _render_check_summary(checks)
-    evaluation_summary = _render_check_summary(evaluation_checks)
-    ignored_summary = _render_check_summary(skipped)
     unknown = [
         check
-        for check in evaluation_checks
-        if check.get("bucket", "").lower() not in (
-            FINAL_GATE_PASS_BUCKETS
-            | FAIL_BUCKETS
-            | PENDING_BUCKETS
-            | SKIP_BUCKETS
-            | ACTION_REQUIRED_BUCKETS
-        )
+        for check in checks
+        if check.get("bucket", "").lower() not in KNOWN_CHECK_BUCKETS
     ]
     action_required = [
         check
-        for check in evaluation_checks
+        for check in checks
         if check.get("state", "").lower() in ACTION_REQUIRED_STATES
         or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
     ]
     failed = [
         check
-        for check in evaluation_checks
+        for check in checks
         if (
             check.get("bucket", "").lower() in FAIL_BUCKETS
             and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
@@ -850,93 +969,49 @@ def run_github_checks_gate(
     ]
     pending = [
         check
-        for check in evaluation_checks
+        for check in checks
         if check.get("bucket", "").lower() in PENDING_BUCKETS
     ]
-    passed = [
-        check
-        for check in evaluation_checks
-        if check.get("bucket", "").lower() in FINAL_GATE_PASS_BUCKETS
-    ]
 
-    if (
-        not required_only
-        and status == "passed"
-        and passed
-        and not failed
-        and not pending
-        and not action_required
-        and not unknown
-    ):
-        message = f"{source_name} passed on PR head {head_sha[:8]}.\n{evaluation_summary}"
-        if skipped:
-            message += f"\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
-        return True, message, head_sha
-    if required_only and status == "passed" and checks and not skipped and not unknown:
+    if status == "passed" and checks and not skipped and not unknown:
         return True, f"{source_name} passed on PR head {head_sha[:8]}.\n{summary}", head_sha
     if status == "passed" and not checks:
         return False, f"{source_name} were missing for PR head {head_sha[:8]}.", head_sha
-    if not required_only and checks and not applicable_checks:
-        return (
-            False,
-            (
-                f"{source_name} had only skipped/neutral non-applicable checks "
-                f"on PR head {head_sha[:8]}; final gate requires at least one "
-                f"applicable passing check.\n{summary}"
-            ),
-            head_sha,
-        )
-    if required_only and skipped:
+    if skipped:
         return (
             False,
             f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
-
-    def _with_ignored(message: str) -> str:
-        if not skipped or required_only:
-            return message
-        return f"{message}\n\nIgnored non-applicable skipped/neutral checks:\n{ignored_summary}"
-
     if action_required or status == "action_required":
         return (
             False,
-            _with_ignored(
-                f"{source_name} require manual action on PR head {head_sha[:8]}:\n"
-                f"{evaluation_summary}"
-            ),
+            f"{source_name} require manual action on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if unknown:
         return (
             False,
-            _with_ignored(
-                f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n"
-                f"{evaluation_summary}"
-            ),
+            f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if failed:
         return (
             False,
-            _with_ignored(
-                f"{source_name} failed on PR head {head_sha[:8]}:\n{evaluation_summary}"
-            ),
+            f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if pending:
         return (
             False,
-            _with_ignored(
-                f"{source_name} were pending, stale, or not reported for PR "
-                f"head {head_sha[:8]}:\n{evaluation_summary}"
-            ),
+            f"{source_name} were pending, stale, or not reported for PR "
+            f"head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if status == "failed":
         return (
             False,
-            _with_ignored(f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}"),
+            f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if status in {"no_checks", "unreadable"}:
