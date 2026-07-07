@@ -36,7 +36,7 @@ artifact fields, with this 1:1 mapping to the serialized JSON:
 - `story_backed_test_count: int`
 - `stories_covered: int`
 - `story_coverage_pct: Optional[float]` (`null` when `story_count` is `0`)
-- `pass_rate: Optional[float]`
+- `pass_rate: Optional[float]` (fraction in `0.0..1.0`; `null` when real pass/fail verdicts are unavailable)
 - `passing_test_count: int`
 - `gap_stories: list[str]` (optional dashboard hint; default empty)
 - `orphan_tests: list[str]` (optional dashboard hint; default empty)
@@ -77,12 +77,17 @@ path, and prints a one-line CI summary.
    `story_backed_test_count` (collected `-m story` items), `stories_covered`
    (distinct stories with ≥1 passing, non-stale test), `story_coverage_pct`
    (= `stories_covered / story_count`), and `pass_rate` / `passing_test_count`.
-   Support many-to-many story↔test relationships (one test may cover multiple
-   stories; one story may be covered by multiple tests).
+   `pass_rate` is a fraction in `0.0..1.0`, not a percent. Support many-to-many
+   story↔test relationships (one test may cover multiple stories; one story may
+   be covered by multiple tests).
 4. **Coverage-semantics guards.** Exclude `skip`/`xfail` items from both
    `pass_rate` and the "covered" count. A stale-but-green test does not count as
    covered: defer to the #1702 gate verdict when available; when the gate status
    is unavailable, do not award coverage credit on staleness it cannot confirm.
+   Collection-only marker data must never be converted into pass/fail evidence:
+   when real pytest/gate verdicts are unavailable, emit `status:
+   "not_applicable"`, `stories_covered: 0`, `story_coverage_pct: null`,
+   `pass_rate: null`, and `passing_test_count: 0`.
 5. **Zero-story guard.** When `story_count` is `0`, emit `story_coverage_pct` as
    `null` and `status: "not_applicable"`. Never divide by zero and never report
    `0%`.

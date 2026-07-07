@@ -146,15 +146,14 @@ def compute_story_coverage(
     story_ids = _discover_story_ids(stories_path)
     collected = _collect_story_tests(tests_path)
     referenced = set(collected.story_to_tests)
-    covered = story_ids & referenced
     test_count = len(collected.test_to_stories)
 
-    if not story_ids:
-        status = "not_applicable"
-        coverage_pct = None
-    else:
-        status = "ok"
-        coverage_pct = round((len(covered) / len(story_ids)) * 100, 2)
+    # This adapter only performs pytest collection. It deliberately does not
+    # execute tests or consume a gate-result feed, so pass/fail and non-stale
+    # coverage evidence is unavailable and must not be inferred from markers.
+    status = "not_applicable"
+    stories_covered = 0
+    coverage_pct = None
 
     return StoryCoverage(
         schema_version=SCHEMA_VERSION,
@@ -163,10 +162,10 @@ def compute_story_coverage(
         generated_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         story_count=len(story_ids),
         story_backed_test_count=test_count,
-        stories_covered=len(covered),
+        stories_covered=stories_covered,
         story_coverage_pct=coverage_pct,
-        pass_rate=None if test_count == 0 else 100.0,
-        passing_test_count=test_count,
+        pass_rate=None,
+        passing_test_count=0,
         gap_stories=sorted(story_ids - referenced),
         orphan_tests=sorted(referenced - story_ids),
     )
@@ -201,9 +200,9 @@ def format_summary_line(coverage: StoryCoverage) -> str:
     if coverage.status == "not_applicable" or coverage.story_coverage_pct is None:
         return (
             "story regression: not_applicable "
-            f"({coverage.story_backed_test_count} tests across "
-            f"{coverage.stories_covered}/{coverage.story_count} stories, "
-            f"{coverage.passing_test_count} passing)"
+            f"({coverage.story_backed_test_count} collected story tests across "
+            f"{coverage.stories_covered}/{coverage.story_count} verified stories; "
+            "pass-rate unavailable)"
         )
     return (
         f"story regression: {coverage.story_backed_test_count} tests across "

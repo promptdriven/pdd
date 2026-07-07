@@ -218,9 +218,10 @@ The artifact uses an integer `schema_version` and is packaged at
 
 - `schema_version` — integer schema version for the artifact (bumped on any
   breaking field change).
-- `status` — `"ok"` for a real measurement, or `"not_applicable"` when
-  `story_count` is `0` or the upstream marker/traceability API or gate statuses
-  are absent (the degraded case described below). Downstream consumers
+- `status` — `"ok"` only for a real measurement with pass/fail and freshness
+  verdicts, or `"not_applicable"` when `story_count` is `0` or the upstream
+  marker/traceability API or gate statuses are absent (the degraded case
+  described below). Downstream consumers
   (`pdd_cloud`, `pdd checkup`) must branch on this field to distinguish a real
   measurement from a degraded one.
 - `run_id` / `generated_at` — the per-run snapshot identifier and the ISO-8601
@@ -229,18 +230,25 @@ The artifact uses an integer `schema_version` and is packaged at
 - `story_backed_test_count` — collected `-m story` test items (parametrizations
   count individually, matching the "142 tests" example).
 - `stories_covered` — distinct stories with at least one passing, non-stale
-  regression test.
+  regression test. Collection-only marker data is not enough to award coverage
+  credit.
 - `story_coverage_pct` — `stories_covered / story_count`, or `null` when
-  `story_count` is `0` (no division-by-zero; never reported as `0%`).
-- `pass_rate` / `passing_test_count` — over collected story tests; `skip`/`xfail`
-  items are excluded from both the pass-rate and the "covered" count.
+  `story_count` is `0` or pass/fail verdicts are unavailable (no
+  division-by-zero; never reported as `0%` in degraded mode).
+- `pass_rate` / `passing_test_count` — over collected story tests when real
+  pass/fail verdicts are available. `pass_rate` is a fraction in `0.0..1.0`,
+  not a percentage. When the emitter only has collection data, `pass_rate` is
+  `null` and `passing_test_count` is `0`; it must not infer passing tests from
+  collected markers. `skip`/`xfail` items are excluded from both the pass-rate
+  and the "covered" count.
 - `gap_stories[]` / `orphan_tests[]` — optional dashboard hints (stories with no
   test; story-marked tests pointing at no known story).
 
 When the upstream marker/traceability API or gate statuses are unavailable (the
 executable story suite is not yet present), the emitter writes a well-formed
-artifact with `status: "not_applicable"` rather than failing — the same
-degradation convention used elsewhere for missing stories/contracts.
+artifact with `status: "not_applicable"` and unavailable pass-rate fields rather
+than failing or overstating pass results — the same degradation convention used
+elsewhere for missing stories/contracts.
 
 ## Verification
 

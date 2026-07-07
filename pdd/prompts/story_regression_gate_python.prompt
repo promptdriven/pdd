@@ -2,6 +2,9 @@
 
 <include>context/python_preamble.prompt</include>
 
+<pdd-dependency>story_regression_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+
 <pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a passing, non-stale executable regression test behind it. The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
 
 % Background

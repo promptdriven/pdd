@@ -39,9 +39,11 @@ story regression: 142 tests across 96/110 stories (87% covered), 142 passing
 ```
 
 The percentage is guarded against zero total stories (reported as
-`not_applicable`, never `0%`). Trend is computed downstream in `pdd_cloud` from
-the stateless per-run snapshots under `.pdd/evidence/stories/runs/`; this lane
-emits snapshots only and does no trend math itself. See
+`not_applicable`, never `0%`). The JSON emitter does not infer pass-rate from
+collected markers: until pass/fail and freshness verdicts are available to the
+artifact writer, it emits `status: "not_applicable"`, `pass_rate: null`, and
+`passing_test_count: 0`. Trend is computed downstream in `pdd_cloud` from the
+stateless per-run snapshots under `.pdd/evidence/stories/runs/`; this lane emits
+snapshots only and does no trend math itself. See
 [docs/evidence_manifest.md](evidence_manifest.md) for the artifact schema and
-field definitions. Until the upstream story marker/lane/gate land, the lane
-emits a `status: "not_applicable"` artifact rather than failing.
+field definitions.
