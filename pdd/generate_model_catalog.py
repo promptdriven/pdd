@@ -220,6 +220,9 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # GLM (Zhipu AI / ZAI)
     # -----------------------------------------------------------------------
+    "glm-5.2": 1510,                   # [EST] above glm-5 (1456); June 2026 Z.AI flagship
+    "glm-5-turbo": 1450,               # [EST] between glm-5.2 and glm-4.7; lighter turbo
+    "glm-5.1": 1436,                   # [EST] DeepSWE #9; raw ELO fallback mirrors GLM-5 route family
     "glm-5": 1456,                     # [CODE] #8
     "glm-4.7": 1440,                   # [CODE] #11
     "glm-4.6": 1357,                   # [CODE]
@@ -360,7 +363,7 @@ CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
     "model_rank_score", "model_rank_source", "base_url", "api_key",
     "max_reasoning_tokens", "structured_output", "reasoning_type",
-    "location", "interactive_only",
+    "location", "interactive_only", "context_limit",
 ]
 
 # DeepSWE is a solve-rate benchmark, not an ELO leaderboard.  Store its signal
@@ -1449,6 +1452,116 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "reasoning_type": "effort",
         "location": "global",
     },
+    # Z.AI General API rows (issue #1827). LiteLLM's native zai/ prefix only
+    # covers up to glm-4.7; openai/ prefix + explicit base_url is required to
+    # route glm-5.2 and glm-5-turbo without silent provider mis-detection.
+    # ELO resolved at build time from STATIC_ELO_FALLBACK (glm-5.2: 1510,
+    # glm-5-turbo: 1450). Both Z.AI endpoints share ZAI_API_KEY.
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.2",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+        "context_limit": 1_000_000,
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5-turbo",
+        "input": 0.5,
+        "output": 1.5,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5.1",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-5",
+        "input": 1.0,
+        "output": 3.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI",
+        "model": "openai/glm-4.7",
+        "input": 0.6,
+        "output": 2.2,
+        "base_url": "https://api.z.ai/api/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    # Z.AI GLM Coding Plan rows (issue #1827). Quota-backed billing: input=0.0,
+    # output=0.0 avoids misleading per-token cost estimates. The Coding Plan
+    # endpoint is distinct from the general API. Users on the Coding Plan should
+    # use bare PDD_MODEL_DEFAULT=glm-5.2 with ZAI_API_KEY so provider-aware
+    # fallback selects this row before the general API row. An explicit
+    # PDD_MODEL_DEFAULT=openai/glm-5.2 selects the general Z.AI row because both
+    # endpoint families share the same OpenAI-compatible model string.
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-5.2",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+        "context_limit": 1_000_000,
+    },
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-5-turbo",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        "provider": "Z.AI Coding Plan",
+        "model": "openai/glm-4.7",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "https://api.z.ai/api/coding/paas/v4",
+        "api_key": "ZAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": False,
+        "reasoning_type": "effort",
+        "location": "",
+    },
 ]
 
 
@@ -1534,10 +1647,23 @@ def _mandatory_rows_missing_from(
     elo_source_counts: Dict[str, int],
     deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[dict]:
-    existing_ids = {r["model"] for r in rows}
+    existing_ids = {
+        (r.get("provider", ""), r.get("model", ""))
+        for r in rows
+        if r.get("provider")
+    }
+    providerless_existing_models = {
+        r.get("model", "")
+        for r in rows
+        if not r.get("provider")
+    }
     missing: List[dict] = []
     for default_row in _MANDATORY_MODEL_ROWS:
-        if default_row["model"] in existing_ids:
+        model = default_row.get("model", "")
+        if model in providerless_existing_models:
+            continue
+        default_id = (default_row.get("provider", ""), model)
+        if default_id in existing_ids:
             continue
         seeded = dict(default_row)
         elo, src = _add_score_fields(seeded, arena_index, deepswe_index)

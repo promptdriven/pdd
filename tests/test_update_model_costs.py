@@ -290,9 +290,9 @@ def test_load_csv_missing_columns(mocker, temp_csv_path, capsys_rich):
 
 def test_load_csv_schema_update_preserves_rank_and_interactive_columns(mocker, temp_csv_path):
     initial_csv = (
-        "provider,model,input,output,model_rank_score,model_rank_source,location,interactive_only\n"
-        "OpenAI,gpt-test,1.0,2.0,17000,deepswe-solve-rate,global,1\n"
-        "OpenAI,gpt-other,1.0,2.0,1400,arena-elo-fallback,,0\n"
+        "provider,model,input,output,model_rank_score,model_rank_source,location,interactive_only,context_limit\n"
+        "OpenAI,gpt-test,1.0,2.0,17000,deepswe-solve-rate,global,1,1000000\n"
+        "OpenAI,gpt-other,1.0,2.0,1400,arena-elo-fallback,,0,\n"
     )
     temp_csv_path.write_text(initial_csv)
     df_from_csv = pd.read_csv(io.StringIO(initial_csv))
@@ -312,7 +312,9 @@ def test_load_csv_schema_update_preserves_rank_and_interactive_columns(mocker, t
     assert row["model_rank_source"] == "deepswe-solve-rate"
     assert row["location"] == "global"
     assert row["interactive_only"] is True
+    assert row["context_limit"] == 1000000
     assert called_df.iloc[1]["interactive_only"] is False
+    assert pd.isna(called_df.iloc[1]["context_limit"])
 
 
 def test_load_csv_with_placeholders_as_na(mocker, temp_csv_path, capsys_rich):
