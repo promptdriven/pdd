@@ -1,0 +1,2 @@
+# tinyproxy allowlist (FilterDefaultDeny Yes): the pinned provider host only.
+api.openai.com

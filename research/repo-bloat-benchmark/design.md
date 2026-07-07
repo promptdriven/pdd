@@ -796,7 +796,7 @@ Filesystem isolation alone is not enough: the *agent* environment is a second so
 | **User config** | `--ignore-user-config` (or equivalent) so no machine-local `config.toml` leaks settings. |
 | **`CODEX_HOME`** | A fresh, empty, per-run `CODEX_HOME`; never the developer's. |
 | **Session persistence** | Ephemeral — no resumed/rollover sessions, no history carried between runs (`--ephemeral` / fresh state per run). |
-| **Web search / network** | Explicitly set and logged. Default: **network egress disabled** in the container except the model API endpoint; web-search tool off unless a variant deliberately studies it. |
+| **Web search / network** | Explicitly set and logged. Default: **network egress disabled** in the container except the model API endpoint; web-search tool off unless a variant deliberately studies it. *(v2.1 status, 2026-07-07: implemented at `harness/runner/container/` — internal Docker network with no gateway isolates runner+agent at the netns level; an ACL'd tinyproxy is the single sanctioned path to the pinned provider; `egress_check.py` verifies the lockdown empirically on the pilot machine before every session and is mandatory.)* |
 | **MCP servers / plugins / hooks** | None enabled unless part of the arm definition; the set is enumerated and frozen. |
 | **Shell environment** | Sanitized allowlist of env vars; secrets limited to the model API key; no inherited dev shell. |
 | **Caches** | Prompt/response/tool caches cleared or disabled so a warm cache cannot shortcut localization. |

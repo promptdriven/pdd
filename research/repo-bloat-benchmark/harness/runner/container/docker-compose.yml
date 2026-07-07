@@ -1,0 +1,64 @@
+# Kernel-level egress lockdown for pilot runs (design §8.1.1 hard tier).
+#
+# Topology:
+#   rb-internal  — `internal: true`: Docker attaches NO gateway; containers on
+#                  it have no route to the outside world. Kernel/netns
+#                  enforcement, not env-var convention.
+#   rb-egress    — ordinary bridge with NAT; only the gateway sits on it.
+#
+#   runner   [rb-internal only]     runs the harness; spawns the agent as a
+#                                   subprocess in the same netns (⇒ the agent
+#                                   kernel-cannot reach anything but loopback
+#                                   and rb-internal). The runner's in-process
+#                                   RecordingProxy forwards provider traffic
+#                                   via HTTPS_PROXY=gateway (runner env only —
+#                                   the §8.1.1 frozen agent env still
+#                                   black-holes proxy vars).
+#   gateway  [rb-internal+egress]   tinyproxy, ACL-pinned: CONNECT to
+#                                   api.openai.com:443 and nothing else.
+#
+# Bring-up + kernel verification (no API key, no billing):
+#   docker compose build
+#   docker compose run --rm runner python3 harness/runner/container/egress_check.py
+# Pilot cells then run inside the same service (see README.md).
+
+networks:
+  rb-internal:
+    internal: true
+  rb-egress: {}
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    volumes:
+      - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./filter:/etc/tinyproxy/filter:ro
+    networks:
+      - rb-internal
+      - rb-egress
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: ../../..
+      dockerfile: harness/runner/container/Dockerfile
+    working_dir: /bench
+    environment:
+      HTTPS_PROXY: http://gateway:8888
+      HTTP_PROXY: http://gateway:8888
+      NO_PROXY: 127.0.0.1,localhost
+      # The single permitted secret; set in the host shell only for the
+      # calibration run and the pilot itself, never for egress_check.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ../../..:/bench
+      - rb-reports:/bench/reports
+    networks:
+      - rb-internal
+    depends_on:
+      - gateway
+
+volumes:
+  rb-reports: {}

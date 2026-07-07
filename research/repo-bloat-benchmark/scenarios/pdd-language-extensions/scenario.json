@@ -1,0 +1,44 @@
+{
+  "scenario_id": "pdd-language-extensions",
+  "schema_version": 1,
+  "language": "python",
+  "purpose": "real PDD pilot scenario 3/3 (design §4.1.0): dependency-sliced pdd.language_extensions with a seeded duplicate-row resolution defect",
+  "upstream": {
+    "repo": "github.com/promptdriven/pdd",
+    "pinned_commit": "4056cfecab558cf6a8e29072e4f3796ddda6fa7b",
+    "target_upstream_path": "pdd/language_extensions.py",
+    "visible_tests_upstream_path": "tests/test_language_extensions.py",
+    "subsystem": "sync/path-resolution data layer (construct_paths + sync_determine_operation consumers)"
+  },
+  "core_path": "core",
+  "pool_path": "pool",
+  "target_files": ["src/pdd/language_extensions.py"],
+  "allowed_edit_globs": ["src/pdd/**"],
+  "task_brief_path": "task.md",
+  "visible_tests": {
+    "command": ["{python}", "-m", "pytest", "tests/visible", "-q"],
+    "expected_exit_code": 0
+  },
+  "hidden_verifier": {
+    "path": "hidden",
+    "command": ["{python}", "-m", "pytest", ".", "-q"],
+    "mounted_into_agent_sandbox": false
+  },
+  "oracle_edit": {
+    "file": "src/pdd/language_extensions.py",
+    "old": "                if language:",
+    "new": "                if language and language not in mapping:"
+  },
+  "seed": {
+    "target_site": "src/pdd/language_extensions.py:_bundled_extension_map (duplicate-row resolution)",
+    "bug_class": "last_write_wins",
+    "description": "the first-match-wins guard is missing, so a language listed twice in language_format.csv resolves to its LAST row (YAML -> 'yaml' instead of canonical 'yml'); visible tests exercise only singleton languages"
+  },
+  "leak_denylist": [
+    "bundled_extension(\"YAML\") == \"yml\"",
+    "resolves_to_its_first_row",
+    "language not in mapping",
+    "first row wins",
+    "first match wins"
+  ]
+}

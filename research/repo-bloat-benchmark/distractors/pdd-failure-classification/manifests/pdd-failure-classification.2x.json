@@ -1,0 +1,67 @@
+{
+  "budget_met": true,
+  "core_loc": 199,
+  "core_tokens": 1696,
+  "distractor_loc": 151,
+  "distractor_tokens_on_disk": 1665,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g6eeb5704",
+      "loc": 66,
+      "mode": "regrow",
+      "sha256": "3f48c9f1d209d09754f53f07c6196288ae8ff0e239e8020f4b370ddf36285f45",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 820,
+      "upstream_path": "src/pdd/get_lint_commands.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "gc89479b6",
+      "loc": 28,
+      "mode": "regrow",
+      "sha256": "973fc53d8e0a0c24401a52f5a565598aeb5436fec4e0ab0314afb2983580fc47",
+      "source_path": "src/pdd/find_section.py",
+      "tier": "same-package",
+      "tokens": 240,
+      "upstream_path": "src/pdd/find_section.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "gdb0528fa",
+      "loc": 35,
+      "mode": "regrow",
+      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "source_path": "src/pdd/comment_line.py",
+      "tier": "same-package",
+      "tokens": 461,
+      "upstream_path": "src/pdd/comment_line.py"
+    },
+    {
+      "content_path": "generated/pdd-failure-classification/2x/src/handler/classification_handler_1.py",
+      "import_group": "g-template",
+      "loc": 22,
+      "mode": "template",
+      "sha256": "f055e18882681b28bc5d755d171fa0675447163391a7aafb25546532c23df406",
+      "source_path": null,
+      "tier": "same-layer",
+      "tokens": 144,
+      "upstream_path": "src/handler/classification_handler_1.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 3,
+    "template": 1
+  },
+  "realized_total_tokens": 3361,
+  "rejected": [],
+  "scenario_id": "pdd-failure-classification",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "2x",
+  "size_token_target": 1696,
+  "size_token_tolerance_pct": 2.0,
+  "tokenizer": "chars/4-v1"
+}

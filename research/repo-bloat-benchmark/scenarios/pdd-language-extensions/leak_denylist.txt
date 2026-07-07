@@ -1,0 +1,5 @@
+bundled_extension("YAML") == "yml"
+resolves_to_its_first_row
+language not in mapping
+first row wins
+first match wins

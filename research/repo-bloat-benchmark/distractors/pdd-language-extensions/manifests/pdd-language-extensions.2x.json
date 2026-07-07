@@ -1,0 +1,34 @@
+{
+  "budget_met": true,
+  "core_loc": 108,
+  "core_tokens": 1004,
+  "distractor_loc": 110,
+  "distractor_tokens_on_disk": 912,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g48ee8993",
+      "loc": 110,
+      "mode": "regrow",
+      "sha256": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
+      "source_path": "src/pdd/failure_classification.py",
+      "tier": "same-package",
+      "tokens": 912,
+      "upstream_path": "src/pdd/failure_classification.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 1,
+    "template": 0
+  },
+  "realized_total_tokens": 1916,
+  "rejected": [],
+  "scenario_id": "pdd-language-extensions",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "2x",
+  "size_token_target": 1004,
+  "size_token_tolerance_pct": 10.0,
+  "tokenizer": "chars/4-v1"
+}

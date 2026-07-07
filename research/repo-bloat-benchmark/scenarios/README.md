@@ -1,19 +1,26 @@
 # Pilot scenarios — status
 
 Design §4.1.0: the pilot uses **3 frozen bug-fix scenarios**, dependency-
-sliced from the PDD repository @ a pinned commit, ≥2 from distinct PDD
-subsystems (the third may come from a second OSS repo as an external-validity
-check if time allows).
+sliced from the PDD repository @ a pinned commit
+(`4056cfecab558cf6a8e29072e4f3796ddda6fa7b`), from distinct PDD subsystems.
+**All three are committed and gated** — the scenario-authoring blocker is
+closed.
 
-| # | Scenario | Subsystem | Status |
-|---|----------|-----------|--------|
-| — | `example-pagination` | (synthetic demo) | committed — pipeline validation only, **not** a pilot scenario |
-| 1 | `pdd-find-section` | template/markdown postprocessing | **committed** — seeded bug, hidden verifier, seed-novelty audit (`upstream_recall_caveat`), ladder manifests 1x–50x committed + locked, §4.1.2 preflight PASS at every step |
-| 2 | *TODO* `pdd-failure-classification` (candidate) | fix-loop failure triage (`pdd/failure_classification.py`) | not authored — stdlib-only leaf, offline upstream tests (`tests/test_failure_classification.py`); candidate seed: reorder the timeout/syntax regex cascade so mixed logs misclassify |
-| 3 | *TODO* `pdd-language-extensions` (candidate) | CSV-driven language→extension resolution (`pdd/language_extensions.py`) | not authored — stdlib-only, offline upstream tests; candidate seed: drop the first-match-wins guard (flips `.yml`/`.yaml` resolution) |
+| # | Scenario | Subsystem | Seeded defect | Recall stratum | Status |
+|---|----------|-----------|---------------|----------------|--------|
+| — | `example-pagination` | (synthetic demo) | off-by-one | n/a | pipeline validation only, **not** a pilot scenario |
+| 1 | `pdd-find-section` | template/markdown postprocessing | unclosed-fence end index off-by-one | `upstream_recall_caveat` (fix not verbatim upstream) | **committed**, manifests 1x–50x locked, preflight PASS |
+| 2 | `pdd-failure-classification` | fix-loop failure triage | timeout/syntax precedence inversion | `upstream_recall_caveat` (fix = reordering of renamed upstream lines) | **committed**, manifests 1x–50x locked, preflight PASS |
+| 3 | `pdd-language-extensions` | sync/path-resolution data layer | duplicate-CSV-row last-write-wins | `upstream_recall_caveat` (**strongest** — fix line verbatim upstream) | **committed**, manifests 1x–50x locked (10% tolerance, documented), preflight PASS |
 
-Authoring checklist for scenarios 2–3 (mirror `pdd-find-section`):
-`scenario.json` + `task.md` + sliced `core/` + `core_files.txt` +
-`seed.patch` + `hidden/` verifier + `seed_novelty.md` + `leak_denylist.txt`,
-then generate + commit ladder manifests (`harness.distractors.cli`) and gate
-with `harness.runner.preflight` — all zero-billing.
+The three seed-novelty classifications intentionally span a recall-risk
+gradient (weakest → strongest); the §7.4 methodology note can use it as an
+internal control: if recall risk rather than distractor dose predicted
+success, scenario 3 would stand apart from scenarios 1–2 at equal sizes.
+
+Each scenario directory contains: `scenario.json`, `task.md`, sliced
+`core/`, `core_files.txt`, `seed.patch`, `hidden/` verifier,
+`seed_novelty.md`, `leak_denylist.txt`, `preflight.json`, `README.md`.
+Committed ladder manifests live under `../distractors/<scenario_id>/`.
+Gate everything with `python3 -m harness.runner.preflight --config
+scenarios/<scenario_id>/preflight.json` — zero model tokens.
