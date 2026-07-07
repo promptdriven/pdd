@@ -49,8 +49,24 @@ def test_render_config_pins_model_provider_and_history():
     assert 'model_reasoning_effort = "medium"' in rendered
     assert 'base_url = "http://127.0.0.1:9999/v1"' in rendered
     assert 'persistence = "none"' in rendered
-    assert "web_search = false" in rendered
+    # Validated against codex-cli 0.142.4 --strict-config (CODEX_PIN.md):
+    # only the Responses wire API is supported, only the top-level string
+    # form of web_search removes the tool, and env_key carries the key.
+    assert 'wire_api = "responses"' in rendered
+    assert 'web_search = "disabled"' in rendered
+    assert 'env_key = "FAKE_API_KEY"' in rendered
     assert "mcp_servers" not in rendered  # none unless the arm defines them
+
+
+def test_render_config_registers_context_window_when_set():
+    rendered = _freeze_config(context_window_tokens=272_000).render_config("http://x")
+    assert "model_context_window = 272000" in rendered
+    assert "model_context_window" not in _freeze_config().render_config("http://x")
+
+
+def test_render_config_web_search_enabled_omits_disable_key():
+    rendered = _freeze_config(web_search_enabled=True).render_config("http://x")
+    assert "web_search" not in rendered
 
 
 def test_render_config_enumerates_frozen_mcp_set():
@@ -71,6 +87,7 @@ def test_fingerprint_changes_with_frozen_fields():
     assert _freeze_config(reasoning_effort="high").fingerprint() != base
     assert _freeze_config(web_search_enabled=True).fingerprint() != base
     assert _freeze_config(mcp_servers=("alpha",)).fingerprint() != base
+    assert _freeze_config(context_window_tokens=272_000).fingerprint() != base
 
 
 def test_verify_fingerprint_mismatch_aborts(tmp_path):
