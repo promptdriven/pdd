@@ -1151,10 +1151,25 @@ def test_process_commands_install_completion_success(mock_write_dump, mock_print
     ctx = click.Context(cli_command)
     ctx.obj = {"quiet": False, "core_dump": False}
     ctx.invoked_subcommands = ["install_completion"]
+    ctx.exit = Mock()
     with ctx:
         process_commands(results=[None])
     printed_text = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
     assert "Command completed" in printed_text
+    ctx.exit.assert_not_called()
+
+@patch('pdd.core.cli.console.print')
+@patch('pdd.core.cli._write_core_dump')
+def test_process_commands_failed_normalized_result_exits_nonzero(mock_write_dump, mock_print):
+    ctx = click.Context(cli_command)
+    ctx.obj = {"quiet": False, "core_dump": False}
+    ctx.invoked_subcommands = ["detect"]
+    ctx.exit = Mock()
+    with ctx:
+        process_commands(results=[None])
+    printed_text = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+    assert "Command failed" in printed_text
+    ctx.exit.assert_called_with(1)
 
 @patch('pdd.core.cli.console.print')
 @patch('pdd.core.cli._write_core_dump')

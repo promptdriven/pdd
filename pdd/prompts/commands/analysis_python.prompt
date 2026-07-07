@@ -20,6 +20,7 @@
          - `include_llm_prompts=include_llm`
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
+       - If `passed` is false, write any requested evidence first, then raise `click.exceptions.Exit(1)` so `pdd detect --stories` is a non-zero validation gate.
        - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
