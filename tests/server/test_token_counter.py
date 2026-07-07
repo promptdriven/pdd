@@ -508,6 +508,50 @@ def test_estimate_cost_default_none_still_unknown(monkeypatch, mock_pricing_csv)
     assert estimate_cost(1000, "gpt-4") is None
 
 
+# ---------------------------------------------------------------------------
+# Z.AI Coding Plan — quota-backed rows must not produce known USD estimates
+# ---------------------------------------------------------------------------
+
+def test_zai_coding_plan_estimate_returns_unknown(tmp_path):
+    """Z.AI Coding Plan rows are quota-backed; estimate_completion_cost must return None."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "provider,model,input,output",
+                "Z.AI Coding Plan,openai/glm-5.2,0.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    token_counter._load_model_pricing.cache_clear()
+
+    assert estimate_completion_cost(1000, 1000, "openai/glm-5.2", pricing_csv) is None
+    assert estimate_cost(1000, "openai/glm-5.2", pricing_csv) is None
+
+
+def test_zai_regular_pricing_not_overwritten_by_coding_plan(tmp_path):
+    """Regular Z.AI pricing row must survive when a Coding Plan row follows it."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "provider,model,input,output",
+                "Z.AI,openai/glm-5.2,1.0,3.2",
+                "Z.AI Coding Plan,openai/glm-5.2,0.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    token_counter._load_model_pricing.cache_clear()
+
+    estimate = estimate_completion_cost(1_000_000, 1_000_000, "openai/glm-5.2", pricing_csv)
+    assert estimate is not None, "Regular Z.AI pricing must not be overwritten by Coding Plan row"
+    assert estimate.input_cost == pytest.approx(1.0)
+    assert estimate.output_cost == pytest.approx(3.2)
+    assert estimate.total_cost == pytest.approx(4.2)
+
+
 def test_estimate_cost_serialization(mock_pricing_csv):
     """CostEstimate.to_dict() serializes all fields correctly."""
     token_counter._load_model_pricing.cache_clear()
