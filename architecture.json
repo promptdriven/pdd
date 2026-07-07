@@ -6024,6 +6024,16 @@
             "returns": "Optional[str]"
           },
           {
+            "name": "_allow_json_repair_rerun",
+            "signature": "(step_num: int) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_single_provider_attempt_for_step",
+            "signature": "(step_num: int) -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "_hard_stop_from_json_with_presence",
             "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]",
             "returns": "Tuple[bool, Optional[str], List[str]]"

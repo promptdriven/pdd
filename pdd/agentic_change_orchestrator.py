@@ -118,6 +118,8 @@ _STEP_ARTIFACT_STEMS = {
 }
 
 _DECISION_JSON_STEPS = {1, 2, 4, 6, 7, 9, 10, 11, 12, 13}
+_JSON_RETRY_UNSAFE_STEPS = {9, 10, 12, 13}
+_PROVIDER_RETRY_UNSAFE_STEPS = {9, 10, 12, 13}
 
 
 def _step_artifact_stem(step_num: int, name: str) -> str:
@@ -129,6 +131,16 @@ def _decision_json_filename(step_num: int, name: str) -> Optional[str]:
     if step_num not in _DECISION_JSON_STEPS:
         return None
     return f"{_step_artifact_stem(step_num, name)}.json"
+
+
+def _allow_json_repair_rerun(step_num: int) -> bool:
+    """Return whether a missing JSON artifact can be repaired by rerunning."""
+    return step_num not in _JSON_RETRY_UNSAFE_STEPS
+
+
+def _single_provider_attempt_for_step(step_num: int) -> bool:
+    """Return whether provider retries are unsafe for this step."""
+    return step_num in _PROVIDER_RETRY_UNSAFE_STEPS
 
 
 def _artifacts_dir_path(work_dir: Path, issue_number: int) -> Path:
@@ -2920,6 +2932,7 @@ def run_agentic_change_orchestrator(
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=reasoning_time,
             steers=_issue_step_steers() or None,
+            single_provider_attempt=_single_provider_attempt_for_step(step_num),
             before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
                 artifacts_dir, step_num, name
             ),
@@ -2937,15 +2950,18 @@ def run_agentic_change_orchestrator(
         )
         initial_step_success = step_success
         initial_step_output = step_output
+        json_repair_reran = False
         if (
             decision_json_name
             and expects_artifacts
             and not _valid_step_json(step_num, step_json)
+            and _allow_json_repair_rerun(step_num)
         ):
             if not quiet:
                 console.print(
                     f"[yellow]Step {step_num} did not write valid {decision_json_name}; rerunning once before prose fallback.[/yellow]"
                 )
+            json_repair_reran = True
             _clear_step_artifacts(artifacts_dir, step_num, name)
             retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
                 instruction=formatted_prompt,
@@ -2957,6 +2973,7 @@ def run_agentic_change_orchestrator(
                 max_retries=DEFAULT_MAX_RETRIES,
                 reasoning_time=reasoning_time,
                 steers=_issue_step_steers() or None,
+                single_provider_attempt=_single_provider_attempt_for_step(step_num),
                 before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
                     artifacts_dir, step_num, name
                 ),
@@ -2970,9 +2987,14 @@ def run_agentic_change_orchestrator(
             step_json = _read_step_json(artifacts_dir, decision_json_name)
         if decision_json_name and not _valid_step_json(step_num, step_json):
             if not quiet and expects_artifacts:
-                console.print(
-                    f"[yellow]Step {step_num} JSON unavailable after retry; using prose fallback.[/yellow]"
-                )
+                if json_repair_reran:
+                    console.print(
+                        f"[yellow]Step {step_num} JSON unavailable after retry; using prose fallback.[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"[yellow]Step {step_num} JSON unavailable; using prose fallback without rerun.[/yellow]"
+                    )
             if initial_step_success:
                 step_success = initial_step_success
                 step_output = initial_step_output
@@ -3477,6 +3499,7 @@ def run_agentic_change_orchestrator(
             _clear_step_artifacts(artifacts_dir, 12, "fix")
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                single_provider_attempt=_single_provider_attempt_for_step(12),
                 before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
                     artifacts_dir, 12, "fix"
                 ),
@@ -3484,13 +3507,20 @@ def run_agentic_change_orchestrator(
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             initial_s12_success = s12_success
             initial_s12_output = s12_output
+            s12_json_repair_reran = False
             s12_json = _read_step_json(artifacts_dir, "12_fix.json")
-            if s12_expects_artifacts and not _valid_step_json(12, s12_json):
+            if (
+                s12_expects_artifacts
+                and not _valid_step_json(12, s12_json)
+                and _allow_json_repair_rerun(12)
+            ):
                 if not quiet:
                     console.print("[yellow]Step 12 did not write valid 12_fix.json; rerunning once before prose fallback.[/yellow]")
+                s12_json_repair_reran = True
                 _clear_step_artifacts(artifacts_dir, 12, "fix")
                 s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                     instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                    single_provider_attempt=_single_provider_attempt_for_step(12),
                     before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
                         artifacts_dir, 12, "fix"
                     ),
@@ -3499,7 +3529,10 @@ def run_agentic_change_orchestrator(
                 s12_json = _read_step_json(artifacts_dir, "12_fix.json")
             if not _valid_step_json(12, s12_json):
                 if not quiet and s12_expects_artifacts:
-                    console.print("[yellow]Step 12 JSON unavailable after retry; using prose fallback.[/yellow]")
+                    if s12_json_repair_reran:
+                        console.print("[yellow]Step 12 JSON unavailable after retry; using prose fallback.[/yellow]")
+                    else:
+                        console.print("[yellow]Step 12 JSON unavailable; using prose fallback without rerun.[/yellow]")
                 if initial_s12_success:
                     s12_success = initial_s12_success
                     s12_output = initial_s12_output

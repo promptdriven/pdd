@@ -760,7 +760,11 @@ def test_step9_json_changed_files_are_order_preserving_and_manual_review():
 
 
 def test_step_json_validation_rejects_malformed_list_items():
-    from pdd.agentic_change_orchestrator import _valid_step_json
+    from pdd.agentic_change_orchestrator import (
+        _allow_json_repair_rerun,
+        _single_provider_attempt_for_step,
+        _valid_step_json,
+    )
 
     assert _valid_step_json(
         9,
@@ -788,6 +792,18 @@ def test_step_json_validation_rejects_malformed_list_items():
         13,
         {"status": "pr_created", "pr_url": "https://github.com/o/r/pull/1"},
     ) is True
+    assert _allow_json_repair_rerun(4) is True
+    assert _allow_json_repair_rerun(11) is True
+    assert _allow_json_repair_rerun(9) is False
+    assert _allow_json_repair_rerun(10) is False
+    assert _allow_json_repair_rerun(12) is False
+    assert _allow_json_repair_rerun(13) is False
+    assert _single_provider_attempt_for_step(4) is False
+    assert _single_provider_attempt_for_step(11) is False
+    assert _single_provider_attempt_for_step(9) is True
+    assert _single_provider_attempt_for_step(10) is True
+    assert _single_provider_attempt_for_step(12) is True
+    assert _single_provider_attempt_for_step(13) is True
 
 
 def test_doc_sync_contract_prefers_json_buckets_over_prose():
@@ -941,15 +957,14 @@ def test_invalid_hard_stop_json_falls_back_to_current_prose(
     assert labels == ["step1", "step2", "step3", "step4", "step4_json_retry"]
 
 
-def test_step9_json_retry_preserves_initial_prose_fallback(
+def test_step9_missing_json_uses_initial_prose_without_rerun(
     mock_dependencies, temp_cwd
 ):
-    """If JSON repair still fails, legacy Step 9 prose parsing must survive.
+    """Legacy Step 9 prose parsing must survive missing JSON.
 
-    The JSON artifact retry is allowed to ask the agent for a structured file,
-    but it must not erase a first response that already contains parseable
-    legacy markers. Otherwise missing JSON becomes a new hard failure instead
-    of degrading to the pre-JSON behavior.
+    Step 9 mutates the worktree, so missing JSON must not trigger a second
+    side-effecting agent run. The orchestrator falls back to the first output's
+    legacy markers instead.
     """
     mocks = mock_dependencies
     mock_run = mocks["run"]
@@ -966,7 +981,7 @@ def test_step9_json_retry_preserves_initial_prose_fallback(
         if label == "step9":
             return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.5, "gpt-4")
         if label == "step9_json_retry":
-            return (True, "retry still forgot the JSON artifact", 0.2, "gpt-4")
+            pytest.fail("Step 9 JSON repair must not rerun side-effecting work")
         if label == "step10":
             return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
         if label.startswith("step11"):
@@ -996,7 +1011,15 @@ def test_step9_json_retry_preserves_initial_prose_fallback(
         for c in mock_run.call_args_list
         if "step9" in c.kwargs.get("label", "")
     ]
-    assert step9_labels == ["step9", "step9_json_retry"]
+    assert step9_labels == ["step9"]
+    step9_call = next(
+        c for c in mock_run.call_args_list if c.kwargs.get("label") == "step9"
+    )
+    assert step9_call.kwargs["single_provider_attempt"] is True
+    step10_call = next(
+        c for c in mock_run.call_args_list if c.kwargs.get("label") == "step10"
+    )
+    assert step10_call.kwargs["single_provider_attempt"] is True
 
 
 def test_step11_json_retry_preserves_initial_no_issues_prose_fallback(
@@ -3054,7 +3077,7 @@ def test_step12_prose_fallback_manual_review_reaches_step13(
                 "gpt-4",
             )
         if label == "step12_iter1_json_retry":
-            return (True, "retry still forgot 12_fix.json", 0.1, "gpt-4")
+            pytest.fail("Step 12 JSON repair must not rerun side-effecting work")
         if label == "step11_iter2":
             write_review_json(kwargs["cwd"], {"status": "clean", "manual_review": []})
             return (True, "No Issues Found", 0.1, "gpt-4")
@@ -3080,6 +3103,12 @@ def test_step12_prose_fallback_manual_review_reaches_step13(
     assert success is True, msg
     assert step13_instructions
     assert "MANUAL_REVIEW: docs/step12.md" in step13_instructions[0]
+    labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+    assert "step12_iter1_json_retry" not in labels
+    step12_call = next(
+        c for c in mock_run.call_args_list if c.kwargs.get("label") == "step12_iter1"
+    )
+    assert step12_call.kwargs["single_provider_attempt"] is True
 
 
 def test_partial_step11_json_collects_prose_manual_review_fallback(

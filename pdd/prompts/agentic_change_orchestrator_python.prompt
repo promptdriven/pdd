@@ -5,7 +5,25 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_artifacts_dir_for", "signature": "(work_dir: Path, issue_number: int) -> Path", "returns": "Path"},
+      {"name": "_clear_step_artifacts", "signature": "(artifacts_dir: Path, step_num: int, name: str) -> None", "returns": "None"},
+      {"name": "_read_step_json", "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]", "returns": "Optional[dict]"},
+      {"name": "_read_step_md", "signature": "(artifacts_dir: Path, filename: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_allow_json_repair_rerun", "signature": "(step_num: int) -> bool", "returns": "bool"},
+      {"name": "_single_provider_attempt_for_step", "signature": "(step_num: int) -> bool", "returns": "bool"},
+      {"name": "_hard_stop_from_json_with_presence", "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]", "returns": "Tuple[bool, Optional[str], List[str]]"},
+      {"name": "_valid_pr_url", "signature": "(value: Any, repo_owner: str = \"\", repo_name: str = \"\") -> bool", "returns": "bool"},
+      {"name": "_git_head_oid", "signature": "(cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_remote_branch_oid", "signature": "(head_branch: str, cwd: Path) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_pr_number_from_url", "signature": "(pr_url: str, repo_owner: str, repo_name: str) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_gh_pr_list_candidates", "signature": "(base_args: Sequence[str], cwd: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
+      {"name": "_pr_url_matches_current_head", "signature": "(repo_owner: str, repo_name: str, pr_url: str, head_branch: str, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
+      {"name": "_open_pr_for_head_branch", "signature": "(repo_owner: str, repo_name: str, head_branch: str, base_branch: str, cwd: Path) -> Optional[dict]", "returns": "Optional[dict]"},
+      {"name": "_check_existing_pr_candidates", "signature": "(repo_owner: str, repo_name: str, issue_number: int) -> List[dict]", "returns": "List[dict]"},
+      {"name": "_existing_pr_matches_remote_head", "signature": "(repo_owner: str, repo_name: str, pr: dict, base_branch: str, cwd: Path) -> bool", "returns": "bool"},
+      {"name": "_step9_changed_files_from_json", "signature": "(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]", "returns": "Tuple[List[str], List[str], List[str], List[str]]"},
+      {"name": "_step13_result_from_json_or_output", "signature": "(data: Optional[dict], output: str) -> Tuple[str, str]", "returns": "Tuple[str, str]"}
     ]
   }
 }
@@ -101,7 +119,7 @@ For steps 1-10 and 13:
 2. **Track progress**: Call `set_agentic_progress(workflow="change", current_step=step_num, total_steps=13, step_name=description, completed_steps=[1..step_num-1])`
 3. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
 4. Preprocess and format template (see Prompt Preprocessing section)
-5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES, steers=_issue_step_steers() or None, before_attempt=lambda _provider, _attempt: _clear_step_artifacts(...))` for artifact-producing steps.
+5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES, steers=_issue_step_steers() or None, single_provider_attempt=_single_provider_attempt_for_step(step_num), before_attempt=lambda _provider, _attempt: _clear_step_artifacts(...))` for artifact-producing steps. `_single_provider_attempt_for_step` MUST return `True` for side-effecting Steps 9, 10, 12, and 13 so provider retry/fallback cannot apply edits twice in the same dirty worktree; it returns `False` for non-mutating decision steps such as Step 11 so they keep the bounded JSON repair/provider fallback behavior.
 6. Store the output for use by subsequent steps
 7. **Save state to file** after step completes (for resumption)
 8. Accumulate cost: `total_cost += step_cost`
@@ -131,7 +149,7 @@ Helper: `_artifacts_dir_for(work_dir: Path, issue_number: int) -> Path` — retu
 
 Immediately before every step attempt, call `_clear_step_artifacts(artifacts_dir, step_num, name)` so valid JSON/Markdown from a prior run, resume, or previous review-loop iteration cannot be read as the current attempt's output. Do the same immediately before each JSON-repair rerun. In addition, pass `before_attempt=lambda _provider, _attempt: _clear_step_artifacts(...)` to `run_agentic_task` for every artifact-producing step so internal provider retries cannot reuse JSON/Markdown written by an earlier provider attempt inside the same outer call. This applies even on resume: completed earlier steps keep their artifacts for cached context, but the step currently being re-executed must start with its own expected artifacts absent. For decision steps, also remove `state["step_json_outputs"][str(step_num)]` before launching the attempt so a rewound/re-executed step cannot keep using an accepted JSON object from an older attempt.
 
-When a step that is supposed to emit a decision JSON finishes and its JSON is invalid, re-run that step EXACTLY ONCE via the existing `run_agentic_task` path before any decision is made, before any trusted success comment is posted, and before successful step state is saved. Invalid means missing file, unreadable file, unparseable JSON, missing required fields, unknown `status`, or a non-list value for fields specified as arrays. Guard with a per-step `json_retry_done` flag so a step can never re-run more than once for this reason. Cost/model are accumulated exactly like a normal step, and the same `steers=_issue_step_steers() or None` hook is passed so issue steering is preserved. If the rerun writes valid JSON, the rerun's output becomes the step output. If the JSON is still invalid after the single re-run, fall back to the legacy prose parser for that surface using the first successful output when there was one; only use the retry output for prose fallback when the original attempt failed. This preserves the exact pre-JSON fallback behavior for providers that wrote legacy markers but forgot the artifact. Log each re-run and each fallback so the fallback rate can be instrumented; a future cleanup PR may delete the prose parsers once that rate is measured ~0.
+When a non-mutating step that is supposed to emit a decision JSON finishes and its JSON is invalid, re-run that step EXACTLY ONCE via the existing `run_agentic_task` path before any decision is made, before any trusted success comment is posted, and before successful step state is saved. Invalid means missing file, unreadable file, unparseable JSON, missing required fields, unknown `status`, or a non-list value for fields specified as arrays. Guard with `_allow_json_repair_rerun(step_num)` / `_JSON_RETRY_UNSAFE_STEPS` so side-effecting Steps 9, 10, 12, and 13 never re-run only to repair JSON. Also pass `single_provider_attempt=_single_provider_attempt_for_step(step_num)` to the original attempt so provider retry/fallback is disabled for the same side-effecting steps, not only for explicit JSON repair. Cost/model are accumulated exactly like a normal step, and the same `steers=_issue_step_steers() or None` hook is passed so issue steering is preserved. If the rerun writes valid JSON, the rerun's output becomes the step output. If the JSON is still invalid after the single re-run, fall back to the legacy prose parser for that surface using the first successful output when there was one; only use the retry output for prose fallback when the original attempt failed. For Steps 9, 10, and 12, missing/invalid JSON falls back immediately to the original attempt's prose output when it succeeded; do not rerun those mutating prompts because the worktree may already contain the intended edits. This preserves the exact pre-JSON fallback behavior for providers that wrote legacy markers but forgot the artifact. Log each re-run and each fallback so the fallback rate can be instrumented; a future cleanup PR may delete the prose parsers once that rate is measured ~0.
 
 Required decision JSON fields and list item schemas are enforced, not merely type-checked when present. In particular Step 6 requires `direct_edit_candidates`; Step 9 requires `files_modified`, `files_created`, `direct_edits`, and `manual_review`; Step 10 requires all architecture/doc buckets; Steps 11/12 require `manual_review`; and Step 13 requires `pr_url` for `pr_created` / `pr_updated`. Path/file arrays must contain non-empty strings, and `manual_review` arrays must contain objects with a non-empty string `path` and optional string `reason`. Partial or malformed JSON must be treated as invalid so the prose fallback can still recover markers such as direct-edit candidates and manual-review lines.
 
@@ -219,7 +237,7 @@ while review_iteration < MAX_REVIEW_ITERATIONS:
 
     # Step 12: Fix Issues
     step12_output = run_step_12(step11_output, review_iteration)
-    step12_json = read_valid_json_or_rerun_once("12_fix.json", step=12)
+    step12_json = read_valid_json_or_none("12_fix.json", step=12)
     if step12_json is not None:
         manual_review_lines.extend(manual_review_from_json(step12_json))
     previous_fixes += f"\n\nIteration {review_iteration}:\n{step12_output}"
