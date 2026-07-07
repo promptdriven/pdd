@@ -430,3 +430,139 @@ def test_build_artifact_layer1_blockers_passed_through():
         final_gate_report={"layer1_status": "fail", "blockers": ["gate X failed", "test Y failed"]},
     )
     assert art.layer1.blockers == ["gate X failed", "test Y failed"]
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage
+# ---------------------------------------------------------------------------
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_normalize_findings_custom_blocking_severities():
+    findings = _normalize_findings(
+        "high src/x.py:10 something", "codex", blocking_severities={"high"}
+    )
+    assert len(findings) == 1
+    assert findings[0].blocking is True
+    # Under default policy, "high" is NOT blocking.
+    default = _normalize_findings("high src/x.py:10 something", "codex")
+    assert default[0].blocking is False
+
+
+def test_normalize_findings_multiple_lines():
+    text = "blocker a.py:1 first issue\nlow b.py:2 minor\nprose without severity"
+    findings = _normalize_findings(text, "claude")
+    assert len(findings) == 2
+    severities = {f.severity for f in findings}
+    assert severities == {"blocker", "low"}
+
+
+def test_deduplicate_preserves_first_occurrence_order():
+    a = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
+    b = AgenticFinding(reviewer="codex", severity="critical", blocking=True, path="b.py", line=2)
+    dup_a = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
+    result = _deduplicate_findings([a, b, dup_a])
+    assert [f.path for f in result] == ["a.py", "b.py"]
+
+
+def test_build_artifact_head_sha_fallback_chain():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(verified_head_sha="", remote_pr_head_sha="remote-sha", reviewed_head_sha="reviewed-sha"),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.head_sha == "remote-sha"
+
+
+def test_build_artifact_validation_status_not_run_in_nofix():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(verified_head_sha=""),
+        config=ReviewLoopConfig(review_only=True, agentic_mode=True),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.validation_after_fix.status == "not_run"
+
+
+def test_build_artifact_validation_status_verified_with_sha():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(verified_head_sha="abc123"),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.validation_after_fix.status == "verified"
+    assert "abc123" in art.validation_after_fix.evidence
+
+
+def test_build_artifact_fresh_final_reviewer_excluded_from_reviewers():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status={"codex": "clean", "fresh-final": "clean"}),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    names = {r.name for r in art.reviewers}
+    assert "fresh-final" not in names
+
+
+def test_build_artifact_fix_status_skipped_and_failed():
+    fixes = [
+        SimpleNamespace(fixer="claude", fixer_result="skipped", push_status=None, changed_files=[]),
+        SimpleNamespace(fixer="codex", fixer_result="failed", push_status=None, changed_files=[]),
+    ]
+    art = build_agentic_v1_artifact(
+        loop_state=_state(fixes=fixes), config=_config(no_fix=False),
+        context=_context(), final_gate_report={"layer1_status": "pass"},
+    )
+    statuses = {a.status for a in art.fix_attempts}
+    assert statuses == {"skipped", "failed"}
+
+
+def test_build_artifact_layer1_status_derived_from_gate_report():
+    art_pass = build_agentic_v1_artifact(
+        loop_state=_state(), config=_config(), context=_context(),
+        final_gate_report={"status": "success"},
+    )
+    assert art_pass.layer1.status == "pass"
+    art_fail = build_agentic_v1_artifact(
+        loop_state=_state(), config=_config(), context=_context(),
+        final_gate_report={"final_gate_status": "blocked"},
+    )
+    assert art_fail.layer1.status == "fail"
+
+
+def test_build_artifact_secrets_scrubbed_in_free_text(monkeypatch):
+    # Patch the scrubber at its defining module; artifact imports it lazily.
+    from pdd import checkup_review_loop
+    monkeypatch.setattr(checkup_review_loop, "_scrub_secrets", lambda t: t.replace("SECRET", "[REDACTED]"))
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            findings=[SimpleNamespace(severity="blocker", reviewer="codex",
+                                      finding="leak SECRET here", required_fix="remove SECRET",
+                                      location="a.py", status="open")],
+            stop_reason="stop with SECRET token",
+        ),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass", "blockers": ["blocker SECRET line"]},
+    )
+    assert "SECRET" not in art.findings[0].summary
+    assert "[REDACTED]" in art.findings[0].summary
+    assert "SECRET" not in art.verdict.reason
+    assert "SECRET" not in art.layer1.blockers[0]
+
+
+def test_build_artifact_artifact_serializes_to_json():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(), config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    dumped = art.model_dump()
+    assert dumped["schema_version"] == AGENTIC_V1_SCHEMA
+    assert dumped["authority"] in AGENTIC_AUTHORITY_STATUSES
