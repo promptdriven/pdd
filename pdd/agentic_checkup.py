@@ -95,6 +95,28 @@ def _hosted_agentic_artifact_path(project_root: Path) -> Optional[str]:
     )
 
 
+def _hosted_agentic_reviewers(reviewers: str) -> str:
+    """Resolve hosted fallback reviewer commands from the env contract.
+
+    Issue #1884.
+    ``PDD_AGENTIC_CHECKUP_REVIEWERS`` is intentionally scoped behind
+    ``PDD_CHECKUP_FALLBACK_MIRROR`` so normal local checkup runs keep their CLI
+    semantics. A caller-provided ``--reviewers role:/command`` value wins over
+    the env knob; hosted pdd_cloud can set the env only when it wants additive
+    fallback/mirror evidence such as ``codex:/review,claude:/code-review``.
+    """
+    if not _env_flag_enabled(os.environ.get("PDD_CHECKUP_FALLBACK_MIRROR")):
+        return reviewers
+    if any(command for command in parse_reviewer_commands(reviewers).values()):
+        return reviewers
+    configured = str(os.environ.get("PDD_AGENTIC_CHECKUP_REVIEWERS", "")).strip()
+    if not configured:
+        return reviewers
+    if not any(command for command in parse_reviewer_commands(configured).values()):
+        return reviewers
+    return configured
+
+
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     """Extract the LAST top-level JSON object from agent output text.
 
@@ -936,6 +958,7 @@ def run_agentic_checkup(
         console.print("[bold]Running agentic checkup...[/bold]")
 
     hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    hosted_reviewers = _hosted_agentic_reviewers(reviewers)
 
     full_suite_source = (full_suite_source or "local").strip().lower()
     if full_suite_source not in {"local", "github-checks"}:
@@ -1067,7 +1090,7 @@ def run_agentic_checkup(
         )
         hosted_agentic_mode = hosted_agentic_artifact_path is not None
         loop_config = ReviewLoopConfig(
-            reviewers=parse_reviewers(reviewers),
+            reviewers=parse_reviewers(hosted_reviewers),
             reviewer=reviewer,
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
@@ -1108,8 +1131,9 @@ def run_agentic_checkup(
             ),
             agentic_artifact_path=hosted_agentic_artifact_path,
             # Per-role slash commands parsed from ``--reviewers codex:/review,...``
-            # so the agentic artifact records each reviewer's command.
-            reviewer_commands=parse_reviewer_commands(reviewers),
+            # or hosted ``PDD_AGENTIC_CHECKUP_REVIEWERS`` so review prompts and
+            # the agentic artifact carry each reviewer's command.
+            reviewer_commands=parse_reviewer_commands(hosted_reviewers),
         )
         return run_checkup_review_loop(
             context=loop_context,

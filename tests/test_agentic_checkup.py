@@ -12,6 +12,7 @@ from pdd.agentic_checkup import (
     _extract_json_from_text,
     _fetch_comments,
     _fetch_pr_context,
+    _hosted_agentic_reviewers,
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
@@ -81,6 +82,40 @@ class TestLoadPddrcContent:
     def test_returns_message_for_missing_pddrc(self, tmp_path):
         result = _load_pddrc_content(tmp_path)
         assert "No .pddrc found" in result
+
+
+class TestHostedAgenticReviewers:
+    def test_uses_env_reviewers_only_when_fallback_mirror_enabled(self, monkeypatch):
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        assert (
+            _hosted_agentic_reviewers("codex,claude")
+            == "codex:/review,claude:/code-review"
+        )
+
+    def test_cli_slash_commands_win_over_env_reviewers(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS",
+            "codex:/review,claude:/code-review",
+        )
+
+        assert (
+            _hosted_agentic_reviewers("gemini:/review,codex:/review")
+            == "gemini:/review,codex:/review"
+        )
+
+    def test_ignores_env_reviewers_without_commands(self, monkeypatch):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini,codex")
+
+        assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
 
 
 # ---------------------------------------------------------------------------

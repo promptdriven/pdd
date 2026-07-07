@@ -63,11 +63,12 @@
   - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop; still requires both `--pr` and `--issue`)
   - `--agentic-review-loop` (standalone adversarial PR checkup mode; implies `--review-loop` and `--json`; requires `--pr`; `--issue` is optional; permits `--no-fix` for report-only mode; cannot be combined with `--final-gate`)
   - `--adversarial-prompt TEXT` (adversarial instruction forwarded to all reviewers in `--agentic-review-loop` mode; default `"find reasons not to merge the PR"`)
+  - Hosted fallback/mirror env: when `PDD_CHECKUP_FALLBACK_MIRROR=1`, `PDD_AGENTIC_CHECKUP_ARTIFACT_PATH` controls the exact artifact path and optional `PDD_AGENTIC_CHECKUP_REVIEWERS=codex:/review,claude:/code-review` requests provider-native review-command behavior while preserving canonical `--final-gate` authority.
   - `--fresh-final-review ROLE` (role to use for the fresh final review in `--agentic-review-loop` mode; runs in a new context/session with no prior reviewer/fixer conversation state)
   - `--full-suite-source` (choice `local`|`github-checks`, default `local`; final-gate only. `local` requires `--test-scope full`; `github-checks` requires `--test-scope targeted` and gates on GitHub checks for the current PR head before Layer 2)
   - `--final-gate` (`final_gate`, flag — the canonical final PR gate, issue #1406; requires both `--pr` and `--issue`; runs the PR-scoped checkup as Layer 1 then the review-loop as Layer 2 and returns a real ship verdict; this is what "ready for maintainer review" means once a PR exists; cannot be combined with `--review-loop`, `--no-fix`, `--review-only`, `--start-step`, or `--no-gates`; `--test-scope targeted` is allowed only with `--full-suite-source github-checks`)
   - `--review-only` (requires `--review-loop`; run only the primary reviewer first pass and do not invoke fixer/commit/push; may be combined with `--no-fix`)
-  - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer)
+  - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer; agentic mirror/fallback mode also accepts `role:/slash-command` tokens such as `codex:/review,claude:/code-review`)
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
   - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
