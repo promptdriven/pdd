@@ -784,6 +784,15 @@ class ReviewLoopContext:
     full_suite_source: str = "local"
     test_scope: str = "full"
     layer1_step5_evidence: str = ""
+    # Explicit canonical Layer 1/final-gate verdict for the agentic artifact.
+    # Issue #1788: on the final-gate SUCCESS path Layer 1 passes without
+    # actionable Step 5 evidence, so ``layer1_step5_evidence`` is empty and the
+    # artifact would otherwise fall back to an ``unknown`` canonical status. The
+    # final-gate caller threads the real canonical outcome ("pass"/"fail") here
+    # so the mirror artifact reports ``canonical_pass_agentic_mirror_*`` instead
+    # of ``canonical_unknown_agentic_fallback_*``. Empty means "not a canonical
+    # final-gate run" and the evidence-derived status (if any) is used.
+    final_gate_canonical_status: str = ""
 
 
 def _layer1_step5_evidence_findings(
@@ -2179,6 +2188,22 @@ def _maybe_write_agentic_artifact(
             except json.JSONDecodeError:
                 final_gate_report = None
 
+        # Issue #1788: when Layer 1 passed (or otherwise produced no actionable
+        # Step 5 evidence) the final-gate caller still threads the real canonical
+        # verdict via ``context.final_gate_canonical_status``. Carry it into the
+        # report so ``_canonical_status_from_gate`` reports the true pass/fail
+        # rather than defaulting to ``unknown`` and mislabeling a canonical pass
+        # mirror as an unknown-verdict fallback.
+        if final_gate_report is None:
+            canonical_status = str(
+                getattr(context, "final_gate_canonical_status", "") or ""
+            ).strip()
+            if canonical_status:
+                final_gate_report = {
+                    "layer1_status": canonical_status,
+                    "blockers": [],
+                }
+
         artifact = build_agentic_v1_artifact(
             loop_state=state,
             config=config,
@@ -2202,6 +2227,71 @@ def _maybe_write_agentic_artifact(
     except Exception as exc:  # pragma: no cover - defensive: never break the loop
         print(
             f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr
+        )
+        return None
+
+
+def write_final_gate_fallback_artifact(
+    *,
+    artifact_path: Optional[str],
+    pr_owner: str = "",
+    pr_repo: str = "",
+    pr_number: int = 0,
+    head_sha: str = "",
+    canonical_status: str = "fail",
+    blockers: Optional[Sequence[str]] = None,
+    no_fix: bool = False,
+) -> Optional[str]:
+    """Emit a bounded ``pdd.checkup.agentic.v1`` artifact for a canonical
+    final-gate failure that short-circuits before Layer 2 (issue #1788).
+
+    The canonical final gate can fail BEFORE the review loop (Layer 2) ever
+    runs — e.g. a non-actionable Layer 1 failure or a GitHub-checks gate
+    failure. Those paths never reach :func:`_maybe_write_agentic_artifact`, so
+    hosted pdd_cloud consumers (``PDD_CHECKUP_FALLBACK_MIRROR=1``) would get no
+    structured artifact and would have to scrape comments. This writes a minimal
+    artifact whose authority is ``canonical_fail_agentic_not_authoritative`` (a
+    canonical failure is authoritative on its own; the agentic mirror never
+    ran). Best-effort: never raises. Returns the written path, or ``None`` when
+    no path was configured or on error.
+    """
+    if not artifact_path:
+        return None
+    try:
+        from types import SimpleNamespace
+
+        from .checkup_agentic_artifact import build_agentic_v1_artifact
+
+        context = SimpleNamespace(
+            pr_owner=pr_owner or "",
+            pr_repo=pr_repo or "",
+            repo_owner=pr_owner or "",
+            repo_name=pr_repo or "",
+            pr_number=pr_number or 0,
+        )
+        config = SimpleNamespace(no_fix=bool(no_fix), review_only=False)
+        loop_state = SimpleNamespace(reviewed_head_sha=head_sha or "")
+        final_gate_report = {
+            "layer1_status": canonical_status or "fail",
+            "blockers": [str(b) for b in (blockers or []) if str(b).strip()],
+        }
+        artifact = build_agentic_v1_artifact(
+            loop_state=loop_state,
+            config=config,
+            context=context,
+            final_gate_report=final_gate_report,
+        )
+        out_path = Path(artifact_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
+        )
+        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
+        return str(out_path)
+    except Exception as exc:  # pragma: no cover - defensive: never break the gate
+        print(
+            f"Warning: failed to write agentic checkup fallback artifact: {exc}",
+            file=sys.stderr,
         )
         return None
 

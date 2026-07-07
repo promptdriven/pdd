@@ -159,7 +159,7 @@
   `run_prompt_repair_loop` with the report as context, and in `strict` mode block
   on unresolved source-set status before entering the orchestrator.
 - Dispatch to `run_agentic_checkup(**checkup_kwargs)`. Do NOT spell out a single flat 40-argument call — assemble `checkup_kwargs` as a dict from the grouped mappings below, then splat it. Each option maps to exactly one keyword (left = Click option/local var after any transform, right = `run_agentic_checkup` keyword); `pr_url` is `None` in non-PR modes:
-  - Core context: `issue_url=effective_issue_url`, `pr_url`, `verbose`, `quiet`, `no_fix`, `timeout_adder`, `use_github_state=(not no_github_state)`, `test_scope`, `full_suite_source`.
+  - Core context: `issue_url=effective_issue_url`, `pr_url`, `verbose`, `quiet=(quiet or agentic_review_loop)`, `no_fix`, `timeout_adder`, `use_github_state=(not no_github_state)`, `test_scope`, `full_suite_source`. Force-quiet the review loop under `--agentic-review-loop` (which emits its structured verdict as JSON on stdout) so the loop's human/console output stays off stdout and the emitted stdout is guaranteed to parse as JSON (issue #1788).
   - Mode selection: `review_loop`, `agentic_review_loop`, `final_gate`, `review_only`.
   - Reviewer/fixer roles: `reviewers`, `reviewer`, `fixer`, `reviewer_fallback`, `fixer_fallback`, `allow_same_reviewer_fixer`, `require_all_reviewers_clean`, `continue_on_reviewer_limit`, `fallback_reviewer_on_failure`, `require_final_fresh_review`, `blocking_severities`, `clean_reviewer_states`, `fresh_final_review_role=fresh_final_review`, `adversarial_prompt`.
   - Budget caps: `max_review_rounds`, `max_review_cost`, `max_review_minutes`.
@@ -168,12 +168,14 @@
 - Role-independence rules enforced by the review loop (see the mode-conflict table above), restated here as the dispatch contract:
   - `--fixer-fallback` (string, default `None`) is the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the loop invokes the configured fallback fixer once before breaking. It must differ from `--fixer` and `--reviewer`.
   - `--allow-same-reviewer-fixer` is an explicit opt-in for single-role review/fix mode; without it, resolved reviewer/fixer equality is rejected by the review loop.
-- If not quiet, `click.echo` exactly these lines:
-  - `Status: Success|Failed`
-  - `Message: {message}`
-  - `Cost: ${cost:.4f}`
-  - `Model: {model}`
-- **Model suppression**: Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
+- Output emission (issue #1788):
+  - When `agentic_review_loop` is set, the standalone adversarial PR checkup emits the machine-readable `pdd.checkup.agentic.v1` verdict on stdout (it implies `--json`). Call a private helper `_emit_agentic_review_loop_json(*, pr_url, success, message, cost, model)` INSTEAD of the human status lines. The helper: derives the artifact path `Path.cwd() / f"pdd-checkup-agentic-{pr_number}.json"` when `pr_url` parses via `_parse_pr_url` (else `None`); if that path is an existing file, load and re-echo its parsed JSON verbatim (pretty-printed) so users and hosted wrappers receive the exact object written to disk; on a missing/unparseable/unreadable artifact (`OSError`/`ValueError`) it falls back to echoing a stable wrapper object `{"schema_version": "pdd.checkup.agentic.v1.wrapper", "artifact_path": <str path or None>, "success": bool, "status": "passed"|"failed", "message", "cost", "model"}` so stdout is ALWAYS valid JSON.
+  - Otherwise, if not quiet, `click.echo` exactly these lines:
+    - `Status: Success|Failed`
+    - `Message: {message}`
+    - `Cost: ${cost:.4f}`
+    - `Model: {model}`
+  - **Model suppression**: Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
 - If `not success`: raise `click.exceptions.Exit(1)`; else return `(message, cost, model)`.
 - Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup", ctx.obj.get("quiet", False))` and return `None`.
 

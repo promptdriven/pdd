@@ -724,6 +724,10 @@ class TestRunAgenticCheckup:
         assert config.agentic_artifact_path == artifact_path
         assert config.review_only is False
         assert config.no_fix is False
+        # Issue #1788: Layer 1 passed here, so the review-loop context carries an
+        # explicit canonical "pass" verdict for the mirror artifact authority.
+        loop_context = mock_review_loop.call_args.kwargs["context"]
+        assert loop_context.final_gate_canonical_status == "pass"
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
@@ -1046,3 +1050,100 @@ class TestRunAgenticCheckupCwdParameter:
             )
 
         assert mock_find_root.call_args.args[0] == Path("/fallback/cwd")
+
+
+# ---------------------------------------------------------------------------
+# Issue #1788: final-gate short-circuit failures emit the canonical-fail
+# mirror artifact for hosted consumers.
+# ---------------------------------------------------------------------------
+
+
+def _run_final_gate_short_circuit(
+    tmp_path,
+    monkeypatch,
+    *,
+    orchestrator,
+    github_gate,
+    full_suite_source="local",
+    test_scope="full",
+):
+    artifact_path = tmp_path / "agentic-checkup.json"
+    monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+    monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path))
+    issue_data = {"title": "t", "body": "b", "comments_url": ""}
+    stack = [
+        patch("pdd.agentic_checkup._check_gh_cli", return_value=True),
+        patch(
+            "pdd.agentic_checkup._run_gh_command",
+            return_value=(True, json.dumps(issue_data)),
+        ),
+        patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path),
+        patch(
+            "pdd.agentic_checkup._load_architecture_json",
+            return_value=(None, tmp_path / "arch.json"),
+        ),
+        patch("pdd.agentic_checkup._load_pddrc_content", return_value=""),
+        patch("pdd.agentic_checkup._load_layer1_step5_evidence", return_value=None),
+        patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=orchestrator,
+        ),
+    ]
+    if github_gate is not None:
+        stack.append(
+            patch(
+                "pdd.agentic_checkup.run_github_checks_gate",
+                return_value=github_gate,
+            )
+        )
+    from contextlib import ExitStack
+
+    with ExitStack() as es:
+        for cm in stack:
+            es.enter_context(cm)
+        result = run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            final_gate=True,
+            full_suite_source=full_suite_source,
+            test_scope=test_scope,
+            use_github_state=False,
+        )
+    return result, artifact_path
+
+
+def test_final_gate_layer1_failure_writes_canonical_fail_artifact(tmp_path, monkeypatch):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(False, "layer 1 boom", 0.1, "claude"),
+        github_gate=None,
+    )
+    assert success is False
+    assert "Final gate Layer 1 failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+
+
+def test_final_gate_github_checks_failure_writes_canonical_fail_artifact(
+    tmp_path, monkeypatch
+):
+    (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
+        tmp_path,
+        monkeypatch,
+        orchestrator=(True, "layer 1 passed", 0.1, "claude"),
+        github_gate=(False, "required check failing", "deadbeef"),
+        full_suite_source="github-checks",
+        test_scope="targeted",
+    )
+    assert success is False
+    assert "GitHub checks gate failed" in msg
+    assert artifact_path.exists()
+    data = json.loads(artifact_path.read_text())
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"

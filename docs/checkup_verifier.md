@@ -43,10 +43,13 @@ bounded fixer, and a structured machine-readable verdict:
 
 ```bash
 # Fix mode
+# --adversarial-prompt is omitted so the safe canonical-checkup-anchored default
+# lens is used ("Using the same criteria as canonical pdd checkup, find concrete
+# reasons this PR should not merge. Do not introduce new merge criteria. Report
+# only verifiable blockers or material risks.").
 pdd checkup --pr <PR_URL> \
   --agentic-review-loop \
   --reviewers codex:/review,claude:/code-review \
-  --adversarial-prompt "find reasons not to merge the PR" \
   --fixer claude \
   --fresh-final-review codex \
   --max-review-rounds 5 --max-review-minutes 50 --max-review-cost 15.00 \
@@ -57,7 +60,6 @@ pdd checkup --pr <PR_URL> \
   --agentic-review-loop \
   --reviewers codex:/review,claude:/code-review \
   --no-fix \
-  --adversarial-prompt "find reasons not to merge the PR" \
   --fresh-final-review codex \
   --json
 ```

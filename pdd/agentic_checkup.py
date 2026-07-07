@@ -53,6 +53,7 @@ from .checkup_review_loop import (
     parse_severity_list,
     parse_state_list,
     run_checkup_review_loop,
+    write_final_gate_fallback_artifact,
 )
 from .ci_validation import run_github_checks_gate
 from .agentic_sync import _find_project_root, _load_architecture_json
@@ -1063,6 +1064,7 @@ def run_agentic_checkup(
     def _run_review_loop_layer(
         pr_content: Optional[str] = None,
         layer1_step5_evidence: str = "",
+        final_gate_canonical_status: str = "",
     ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
@@ -1087,6 +1089,7 @@ def run_agentic_checkup(
             full_suite_source=full_suite_source,
             test_scope=test_scope,
             layer1_step5_evidence=layer1_step5_evidence,
+            final_gate_canonical_status=final_gate_canonical_status,
         )
         hosted_agentic_mode = hosted_agentic_artifact_path is not None
         loop_config = ReviewLoopConfig(
@@ -1361,6 +1364,18 @@ def run_agentic_checkup(
                 cwd=project_root,
                 use_github_state=use_github_state,
             )
+            # Issue #1788: this canonical Layer 1 failure short-circuits before
+            # Layer 2, so the review-loop artifact writer never runs. Emit the
+            # bounded canonical-failure mirror artifact for hosted consumers.
+            write_final_gate_fallback_artifact(
+                artifact_path=hosted_agentic_artifact_path,
+                pr_owner=pr_owner or "",
+                pr_repo=pr_repo or "",
+                pr_number=pr_number or 0,
+                canonical_status="fail",
+                blockers=[f"Final gate Layer 1 failed: {orch_message}"],
+                no_fix=no_fix,
+            )
             return (
                 False,
                 f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
@@ -1414,6 +1429,21 @@ def run_agentic_checkup(
                     cwd=project_root,
                     use_github_state=use_github_state,
                 )
+                # Issue #1788: the GitHub-checks gate failure short-circuits
+                # before Layer 2, so the review-loop artifact writer never runs.
+                # Emit the bounded canonical-failure mirror artifact for hosted
+                # consumers.
+                write_final_gate_fallback_artifact(
+                    artifact_path=hosted_agentic_artifact_path,
+                    pr_owner=pr_owner or "",
+                    pr_repo=pr_repo or "",
+                    pr_number=pr_number or 0,
+                    canonical_status="fail",
+                    blockers=[
+                        f"Final gate GitHub checks gate failed: {github_checks_message}"
+                    ],
+                    no_fix=no_fix,
+                )
                 return (
                     False,
                     f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
@@ -1448,6 +1478,11 @@ def run_agentic_checkup(
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content,
             layer1_step5_evidence=layer1_step5_evidence_for_review,
+            # Layer 1 (and any configured GitHub-checks gate) passed to reach
+            # here, so the canonical final-gate verdict entering Layer 2 is a
+            # pass. Thread it so the mirror artifact reports
+            # ``canonical_pass_agentic_mirror_*`` rather than an unknown fallback.
+            final_gate_canonical_status="pass",
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),

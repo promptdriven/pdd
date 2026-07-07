@@ -14231,3 +14231,78 @@ def test_agentic_mode_off_writes_nothing(tmp_path, monkeypatch):
     )
     assert crl._maybe_write_agentic_artifact(ctx, cfg, state) is None
     assert not (tmp_path / "pdd-checkup-agentic-1.json").exists()
+
+
+def test_final_gate_canonical_pass_status_yields_mirror_authority(tmp_path, monkeypatch):
+    """Issue #1788: an explicit canonical pass on the context makes a clean loop
+    write ``canonical_pass_agentic_mirror_clean``, not an unknown fallback."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+        # Layer 1 passed without actionable Step 5 evidence, so the final gate
+        # threads the canonical verdict explicitly.
+        final_gate_canonical_status="pass",
+    )
+    configured = tmp_path / "hosted" / "agentic.json"
+    cfg = crl.ReviewLoopConfig(
+        agentic_mode=True,
+        review_only=True,
+        agentic_artifact_path=str(configured),
+    )
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="Primary reviewer is clean.",
+    )
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads((tmp_path / "hosted" / "agentic.json").read_text())
+    assert out == str(configured)
+    assert data["layer1"]["status"] == "pass"
+    assert data["authority"] in (
+        "canonical_pass_agentic_mirror_clean",
+        "canonical_pass_agentic_mirror_blocking",
+    )
+    assert data["authority"] == "canonical_pass_agentic_mirror_clean"
+
+
+def test_write_final_gate_fallback_artifact_canonical_fail(tmp_path):
+    """Issue #1788: short-circuit final-gate failures (Layer 1 / GitHub checks)
+    still emit a bounded canonical-fail mirror artifact for hosted consumers."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "artifacts" / "fallback.json"
+    out = crl.write_final_gate_fallback_artifact(
+        artifact_path=str(configured),
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        canonical_status="fail",
+        blockers=["Final gate Layer 1 failed: boom"],
+        no_fix=False,
+    )
+    assert out == str(configured)
+    data = _json.loads(configured.read_text())
+    assert data["schema_version"] == "pdd.checkup.agentic.v1"
+    assert data["authority"] == "canonical_fail_agentic_not_authoritative"
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"] == ["Final gate Layer 1 failed: boom"]
+    assert data["status"] == "failed"
+    # No configured path -> no write, no crash.
+    assert crl.write_final_gate_fallback_artifact(artifact_path=None) is None
