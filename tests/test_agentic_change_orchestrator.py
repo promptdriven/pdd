@@ -809,6 +809,170 @@ def test_invalid_json_reruns_once_before_hard_stop(mock_dependencies, temp_cwd):
     assert all("steers" in c.kwargs for c in mock_run.call_args_list)
 
 
+def test_step9_json_retry_preserves_initial_prose_fallback(
+    mock_dependencies, temp_cwd
+):
+    """If JSON repair still fails, legacy Step 9 prose parsing must survive.
+
+    The JSON artifact retry is allowed to ask the agent for a structured file,
+    but it must not erase a first response that already contains parseable
+    legacy markers. Otherwise missing JSON becomes a new hard failure instead
+    of degrading to the pre-JSON behavior.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step9_implement_LLM":
+            return "implement artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.5, "gpt-4")
+        if label == "step9_json_retry":
+            return (True, "retry still forgot the JSON artifact", 0.2, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 9 JSON fallback",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "prompts/fix_python.prompt" in files
+    step9_labels = [
+        c.kwargs.get("label")
+        for c in mock_run.call_args_list
+        if "step9" in c.kwargs.get("label", "")
+    ]
+    assert step9_labels == ["step9", "step9_json_retry"]
+
+
+def test_step11_json_retry_preserves_initial_no_issues_prose_fallback(
+    mock_dependencies, temp_cwd
+):
+    """A failed Step 11 JSON repair must not erase a clean legacy review.
+
+    If the first Step 11 response says "No Issues Found" but forgets
+    11_review.json, the JSON-only retry can still fail without turning a clean
+    review into an issues-found review-loop iteration.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step11_iter1_json_retry":
+            return (True, "retry still forgot 11_review.json", 0.1, "gpt-4")
+        if label.startswith("step12"):
+            pytest.fail("Step 12 should not run when initial Step 11 prose was clean")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 11 JSON fallback",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "PR Created: https://github.com/owner/repo/pull/1850" in msg
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert "step11_iter1" in labels
+    assert "step11_iter1_json_retry" in labels
+    assert not any(label and label.startswith("step12") for label in labels)
+
+
+def test_step13_json_retry_preserves_initial_pr_url_prose_fallback(
+    mock_dependencies, temp_cwd
+):
+    """A failed Step 13 JSON repair must not erase a legacy prose PR URL."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            return (True, "retry still forgot 13_create_pr.json", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 13 JSON fallback",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert labels.count("step13") == 1
+    assert labels.count("step13_json_retry") == 1
+
+
 def test_review_loop_exits_on_clean_json_even_when_prose_says_issues(
     mock_dependencies, temp_cwd
 ):

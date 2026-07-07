@@ -2606,6 +2606,8 @@ def run_agentic_change_orchestrator(
             if decision_json_name
             else None
         )
+        initial_step_success = step_success
+        initial_step_output = step_output
         if (
             decision_json_name
             and expects_artifacts
@@ -2638,6 +2640,9 @@ def run_agentic_change_orchestrator(
                 console.print(
                     f"[yellow]Step {step_num} JSON unavailable after retry; using prose fallback.[/yellow]"
                 )
+            if initial_step_success:
+                step_success = initial_step_success
+                step_output = initial_step_output
             step_json = None
 
         if not step_success:
@@ -3049,6 +3054,8 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
+            initial_s11_success = s11_success
+            initial_s11_output = s11_output
             s11_json = _read_step_json(artifacts_dir, "11_review.json")
             if s11_expects_artifacts and not _valid_step_json(11, s11_json):
                 if not quiet:
@@ -3061,6 +3068,9 @@ def run_agentic_change_orchestrator(
             if not _valid_step_json(11, s11_json):
                 if not quiet and s11_expects_artifacts:
                     console.print("[yellow]Step 11 JSON unavailable after retry; using prose fallback.[/yellow]")
+                if initial_s11_success:
+                    s11_success = initial_s11_success
+                    s11_output = initial_s11_output
                 s11_json = None
             s11_manual = _manual_review_lines_from_json(s11_json)
             if s11_manual:
@@ -3116,6 +3126,8 @@ def run_agentic_change_orchestrator(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
+            initial_s12_success = s12_success
+            initial_s12_output = s12_output
             s12_json = _read_step_json(artifacts_dir, "12_fix.json")
             if s12_expects_artifacts and not _valid_step_json(12, s12_json):
                 if not quiet:
@@ -3128,6 +3140,9 @@ def run_agentic_change_orchestrator(
             if not _valid_step_json(12, s12_json):
                 if not quiet and s12_expects_artifacts:
                     console.print("[yellow]Step 12 JSON unavailable after retry; using prose fallback.[/yellow]")
+                if initial_s12_success:
+                    s12_success = initial_s12_success
+                    s12_output = initial_s12_output
                 s12_json = None
             s12_manual = _manual_review_lines_from_json(s12_json)
             if s12_manual:
@@ -3400,6 +3415,8 @@ def run_agentic_change_orchestrator(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
         )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
+        initial_s13_success = s13_success
+        initial_s13_output = s13_output
         s13_json = _read_step_json(artifacts_dir, "13_create_pr.json")
         if s13_expects_artifacts and not _valid_step_json(13, s13_json):
             if not quiet:
@@ -3412,6 +3429,9 @@ def run_agentic_change_orchestrator(
         if not _valid_step_json(13, s13_json):
             if not quiet and s13_expects_artifacts:
                 console.print("[yellow]Step 13 JSON unavailable after retry; using prose fallback.[/yellow]")
+            if initial_s13_success:
+                s13_success = initial_s13_success
+                s13_output = initial_s13_output
             s13_json = None
         if not s13_success:
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
