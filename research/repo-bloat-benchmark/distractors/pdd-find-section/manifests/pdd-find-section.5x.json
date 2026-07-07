@@ -1,0 +1,89 @@
+{
+  "budget_met": true,
+  "core_loc": 148,
+  "core_tokens": 1055,
+  "distractor_loc": 420,
+  "distractor_tokens_on_disk": 4183,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g48ee8993",
+      "loc": 110,
+      "mode": "regrow",
+      "sha256": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
+      "source_path": "src/pdd/failure_classification.py",
+      "tier": "same-package",
+      "tokens": 912,
+      "upstream_path": "src/pdd/failure_classification.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "g6eeb5704",
+      "loc": 66,
+      "mode": "regrow",
+      "sha256": "3f48c9f1d209d09754f53f07c6196288ae8ff0e239e8020f4b370ddf36285f45",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 820,
+      "upstream_path": "src/pdd/get_lint_commands.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "gdb0528fa",
+      "loc": 35,
+      "mode": "regrow",
+      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "source_path": "src/pdd/comment_line.py",
+      "tier": "same-package",
+      "tokens": 461,
+      "upstream_path": "src/pdd/comment_line.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/5x/src/pdd/failure_classification_open.py",
+      "import_group": "g-mutate",
+      "loc": 110,
+      "mode": "mutate",
+      "sha256": "97d301900f11fdef9eef0a75b58631e533a3cd08d19f8b56d4b52d04776910f6",
+      "source_path": "src/pdd/failure_classification.py",
+      "tier": "same-package",
+      "tokens": 931,
+      "upstream_path": "src/pdd/failure_classification_open.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/5x/src/pdd/get_lint_commands_raw.py",
+      "import_group": "g-mutate",
+      "loc": 66,
+      "mode": "mutate",
+      "sha256": "eba2e39be123b9915ca5cb8d00ab9eb1e60c43c338456c7203606aa8e90dc6e6",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 830,
+      "upstream_path": "src/pdd/get_lint_commands_raw.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/5x/src/service/language_service_0.py",
+      "import_group": "g-template",
+      "loc": 33,
+      "mode": "template",
+      "sha256": "aa731370d69989fb15d370457e49d42256cc3cc61602fadba0c14b893419d07f",
+      "source_path": null,
+      "tier": "same-layer",
+      "tokens": 229,
+      "upstream_path": "src/service/language_service_0.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 2,
+    "regrow": 3,
+    "template": 1
+  },
+  "realized_total_tokens": 5238,
+  "rejected": [],
+  "scenario_id": "pdd-find-section",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "5x",
+  "size_token_target": 4220,
+  "size_token_tolerance_pct": 2.0,
+  "tokenizer": "chars/4-v1"
+}

@@ -1,0 +1,45 @@
+{
+  "budget_met": true,
+  "core_loc": 148,
+  "core_tokens": 1055,
+  "distractor_loc": 132,
+  "distractor_tokens_on_disk": 1052,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g48ee8993",
+      "loc": 110,
+      "mode": "regrow",
+      "sha256": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
+      "source_path": "src/pdd/failure_classification.py",
+      "tier": "same-package",
+      "tokens": 912,
+      "upstream_path": "src/pdd/failure_classification.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/2x/src/service/language_service_0.py",
+      "import_group": "g-template",
+      "loc": 22,
+      "mode": "template",
+      "sha256": "ca0ae42b93e064df43f7bf72aa06e685c39f101b5a588899dd31e7e1f693c919",
+      "source_path": null,
+      "tier": "same-layer",
+      "tokens": 140,
+      "upstream_path": "src/service/language_service_0.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 1,
+    "template": 1
+  },
+  "realized_total_tokens": 2107,
+  "rejected": [],
+  "scenario_id": "pdd-find-section",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "2x",
+  "size_token_target": 1055,
+  "size_token_tolerance_pct": 2.0,
+  "tokenizer": "chars/4-v1"
+}
