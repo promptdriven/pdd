@@ -199,8 +199,18 @@ def build_run_record(
         context_overflow=context_overflow,
     )
 
+    # Evidence gating (design §6.2/§9): token-level penetration metrics and
+    # the H2 trajectory family are SUPPORTED only when the recording proxy
+    # captured snapshots for the run and provider usage was present on every
+    # request. A command-arm run without an env fingerprint is
+    # development-only and must never enter pilot tables.
+    token_metrics_supported = bool(records) and all(
+        r.input_tokens is not None for r in records
+    )
+    development_only = arm == "command" and env_fingerprint_sha256 is None
+
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "run_id": run_id,
         "scenario_id": scenario_id,
         "size": size,
@@ -214,6 +224,9 @@ def build_run_record(
         # harness development); real pilot records must carry both values.
         "env_fingerprint_sha256": env_fingerprint_sha256,
         "cli_version": cli_version,
+        # Evidence gates consumed by the report (see comment above).
+        "token_metrics_supported": token_metrics_supported,
+        "development_only": development_only,
         # Cost.
         "iterations_total": trajectory.iterations_total,
         "iterations_before_first_edit": trajectory.iterations_before_first_edit,

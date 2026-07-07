@@ -71,6 +71,32 @@ def _by_size(records: list[dict]) -> dict[int, list[dict]]:
     return dict(sorted(cells.items()))
 
 
+def _token_supported(record: dict) -> bool:
+    """Token-level metrics count only with recording-proxy evidence.
+
+    Records from schema ≥4 carry the flag; older records fall back to the
+    observable facts (a run with zero captured requests or missing usage
+    reports zeros, which must never masquerade as measurements).
+    """
+    if "token_metrics_supported" in record:
+        return bool(record["token_metrics_supported"])
+    return (
+        record.get("iterations_total", 0) > 0
+        and (record.get("input_tokens_per_run") or 0) > 0
+    )
+
+
+def partition_by_evidence(
+    records: list[dict],
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """Split into (pilot, token_supported, token_unsupported, development_only)."""
+    dev = [r for r in records if r.get("development_only")]
+    pilot = [r for r in records if not r.get("development_only")]
+    supported = [r for r in pilot if _token_supported(r)]
+    unsupported = [r for r in pilot if not _token_supported(r)]
+    return pilot, supported, unsupported, dev
+
+
 def _fmt(value: float | None, digits: int = 1) -> str:
     if value is None:
         return "—"
@@ -96,25 +122,51 @@ def _modal_shape(cell: list[dict]) -> str:
 
 
 def generate_report(records: list[dict], scenario_id: str | None = None) -> str:
-    """Render the markdown report for one scenario's run records."""
+    """Render the markdown report for one scenario's run records.
+
+    Token-level penetration metrics and the H2 trajectory family are
+    computed **only over runs with recording-proxy evidence** (snapshots +
+    provider usage); development-only runs (unfrozen command arm) are
+    excluded from every table. Excluded runs are listed, never imputed.
+    """
     if scenario_id:
         records = [r for r in records if r["scenario_id"] == scenario_id]
     if not records:
         return "# Repo-bloat report\n\n(no run records)\n"
-    cells = _by_size(records)
-    sizes = list(cells)
-    lines: list[str] = []
+    pilot, supported, unsupported, dev = partition_by_evidence(records)
     scenario = scenario_id or records[0]["scenario_id"]
+    if not pilot:
+        return (
+            f"# Repo-bloat report — `{scenario}`\n\n"
+            f"(no pilot records — all {len(records)} run(s) are "
+            "development-only: unfrozen command arm, env_fingerprint null)\n"
+        )
+    cells = _by_size(pilot)
+    cells_tok = _by_size(supported)
+    sizes = list(cells)
+
+    def _tok(size: int) -> list[dict]:
+        return cells_tok.get(size, [])
+
+    lines: list[str] = []
     lines.append(f"# Repo-bloat report — `{scenario}`")
     lines.append("")
     lines.append(
-        f"Runs: {len(records)} across sizes {', '.join(f'{s}x' for s in sizes)}. "
+        f"Runs: {len(pilot)} across sizes {', '.join(f'{s}x' for s in sizes)}. "
         "All numbers are **descriptive** (median per cell; rates as k/n); "
         "N per cell is small by design — no significance claims (design §7.2)."
     )
+    if unsupported or dev:
+        lines.append(
+            f"Token-level rows cover the {len(supported)} run(s) with "
+            "recording-proxy evidence; "
+            f"{len(unsupported)} run(s) lack it and {len(dev)} development-only "
+            "run(s) are excluded entirely (see *Excluded runs*)."
+        )
     lines.append("")
 
-    # §7.1 per-size table.
+    # §7.1 per-size table. Outcome/edit/wall-clock rows are computed over all
+    # pilot runs; token/H2 rows only over proxy-evidenced runs.
     header = "| Metric | " + " | ".join(f"{s}x" for s in sizes) + " |"
     lines.append(header)
     lines.append("|" + "---|" * (len(sizes) + 1))
@@ -123,46 +175,47 @@ def generate_report(records: list[dict], scenario_id: str | None = None) -> str:
         ("`visible_pass_rate`", [_rate_of(cells[s], "visible_pass") for s in sizes]),
         (
             "`input_tokens_per_run` (med)",
-            [_fmt(_median_of(cells[s], "input_tokens_per_run"), 0) for s in sizes],
+            [_fmt(_median_of(_tok(s), "input_tokens_per_run"), 0) for s in sizes],
         ),
         (
             "`input_tokens_before_first_edit` (med)",
             [
-                _fmt(_median_of(cells[s], "input_tokens_before_first_edit"), 0)
+                _fmt(_median_of(_tok(s), "input_tokens_before_first_edit"), 0)
                 for s in sizes
             ],
         ),
         (
             "`max_request_input_tokens` (med)",
-            [_fmt(_median_of(cells[s], "max_request_input_tokens"), 0) for s in sizes],
+            [_fmt(_median_of(_tok(s), "max_request_input_tokens"), 0) for s in sizes],
         ),
         (
             "`search_or_tool_calls_before_first_edit` (med)",
             [
-                _fmt(_median_of(cells[s], "search_or_tool_calls_before_first_edit"), 1)
+                _fmt(_median_of(_tok(s), "search_or_tool_calls_before_first_edit"), 1)
                 for s in sizes
             ],
         ),
         (
             "`iterations_total` (med)",
-            [_fmt(_median_of(cells[s], "iterations_total"), 1) for s in sizes],
+            [_fmt(_median_of(_tok(s), "iterations_total"), 1) for s in sizes],
         ),
         (
             "`distractor_context_share` (med)",
-            [_fmt(_median_of(cells[s], "distractor_context_share"), 3) for s in sizes],
+            [_fmt(_median_of(_tok(s), "distractor_context_share"), 3) for s in sizes],
         ),
         (
             "`distractor_pool_coverage` (med)",
-            [_fmt(_median_of(cells[s], "distractor_pool_coverage"), 3) for s in sizes],
+            [_fmt(_median_of(_tok(s), "distractor_pool_coverage"), 3) for s in sizes],
         ),
         (
             "`distractor_context_share` Δ late−early (med, H2)",
             [
-                _fmt(_median_of(cells[s], "distractor_context_share_delta"), 3)
+                _fmt(_median_of(_tok(s), "distractor_context_share_delta"), 3)
                 for s in sizes
             ],
         ),
-        ("`growth_shape` (modal, H2)", [_modal_shape(cells[s]) for s in sizes]),
+        ("`growth_shape` (modal, H2)",
+         [_modal_shape(_tok(s)) for s in sizes]),
         (
             "`wrong_file_edit_rate` (med)",
             [_fmt(_median_of(cells[s], "wrong_file_edit_rate"), 3) for s in sizes],
@@ -176,24 +229,27 @@ def generate_report(records: list[dict], scenario_id: str | None = None) -> str:
         lines.append(f"| {label} | " + " | ".join(values) + " |")
     lines.append("")
 
-    # §7.2 fits (dose = on-disk distractor tokens; per-run points).
-    xs = [float(r["distractor_tokens_on_disk"]) for r in records]
+    # §7.2 fits (dose = on-disk distractor tokens; proxy-evidenced points).
     lines.append("## Trend fits (descriptive)")
     lines.append("")
     for key in ("input_tokens_per_run", "distractor_context_share"):
-        ys = [float(r[key]) for r in records if r.get(key) is not None]
+        ys = [float(r[key]) for r in supported if r.get(key) is not None]
         xs_k = [
             float(r["distractor_tokens_on_disk"])
-            for r in records
+            for r in supported
             if r.get(key) is not None
         ]
+        if len(xs_k) < 2:
+            lines.append(f"- `{key}`: insufficient proxy-evidenced runs for a fit")
+            continue
         alpha, beta, r_squared = least_squares(xs_k, ys)
         rho = spearman_rho(xs_k, ys)
         lines.append(
             f"- `{key}` ≈ {alpha:.1f} + {beta:.6f} · distractor_tokens_on_disk "
             f"(R²={r_squared:.3f}, Spearman ρ={rho:.3f})"
         )
-    hidden_ys = [1.0 if r["hidden_pass"] else 0.0 for r in records]
+    xs = [float(r["distractor_tokens_on_disk"]) for r in pilot]
+    hidden_ys = [1.0 if r["hidden_pass"] else 0.0 for r in pilot]
     rho_hidden = spearman_rho(xs, hidden_ys)
     lines.append(f"- `hidden_pass` vs. dose: Spearman ρ={rho_hidden:.3f}")
     lines.append("")
@@ -209,6 +265,23 @@ def generate_report(records: list[dict], scenario_id: str | None = None) -> str:
         rendered = ", ".join(f"{k}: {v}" for k, v in sorted(counts.items())) or "none"
         lines.append(f"- **{size}x** — {rendered}")
     lines.append("")
+
+    # Evidence exclusions (never silent).
+    if unsupported or dev:
+        lines.append("## Excluded runs")
+        lines.append("")
+        for record in unsupported:
+            lines.append(
+                f"- `{record['run_id']}` — token-level metrics unsupported "
+                "(no recording-proxy snapshots / provider usage); counted in "
+                "outcome rows only"
+            )
+        for record in dev:
+            lines.append(
+                f"- `{record['run_id']}` — development-only (command arm, "
+                "env_fingerprint null); excluded from all tables"
+            )
+        lines.append("")
 
     # §7.5 pre-registered threshold checklist.
     lines.append("## Pre-registered thresholds (design §7.5)")
@@ -226,8 +299,15 @@ def generate_report(records: list[dict], scenario_id: str | None = None) -> str:
 
 
 def evaluate_thresholds(records: list[dict]) -> dict[str, tuple[str, str]]:
-    """Compute each §7.5 threshold where the data allows it."""
-    cells = _by_size(records)
+    """Compute each §7.5 threshold where the data allows it.
+
+    Token-dose thresholds (cost rise, penetration rise, H2) are evaluated
+    only over proxy-evidenced pilot runs; outcome thresholds (hidden drop,
+    H3) over all pilot runs. Development-only runs never count.
+    """
+    pilot, supported, _unsupported, _dev = partition_by_evidence(records)
+    cells = _by_size(pilot)
+    cells_tok = _by_size(supported)
     sizes = list(cells)
     out: dict[str, tuple[str, str]] = {}
     if not sizes:
@@ -238,9 +318,12 @@ def evaluate_thresholds(records: list[dict]) -> dict[str, tuple[str, str]]:
         cell = cells[size]
         return sum(1 for r in cell if r["hidden_pass"]) / len(cell)
 
-    # H1 cost rise.
-    low = _median_of(cells[smallest], "input_tokens_per_run")
-    high = _median_of(cells[largest], "input_tokens_per_run")
+    def tok(size: int) -> list[dict]:
+        return cells_tok.get(size, [])
+
+    # H1 cost rise (proxy-evidenced only).
+    low = _median_of(tok(smallest), "input_tokens_per_run")
+    high = _median_of(tok(largest), "input_tokens_per_run")
     if low and high:
         ratio = high / low
         crossed = ratio >= THRESHOLD_COST_RISE
@@ -248,35 +331,53 @@ def evaluate_thresholds(records: list[dict]) -> dict[str, tuple[str, str]]:
             "CROSSED" if crossed else "not crossed",
             f"{smallest}x med {low:.0f} → {largest}x med {high:.0f} ({ratio:.2f}x)",
         )
-    # Penetration rise.
-    low_share = _median_of(cells[smallest], "distractor_context_share") or 0.0
-    high_share = _median_of(cells[largest], "distractor_context_share") or 0.0
-    out["context-penetration rise (≥0.20 share)"] = (
-        "CROSSED" if high_share - low_share >= THRESHOLD_SHARE_RISE else "not crossed",
-        f"share {low_share:.3f} → {high_share:.3f}",
-    )
-    # Hidden-success drop.
+    else:
+        out["localization-cost rise (≥2x tokens)"] = (
+            "unsupported",
+            "insufficient proxy-evidenced runs at the endpoint sizes",
+        )
+    # Penetration rise (proxy-evidenced only).
+    low_share = _median_of(tok(smallest), "distractor_context_share")
+    high_share = _median_of(tok(largest), "distractor_context_share")
+    if low_share is None or high_share is None:
+        out["context-penetration rise (≥0.20 share)"] = (
+            "unsupported",
+            "insufficient proxy-evidenced runs at the endpoint sizes",
+        )
+    else:
+        out["context-penetration rise (≥0.20 share)"] = (
+            "CROSSED"
+            if high_share - low_share >= THRESHOLD_SHARE_RISE
+            else "not crossed",
+            f"share {low_share:.3f} → {high_share:.3f}",
+        )
+    # Hidden-success drop (all pilot runs).
     drop = rate(smallest) - rate(largest)
     out["hidden-success drop (≥20 pp)"] = (
         "CROSSED" if drop >= THRESHOLD_HIDDEN_DROP else "not crossed",
         f"hidden_pass_rate {rate(smallest):.2f} → {rate(largest):.2f}",
     )
-    # H2 within-run accumulation at ≥20x.
+    # H2 within-run accumulation at ≥20x (proxy-evidenced only).
     big_sizes = [s for s in sizes if s >= 20]
     if big_sizes:
         deltas = [
             r.get("distractor_context_share_delta")
             for s in big_sizes
-            for r in cells[s]
+            for r in tok(s)
             if r.get("distractor_context_share_delta") is not None
         ]
-        modal = _modal_shape([r for s in big_sizes for r in cells[s]])
+        modal = _modal_shape([r for s in big_sizes for r in tok(s)])
         if deltas:
             med_delta = median(deltas)
             crossed = med_delta >= THRESHOLD_H2_DELTA and modal == "gradual"
             out["H2 within-run accumulation"] = (
                 "CROSSED" if crossed else "not crossed",
                 f"median Δ(late−early)={med_delta:.3f} at ≥20x, modal shape={modal}",
+            )
+        else:
+            out["H2 within-run accumulation"] = (
+                "unsupported",
+                "no proxy-evidenced runs at ≥20x",
             )
     # H3 breakdown location.
     base_rate = rate(smallest)

@@ -97,3 +97,53 @@ def test_thresholds_flat_data_not_crossed():
 
 def test_empty_report():
     assert "(no run records)" in generate_report([])
+
+
+# -- evidence gating (proxy-evidenced vs development-only) --------------------
+
+
+def test_token_rows_exclude_runs_without_proxy_evidence():
+    supported = [_record(1, t, True, 5000, 0.0) for t in range(2)]
+    ghost = _record(50, 0, False, 0, 0.0)
+    ghost.update(
+        {"token_metrics_supported": False, "iterations_total": 0,
+         "input_tokens_per_run": 0, "failure_class": "other"}
+    )
+    for r in supported:
+        r["token_metrics_supported"] = True
+    report = generate_report(supported + [ghost])
+    # The 50x run still counts for outcomes...
+    assert "| `hidden_pass_rate` | 2/2 | 0/1 |" in report
+    # ...but its zero token counts never enter the token medians.
+    assert "| `input_tokens_per_run` (med) | 5000 | — |" in report
+    assert "token-level metrics unsupported" in report
+    assert "demo.50x.trial0" in report
+
+
+def test_development_only_runs_excluded_entirely():
+    supported = [_record(1, t, True, 5000, 0.0) for t in range(2)]
+    dev = _record(1, 9, True, 9999, 0.9)
+    dev["development_only"] = True
+    report = generate_report(supported + [dev])
+    assert "| `hidden_pass_rate` | 2/2 |" in report
+    assert "development-only (command arm, env_fingerprint null)" in report
+    verdicts = evaluate_thresholds(supported + [dev])
+    # dev run's 9999 tokens must not shift the cost baseline
+    assert "5000" in verdicts["localization-cost rise (≥2x tokens)"][1]
+
+
+def test_all_development_only_yields_no_pilot_report():
+    dev = _record(1, 0, True, 5000, 0.0)
+    dev["development_only"] = True
+    report = generate_report([dev])
+    assert "no pilot records" in report
+
+
+def test_thresholds_unsupported_without_endpoint_evidence():
+    records = [_record(1, t, True, 5000, 0.0) for t in range(2)]
+    big = _record(50, 0, True, 0, 0.0)
+    big.update({"token_metrics_supported": False, "input_tokens_per_run": 0,
+                "iterations_total": 0})
+    verdicts = evaluate_thresholds(records + [big])
+    assert verdicts["localization-cost rise (≥2x tokens)"][0] == "unsupported"
+    assert verdicts["context-penetration rise (≥0.20 share)"][0] == "unsupported"
