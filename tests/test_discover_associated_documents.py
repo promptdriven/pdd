@@ -562,6 +562,7 @@ class TestOrchestratorWiringIntegration:
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as m_ga, \
              patch("pdd.agentic_change_orchestrator.generate_sync_order_script"), \
              patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None), \
+             patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True), \
              patch("pdd.agentic_change_orchestrator.substitute_template_variables") as m_sub, \
              patch("pdd.agentic_change_orchestrator.discover_associated_documents") as m_disc, \
              patch("pdd.agentic_change_orchestrator._setup_worktree") as m_setup:
@@ -606,7 +607,7 @@ class TestOrchestratorWiringIntegration:
             if "step11" in label:
                 return (True, "No Issues Found", 0.1, "gpt-4")
             if "step13" in label:
-                return (True, "PR Created: https://example/pr/1", 0.1, "gpt-4")
+                return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         m["run"].side_effect = fake_step
@@ -666,7 +667,7 @@ class TestOrchestratorWiringIntegration:
             if "step11" in label:
                 return (True, "No Issues Found", 0.1, "gpt-4")
             if "step13" in label:
-                return (True, "PR Created: https://example/pr/4", 0.1, "gpt-4")
+                return (True, "PR Created: https://github.com/owner/repo/pull/4", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         m["run"].side_effect = fake_step
@@ -717,7 +718,7 @@ class TestOrchestratorWiringIntegration:
             if "step11" in label:
                 return (True, "No Issues Found", 0.1, "gpt-4")
             if "step13" in label:
-                return (True, "PR Created: https://example/pr/2", 0.1, "gpt-4")
+                return (True, "PR Created: https://github.com/owner/repo/pull/2", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         m["run"].side_effect = fake_step
@@ -753,7 +754,7 @@ class TestOrchestratorWiringIntegration:
             if "step11" in label:
                 return (True, "No Issues Found", 0.1, "gpt-4")
             if "step13" in label:
-                return (True, "PR Created: https://example/pr/3", 0.1, "gpt-4")
+                return (True, "PR Created: https://github.com/owner/repo/pull/3", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         m["run"].side_effect = fake_step

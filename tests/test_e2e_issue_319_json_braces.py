@@ -62,6 +62,7 @@ class TestIssue319JsonBracesE2E:
              patch("pdd.agentic_change_orchestrator.run_pre_checkup_gate",
                    return_value=(True, "pre_checkup_gate passed", 0.0)), \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_orch_subprocess, \
+             patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True), \
              patch("pdd.agentic_change.console"), \
              patch("pdd.agentic_change_orchestrator.console"):
 
@@ -154,8 +155,8 @@ Here's the config that causes it:
                     return (True, "FILES_MODIFIED: fix.py", 0.1, "gpt-4")
                 if label.startswith("step10"):
                     return (True, "No Issues Found", 0.1, "gpt-4")
-                if label == "step12":
-                    return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
+                if label == "step13":
+                    return (True, "PR Created: https://github.com/promptdriven/pdd/pull/1", 0.1, "gpt-4")
                 return (True, f"Output for {label}", 0.1, "gpt-4")
 
             mock_agentic_task.side_effect = agentic_task_side_effect
@@ -215,6 +216,7 @@ Here's the config that causes it:
                    return_value=(True, "pre_checkup_gate passed", 0.0)), \
              patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True), \
              patch("pdd.agentic_change_orchestrator.console"):
 
             def subprocess_side_effect(args, **kwargs):
@@ -286,8 +288,8 @@ Configuration schema:
                     return (True, "FILES_MODIFIED: config.py", 0.1, "gpt-4")
                 if label.startswith("step10"):
                     return (True, "No Issues Found", 0.1, "gpt-4")
-                if label == "step12":
-                    return (True, "PR Created: https://github.com/owner/repo/pull/2", 0.1, "gpt-4")
+                if label == "step13":
+                    return (True, "PR Created: https://github.com/promptdriven/pdd/pull/2", 0.1, "gpt-4")
                 return (True, f"Output for {label}", 0.1, "gpt-4")
 
             mock_agentic_task.side_effect = agentic_task_side_effect
@@ -393,6 +395,7 @@ class TestIssue319RegressionTests:
                    return_value=(True, "pre_checkup_gate passed", 0.0)), \
              patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True), \
              patch("pdd.agentic_change_orchestrator.console"):
 
             # Track how many times format is called per template load
@@ -444,8 +447,8 @@ class TestIssue319RegressionTests:
                     return (True, "FILES_MODIFIED: test.py", 0.1, "gpt-4")
                 if label.startswith("step10"):
                     return (True, "No Issues Found", 0.1, "gpt-4")
-                if label == "step12":
-                    return (True, "PR Created: https://github.com/owner/repo/pull/3", 0.1, "gpt-4")
+                if label == "step13":
+                    return (True, "PR Created: https://github.com/promptdriven/pdd/pull/3", 0.1, "gpt-4")
                 return (True, f"Output for {label}", 0.1, "gpt-4")
 
             mock_agentic_task.side_effect = agentic_task_side_effect
