@@ -806,6 +806,8 @@ Anything genuinely variable that cannot be eliminated (e.g. provider-side nondet
 
 **Still to confirm before runs** (does not block scenario authoring): the exact pinned Codex CLI version + model id + reasoning effort; whether Codex exposes a supported seed ([§6.5](#65-replication-trials)); and that the pinned build honors a base-URL override so the recording proxy captures **all** requests ([§6.2](#62-how-we-capture-it-defense-in-depth)) — with the CLI's own session transcript as the documented fallback source.
 
+> **Status (v2.1, 2026-07-07)**: confirmed against `codex-cli 0.142.4` by the zero-billing routing probe (`harness/runner/codex_probe.py`, record in `harness/runner/CODEX_PIN.md`): the build routes **all** provider traffic through the configured base URL (Responses wire only — `wire_api = "chat"` is rejected), no sampling seed is exposed (→ §6.5 fallback: N=5 unseeded trials), and tool execution is local. The fallback chain was not needed. The **numeric values** of model id / reasoning effort / context window remain a human pre-registration choice (see `CODEX_PIN.md`).
+
 ### 8.2 `pdd_prompt_space` (deferred comparison)
 
 A PDD-style prompt/test/spec context rendered from a fixed manifest. The key property to validate: for a fixed task, the **resolved prompt is byte-identical across repo-size variants** unless the manifest intentionally changes — i.e. prompt-space context does not dilute with repo bloat. This arm is a sanity check, not the core question, and is out of scope for the first pass. When added, the merged `pdd context` audit (PR #1387, closing #789) provides its token attribution.
@@ -814,7 +816,7 @@ A PDD-style prompt/test/spec context rendered from a fixed manifest. The key pro
 
 ## 9. Pilot execution checklist (maps to acceptance criteria)
 
-- [ ] 3 upstream OSS repos chosen (permissive license, offline-runnable), vendored as pinned snapshots with provenance + LICENSE recorded.
+- [ ] Scenario substrate frozen per [§4.1.0](#410-primary-upstream-repo-pdd-itself): the pilot's scenarios are dependency-sliced cores of **PDD itself** @ a pinned commit (≥2 of 3 from distinct PDD subsystems, offline-runnable); the third **may** come from a second, unaffiliated OSS repo as an external-validity check if time allows — only then do third-party license/provenance/LICENSE recording obligations apply. *(v2.1 wording fix, 2026-07-07: an earlier draft of this line said "3 upstream OSS repos", contradicting §4.1.0 — §4.1.0 is the locked decision.)*
 - [ ] 3 frozen bug-fix scenarios defined (`scenario.json` + `task.md` + dependency-sliced `core/` + `core_files.txt` + `seed.patch` + hidden verifier + `seed_novelty.md`); oracle fix classified as novel or upstream-recall caveat before runs.
 - [ ] Per-scenario size variants at 1x/2x/5x/10x/20x/50x by **token budget**, or a documented infeasibility reason.
 - [ ] Oracle equivalence gate passes for every materialized `(scenario, size)`: registered baseline outcomes match and the oracle fix passes visible + hidden verification under one fixed dependency environment.
@@ -854,6 +856,11 @@ Frozen before any model run (pre-registration). A change to any of these is a ne
 1. **Exact Codex model id + reasoning-effort** setting to pin in the run config (must be stated in the report).
 2. **Codex read/search execution path** — confirm whether the pinned Codex build shells out (e.g. `ripgrep`), performs direct local file reads, or uses any server-side/MCP retrieval path. Shell-spawned and direct local reads are kernel-visible to the FUSE tap; server-side or index-backed retrieval would require an additional tool-boundary tap. This affects both how we reconcile the transcript tap against the FS tap and whether the Codex arm can be described as purely local agentic search. (Why this matters across agents is analyzed in [`agentic_cli_search.md` §6](./agentic_cli_search.md#6-implications-for-the-benchmarks-instrumentation-and-validity).)
 3. **Base-URL override / proxy routing** — confirm the pinned Codex build routes **all** provider traffic through a configurable base URL so the recording proxy captures every request. Documented fallback: Codex's session transcript, iff it exposes per-request `usage` **and** tool-result content. Failing both, a transport-only fork (base-URL plumbing, never context assembly or tool logic) is the disclosed last resort. Without any of the three, token-level context-penetration metrics, the iteration-trajectory family, and token-dose thresholds are blocked and must be demoted/removed before runs.
+
+> **Status (v2.1, 2026-07-07)** — resolved against the pinned build `codex-cli 0.142.4` by the zero-billing probe (`harness/runner/codex_probe.py`; full record + replication commands in [`harness/runner/CODEX_PIN.md`](./harness/runner/CODEX_PIN.md)):
+> 1. *Pin mechanics confirmed* (`--strict-config`-validated frozen config; fingerprint schema v2). The numeric **values** of model id / reasoning effort / `model_context_window` remain a pre-registration choice to be stated in the report.
+> 2. *Local execution path confirmed*: the offered toolset has no server-side retrieval tool; a scripted `exec_command` round-trip executed **locally** (marker-file echo). Kernel-visible; the Codex arm can be described as purely local agentic search.
+> 3. *Routing confirmed*: all provider traffic transits the proxy (byte-exact, per-request `usage` parsed from Responses SSE). Token-level penetration metrics, the H2 trajectory family, and token-dose thresholds are **supported**; the fallback chain was not needed. The report generator additionally refuses to compute token metrics for any run lacking this evidence (schema-4 `token_metrics_supported` / `development_only` gating).
 
 ### Consequence of choice #3 (real-OSS subset-and-regrow) — contamination guardrail
 
