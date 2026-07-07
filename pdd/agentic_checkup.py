@@ -1184,6 +1184,9 @@ def run_agentic_checkup(
                 pr_repo=pr_repo,
                 pr_number=pr_number,
                 test_scope=test_scope,
+                defer_step5_to_github_checks=(
+                    final_gate and full_suite_source == "github-checks"
+                ),
                 start_step_override=start_step_override,
             )
         )

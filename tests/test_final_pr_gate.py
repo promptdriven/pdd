@@ -470,6 +470,7 @@ class TestFinalGateLibrary:
         assert success is True, msg
         assert order == ["layer1", "github-checks", "layer2"]
         assert orch_mock.call_args.kwargs["test_scope"] == "targeted"
+        assert orch_mock.call_args.kwargs["defer_step5_to_github_checks"] is True
         checks_mock.assert_called_once()
         loop_mock.assert_called_once()
 

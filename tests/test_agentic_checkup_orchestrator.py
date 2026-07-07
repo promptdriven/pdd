@@ -78,6 +78,28 @@ STEP5_CLEAN_OUTPUT = (
 
 
 class TestStep5ShellFirstEvidence:
+    def test_targeted_step5_can_defer_to_github_checks(self, tmp_path):
+        context = {
+            "pr_mode": "true",
+            "pr_test_scope": "targeted",
+            "defer_step5_to_github_checks": "true",
+            "pr_changed_files": "Base: main\n- M: pdd/provider.py",
+        }
+
+        result = _targeted_non_code_step5_result(
+            context,
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is not None
+        success, output, cost, model = result
+        assert success is True
+        assert cost == 0.0
+        assert model == "deterministic-step5-github-checks"
+        assert "GitHub checks gate" in output
+        assert "status: pass" in output
+
     def test_selects_existing_python_tests_from_changed_modules(self, tmp_path):
         (tmp_path / "pdd").mkdir()
         (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")

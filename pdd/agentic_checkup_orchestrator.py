@@ -3140,9 +3140,43 @@ def _targeted_non_code_step5_result(
     *,
     iteration: int,
 ) -> Optional[Tuple[bool, str, float, str]]:
-    """Return a deterministic Step 5 result for docs/assets-only PRs."""
+    """Return a deterministic Step 5 result for targeted PR fast paths."""
     if context.get("pr_mode") != "true" or context.get("pr_test_scope") != "targeted":
         return None
+
+    if context.get("defer_step5_to_github_checks") == "true":
+        report = f"""<step_report>
+## Step 5/8: Test Execution (Iteration {iteration})
+
+### Test Runner
+`GitHub checks gate (deferred)`
+
+### Results Summary
+- **Total:** Deferred to GitHub checks
+- **Passed:** Deferred to GitHub checks
+- **Failed:** 0
+- **Skipped:** 0
+- **Errors:** 0
+
+### Failures
+None. Final-gate Layer 1 is running targeted local checks; the full-suite
+source is GitHub checks on the current PR head, enforced before Layer 2.
+
+---
+*Proceeding to Step 7: Verify*
+</step_report>
+
+```failure_signal
+command: GitHub checks gate
+exit_code: 0
+status: pass
+failing_ids: none
+artifact_path: inline
+output: |
+  Step 5 local agent execution deferred because final-gate full-suite source is GitHub checks.
+  The wrapper must pass the current PR head through run_github_checks_gate before Layer 2.
+```"""
+        return (True, report, 0.0, "deterministic-step5-github-checks")
 
     changed_files_text = context.get("pr_changed_files", "")
     base_match = re.search(r"^Base:\s+(.+?)\s*$", changed_files_text, re.MULTILINE)
@@ -3316,6 +3350,7 @@ def _run_agentic_checkup_orchestrator_inner(
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
     test_scope: str = "full",
+    defer_step5_to_github_checks: bool = False,
     start_step_override: Optional[Union[int, float]] = None,
     # External review (issue #1116). Both default to "off"; set only by
     # the outer wrapper on restart iterations.
@@ -3394,6 +3429,9 @@ def _run_agentic_checkup_orchestrator_inner(
         # holds even when the operator runs the default ``--scope full``.
         "pr_scope_changed_files": "",
         "pr_test_scope": pr_test_scope,
+        "defer_step5_to_github_checks": (
+            "true" if defer_step5_to_github_checks else "false"
+        ),
         "manual_start_step": str(start_step_override or ""),
         "worktree_path": "",
         "files_to_stage": "",
@@ -3581,6 +3619,13 @@ def _run_agentic_checkup_orchestrator_inner(
                 identity_mismatch_reasons.append(
                     f"pr_test_scope "
                     f"(cached={cached_pr_test_scope}, current={pr_test_scope})"
+                )
+            cached_defer_step5 = bool(state.get("defer_step5_to_github_checks"))
+            if cached_defer_step5 != defer_step5_to_github_checks:
+                identity_mismatch_reasons.append(
+                    "defer_step5_to_github_checks "
+                    f"(cached={cached_defer_step5}, "
+                    f"current={defer_step5_to_github_checks})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -3840,6 +3885,9 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_repo=pr_repo,
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             pr_test_scope=pr_test_scope if pr_mode else None,
+            defer_step5_to_github_checks=(
+                defer_step5_to_github_checks if pr_mode else None
+            ),
             step_comments=sorted(step_comments_set),
             step_telemetry=step_telemetry,
         )
@@ -4797,7 +4845,44 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"{description} (iter {fix_verify_iteration})..."
                     )
 
-                if step_num == 5:
+                if (
+                    step_num == 5
+                    and context.get("defer_step5_to_github_checks") == "true"
+                    and pr_number is not None
+                ):
+                    evidence = _storage_safe_step5_shell_evidence(
+                        {
+                            "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
+                            "iteration": fix_verify_iteration,
+                            "status": "deferred",
+                            "command": "GitHub checks gate",
+                            "exit_code": 0,
+                            "changed_files": _pr_changed_paths_for_targeted_checks(
+                                context.get("pr_changed_files")
+                                or context.get("pr_scope_changed_files")
+                                or ""
+                            ),
+                            "selected_tests": [],
+                            "artifact_path": (
+                                Path(".pdd")
+                                / f"checkup-pr-{pr_number}"
+                                / STEP5_SHELL_EVIDENCE_FILENAME
+                            ).as_posix(),
+                            "timeout_seconds": 0,
+                            "output": (
+                                "Step 5 shell-first probe deferred because "
+                                "final-gate full-suite source is GitHub checks."
+                            ),
+                            "output_truncated": False,
+                        }
+                    )
+                    _write_step5_shell_evidence(cwd, pr_number, evidence)
+                    context["step5_shell_evidence"] = json.dumps(
+                        evidence,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                elif step_num == 5:
                     _run_step5_shell_first_evidence(
                         context,
                         step_cwd,
@@ -6042,6 +6127,7 @@ def run_agentic_checkup_orchestrator(
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
     test_scope: str = "full",
+    defer_step5_to_github_checks: bool = False,
     start_step_override: Optional[Union[int, float]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Public entry point for the agentic checkup orchestrator.
@@ -6082,6 +6168,7 @@ def run_agentic_checkup_orchestrator(
             pr_repo=pr_repo,
             pr_number=pr_number,
             test_scope=test_scope,
+            defer_step5_to_github_checks=defer_step5_to_github_checks,
             start_step_override=start_step_override,
         )
 
@@ -6121,6 +6208,7 @@ def run_agentic_checkup_orchestrator(
                 pr_repo=pr_repo,
                 pr_number=pr_number,
                 test_scope=test_scope,
+                defer_step5_to_github_checks=defer_step5_to_github_checks,
                 start_step_override=start_step_override,
                 # External review Finding 3: bypass load_workflow_state
                 # on restarts so a flaky GH state load can't reload
@@ -6213,6 +6301,7 @@ def _build_state(
     pr_repo: Optional[str] = None,
     pr_head_sha: Optional[str] = None,
     pr_test_scope: Optional[str] = None,
+    defer_step5_to_github_checks: Optional[bool] = None,
     step_comments: Optional[List[int]] = None,
     step_telemetry: Optional[List[dict]] = None,
 ) -> Dict:
@@ -6235,6 +6324,11 @@ def _build_state(
     ``pr_test_scope`` records whether the PR run used full or targeted
     checkup semantics. Scope is part of the cache identity because Step 5
     test selection and Step 7 critical-blocking rules differ by scope.
+
+    ``defer_step5_to_github_checks`` records the final-gate fast path where
+    targeted Layer 1 skips the Step 5 agent and the wrapper enforces GitHub
+    checks before Layer 2. It is part of PR cache identity because a deferred
+    Step 5 output must not be reused by a local-suite run.
     """
     return {
         "workflow": "checkup",
@@ -6255,6 +6349,7 @@ def _build_state(
         "pr_repo": pr_repo,
         "pr_head_sha": pr_head_sha,
         "pr_test_scope": pr_test_scope,
+        "defer_step5_to_github_checks": defer_step5_to_github_checks,
         "step_comments": list(step_comments) if step_comments else [],
         # Per-step telemetry for pdd_cloud durable runs (issue #1709). Purely
         # additive — every existing key above is unchanged, so older state
