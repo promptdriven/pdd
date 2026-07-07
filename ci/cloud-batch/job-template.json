@@ -65,7 +65,7 @@
             {
                 "policy": {
                     "machineType": "e2-standard-8",
-                    "provisioningModel": "SPOT"
+                    "provisioningModel": "{{SPOT_PROVISIONING_MODEL}}"
                 }
             }
         ],

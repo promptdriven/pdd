@@ -53,3 +53,23 @@ def test_cloud_batch_template_secrets_are_provisioned_by_setup_script():
         }
 
         assert template_secrets <= setup_secrets
+
+
+def test_spot_template_provisioning_model_is_release_gate_overridable():
+    spot_template_path = REPO_ROOT / "ci" / "cloud-batch" / "job-template.json"
+    spot_template = json.loads(spot_template_path.read_text(encoding="utf-8"))
+    spot_policy = spot_template["allocationPolicy"]["instances"][0]["policy"]
+    assert spot_policy["provisioningModel"] == "{{SPOT_PROVISIONING_MODEL}}"
+
+    standard_template_path = (
+        REPO_ROOT / "ci" / "cloud-batch" / "job-template-standard.json"
+    )
+    standard_template = json.loads(standard_template_path.read_text(encoding="utf-8"))
+    standard_policy = standard_template["allocationPolicy"]["instances"][0]["policy"]
+    assert standard_policy["provisioningModel"] == "STANDARD"
+
+    submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL" in submit_text
+    assert "{{SPOT_PROVISIONING_MODEL}}" in submit_text
