@@ -91,14 +91,41 @@ def resolve_code_path(
     """
     Resolve the code path paired with a CSV prompt row.
 
-    Prefer the prompt's relative subpath under the CSV directory or code
-    directory, then fall back to the historical flat code_directory lookup.
+    Prefer prompt-root-stripped subpaths under the code directory, then fall
+    back to preserved prompt subpaths and the historical flat lookup.
     """
     abs_code_directory = os.path.abspath(code_directory)
+    real_code_directory = os.path.realpath(abs_code_directory)
     abs_csv_dir = os.path.abspath(os.path.dirname(csv_file))
     abs_prompt_path = os.path.abspath(resolved_prompt_path)
 
     candidate_dirs: List[str] = []
+
+    def _strip_prompt_root(relative_dir: str) -> Optional[str]:
+        parts = [
+            part
+            for part in relative_dir.replace("\\", os.sep)
+            .replace("/", os.sep)
+            .split(os.sep)
+            if part and part != "."
+        ]
+        try:
+            prompt_root_index = parts.index("prompts")
+        except ValueError:
+            return None
+        if prompt_root_index > 1:
+            return None
+        remainder = parts[prompt_root_index + 1:]
+        return os.path.join(*remainder) if remainder else ""
+
+    def _add_candidate_dir(relative_dir: str) -> None:
+        if not relative_dir:
+            return
+        stripped_dir = _strip_prompt_root(relative_dir)
+        if stripped_dir is not None:
+            candidate_dirs.append(os.path.join(abs_code_directory, stripped_dir))
+        candidate_dirs.append(os.path.join(abs_code_directory, relative_dir))
+
     for root in (abs_csv_dir, abs_code_directory):
         try:
             rel_prompt = os.path.relpath(abs_prompt_path, root)
@@ -108,19 +135,19 @@ def resolve_code_path(
             continue
         rel_dir = os.path.dirname(rel_prompt)
         if rel_dir:
-            candidate_dirs.append(os.path.join(abs_code_directory, rel_dir))
+            _add_candidate_dir(rel_dir)
 
     prompt_dir_from_csv = os.path.dirname(prompt_name)
     if prompt_dir_from_csv and not os.path.isabs(prompt_dir_from_csv):
-        candidate_dirs.append(os.path.join(abs_code_directory, prompt_dir_from_csv))
+        _add_candidate_dir(prompt_dir_from_csv)
 
     candidate_dirs.append(abs_code_directory)
 
     def _inside_code_directory(path: str) -> bool:
         try:
             return (
-                os.path.commonpath([abs_code_directory, os.path.abspath(path)])
-                == abs_code_directory
+                os.path.commonpath([real_code_directory, os.path.realpath(path)])
+                == real_code_directory
             )
         except ValueError:
             return False
@@ -131,13 +158,15 @@ def resolve_code_path(
         normalized_dir = os.path.abspath(directory)
         if normalized_dir in checked_dirs:
             continue
-        if not _inside_code_directory(normalized_dir):
-            continue
         checked_dirs.add(normalized_dir)
         candidate = os.path.join(normalized_dir, input_code_filename)
+        if not _inside_code_directory(candidate):
+            continue
         if os.path.exists(candidate) and os.path.isfile(candidate):
             return candidate
 
+    if not _inside_code_directory(fallback_path):
+        raise ValueError(f"Derived code path escapes code directory: {fallback_path}")
     return fallback_path
 
 def process_csv_change(

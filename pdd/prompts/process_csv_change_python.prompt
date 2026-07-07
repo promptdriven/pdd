@@ -102,7 +102,7 @@
                 i.  remove the path and suffix _language.prompt from the prompt_name
                 ii. use the `get_extension` function to infer the extension of the input_code file, if it doesn't have a language suffix use the default input extension.
                 iii. add the suffix extension to the prompt_name
-                iv. resolve the input_code path under code_directory while preserving the prompt's relative subdirectory when present. For example, if the CSV points to prompts/pkg/widget_python.prompt, first try code_directory/prompts/pkg/widget.py, then fall back to the historical flat code_directory/widget.py lookup for compatibility.
+                iv. resolve the input_code path under code_directory by stripping recognized prompt roots before trying compatibility fallbacks. For example, if the CSV points to prompts/pkg/widget_python.prompt or pdd/prompts/pkg/widget_python.prompt, first try code_directory/pkg/widget.py, then fall back to the preserved-subpath lookup and the historical flat code_directory/widget.py lookup. Ensure returned code paths remain inside the resolved code_directory, including symlink targets.
             - Read the input_code from the input_code_name as a string
             - Read the change_instructions from the change_instructions column
         b. Call the change function with the input_prompt, input_code, change_prompt, strength, temperature, and time.

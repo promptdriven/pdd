@@ -877,8 +877,8 @@ def test_csv_change_resolves_code_path_from_prompt_subdirectory(
     capsys,
 ):
     """
-    CSV change should preserve the prompt's relative subdirectory when locating
-    the paired code file under code_directory.
+    CSV change keeps the older preserved prompt-subdirectory lookup as a
+    fallback when no prompt-root-stripped code path exists.
     """
     prompts_dir = tmp_path / "prompts" / "pkg"
     code_dir = tmp_path / "code"
@@ -893,6 +893,99 @@ def test_csv_change_resolves_code_path_from_prompt_subdirectory(
 
     prompt_path.write_text("Original prompt content", encoding="utf-8")
     code_path.write_text("def widget():\n    return 1\n", encoding="utf-8")
+    csv_path.write_text(
+        f"prompt_name,change_instructions\n{prompt_rel.as_posix()},Do the change\n",
+        encoding="utf-8",
+    )
+
+    mock_change_fixture.return_value = ("Modified prompt", 0.01, "test_model")
+
+    with patch("pdd.process_csv_change.get_extension", return_value=".py"):
+        success, list_of_jsons, total_cost, model_name = process_csv_change(
+            csv_file=str(csv_path),
+            strength=0.5,
+            temperature=0.5,
+            code_directory=str(code_dir),
+            language="python",
+            extension=".py",
+            budget=1.0,
+        )
+
+    assert success
+    assert list_of_jsons == [
+        {
+            "file_name": prompt_rel.as_posix(),
+            "modified_prompt": "Modified prompt",
+        }
+    ]
+    assert total_cost == 0.01
+    assert model_name == "test_model"
+    assert mock_change_fixture.call_args.kwargs["input_code"] == code_path.read_text(
+        encoding="utf-8"
+    )
+
+    captured = capsys.readouterr()
+    assert "Overall Success Status: True" in captured.out
+
+@pytest.mark.parametrize(
+    "prompt_name",
+    [
+        "prompts/commands/foo_python.prompt",
+        "pdd/prompts/commands/foo_python.prompt",
+    ],
+)
+def test_resolve_code_path_strips_pdd_prompt_root_for_nested_prompt(
+    tmp_path,
+    prompt_name,
+):
+    """
+    Real PDD layouts store prompts under pdd/prompts/<subdir> and paired code
+    under pdd/<subdir>, not pdd/prompts/<subdir>.
+    """
+    repo_dir = tmp_path / "repo"
+    code_dir = repo_dir / "pdd"
+    prompt_path = code_dir / "prompts" / "commands" / "foo_python.prompt"
+    code_path = code_dir / "commands" / "foo.py"
+    csv_path = repo_dir / "changes.csv"
+
+    prompt_path.parent.mkdir(parents=True)
+    code_path.parent.mkdir(parents=True)
+    prompt_path.write_text("Prompt", encoding="utf-8")
+    code_path.write_text("def foo():\n    return 1\n", encoding="utf-8")
+    csv_path.write_text("prompt_name,change_instructions\n", encoding="utf-8")
+
+    resolved_code_path = resolve_code_path(
+        prompt_name=prompt_name,
+        resolved_prompt_path=str(prompt_path),
+        csv_file=str(csv_path),
+        code_directory=str(code_dir),
+        input_code_filename="foo.py",
+    )
+
+    assert resolved_code_path == str(code_path)
+
+def test_csv_change_resolves_pdd_prompt_root_layout(
+    mock_change_fixture,
+    tmp_path,
+    capsys,
+):
+    """
+    CSV change should pair pdd/prompts/<subdir>/<name>_python.prompt with
+    pdd/<subdir>/<name>.py when INPUT_CODE points at the pdd package directory.
+    """
+    code_dir = tmp_path / "pdd"
+    prompts_dir = code_dir / "prompts" / "commands"
+    nested_code_dir = code_dir / "commands"
+    prompts_dir.mkdir(parents=True)
+    nested_code_dir.mkdir(parents=True)
+
+    prompt_rel = Path("prompts") / "commands" / "modify_python.prompt"
+    prompt_path = code_dir / prompt_rel
+    code_path = nested_code_dir / "modify.py"
+    csv_path = tmp_path / "changes.csv"
+
+    prompt_path.write_text("Original prompt content", encoding="utf-8")
+    code_path.write_text("def modify():\n    return 1\n", encoding="utf-8")
     csv_path.write_text(
         f"prompt_name,change_instructions\n{prompt_rel.as_posix()},Do the change\n",
         encoding="utf-8",
@@ -949,6 +1042,44 @@ def test_csv_change_does_not_resolve_code_outside_code_directory(
     resolved_code_path = resolve_code_path(
         prompt_name="../outside/widget_python.prompt",
         resolved_prompt_path=str(resolved_prompt_path),
+        csv_file=str(tmp_path / "changes.csv"),
+        code_directory=str(code_dir),
+        input_code_filename="widget.py",
+    )
+
+    assert resolved_code_path == str(safe_code_path)
+
+def test_resolve_code_path_skips_symlinked_candidate_outside_code_directory(
+    tmp_path,
+):
+    """
+    A symlinked subdirectory under code_directory must not let CSV code lookup
+    return a file whose resolved path is outside code_directory.
+    """
+    if not hasattr(os, "symlink"):
+        pytest.skip("os.symlink is unavailable on this platform")
+
+    code_dir = tmp_path / "code"
+    outside_dir = tmp_path / "outside"
+    prompt_path = tmp_path / "prompts" / "linked" / "widget_python.prompt"
+    code_dir.mkdir()
+    outside_dir.mkdir()
+    prompt_path.parent.mkdir(parents=True)
+
+    try:
+        (code_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation failed: {exc}")
+
+    unsafe_code_path = outside_dir / "widget.py"
+    unsafe_code_path.write_text("def widget(): return 'unsafe'\n", encoding="utf-8")
+    safe_code_path = code_dir / "widget.py"
+    safe_code_path.write_text("def widget(): return 'safe'\n", encoding="utf-8")
+    prompt_path.write_text("Prompt", encoding="utf-8")
+
+    resolved_code_path = resolve_code_path(
+        prompt_name="prompts/linked/widget_python.prompt",
+        resolved_prompt_path=str(prompt_path),
         csv_file=str(tmp_path / "changes.csv"),
         code_directory=str(code_dir),
         input_code_filename="widget.py",
