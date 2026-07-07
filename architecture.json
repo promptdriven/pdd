@@ -10169,6 +10169,35 @@
     }
   },
   {
+    "reason": "Parses capabilities tag text into a target-neutral effect IR (EffectItem / ContractEffectIR).",
+    "description": "Compiles raw <capabilities> block text into a language-neutral effect IR, exposing EffectItem and ContractEffectIR dataclasses independent of any Python AST or code-analysis libraries.",
+    "dependencies": [],
+    "priority": 249,
+    "filename": "capability_ir_python.prompt",
+    "filepath": "pdd/capability_ir.py",
+    "tags": [
+      "module",
+      "python",
+      "contracts"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_capabilities_ir",
+            "signature": "(text: str) -> ContractEffectIR",
+            "returns": "ContractEffectIR"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
     "reason": "Defines the PolicyBackend ABC, PolicyFinding dataclass, and get_backend() registry for target-neutral capability policy analysis.",
     "description": "Public interface for the policy_backends package. Defines the PolicyBackend abstract base class, PolicyFinding dataclass, and a get_backend() registry function that returns the appropriate backend by target language string or an unsupported-target dict.",
     "dependencies": [
