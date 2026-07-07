@@ -278,6 +278,7 @@ class TestIssue373Step5KeyErrorE2E:
             "repo_name": "repo",
             "issue_number": 373,
             "issue_content": "Test issue",
+            "artifacts_dir": str(mock_cwd / ".pdd" / "change" / "issue-373"),
         }
         for i in range(1, 5):
             context[f"step{i}_output"] = f"Step {i} output"
@@ -668,6 +669,7 @@ class TestIssue373OrchestratorE2EIntegration:
             "repo_name": "repo",
             "issue_number": 373,
             "issue_content": "Test issue",
+            "artifacts_dir": str(mock_cwd / ".pdd" / "change" / "issue-373"),
         }
         for i in range(1, 5):
             context[f"step{i}_output"] = f"Step {i} output"
