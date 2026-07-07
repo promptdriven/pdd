@@ -147,6 +147,18 @@ def _reset_artifacts_dir(work_dir: Path, issue_number: int) -> None:
     shutil.rmtree(_artifacts_dir_path(work_dir, issue_number), ignore_errors=True)
 
 
+def _clear_step_artifacts(artifacts_dir: Path, step_num: int, name: str) -> None:
+    """Remove artifacts a step attempt is expected to rewrite."""
+    stem = _step_artifact_stem(step_num, name)
+    for suffix in (".json", ".md"):
+        try:
+            (Path(artifacts_dir) / f"{stem}{suffix}").unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
 def _read_step_json(artifacts_dir: Path, filename: str) -> Optional[dict]:
     """Return parsed step JSON, or None on missing/unreadable/unparseable."""
     try:
@@ -232,7 +244,7 @@ def _hard_stop_from_json_with_presence(
     can distinguish a valid ``proceed`` JSON from a missing JSON fallback.
     """
     data = _read_step_json(artifacts_dir, f"{_step_artifact_stem(step_num, name)}.json")
-    if data is None:
+    if not _valid_step_json(step_num, data):
         return False, None, []
     status = str(data.get("status") or "").strip().lower()
     direct_edit_candidates = _json_list(data, "direct_edit_candidates")
@@ -277,14 +289,233 @@ def _step13_result_from_json_or_output(
     return "unknown", url_match.group(0) if url_match else "Unknown"
 
 
+def _valid_pr_url(value: Any, repo_owner: str = "", repo_name: str = "") -> bool:
+    url = str(value or "").strip()
+    if repo_owner and repo_name:
+        return bool(
+            re.fullmatch(
+                rf"https://github\.com/{re.escape(repo_owner)}/{re.escape(repo_name)}/pull/\d+",
+                url,
+                flags=re.IGNORECASE,
+            )
+        )
+    return bool(
+        re.fullmatch(
+            r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+",
+            url,
+        )
+    )
+
+
+def _git_head_oid(cwd: Path) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    oid = result.stdout.strip()
+    return oid if re.fullmatch(r"[0-9a-fA-F]{40}", oid) else None
+
+
+def _remote_branch_oid(head_branch: str, cwd: Path) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "origin", f"refs/heads/{head_branch}"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    first = result.stdout.strip().split(None, 1)[0] if result.stdout.strip() else ""
+    return first if re.fullmatch(r"[0-9a-fA-F]{40}", first) else None
+
+
+def _pr_number_from_url(pr_url: str, repo_owner: str, repo_name: str) -> Optional[str]:
+    match = re.fullmatch(
+        rf"https://github\.com/{re.escape(repo_owner)}/{re.escape(repo_name)}/pull/(\d+)",
+        str(pr_url or "").strip(),
+        flags=re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
+def _gh_pr_list_candidates(
+    base_args: Sequence[str], cwd: Optional[Path] = None
+) -> List[dict]:
+    """Return PR list entries from a supported bounded gh query."""
+    try:
+        result = subprocess.run(
+            [*base_args, "--limit", "1000"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return []
+        data = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def _pr_url_matches_current_head(
+    repo_owner: str,
+    repo_name: str,
+    pr_url: str,
+    head_branch: str,
+    base_branch: str,
+    cwd: Path,
+) -> bool:
+    """Return true only when the PR URL points at this branch and local HEAD."""
+    pr_number = _pr_number_from_url(pr_url, repo_owner, repo_name)
+    if not pr_number:
+        return False
+    local_oid = _git_head_oid(cwd)
+    remote_oid = _remote_branch_oid(head_branch, cwd)
+    if not local_oid or not remote_oid or local_oid.lower() != remote_oid.lower():
+        return False
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "view",
+                pr_number,
+                "--repo",
+                f"{repo_owner}/{repo_name}",
+                "--json",
+                "url,headRefName,headRefOid,baseRefName,state",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return False
+        data = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if str(data.get("url") or "").strip().rstrip("/") != str(pr_url).strip().rstrip("/"):
+        return False
+    if str(data.get("headRefName") or "").strip() != head_branch:
+        return False
+    if str(data.get("baseRefName") or "").strip() != base_branch:
+        return False
+    if str(data.get("state") or "").strip().upper() != "OPEN":
+        return False
+    pr_oid = str(data.get("headRefOid") or "").strip()
+    return bool(pr_oid) and pr_oid.lower() == local_oid.lower()
+
+
+def _open_pr_for_head_branch(
+    repo_owner: str,
+    repo_name: str,
+    head_branch: str,
+    base_branch: str,
+    cwd: Path,
+) -> Optional[dict]:
+    """Return open PR metadata for the exact head branch, if one exists."""
+    data = _gh_pr_list_candidates(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            f"{repo_owner}/{repo_name}",
+            "--head",
+            head_branch,
+            "--state",
+            "open",
+            "--json",
+            "number,url,headRefName,headRefOid,baseRefName,state",
+        ],
+        cwd=cwd,
+    )
+    if not data:
+        return None
+    local_oid = _git_head_oid(cwd)
+    remote_oid = _remote_branch_oid(head_branch, cwd)
+    if not local_oid or not remote_oid or remote_oid.lower() != local_oid.lower():
+        return None
+    for pr in data:
+        if not isinstance(pr, dict) or not _valid_pr_url(
+            pr.get("url"), repo_owner, repo_name
+        ):
+            continue
+        pr_oid = str(pr.get("headRefOid") or "").strip()
+        if str(pr.get("state") or "").strip().upper() != "OPEN":
+            continue
+        if str(pr.get("headRefName") or "").strip() != head_branch:
+            continue
+        if str(pr.get("baseRefName") or "").strip() != base_branch:
+            continue
+        if pr_oid and pr_oid.lower() == local_oid.lower():
+            return pr
+    return None
+
+
 def _valid_step_json(step_num: int, data: Optional[dict]) -> bool:
     if not isinstance(data, dict):
         return False
-    list_fields_by_step = {
-        1: ("duplicates", "questions"),
+    path_list_fields_by_step = {
+        1: ("duplicates",),
         4: ("questions",),
         6: ("direct_edit_candidates",),
         7: ("questions",),
+        9: ("files_modified", "files_created", "direct_edits"),
+        10: (
+            "architecture_files_modified",
+            "associated_docs_modified",
+            "associated_docs_conflicts",
+            "associated_docs_unchanged",
+        ),
+    }
+    for key in path_list_fields_by_step.get(step_num, ()):
+        if key not in data:
+            continue
+        value = data.get(key)
+        if not isinstance(value, list):
+            return False
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            return False
+    if step_num in {9, 11, 12} and "manual_review" in data:
+        manual_review = data.get("manual_review")
+        if not isinstance(manual_review, list):
+            return False
+        for item in manual_review:
+            if not isinstance(item, dict):
+                return False
+            path = item.get("path")
+            reason = item.get("reason", "")
+            if not isinstance(path, str) or not path.strip():
+                return False
+            if reason is not None and not isinstance(reason, str):
+                return False
+    required_fields_by_step = {
+        1: ("duplicates",),
+        4: ("questions",),
+        6: ("direct_edit_candidates",),
         9: ("files_modified", "files_created", "direct_edits", "manual_review"),
         10: (
             "architecture_files_modified",
@@ -295,8 +526,8 @@ def _valid_step_json(step_num: int, data: Optional[dict]) -> bool:
         11: ("manual_review",),
         12: ("manual_review",),
     }
-    for key in list_fields_by_step.get(step_num, ()):
-        if key in data and not isinstance(data.get(key), list):
+    for key in required_fields_by_step.get(step_num, ()):
+        if key not in data:
             return False
     status_sets = {
         1: {"proceed", "duplicate"},
@@ -312,15 +543,11 @@ def _valid_step_json(step_num: int, data: Optional[dict]) -> bool:
     allowed_statuses = status_sets.get(step_num)
     if allowed_statuses is not None:
         status = str(data.get("status") or "").strip()
-        return status in allowed_statuses
-    if step_num == 10:
-        required = {
-            "architecture_files_modified",
-            "associated_docs_modified",
-            "associated_docs_conflicts",
-            "associated_docs_unchanged",
-        }
-        return all(key in data for key in required)
+        if status not in allowed_statuses:
+            return False
+        if step_num == 13 and status in {"pr_created", "pr_updated"}:
+            return _valid_pr_url(data.get("pr_url"))
+        return True
     return True
 
 
@@ -2013,6 +2240,66 @@ def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Op
     return None
 
 
+def _check_existing_pr_candidates(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+) -> List[dict]:
+    """Return open PR metadata candidates for canonical/fallback issue branches."""
+    canonical = f"change/issue-{issue_number}"
+    fallback_prefix = f"{canonical}-job-"
+    data = _gh_pr_list_candidates(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            f"{repo_owner}/{repo_name}",
+            "--search",
+            f"head:{canonical}",
+            "--state",
+            "open",
+            "--json",
+            "number,url,headRefName,headRefOid,baseRefName,state",
+        ]
+    )
+    candidates: List[dict] = []
+    for pr in data:
+        if not isinstance(pr, dict):
+            continue
+        head = str(pr.get("headRefName") or "")
+        if (head == canonical or head.startswith(fallback_prefix)) and _valid_pr_url(
+            pr.get("url"), repo_owner, repo_name
+        ):
+            candidates.append(pr)
+    return candidates
+
+
+def _existing_pr_matches_remote_head(
+    repo_owner: str,
+    repo_name: str,
+    pr: dict,
+    base_branch: str,
+    cwd: Path,
+) -> bool:
+    """Validate existing-PR guard metadata against its remote branch state."""
+    if not isinstance(pr, dict):
+        return False
+    pr_url = str(pr.get("url") or "").strip()
+    head_branch = str(pr.get("headRefName") or "").strip()
+    if not _valid_pr_url(pr_url, repo_owner, repo_name):
+        return False
+    if str(pr.get("state") or "").strip().upper() != "OPEN":
+        return False
+    if str(pr.get("baseRefName") or "").strip() != base_branch:
+        return False
+    remote_oid = _remote_branch_oid(head_branch, cwd)
+    pr_oid = str(pr.get("headRefOid") or "").strip()
+    if not remote_oid:
+        return False
+    return bool(pr_oid) and pr_oid.lower() == remote_oid.lower()
+
+
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -2082,7 +2369,22 @@ def run_agentic_change_orchestrator(
     # Skipped under clean_restart (Req 15) because the caller explicitly wants
     # to ignore the previously generated change/issue-{N} branch / PR.
     if not effective_clean_restart:
-        existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+        existing_pr_base_branch = _normalize_pr_base_branch(
+            _resolve_main_ref_name(_get_git_root(cwd) or cwd)
+        )
+        existing_pr = None
+        for existing_pr_meta in _check_existing_pr_candidates(
+            repo_owner, repo_name, issue_number
+        ):
+            if _existing_pr_matches_remote_head(
+                repo_owner,
+                repo_name,
+                existing_pr_meta,
+                existing_pr_base_branch,
+                cwd,
+            ):
+                existing_pr = str(existing_pr_meta.get("url") or "").strip()
+                break
         if existing_pr:
             if not quiet:
                 console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
@@ -2161,9 +2463,38 @@ def run_agentic_change_orchestrator(
     # Normalize step comments tracking (Set[int] of step indices already posted)
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
-    manual_review_json_lines: List[str] = list(
-        state.get("manual_review_json_lines") or []
+    step_json_outputs = state.setdefault("step_json_outputs", {})
+    for step_key in list(step_json_outputs):
+        try:
+            step_key_num = int(step_key)
+        except (TypeError, ValueError):
+            continue
+        cached_output = str(step_outputs.get(step_key, ""))
+        if step_key_num > last_completed_step or cached_output.startswith("FAILED:"):
+            step_json_outputs.pop(step_key, None)
+    manual_review_json_lines: List[str] = []
+    if _valid_step_json(9, step_json_outputs.get("9")):
+        manual_line = _manual_review_lines_from_json(step_json_outputs.get("9"))
+        manual_review_json_lines = manual_line.splitlines() if manual_line else []
+        state["manual_review_json_lines"] = manual_review_json_lines
+    else:
+        manual_review_json_lines = []
+        state["manual_review_json_lines"] = manual_review_json_lines
+    review_manual_review_json_lines: List[str] = list(
+        state.get("review_manual_review_json_lines") or []
     )
+    review_state_invalidated = (
+        last_completed_step < 10
+        or any(
+            str(step_outputs.get(str(step), "")).startswith("FAILED:")
+            for step in (9, 10, 11, 12)
+        )
+    )
+    if review_state_invalidated:
+        state["review_iteration"] = 0
+        state["previous_fixes"] = ""
+        state["review_manual_review_json_lines"] = []
+        review_manual_review_json_lines = []
 
     if ensure_issue_steer_cursor_seeded(
         repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
@@ -2226,6 +2557,12 @@ def run_agentic_change_orchestrator(
     }
     
     for s_num, s_out in step_outputs.items():
+        try:
+            s_num_int = int(s_num)
+        except (TypeError, ValueError):
+            s_num_int = 0
+        if s_num_int > last_completed_step or str(s_out).startswith("FAILED:"):
+            continue
         context[f"step{s_num}_output"] = s_out
 
     cached_step6_output = str(context.get("step6_output", ""))
@@ -2234,9 +2571,7 @@ def run_agentic_change_orchestrator(
         and cached_step6_output
         and not cached_step6_output.startswith("FAILED:")
     ):
-        s6_json = _read_step_json(
-            _artifacts_dir_path(cwd, issue_number), "06_devunits.json"
-        )
+        s6_json = step_json_outputs.get("6")
         if _valid_step_json(6, s6_json):
             context["direct_edit_candidates"] = _json_list(
                 s6_json, "direct_edit_candidates"
@@ -2250,12 +2585,7 @@ def run_agentic_change_orchestrator(
     
     if "step9_output" in context:
         s9_out = context["step9_output"]
-        s9_json = None
-        if worktree_path and worktree_path.exists():
-            s9_json = _read_step_json(
-                _artifacts_dir_path(worktree_path, issue_number),
-                "09_implement.json",
-            )
+        s9_json = step_json_outputs.get("9")
         if _valid_step_json(9, s9_json):
             extracted_files, files_created, files_modified, direct_edits = (
                 _step9_changed_files_from_json(s9_json)
@@ -2264,10 +2594,8 @@ def run_agentic_change_orchestrator(
             context["files_modified"] = ", ".join(files_modified)
             context["direct_edits"] = ", ".join(direct_edits)
             manual_line = _manual_review_lines_from_json(s9_json)
-            if manual_line:
-                manual_review_json_lines = _dedupe_preserve_order(
-                    [*manual_review_json_lines, *manual_line.splitlines()]
-                )
+            manual_review_json_lines = manual_line.splitlines() if manual_line else []
+            state["manual_review_json_lines"] = manual_review_json_lines
         else:
             extracted_files = _parse_changed_files(s9_out)
             context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", s9_out))
@@ -2284,12 +2612,7 @@ def run_agentic_change_orchestrator(
     
     if "step10_output" in context:
         s10_out = context["step10_output"]
-        s10_json = None
-        if worktree_path and worktree_path.exists():
-            s10_json = _read_step_json(
-                _artifacts_dir_path(worktree_path, issue_number),
-                "10_architecture_update.json",
-            )
+        s10_json = step_json_outputs.get("10")
         arch_files = (
             _step10_changed_files_from_json(s10_json)
             if _valid_step_json(10, s10_json)
@@ -2583,6 +2906,10 @@ def run_agentic_change_orchestrator(
         formatted_prompt = substitute_template_variables(prompt_template, context)
 
         timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
+        decision_json_name = _decision_json_filename(step_num, name)
+        _clear_step_artifacts(artifacts_dir, step_num, name)
+        if decision_json_name:
+            step_json_outputs.pop(str(step_num), None)
         step_success, step_output, step_cost, step_model = run_agentic_task(
             instruction=formatted_prompt,
             cwd=current_work_dir,
@@ -2593,6 +2920,9 @@ def run_agentic_change_orchestrator(
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=reasoning_time,
             steers=_issue_step_steers() or None,
+            before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                artifacts_dir, step_num, name
+            ),
         )
 
         total_cost += step_cost
@@ -2600,7 +2930,6 @@ def run_agentic_change_orchestrator(
         state["total_cost"] = total_cost
         state["model_used"] = model_used
 
-        decision_json_name = _decision_json_filename(step_num, name)
         step_json = (
             _read_step_json(artifacts_dir, decision_json_name)
             if decision_json_name
@@ -2617,6 +2946,7 @@ def run_agentic_change_orchestrator(
                 console.print(
                     f"[yellow]Step {step_num} did not write valid {decision_json_name}; rerunning once before prose fallback.[/yellow]"
                 )
+            _clear_step_artifacts(artifacts_dir, step_num, name)
             retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
                 instruction=formatted_prompt,
                 cwd=current_work_dir,
@@ -2627,6 +2957,9 @@ def run_agentic_change_orchestrator(
                 max_retries=DEFAULT_MAX_RETRIES,
                 reasoning_time=reasoning_time,
                 steers=_issue_step_steers() or None,
+                before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                    artifacts_dir, step_num, name
+                ),
             )
             step_success = retry_success
             step_output = retry_output
@@ -2643,7 +2976,10 @@ def run_agentic_change_orchestrator(
             if initial_step_success:
                 step_success = initial_step_success
                 step_output = initial_step_output
+                _clear_step_artifacts(artifacts_dir, step_num, name)
             step_json = None
+        if decision_json_name and _valid_step_json(step_num, step_json):
+            step_json_outputs[str(step_num)] = step_json
 
         if not step_success:
             # Track consecutive provider failures for early abort
@@ -2772,7 +3108,15 @@ def run_agentic_change_orchestrator(
                 except Exception as _exc:
                     console.print(f"[yellow]Warning: failed to post step comment for step {step_num}: {_exc}[/yellow]")
                 state["step_comments"] = sorted(step_comments_set)
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+                clear_workflow_state(
+                    cwd,
+                    issue_number,
+                    "change",
+                    state_dir,
+                    repo_owner,
+                    repo_name,
+                    use_github_state,
+                )
                 clear_agentic_progress()
                 return (
                     True,
@@ -2789,11 +3133,8 @@ def run_agentic_change_orchestrator(
                 context["files_modified"] = ", ".join(files_modified)
                 context["direct_edits"] = ", ".join(direct_edits)
                 manual_line = _manual_review_lines_from_json(step_json)
-                if manual_line:
-                    manual_review_json_lines = _dedupe_preserve_order(
-                        [*manual_review_json_lines, *manual_line.splitlines()]
-                    )
-                    state["manual_review_json_lines"] = manual_review_json_lines
+                manual_review_json_lines = manual_line.splitlines() if manual_line else []
+                state["manual_review_json_lines"] = manual_review_json_lines
             else:
                 extracted_files = _parse_changed_files(step_output)
                 if not extracted_files and re.search(r"\bFAIL:", step_output, re.IGNORECASE):
@@ -3050,8 +3391,12 @@ def run_agentic_change_orchestrator(
             s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
+            _clear_step_artifacts(artifacts_dir, 11, "review")
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                    artifacts_dir, 11, "review"
+                ),
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
             initial_s11_success = s11_success
@@ -3060,8 +3405,12 @@ def run_agentic_change_orchestrator(
             if s11_expects_artifacts and not _valid_step_json(11, s11_json):
                 if not quiet:
                     console.print("[yellow]Step 11 did not write valid 11_review.json; rerunning once before prose fallback.[/yellow]")
+                _clear_step_artifacts(artifacts_dir, 11, "review")
                 s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
                     instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                    before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                        artifacts_dir, 11, "review"
+                    ),
                 )
                 total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
                 s11_json = _read_step_json(artifacts_dir, "11_review.json")
@@ -3071,13 +3420,16 @@ def run_agentic_change_orchestrator(
                 if initial_s11_success:
                     s11_success = initial_s11_success
                     s11_output = initial_s11_output
+                    _clear_step_artifacts(artifacts_dir, 11, "review")
                 s11_json = None
             s11_manual = _manual_review_lines_from_json(s11_json)
+            if not s11_manual and s11_json is None:
+                s11_manual = _collect_manual_review_lines(s11_output)
             if s11_manual:
-                manual_review_json_lines = _dedupe_preserve_order(
-                    [*manual_review_json_lines, *s11_manual.splitlines()]
+                review_manual_review_json_lines = _dedupe_preserve_order(
+                    [*review_manual_review_json_lines, *s11_manual.splitlines()]
                 )
-                state["manual_review_json_lines"] = manual_review_json_lines
+                state["review_manual_review_json_lines"] = review_manual_review_json_lines
             # Trusted post for Step 11 (iteration-keyed: iter * 100 + 11)
             if s11_success:
                 try:
@@ -3122,8 +3474,12 @@ def run_agentic_change_orchestrator(
             s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
+            _clear_step_artifacts(artifacts_dir, 12, "fix")
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                 instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                    artifacts_dir, 12, "fix"
+                ),
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             initial_s12_success = s12_success
@@ -3132,8 +3488,12 @@ def run_agentic_change_orchestrator(
             if s12_expects_artifacts and not _valid_step_json(12, s12_json):
                 if not quiet:
                     console.print("[yellow]Step 12 did not write valid 12_fix.json; rerunning once before prose fallback.[/yellow]")
+                _clear_step_artifacts(artifacts_dir, 12, "fix")
                 s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
                     instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+                    before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                        artifacts_dir, 12, "fix"
+                    ),
                 )
                 total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
                 s12_json = _read_step_json(artifacts_dir, "12_fix.json")
@@ -3143,13 +3503,16 @@ def run_agentic_change_orchestrator(
                 if initial_s12_success:
                     s12_success = initial_s12_success
                     s12_output = initial_s12_output
+                    _clear_step_artifacts(artifacts_dir, 12, "fix")
                 s12_json = None
             s12_manual = _manual_review_lines_from_json(s12_json)
+            if not s12_manual and s12_json is None:
+                s12_manual = _collect_manual_review_lines(s12_output)
             if s12_manual:
-                manual_review_json_lines = _dedupe_preserve_order(
-                    [*manual_review_json_lines, *s12_manual.splitlines()]
+                review_manual_review_json_lines = _dedupe_preserve_order(
+                    [*review_manual_review_json_lines, *s12_manual.splitlines()]
                 )
-                state["manual_review_json_lines"] = manual_review_json_lines
+                state["review_manual_review_json_lines"] = review_manual_review_json_lines
             # Trusted post for Step 12 (iteration-keyed: iter * 100 + 12)
             if s12_success:
                 try:
@@ -3364,17 +3727,15 @@ def run_agentic_change_orchestrator(
         context["impacted_tests"] = "No impacted test files identified"
 
     if last_completed_step < 13:
-        # Aggregate MANUAL_REVIEW lines from Step 9 and the review-loop
-        # iterations (Step 12 outputs are concatenated into `previous_fixes`).
+        # Aggregate MANUAL_REVIEW lines from accepted JSON-derived state.
+        # Do not rescan raw Step 9 prose or previous_fixes here: those strings
+        # can contain stale lines from attempts whose JSON was superseded.
         # Step 10's ASSOCIATED_DOCS_CONFLICTS bucket is also funneled here:
         # the verifier treats those entries as "handled" (no silent drop),
         # but the spec calls them "left for human", so each conflict path
         # must surface as a MANUAL_REVIEW line in the PR body.
         s10_out = context.get("step10_output", "") or ""
-        s10_json = _read_step_json(
-            _artifacts_dir_path(gate_worktree, issue_number),
-            "10_architecture_update.json",
-        )
+        s10_json = step_json_outputs.get("10")
         s10_conflict_paths = (
             _json_list(s10_json, "associated_docs_conflicts")
             if _valid_step_json(10, s10_json)
@@ -3384,11 +3745,16 @@ def run_agentic_change_orchestrator(
             f"MANUAL_REVIEW: {p} — Step 10 ASSOCIATED_DOCS_CONFLICTS, manual edit needed"
             for p in s10_conflict_paths
         )
+        step9_manual_review_source = (
+            ""
+            if _valid_step_json(9, step_json_outputs.get("9"))
+            else (context.get("step9_output", "") or "")
+        )
         context["manual_review_lines"] = _collect_manual_review_lines(
-            context.get("step9_output", "") or "",
-            previous_fixes,
+            step9_manual_review_source,
             synthesized_conflict_lines,
             "\n".join(manual_review_json_lines),
+            "\n".join(review_manual_review_json_lines),
         )
         context["clean_restart"] = "true" if effective_clean_restart else "false"
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir
@@ -3411,34 +3777,101 @@ def run_agentic_change_orchestrator(
         s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
+        _clear_step_artifacts(artifacts_dir, 13, "create_pr")
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
             instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+            before_attempt=lambda _provider, _attempt: _clear_step_artifacts(
+                artifacts_dir, 13, "create_pr"
+            ),
+            single_provider_attempt=True,
         )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
         initial_s13_success = s13_success
         initial_s13_output = s13_output
         s13_json = _read_step_json(artifacts_dir, "13_create_pr.json")
-        if s13_expects_artifacts and not _valid_step_json(13, s13_json):
-            if not quiet:
-                console.print("[yellow]Step 13 did not write valid 13_create_pr.json; rerunning once before prose fallback.[/yellow]")
-            s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
-                instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13_json_retry", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
+        initial_s13_status, initial_s13_pr_url = _step13_result_from_json_or_output(
+            None,
+            initial_s13_output,
+        )
+        initial_s13_has_any_pr_url = (
+            initial_s13_success
+            and initial_s13_pr_url != "Unknown"
+        )
+        initial_s13_has_pr_url = (
+            initial_s13_success
+            and _valid_pr_url(initial_s13_pr_url, repo_owner, repo_name)
+        )
+        s13_uses_accepted_json = _valid_step_json(13, s13_json)
+        existing_s13_pr = None
+        if s13_expects_artifacts and not initial_s13_has_any_pr_url and not _valid_step_json(13, s13_json):
+            existing_s13_pr = _open_pr_for_head_branch(
+                repo_owner,
+                repo_name,
+                context["head_branch"],
+                context["base_branch"],
+                current_work_dir,
             )
-            total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
-            s13_json = _read_step_json(artifacts_dir, "13_create_pr.json")
+            if existing_s13_pr:
+                s13_json = {
+                    "status": "pr_updated",
+                    "pr_url": existing_s13_pr["url"],
+                    "pr_number": existing_s13_pr.get("number"),
+                    "summary": "reused existing open PR for head branch",
+                }
+                s13_success = True
+                s13_output = (
+                    f"PR Updated: {existing_s13_pr['url']}\n"
+                    "Recovered existing open PR for this head branch."
+                )
+                s13_uses_accepted_json = False
+        if initial_s13_has_pr_url and not _valid_step_json(13, s13_json):
+            s13_json = {
+                "status": (
+                    initial_s13_status
+                    if initial_s13_status in {"pr_created", "pr_updated"}
+                    else "pr_created"
+                ),
+                "pr_url": initial_s13_pr_url,
+            }
+            s13_uses_accepted_json = False
         if not _valid_step_json(13, s13_json):
             if not quiet and s13_expects_artifacts:
-                console.print("[yellow]Step 13 JSON unavailable after retry; using prose fallback.[/yellow]")
+                console.print("[yellow]Step 13 JSON unavailable; using prose fallback.[/yellow]")
             if initial_s13_success:
                 s13_success = initial_s13_success
                 s13_output = initial_s13_output
+                _clear_step_artifacts(artifacts_dir, 13, "create_pr")
             s13_json = None
-        if not s13_success:
-             post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
-             console.print("[red]Step 13 (PR Creation) failed.[/red]")
-             state["step_comments"] = sorted(step_comments_set)
-             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
-             return False, "PR Creation failed", total_cost, model_used, changed_files
+            s13_uses_accepted_json = False
+        if (
+            not initial_s13_has_any_pr_url
+            and not (
+                isinstance(s13_json, dict)
+                and str(s13_json.get("status", "")).strip() in {"pr_created", "pr_updated"}
+                and _valid_pr_url(s13_json.get("pr_url"), repo_owner, repo_name)
+            )
+        ):
+            recovered_s13_pr = _open_pr_for_head_branch(
+                repo_owner,
+                repo_name,
+                context["head_branch"],
+                context["base_branch"],
+                current_work_dir,
+            )
+            if recovered_s13_pr:
+                s13_json = {
+                    "status": "pr_updated",
+                    "pr_url": recovered_s13_pr["url"],
+                    "pr_number": recovered_s13_pr.get("number"),
+                    "summary": "recovered existing open PR for head branch",
+                }
+                step_json_outputs["13"] = s13_json
+                s13_success = True
+                s13_output = (
+                    f"PR Updated: {recovered_s13_pr['url']}\n"
+                    "Recovered existing open PR for this head branch."
+                )
+                s13_uses_accepted_json = False
         s13_status, pr_url = _step13_result_from_json_or_output(s13_json, s13_output)
         if s13_status == "blocked":
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
@@ -3446,6 +3879,30 @@ def run_agentic_change_orchestrator(
              state["step_comments"] = sorted(step_comments_set)
              save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
              return False, "PR Creation blocked", total_cost, model_used, changed_files
+        if not _valid_pr_url(repo_owner=repo_owner, repo_name=repo_name, value=pr_url):
+             post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
+             console.print("[red]Step 13 (PR Creation) did not return a valid PR URL for this repository.[/red]")
+             state["step_comments"] = sorted(step_comments_set)
+             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+             return False, "PR Creation failed: missing valid PR URL", total_cost, model_used, changed_files
+        if not _pr_url_matches_current_head(
+            repo_owner,
+            repo_name,
+            pr_url,
+            context["head_branch"],
+            context["base_branch"],
+            current_work_dir,
+        ):
+             post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
+             console.print("[red]Step 13 (PR Creation) returned a PR that does not match this branch/head.[/red]")
+             state["step_comments"] = sorted(step_comments_set)
+             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
+             return False, "PR Creation failed: PR does not match current branch", total_cost, model_used, changed_files
+        s13_success = True
+        if _valid_step_json(13, s13_json):
+            step_json_outputs["13"] = s13_json
+        if not s13_uses_accepted_json:
+            _clear_step_artifacts(artifacts_dir, 13, "create_pr")
         # Trusted per-step success comment for Step 13
         try:
             s13_report = _comment_body_from_artifact(

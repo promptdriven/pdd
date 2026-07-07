@@ -59,6 +59,9 @@ literal ``None``, no story was generated and the section must be omitted.
 2. **Create commit**
    - Use a clear commit message referencing the issue
    - Format: `feat: [brief description] (#{issue_number})`
+   - If `git status --porcelain` shows no staged or unstaged changes after
+     staging, do not create an empty commit. Still push the branch in step 3,
+     then continue to the existing-PR check in step 4.
 
 3. **Push branch**
 
@@ -72,20 +75,21 @@ literal ``None``, no story was generated and the section must be omitted.
    git push -u origin {head_branch}
    ```
 
-4. **Create pull request**
+4. **Create or update pull request**
 
-   If `clean_restart` is `true`, an old PR for this branch may still be open. Check first:
+   An open PR for this branch may already exist, especially after a retry or
+   resume. Always check first:
    ```bash
-   gh pr list --head {head_branch} --state open --json number,url
+   gh pr list --repo {repo_owner}/{repo_name} --head {head_branch} --state open --json number,url
    ```
    - If an open PR is found, update it in place (the branch was already force-pushed):
      ```bash
-     gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
+     gh pr edit <number> --repo {repo_owner}/{repo_name} --base {base_branch} --title "feat: [description] (#{issue_number})" --body "..."
      ```
      Record that PR's number and URL as the result; skip `gh pr create`.
    - If no open PR exists, create one:
      ```bash
-     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
+     gh pr create --repo {repo_owner}/{repo_name} --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
      ```
 
    Whether creating or editing, the PR must:
@@ -105,9 +109,11 @@ Push the branch (use `--force-with-lease` if `clean_restart` is `true`), then cr
 update the PR following the logic in step 4 above:
 
 ```bash
-gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
-# OR, if an open PR already exists under clean restart:
-gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
+gh pr list --repo {repo_owner}/{repo_name} --head {head_branch} --state open --json number,url
+# If no open PR exists:
+gh pr create --repo {repo_owner}/{repo_name} --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
+# OR, if an open PR already exists:
+gh pr edit <number> --repo {repo_owner}/{repo_name} --base {base_branch} --title "feat: [description] (#{issue_number})" --body "..."
 ```
 
 After attempting to create or update the PR, return your findings in your final response.

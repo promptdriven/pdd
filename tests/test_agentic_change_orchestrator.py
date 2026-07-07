@@ -21,6 +21,7 @@
 
 import json
 import os
+import re
 import sys
 import subprocess
 from pathlib import Path
@@ -568,7 +569,10 @@ def mock_dependencies(temp_cwd):
          patch("pdd.agentic_change_orchestrator.post_step_comment") as mock_post_comment, \
          patch("pdd.agentic_change_orchestrator.console") as mock_console, \
          patch("pdd.agentic_change_orchestrator.preprocess", side_effect=lambda prompt, **kw: prompt) as mock_preprocess, \
-         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr_candidates", return_value=[]) as mock_check_pr_candidates, \
+         patch("pdd.agentic_change_orchestrator._existing_pr_matches_remote_head", return_value=True) as mock_existing_pr_matches, \
+         patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True) as mock_pr_matches:
 
         # Default mock behaviors
         mock_run.return_value = (True, "Default Agent Output", 0.1, "gpt-4")
@@ -579,10 +583,44 @@ def mock_dependencies(temp_cwd):
         # Default state: No existing state
         mock_load_state.return_value = (None, None)
 
-        # Mock git rev-parse to return the temp_cwd as root
-        # This ensures mkdir operations on the root succeed
-        mock_subprocess.return_value.stdout = str(temp_cwd)
-        mock_subprocess.return_value.returncode = 0
+        head_oid = "a" * 40
+        last_head_branch = {"value": "change/issue-1"}
+
+        def default_subprocess_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = str(temp_cwd)
+            if args[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                result.stdout = str(temp_cwd)
+            elif args[:3] == ["git", "rev-parse", "HEAD"]:
+                result.stdout = f"{head_oid}\n"
+            elif args[:3] == ["git", "ls-remote", "origin"]:
+                ref = args[3] if len(args) > 3 else "refs/heads/change/issue-1"
+                if ref.startswith("refs/heads/"):
+                    last_head_branch["value"] = ref.removeprefix("refs/heads/")
+                result.stdout = f"{head_oid}\t{ref}\n"
+            elif args[:3] == ["gh", "pr", "view"]:
+                repo = args[args.index("--repo") + 1] if "--repo" in args else "owner/repo"
+                pr_number = args[3]
+                cwd = Path(kwargs.get("cwd") or temp_cwd)
+                match = re.search(r"change-issue-(\d+)", str(cwd))
+                head_branch = (
+                    f"change/issue-{match.group(1)}"
+                    if match
+                    else last_head_branch["value"]
+                )
+                result.stdout = json.dumps(
+                    {
+                        "url": f"https://github.com/{repo}/pull/{pr_number}",
+                        "headRefName": head_branch,
+                        "headRefOid": head_oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                )
+            return result
+
+        mock_subprocess.side_effect = default_subprocess_run
 
         # Default: post_step_comment succeeds
         mock_post_comment.return_value = True
@@ -597,6 +635,9 @@ def mock_dependencies(temp_cwd):
             "post_comment": mock_post_comment,
             "console": mock_console,
             "check_pr": mock_check_pr,
+            "check_pr_candidates": mock_check_pr_candidates,
+            "existing_pr_matches": mock_existing_pr_matches,
+            "pr_matches": mock_pr_matches,
         }
 
 # -----------------------------------------------------------------------------
@@ -614,12 +655,18 @@ def test_step13_prompt_uses_resolved_base_branch():
 
 
 def test_json_artifact_readers_are_safe_and_strip_markdown(tmp_path):
-    from pdd.agentic_change_orchestrator import _read_step_json, _read_step_md
+    from pdd.agentic_change_orchestrator import (
+        _clear_step_artifacts,
+        _read_step_json,
+        _read_step_md,
+    )
 
     artifacts = tmp_path / ".pdd" / "change" / "issue-1850"
     artifacts.mkdir(parents=True)
     (artifacts / "valid.json").write_text('{"status": "clean"}', encoding="utf-8")
     (artifacts / "bad.json").write_text("{not json", encoding="utf-8")
+    (artifacts / "11_review.json").write_text('{"status": "clean"}', encoding="utf-8")
+    (artifacts / "11_review.md").write_text("old review", encoding="utf-8")
     (artifacts / "body.md").write_text("\n  Posted body  \n", encoding="utf-8")
     (artifacts / "empty.md").write_text("  \n", encoding="utf-8")
 
@@ -629,6 +676,10 @@ def test_json_artifact_readers_are_safe_and_strip_markdown(tmp_path):
     assert _read_step_md(artifacts, "body.md") == "Posted body"
     assert _read_step_md(artifacts, "empty.md") is None
     assert _read_step_md(artifacts, "missing.md") is None
+    _clear_step_artifacts(artifacts, 11, "review")
+    assert not (artifacts / "11_review.json").exists()
+    assert not (artifacts / "11_review.md").exists()
+    assert (artifacts / "valid.json").exists()
 
 
 def test_artifact_stems_use_review_loop_contract_names():
@@ -647,7 +698,7 @@ def test_hard_stop_from_json_maps_statuses_and_direct_edits(tmp_path):
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
     (artifacts / "01_duplicate.json").write_text(
-        json.dumps({"status": "duplicate", "duplicates": ["#1850"]}),
+        json.dumps({"status": "duplicate", "duplicates": ["#1850"], "questions": []}),
         encoding="utf-8",
     )
     (artifacts / "06_devunits.json").write_text(
@@ -706,6 +757,37 @@ def test_step9_json_changed_files_are_order_preserving_and_manual_review():
         "MANUAL_REVIEW: docs/a.md — schema conflict\n"
         "MANUAL_REVIEW: docs/b.md — human decision needed"
     )
+
+
+def test_step_json_validation_rejects_malformed_list_items():
+    from pdd.agentic_change_orchestrator import _valid_step_json
+
+    assert _valid_step_json(
+        9,
+        {
+            "status": "changed",
+            "files_modified": [123],
+            "files_created": [],
+            "direct_edits": [],
+            "manual_review": [],
+        },
+    ) is False
+    assert _valid_step_json(
+        11,
+        {"status": "issues_found", "manual_review": ["docs/a.md"]},
+    ) is False
+    assert _valid_step_json(
+        13,
+        {"status": "pr_created", "summary": "created"},
+    ) is False
+    assert _valid_step_json(
+        13,
+        {"status": "pr_created", "pr_url": "Unknown"},
+    ) is False
+    assert _valid_step_json(
+        13,
+        {"status": "pr_created", "pr_url": "https://github.com/o/r/pull/1"},
+    ) is True
 
 
 def test_doc_sync_contract_prefers_json_buckets_over_prose():
@@ -779,7 +861,7 @@ def test_invalid_json_reruns_once_before_hard_stop(mock_dependencies, temp_cwd):
             artifacts = temp_cwd / ".pdd" / "change" / "issue-1850"
             artifacts.mkdir(parents=True, exist_ok=True)
             (artifacts / "01_duplicate.json").write_text(
-                json.dumps({"status": "duplicate", "duplicates": ["#1"]}),
+                json.dumps({"status": "duplicate", "duplicates": ["#1"], "questions": []}),
                 encoding="utf-8",
             )
             return (True, "retry wrote json", 0.2, "gpt-4")
@@ -807,6 +889,56 @@ def test_invalid_json_reruns_once_before_hard_stop(mock_dependencies, temp_cwd):
         "step1_json_retry",
     ]
     assert all("steers" in c.kwargs for c in mock_run.call_args_list)
+
+
+def test_invalid_hard_stop_json_falls_back_to_current_prose(
+    mock_dependencies, temp_cwd
+):
+    """Invalid decision JSON must not suppress the current STOP_CONDITION."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step4_clarify_LLM":
+            return "clarify artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    artifacts = temp_cwd / ".pdd" / "change" / "issue-1850"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label in {"step4", "step4_json_retry"}:
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "04_clarify.json").write_text(
+                json.dumps({"status": "unknown_status", "questions": []}),
+                encoding="utf-8",
+            )
+        if label == "step4":
+            return (True, "STOP_CONDITION: Clarification Needed", 0.1, "gpt-4")
+        if label == "step4_json_retry":
+            return (True, "retry still wrote invalid JSON", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Invalid hard stop JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "Stopped at step 4: Clarification needed" in msg
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert labels == ["step1", "step2", "step3", "step4", "step4_json_retry"]
 
 
 def test_step9_json_retry_preserves_initial_prose_fallback(
@@ -924,10 +1056,260 @@ def test_step11_json_retry_preserves_initial_no_issues_prose_fallback(
     assert not any(label and label.startswith("step12") for label in labels)
 
 
+def test_review_loop_ignores_stale_step11_json_from_previous_iteration(
+    mock_dependencies, temp_cwd
+):
+    """A prior valid 11_review.json must not control the next iteration.
+
+    Iteration 1 writes issues_found and runs Step 12. Iteration 2 forgets JSON
+    but reports a clean review in prose. The orchestrator should clear the old
+    JSON, retry once, then fall back to iteration 2's prose and skip Step 12.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        if name == "agentic_change_step12_fix_issues_LLM":
+            return "fix artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def write_review_json(payload):
+        artifacts = (
+            temp_cwd
+            / ".pdd"
+            / "worktrees"
+            / "change-issue-1850"
+            / ".pdd"
+            / "change"
+            / "issue-1850"
+        )
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "11_review.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+    def write_fix_json():
+        artifacts = (
+            temp_cwd
+            / ".pdd"
+            / "worktrees"
+            / "change-issue-1850"
+            / ".pdd"
+            / "change"
+            / "issue-1850"
+        )
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "12_fix.json").write_text(
+            json.dumps({"status": "fixed_issues", "manual_review": []}),
+            encoding="utf-8",
+        )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            write_review_json({"status": "issues_found", "manual_review": []})
+            return (True, "Issues Found", 0.1, "gpt-4")
+        if label == "step12_iter1":
+            write_fix_json()
+            return (True, "Fixed issues", 0.1, "gpt-4")
+        if label == "step11_iter2":
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step11_iter2_json_retry":
+            return (True, "retry still forgot 11_review.json", 0.1, "gpt-4")
+        if label.startswith("step12_iter2"):
+            pytest.fail("Stale iteration-1 11_review.json should not force Step 12")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Stale review JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert success is True, msg
+    assert labels == [
+        "step1",
+        "step2",
+        "step3",
+        "step4",
+        "step5",
+        "step6",
+        "step7",
+        "step8",
+        "step9",
+        "step10",
+        "step11_iter1",
+        "step12_iter1",
+        "step11_iter2",
+        "step11_iter2_json_retry",
+        "step13",
+    ]
+
+
+def test_resumed_step4_ignores_stale_clarification_json(
+    mock_dependencies, temp_cwd
+):
+    """A resumed Step 4 attempt must not reuse the previous stop artifact."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "cached duplicate check",
+                "2": "cached docs check",
+                "3": "cached research",
+            },
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    artifacts = temp_cwd / ".pdd" / "change" / "issue-1850"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "04_clarify.json").write_text(
+        json.dumps({"status": "needs_clarification", "questions": ["old?"]}),
+        encoding="utf-8",
+    )
+    (artifacts / "04_clarify.md").write_text("old stop report", encoding="utf-8")
+
+    def template_side_effect(name):
+        if name == "agentic_change_step4_clarify_LLM":
+            return "clarify artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step4":
+            return (True, "Requirements are clear.", 0.1, "gpt-4")
+        if label == "step4_json_retry":
+            return (True, "retry still forgot 04_clarify.json", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Resume stale clarify JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert success is True, msg
+    assert "step4" in labels
+    assert "step4_json_retry" in labels
+    assert "step5" in labels
+    assert "Stopped at step 4" not in msg
+
+
+def test_internal_provider_retry_clears_step_artifacts(
+    mock_dependencies, temp_cwd
+):
+    """Artifacts from an earlier internal provider attempt must not control the step."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step4_clarify_LLM":
+            return "clarify artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def write_stale_clarify_json(cwd):
+        artifacts = Path(cwd) / ".pdd" / "change" / "issue-1850"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "04_clarify.json").write_text(
+            json.dumps(
+                {
+                    "status": "needs_clarification",
+                    "questions": ["old internal attempt?"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        before_attempt = kwargs.get("before_attempt")
+        if label == "step4":
+            assert before_attempt is not None
+            before_attempt("provider-a", 1)
+            write_stale_clarify_json(kwargs["cwd"])
+            before_attempt("provider-b", 2)
+            return (True, "Requirements are clear.", 0.1, "gpt-4")
+        if label == "step4_json_retry":
+            assert before_attempt is not None
+            before_attempt("provider-a", 1)
+            return (True, "retry still forgot 04_clarify.json", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Internal retry stale artifact",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "Stopped at step 4" not in msg
+
+
 def test_step13_json_retry_preserves_initial_pr_url_prose_fallback(
     mock_dependencies, temp_cwd
 ):
-    """A failed Step 13 JSON repair must not erase a legacy prose PR URL."""
+    """Step 13 must not rerun PR creation when initial prose has a PR URL."""
     mocks = mock_dependencies
     mock_run = mocks["run"]
 
@@ -970,7 +1352,835 @@ def test_step13_json_retry_preserves_initial_pr_url_prose_fallback(
     assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
     labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
     assert labels.count("step13") == 1
-    assert labels.count("step13_json_retry") == 1
+    assert labels.count("step13_json_retry") == 0
+
+
+def test_step13_prose_fallback_does_not_post_retry_markdown(
+    mock_dependencies, temp_cwd
+):
+    """When Step 13 prose has a PR URL, JSON repair must not rerun."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            artifacts = (
+                temp_cwd
+                / ".pdd"
+                / "worktrees"
+                / "change-issue-1850"
+                / ".pdd"
+                / "change"
+                / "issue-1850"
+            )
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "13_create_pr.json").write_text(
+                json.dumps({"status": "not_valid"}),
+                encoding="utf-8",
+            )
+            (artifacts / "13_create_pr.md").write_text(
+                "Retry says PR creation blocked.",
+                encoding="utf-8",
+            )
+            return (True, "retry still forgot valid 13_create_pr.json", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ) as mock_post_once:
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 retry markdown",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert "step13_json_retry" not in labels
+    step13_posts = [
+        c.kwargs["body"]
+        for c in mock_post_once.call_args_list
+        if c.kwargs.get("step_num") == 13
+    ]
+    assert step13_posts
+    assert "Retry says PR creation blocked" not in step13_posts[-1]
+    assert "PR Created: https://github.com/owner/repo/pull/1850" in msg
+
+
+def test_step13_existing_pr_lookup_skips_json_retry(
+    mock_dependencies, temp_cwd
+):
+    """If Step 13 side effects created a PR, don't rerun the side-effect step."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR created but URL omitted", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("Step 13 JSON retry should be skipped when PR lookup succeeds")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._open_pr_for_head_branch",
+        return_value={
+            "number": 1850,
+            "url": "https://github.com/owner/repo/pull/1850",
+        },
+    ) as mock_pr_lookup:
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 existing PR",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+    mock_pr_lookup.assert_called_once()
+
+
+def test_step13_existing_pr_lookup_recovers_failed_agent_result(
+    mock_dependencies, temp_cwd
+):
+    """A discovered exact-head PR is a successful Step 13 result."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (False, "Provider failed after creating PR", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("Step 13 JSON retry should be skipped when PR lookup succeeds")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._open_pr_for_head_branch",
+        return_value={
+            "number": 1850,
+            "url": "https://github.com/owner/repo/pull/1850",
+        },
+    ):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 failed but PR exists",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+
+
+def test_step13_failed_provider_accepts_valid_json_after_pr_validation(
+    mock_dependencies, temp_cwd
+):
+    """A failed provider result can still leave a valid, verifiable PR JSON."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            artifacts = Path(kwargs["cwd"]) / ".pdd" / "change" / "issue-1850"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "13_create_pr.json").write_text(
+                json.dumps(
+                    {
+                        "status": "pr_created",
+                        "pr_url": "https://github.com/owner/repo/pull/1850",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return (False, "Provider failed after creating PR", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("Step 13 JSON retry should be skipped")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 13 failed provider valid JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+
+
+def test_step13_recovery_does_not_post_stale_markdown(
+    mock_dependencies, temp_cwd
+):
+    """Recovered Step 13 success must post synthesized output, not stale MD."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            artifacts = Path(kwargs["cwd"]) / ".pdd" / "change" / "issue-1850"
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "13_create_pr.md").write_text(
+                "STALE FAILED MARKDOWN",
+                encoding="utf-8",
+            )
+            return (False, "Provider failed after creating PR", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("Step 13 JSON retry should be skipped")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+    posted_bodies = []
+
+    with patch(
+        "pdd.agentic_change_orchestrator._open_pr_for_head_branch",
+        return_value={
+            "number": 1850,
+            "url": "https://github.com/owner/repo/pull/1850",
+        },
+    ), patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        side_effect=lambda **kwargs: posted_bodies.append(kwargs["body"]) or True,
+    ):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 recovered stale markdown",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    assert posted_bodies
+    assert "STALE FAILED MARKDOWN" not in posted_bodies[-1]
+    recovered_artifact = (
+        temp_cwd
+        / ".pdd"
+        / "worktrees"
+        / "change-issue-1850"
+        / ".pdd"
+        / "change"
+        / "issue-1850"
+        / "13_create_pr.md"
+    )
+    assert not recovered_artifact.exists()
+
+
+def test_pr_url_matches_current_head_rejects_closed_pr(temp_cwd):
+    from pdd.agentic_change_orchestrator import _pr_url_matches_current_head
+
+    oid = "a" * 40
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "view"]:
+            result.stdout = json.dumps(
+                {
+                    "url": "https://github.com/owner/repo/pull/1850",
+                    "headRefName": "change/issue-1850",
+                    "headRefOid": oid,
+                    "baseRefName": "main",
+                    "state": "CLOSED",
+                }
+            )
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert (
+            _pr_url_matches_current_head(
+                "owner",
+                "repo",
+                "https://github.com/owner/repo/pull/1850",
+                "change/issue-1850",
+                "main",
+                temp_cwd,
+            )
+            is False
+        )
+
+
+def test_open_pr_for_head_branch_requires_current_remote_head(temp_cwd):
+    from pdd.agentic_change_orchestrator import _open_pr_for_head_branch
+
+    local_oid = "a" * 40
+    stale_oid = "b" * 40
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{local_oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{stale_oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "list"]:
+            result.stdout = json.dumps(
+                [
+                    {
+                        "number": 1850,
+                        "url": "https://github.com/owner/repo/pull/1850",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": stale_oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                ]
+            )
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert (
+            _open_pr_for_head_branch(
+                "owner", "repo", "change/issue-1850", "main", temp_cwd
+            )
+            is None
+        )
+
+
+def test_open_pr_for_head_branch_rejects_wrong_repo_url(temp_cwd):
+    from pdd.agentic_change_orchestrator import _open_pr_for_head_branch
+
+    oid = "a" * 40
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "list"]:
+            result.stdout = json.dumps(
+                [
+                    {
+                        "number": 1850,
+                        "url": "https://github.com/other/repo/pull/1850",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                ]
+            )
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert (
+            _open_pr_for_head_branch(
+                "owner", "repo", "change/issue-1850", "main", temp_cwd
+            )
+            is None
+        )
+
+
+def test_open_pr_for_head_branch_skips_invalid_first_candidate(temp_cwd):
+    from pdd.agentic_change_orchestrator import _open_pr_for_head_branch
+
+    oid = "a" * 40
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "list"]:
+            result.stdout = json.dumps(
+                [
+                    {
+                        "number": 1,
+                        "url": "https://github.com/owner/repo/pull/1",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": oid,
+                        "baseRefName": "wrong-base",
+                        "state": "OPEN",
+                    },
+                    {
+                        "number": 2,
+                        "url": "https://github.com/owner/repo/pull/2",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    },
+                ]
+            )
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert _open_pr_for_head_branch(
+            "owner", "repo", "change/issue-1850", "main", temp_cwd
+        )["url"] == "https://github.com/owner/repo/pull/2"
+
+
+def test_open_pr_for_head_branch_scans_later_bounded_candidates(temp_cwd):
+    from pdd.agentic_change_orchestrator import _open_pr_for_head_branch
+
+    oid = "a" * 40
+    seen_args = []
+
+    def fake_run(args, **kwargs):
+        seen_args.append(args)
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "list"]:
+            result.stdout = json.dumps(
+                [
+                    {
+                        "number": i,
+                        "url": f"https://github.com/owner/repo/pull/{i}",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": "b" * 40,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                    for i in range(100)
+                ]
+                + [
+                    {
+                        "number": 101,
+                        "url": "https://github.com/owner/repo/pull/101",
+                        "headRefName": "change/issue-1850",
+                        "headRefOid": oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                ]
+            )
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert _open_pr_for_head_branch(
+            "owner", "repo", "change/issue-1850", "main", temp_cwd
+        )["url"] == "https://github.com/owner/repo/pull/101"
+    pr_list_args = [args for args in seen_args if args[:3] == ["gh", "pr", "list"]][0]
+    assert "--page" not in pr_list_args
+    assert pr_list_args[pr_list_args.index("--limit") + 1] == "1000"
+
+
+@pytest.mark.parametrize(
+    "pr_overrides",
+    [
+        {"headRefOid": ""},
+        {"headRefName": "change/issue-older"},
+        {"state": "CLOSED"},
+    ],
+)
+def test_open_pr_for_head_branch_rejects_unverified_pr_metadata(
+    temp_cwd, pr_overrides
+):
+    from pdd.agentic_change_orchestrator import _open_pr_for_head_branch
+
+    oid = "a" * 40
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{oid}\trefs/heads/change/issue-1850\n"
+        elif args[:3] == ["gh", "pr", "list"]:
+            pr = {
+                "number": 1850,
+                "url": "https://github.com/owner/repo/pull/1850",
+                "headRefName": "change/issue-1850",
+                "headRefOid": oid,
+                "baseRefName": "main",
+                "state": "OPEN",
+            }
+            pr.update(pr_overrides)
+            result.stdout = json.dumps([pr])
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert (
+            _open_pr_for_head_branch(
+                "owner", "repo", "change/issue-1850", "main", temp_cwd
+            )
+            is None
+        )
+
+
+def test_existing_pr_match_uses_remote_head_not_current_checkout(temp_cwd):
+    from pdd.agentic_change_orchestrator import _existing_pr_matches_remote_head
+
+    current_checkout_oid = "b" * 40
+    remote_oid = "a" * 40
+    pr = {
+        "url": "https://github.com/owner/repo/pull/1850",
+        "headRefName": "change/issue-1850-job-deadbeef",
+        "headRefOid": remote_oid,
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+
+    def fake_run(args, **kwargs):
+        result = MagicMock()
+        result.returncode = 0
+        if args[:3] == ["git", "rev-parse", "HEAD"]:
+            result.stdout = f"{current_checkout_oid}\n"
+        elif args[:3] == ["git", "ls-remote", "origin"]:
+            result.stdout = f"{remote_oid}\trefs/heads/change/issue-1850-job-deadbeef\n"
+        else:
+            raise AssertionError(f"unexpected command: {args}")
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        assert _existing_pr_matches_remote_head(
+            "owner", "repo", pr, "main", temp_cwd
+        ) is True
+
+
+def test_existing_pr_guard_skips_stale_candidate_then_accepts_valid_fallback(
+    mock_dependencies, temp_cwd
+):
+    mocks = mock_dependencies
+    stale = {
+        "url": "https://github.com/owner/repo/pull/99",
+        "headRefName": "change/issue-1850",
+        "headRefOid": "",
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    fallback = {
+        "url": "https://github.com/owner/repo/pull/43",
+        "headRefName": "change/issue-1850-job-deadbeef",
+        "headRefOid": "a" * 40,
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    mocks["check_pr_candidates"].return_value = [stale, fallback]
+    mocks["existing_pr_matches"].side_effect = [False, True]
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Existing fallback after stale canonical",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert msg == "PR already exists: https://github.com/owner/repo/pull/43"
+    assert mocks["existing_pr_matches"].call_count == 2
+    mocks["run"].assert_not_called()
+
+
+def test_existing_pr_candidates_scans_later_bounded_candidates(temp_cwd):
+    from pdd.agentic_change_orchestrator import _check_existing_pr_candidates
+
+    seen_args = []
+
+    def fake_run(args, **kwargs):
+        seen_args.append(args)
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = json.dumps(
+            [
+                {
+                    "url": f"https://github.com/owner/repo/pull/{i}",
+                    "headRefName": "change/issue-1850",
+                    "headRefOid": "b" * 40,
+                    "baseRefName": "main",
+                    "state": "OPEN",
+                }
+                for i in range(100)
+            ]
+            + [
+                [
+                    {
+                        "url": "https://github.com/owner/repo/pull/101",
+                        "headRefName": "change/issue-1850-job-deadbeef",
+                        "headRefOid": "a" * 40,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                ]
+            ][0]
+        )
+        return result
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        candidates = _check_existing_pr_candidates("owner", "repo", 1850)
+
+    assert len(candidates) == 101
+    assert candidates[-1]["url"] == "https://github.com/owner/repo/pull/101"
+    pr_list_args = seen_args[0]
+    assert "--page" not in pr_list_args
+    assert pr_list_args[pr_list_args.index("--limit") + 1] == "1000"
+
+
+def test_step13_missing_valid_pr_url_fails(
+    mock_dependencies, temp_cwd
+):
+    """Step 13 must not report success with PR Created: Unknown."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR created but URL omitted", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("Step 13 must not rerun the side-effecting PR prompt")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._open_pr_for_head_branch",
+        return_value=None,
+    ):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 missing URL",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "missing valid PR URL" in msg
+
+
+def test_step13_same_repo_stale_pr_url_fails_final_verification(
+    mock_dependencies, temp_cwd
+):
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("same-repo stale PR URL should not trigger side-effect retry")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._pr_url_matches_current_head",
+        return_value=False,
+    ):
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Step 13 stale PR",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "does not match current branch" in msg
+
+
+def test_step13_wrong_repo_pr_url_fails(mock_dependencies, temp_cwd):
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "create pr artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/other/repo/pull/1850", 0.1, "gpt-4")
+        if label == "step13_json_retry":
+            pytest.fail("wrong-repo prose URL should not trigger side-effect retry")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 13 wrong repo",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is False
+    assert "missing valid PR URL" in msg
 
 
 def test_review_loop_exits_on_clean_json_even_when_prose_says_issues(
@@ -1081,6 +2291,934 @@ def test_step9_no_change_needed_json_stops_successfully_without_pr(
     assert files == []
     assert not any(c.kwargs.get("label") == "step10" for c in mock_run.call_args_list)
     assert not any(c.kwargs.get("label") == "step13" for c in mock_run.call_args_list)
+    mocks["clear_state"].assert_called()
+
+
+def test_resume_step9_ignores_stale_disk_json_when_state_has_only_prose(
+    mock_dependencies, temp_cwd
+):
+    """Resume hydration should not trust unproven JSON files from disk."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-1850"
+    stale_artifacts = worktree_path / ".pdd" / "change" / "issue-1850"
+    stale_artifacts.mkdir(parents=True, exist_ok=True)
+    (stale_artifacts / "09_implement.json").write_text(
+        json.dumps(
+            {
+                "status": "changed",
+                "files_modified": ["prompts/stale_python.prompt"],
+                "files_created": [],
+                "direct_edits": [],
+                "manual_review": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 9,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+            },
+            "worktree_path": str(worktree_path),
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step10_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step10_architecture_update_LLM":
+            return "files to stage: {files_to_stage}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step10":
+            step10_instructions.append(kwargs["instruction"])
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Resume stale Step 9 JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "prompts/current_python.prompt" in files
+    assert "prompts/stale_python.prompt" not in files
+    assert step10_instructions
+    assert "prompts/current_python.prompt" in step10_instructions[0]
+    assert "prompts/stale_python.prompt" not in step10_instructions[0]
+
+
+def test_rerun_decision_step_drops_stale_persisted_json(
+    mock_dependencies, temp_cwd
+):
+    """A rewound step must not keep prior accepted JSON in workflow state."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 8,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FAILED: prior failure",
+            },
+            "step_json_outputs": {
+                "9": {
+                    "status": "changed",
+                    "files_modified": ["prompts/stale_python.prompt"],
+                    "files_created": [],
+                    "direct_edits": [],
+                    "manual_review": [],
+                }
+            },
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    saved_states = []
+
+    def save_side_effect(*args, **kwargs):
+        saved_states.append(args[3])
+        return None
+
+    mocks["save_state"].side_effect = save_side_effect
+
+    def template_side_effect(name):
+        if name == "agentic_change_step9_implement_LLM":
+            return "implement artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step9_json_retry":
+            return (True, "retry still forgot 09_implement.json", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Drop stale state JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "prompts/current_python.prompt" in files
+    assert "prompts/stale_python.prompt" not in files
+    assert saved_states
+    assert "9" not in saved_states[-1].get("step_json_outputs", {})
+
+
+def test_rerun_step9_drops_stale_manual_review_json_lines(
+    mock_dependencies, temp_cwd
+):
+    """Stale denormalized Step 9 manual-review lines must not survive rewind."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 8,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FAILED: prior failure",
+            },
+            "manual_review_json_lines": [
+                "MANUAL_REVIEW: docs/stale.md - stale review"
+            ],
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Drop stale Step 9 manual review",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "docs/stale.md" not in step13_instructions[0]
+
+
+def test_resume_step9_json_replaces_stale_manual_review_json_lines(
+    mock_dependencies, temp_cwd
+):
+    """Accepted Step 9 JSON must be the source of truth for review lines."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 9,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+            },
+            "step_json_outputs": {
+                "9": {
+                    "status": "changed",
+                    "files_modified": ["prompts/current_python.prompt"],
+                    "files_created": [],
+                    "direct_edits": [],
+                    "manual_review": [
+                        {
+                            "path": "docs/current.md",
+                            "reason": "needs human review",
+                        }
+                    ],
+                }
+            },
+            "manual_review_json_lines": [
+                "MANUAL_REVIEW: docs/stale.md - stale review"
+            ],
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Replace stale Step 9 manual review",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "docs/current.md" in step13_instructions[0]
+    assert "docs/stale.md" not in step13_instructions[0]
+
+
+def test_step13_manual_review_ignores_raw_previous_fixes(
+    mock_dependencies, temp_cwd
+):
+    """Step 13 must consume review JSON lines, not stale previous_fixes prose."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 12,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+                "10": "ARCHITECTURE_FILES_MODIFIED: architecture.json",
+                "11": "No Issues Found",
+                "12": "Fixed issues",
+            },
+            "step_json_outputs": {
+                "9": {
+                    "status": "changed",
+                    "files_modified": ["prompts/current_python.prompt"],
+                    "files_created": [],
+                    "direct_edits": [],
+                    "manual_review": [],
+                },
+                "10": {
+                    "status": "updated",
+                    "architecture_files_modified": ["architecture.json"],
+                    "associated_docs_modified": [],
+                    "associated_docs_conflicts": [],
+                    "associated_docs_unchanged": [],
+                },
+            },
+            "previous_fixes": "MANUAL_REVIEW: docs/stale-fix.md - stale",
+            "review_manual_review_json_lines": [
+                "MANUAL_REVIEW: docs/current-review.md — current"
+            ],
+            "worktree_path": str(temp_cwd),
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        if kwargs.get("label") == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {kwargs.get('label', '')}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Ignore previous fixes review lines",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "docs/current-review.md" in step13_instructions[0]
+    assert "docs/stale-fix.md" not in step13_instructions[0]
+
+
+def test_failed_step10_resume_resets_stale_review_loop_state(
+    mock_dependencies, temp_cwd
+):
+    """A rewound Step 10 must not keep maxed review state and skip Step 11."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 12,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+                "10": "FAILED: prior architecture update failed",
+            },
+            "review_iteration": 5,
+            "previous_fixes": "MANUAL_REVIEW: docs/stale-fix.md - stale",
+            "review_manual_review_json_lines": [
+                "MANUAL_REVIEW: docs/stale-review.md - stale"
+            ],
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Reset stale review loop",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    labels = [c.kwargs.get("label") for c in mock_run.call_args_list]
+    assert success is True, msg
+    assert "step11_iter1" in labels
+    assert "step11_iter5" not in labels
+    assert step13_instructions
+    assert "docs/stale-fix.md" not in step13_instructions[0]
+    assert "docs/stale-review.md" not in step13_instructions[0]
+
+
+def test_step13_manual_review_ignores_stale_disk_step10_json(
+    mock_dependencies, temp_cwd
+):
+    """PR manual-review synthesis should not reread unaccepted Step 10 JSON."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-1850"
+    stale_artifacts = worktree_path / ".pdd" / "change" / "issue-1850"
+    stale_artifacts.mkdir(parents=True, exist_ok=True)
+    (stale_artifacts / "10_architecture_update.json").write_text(
+        json.dumps(
+            {
+                "architecture_files_modified": [],
+                "associated_docs_modified": [],
+                "associated_docs_conflicts": ["docs/stale.md"],
+                "associated_docs_unchanged": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 10,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+                "10": "ASSOCIATED_DOCS_CONFLICTS: docs/current.md",
+            },
+            "worktree_path": str(worktree_path),
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 10 stale disk JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "docs/current.md" in step13_instructions[0]
+    assert "docs/stale.md" not in step13_instructions[0]
+
+
+def test_resume_prunes_stale_state_json_for_failed_step10(
+    mock_dependencies, temp_cwd
+):
+    """Accepted JSON beyond the corrected resume point must not hydrate."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    worktree_path = temp_cwd / ".pdd" / "worktrees" / "change-issue-1850"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 10,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 9)},
+                "9": "FILES_MODIFIED: prompts/current_python.prompt",
+                "10": "FAILED: stale Step 10 failure",
+            },
+            "step_json_outputs": {
+                "10": {
+                    "architecture_files_modified": ["docs/stale.md"],
+                    "associated_docs_modified": ["docs/stale.md"],
+                    "associated_docs_conflicts": [],
+                    "associated_docs_unchanged": [],
+                }
+            },
+            "worktree_path": str(worktree_path),
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    step13_instructions = []
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "files: {files_to_stage}\nmanual: {manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Prune failed Step 10 JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert "docs/stale.md" not in files
+    assert step13_instructions
+    assert "docs/stale.md" not in step13_instructions[0]
+
+
+def test_review_loop_manual_review_lines_survive_later_clean_iteration(
+    mock_dependencies, temp_cwd
+):
+    """Manual-review lines emitted during review remain in the PR context."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        if name == "agentic_change_step12_fix_issues_LLM":
+            return "fix artifacts: {artifacts_dir}"
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    step13_instructions = []
+
+    def artifacts_for(cwd):
+        return Path(cwd) / ".pdd" / "change" / "issue-1850"
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        artifacts = artifacts_for(kwargs["cwd"])
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "11_review.json").write_text(
+                json.dumps(
+                    {
+                        "status": "issues_found",
+                        "manual_review": [
+                            {"path": "docs/a.md", "reason": "needs human check"}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return (True, "Issues Found", 0.1, "gpt-4")
+        if label == "step12_iter1":
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "12_fix.json").write_text(
+                json.dumps({"status": "fixed_issues", "manual_review": []}),
+                encoding="utf-8",
+            )
+            return (True, "Fixed issues", 0.1, "gpt-4")
+        if label == "step11_iter2":
+            artifacts.mkdir(parents=True, exist_ok=True)
+            (artifacts / "11_review.json").write_text(
+                json.dumps({"status": "clean", "manual_review": []}),
+                encoding="utf-8",
+            )
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Review manual review",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "MANUAL_REVIEW: docs/a.md" in step13_instructions[0]
+
+
+def test_step11_prose_fallback_manual_review_reaches_step13(
+    mock_dependencies, temp_cwd
+):
+    """Step 11 prose MANUAL_REVIEW markers survive JSON fallback."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    step13_instructions = []
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            return (
+                True,
+                "No Issues Found\nMANUAL_REVIEW: docs/prose.md - check manually",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step11_iter1_json_retry":
+            return (True, "retry still forgot 11_review.json", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 11 prose manual review",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "MANUAL_REVIEW: docs/prose.md" in step13_instructions[0]
+
+
+def test_step12_prose_fallback_manual_review_reaches_step13(
+    mock_dependencies, temp_cwd
+):
+    """Step 12 prose MANUAL_REVIEW markers survive JSON fallback."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        if name == "agentic_change_step12_fix_issues_LLM":
+            return "fix artifacts: {artifacts_dir}"
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    step13_instructions = []
+
+    def write_review_json(cwd, payload):
+        artifacts = Path(cwd) / ".pdd" / "change" / "issue-1850"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "11_review.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            write_review_json(kwargs["cwd"], {"status": "issues_found", "manual_review": []})
+            return (True, "Issues Found", 0.1, "gpt-4")
+        if label == "step12_iter1":
+            return (
+                True,
+                "Fixed issues\nMANUAL_REVIEW: docs/step12.md - check manually",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step12_iter1_json_retry":
+            return (True, "retry still forgot 12_fix.json", 0.1, "gpt-4")
+        if label == "step11_iter2":
+            write_review_json(kwargs["cwd"], {"status": "clean", "manual_review": []})
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Step 12 prose manual review",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "MANUAL_REVIEW: docs/step12.md" in step13_instructions[0]
+
+
+def test_partial_step11_json_collects_prose_manual_review_fallback(
+    mock_dependencies, temp_cwd
+):
+    """Partial Step 11 JSON must be invalid so prose review lines survive."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step11_identify_issues_LLM":
+            return "review artifacts: {artifacts_dir}"
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "manual review:\n{manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    step13_instructions = []
+
+    def write_partial_review_json(cwd):
+        artifacts = Path(cwd) / ".pdd" / "change" / "issue-1850"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "11_review.json").write_text(
+            json.dumps({"status": "clean"}),
+            encoding="utf-8",
+        )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label == "step11_iter1":
+            write_partial_review_json(kwargs["cwd"])
+            return (
+                True,
+                "No Issues Found\nMANUAL_REVIEW: docs/partial.md - check manually",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step11_iter1_json_retry":
+            write_partial_review_json(kwargs["cwd"])
+            return (True, "retry still wrote partial JSON", 0.1, "gpt-4")
+        if label == "step13":
+            step13_instructions.append(kwargs["instruction"])
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="Fix bug",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Partial Step 11 JSON",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert step13_instructions
+    assert "MANUAL_REVIEW: docs/partial.md" in step13_instructions[0]
+
+
+def test_rerun_non_decision_step_does_not_post_stale_markdown(
+    mock_dependencies, temp_cwd
+):
+    """Non-decision step comments should use current output if MD is absent."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 4,
+            "step_outputs": {
+                **{str(i): f"cached step{i}" for i in range(1, 5)},
+                "5": "FAILED: prior failure",
+            },
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+    artifacts = temp_cwd / ".pdd" / "change" / "issue-1850"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    (artifacts / "05_docs_change.md").write_text(
+        "Old Step 5 report",
+        encoding="utf-8",
+    )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step5":
+            return (
+                True,
+                "<step_report>Current Step 5 report</step_report>",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/current_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.post_step_comment_once",
+        return_value=True,
+    ) as mock_post_once:
+        success, msg, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Stale non-decision markdown",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    step5_posts = [
+        c.kwargs["body"]
+        for c in mock_post_once.call_args_list
+        if c.kwargs.get("step_num") == 5
+    ]
+    assert step5_posts
+    assert "Current Step 5 report" in step5_posts[-1]
+    assert "Old Step 5 report" not in step5_posts[-1]
 
 
 def test_orchestrator_happy_path(mock_dependencies, temp_cwd):
@@ -1354,7 +3492,7 @@ def test_orchestrator_resume_from_state(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -1527,7 +3665,7 @@ def test_orchestrator_review_loop_logic(mock_dependencies, temp_cwd):
         elif label.startswith("step12"):
             return (True, "Fixed style", 0.1, "gpt-4")
         elif label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -1567,7 +3705,7 @@ def test_orchestrator_review_loop_max_iterations(mock_dependencies, temp_cwd):
         elif label.startswith("step12"):
             return (True, "Attempted fix", 0.1, "gpt-4")
         elif label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -2250,14 +4388,52 @@ def mock_dependencies_dict():
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
          patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
-         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr_candidates", return_value=[]) as mock_check_pr_candidates, \
+         patch("pdd.agentic_change_orchestrator._existing_pr_matches_remote_head", return_value=True) as mock_existing_pr_matches, \
+         patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True) as mock_pr_matches:
 
         mock_load.return_value = (None, None)
         mock_save.return_value = 12345
         mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
-        # Mock subprocess to return a valid path for git root
-        mock_subprocess.return_value.stdout = "/tmp/git/root"
-        mock_subprocess.return_value.returncode = 0
+        head_oid = "a" * 40
+        last_head_branch = {"value": "change/issue-1"}
+
+        def default_subprocess_run(args, **kwargs):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "/tmp/git/root"
+            if args[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                result.stdout = "/tmp/git/root"
+            elif args[:3] == ["git", "rev-parse", "HEAD"]:
+                result.stdout = f"{head_oid}\n"
+            elif args[:3] == ["git", "ls-remote", "origin"]:
+                ref = args[3] if len(args) > 3 else "refs/heads/change/issue-1"
+                if ref.startswith("refs/heads/"):
+                    last_head_branch["value"] = ref.removeprefix("refs/heads/")
+                result.stdout = f"{head_oid}\t{ref}\n"
+            elif args[:3] == ["gh", "pr", "view"]:
+                repo = args[args.index("--repo") + 1] if "--repo" in args else "owner/repo"
+                pr_number = args[3]
+                cwd = Path(kwargs.get("cwd") or "/tmp/git/root")
+                match = re.search(r"change-issue-(\d+)", str(cwd))
+                head_branch = (
+                    f"change/issue-{match.group(1)}"
+                    if match
+                    else last_head_branch["value"]
+                )
+                result.stdout = json.dumps(
+                    {
+                        "url": f"https://github.com/{repo}/pull/{pr_number}",
+                        "headRefName": head_branch,
+                        "headRefOid": head_oid,
+                        "baseRefName": "main",
+                        "state": "OPEN",
+                    }
+                )
+            return result
+
+        mock_subprocess.side_effect = default_subprocess_run
         mock_topo_sort.return_value = ([], [])
         mock_get_affected.return_value = []
 
@@ -2273,6 +4449,9 @@ def mock_dependencies_dict():
             "get_affected": mock_get_affected,
             "gen_script": mock_gen_script,
             "check_pr": mock_check_pr,
+            "check_pr_candidates": mock_check_pr_candidates,
+            "existing_pr_matches": mock_existing_pr_matches,
+            "pr_matches": mock_pr_matches,
         }
 
 def test_happy_path_full_execution(mock_dependencies_dict, tmp_path):
@@ -2315,6 +4494,7 @@ def test_resumption_from_state_dict(mock_dependencies_dict, tmp_path):
         if "step9" in label: return True, "FILES_MODIFIED: mod.py", 0.1, "gpt-4"
         if "step10" in label: return True, "Arch updated", 0.1, "gpt-4"
         if "step11" in label: return True, "No Issues Found", 0.1, "gpt-4"
+        if "step13" in label: return True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4"
         return True, "ok", 0.1, "gpt-4"
     mocks["run"].side_effect = side_effect_run
     
@@ -2333,7 +4513,7 @@ def test_review_loop_logic_dict(mock_dependencies_dict, tmp_path):
     existing_state = {"last_completed_step": 10, "step_outputs": {str(i): "out" for i in range(1, 11)}, "worktree_path": str(tmp_path / "wt")}
     existing_state["step_outputs"]["9"] = "FILES_CREATED: foo.py"
     mocks["load"].return_value = (existing_state, 123)
-    responses = [(True, "Issues found: syntax error", 0.1, "gpt-4"), (True, "Fixed syntax error", 0.1, "gpt-4"), (True, "No Issues Found", 0.1, "gpt-4"), (True, "PR Created", 0.1, "gpt-4")]
+    responses = [(True, "Issues found: syntax error", 0.1, "gpt-4"), (True, "Fixed syntax error", 0.1, "gpt-4"), (True, "No Issues Found", 0.1, "gpt-4"), (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")]
     mocks["run"].side_effect = responses
     with patch("pathlib.Path.exists", return_value=True):
         success, msg, cost, model, files = run_agentic_change_orchestrator(issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", repo_name="repo", issue_number=1, issue_author="me", issue_title="Bug Fix", cwd=tmp_path, quiet=True)
@@ -2367,6 +4547,7 @@ def test_file_parsing_step9_and_10_dict(mock_dependencies_dict, tmp_path):
         if "step9" in label: return True, "FILES_CREATED: new.py\nFILES_MODIFIED: existing.py", 0.1, "gpt-4"
         if "step10" in label: return True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4"
         if "step11" in label: return True, "No Issues Found", 0.1, "gpt-4"
+        if "step13" in label: return True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4"
         return True, "ok", 0.1, "gpt-4"
     mocks["run"].side_effect = side_effect_run
     mocks["subprocess"].return_value.stdout = str(tmp_path)
@@ -2399,7 +4580,7 @@ def test_sync_order_generation_dict(mock_dependencies_dict, tmp_path):
     
     mocks["get_affected"].return_value = ["foo", "bar"]
     mocks["gen_script"].return_value = "echo sync"
-    mocks["run"].return_value = (True, "PR Created", 0.1, "gpt-4")
+    mocks["run"].return_value = (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
     
     run_agentic_change_orchestrator(
         issue_url="http://issue", issue_content="Fix bug", repo_owner="owner", 
@@ -2580,7 +4761,7 @@ def test_orchestrator_uses_defaults_when_no_pddrc(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -2663,7 +4844,10 @@ def mock_dependencies_v2():
          patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
          patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_affected, \
          patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
-         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr:
+         patch("pdd.agentic_change_orchestrator._check_existing_pr", return_value=None) as mock_check_pr, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr_candidates", return_value=[]) as mock_check_pr_candidates, \
+         patch("pdd.agentic_change_orchestrator._existing_pr_matches_remote_head", return_value=True) as mock_existing_pr_matches, \
+         patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True) as mock_pr_matches:
 
         # Default behaviors
         mock_load.return_value = (None, None) # No existing state
@@ -2685,6 +4869,9 @@ def mock_dependencies_v2():
             "subprocess": mock_subprocess,
             "build_graph": mock_build_graph,
             "check_pr": mock_check_pr,
+            "check_pr_candidates": mock_check_pr_candidates,
+            "existing_pr_matches": mock_existing_pr_matches,
+            "pr_matches": mock_pr_matches,
         }
 
 def test_happy_path_full_run(mock_dependencies_v2, tmp_path):
@@ -2742,6 +4929,8 @@ def test_resumption_from_state(mock_dependencies_v2, tmp_path):
             return (True, "FILES_MODIFIED: file1.py", 0.5, "gpt-4")
         if "step11" in label:
             return (True, "No Issues Found", 0.1, "gpt-4")
+        if "step13" in label:
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
     mocks["run"].side_effect = side_effect_run
 
@@ -2829,7 +5018,7 @@ def test_review_loop_logic(mock_dependencies_v2, tmp_path):
         if label == "step11_iter2":
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "Unexpected", 0.0, "gpt-4")
         
     mocks["run"].side_effect = side_effect_run
@@ -2885,6 +5074,8 @@ def test_file_parsing_step_9_10(mock_dependencies_v2, tmp_path):
             return (True, "ARCHITECTURE_FILES_MODIFIED: docs/arch.md", 0.1, "gpt-4")
         if "step11" in label:
             return (True, "No Issues Found", 0.1, "gpt-4")
+        if "step13" in label:
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
         
     mocks["run"].side_effect = side_effect_run
@@ -3149,6 +5340,83 @@ def test_resume_to_step9_rehydrates_direct_edit_candidates_for_fallback(
     )
 
 
+def test_partial_step6_json_uses_direct_edit_prose_fallback(
+    mock_dependencies, temp_cwd
+):
+    """Partial Step 6 JSON must not suppress direct-edit prose parsing."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step6_devunits_LLM":
+            return "devunits artifacts: {artifacts_dir}"
+        return "Mocked Prompt Template"
+
+    mocks["template_loader"].side_effect = template_side_effect
+
+    def write_partial_step6_json(cwd):
+        artifacts = Path(cwd) / ".pdd" / "change" / "issue-1850"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "06_devunits.json").write_text(
+            json.dumps({"status": "proceed"}),
+            encoding="utf-8",
+        )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step6":
+            write_partial_step6_json(kwargs["cwd"])
+            return (
+                True,
+                "### Direct Edit Candidates (No Prompt)\n"
+                "| File | Edit Type | Description |\n"
+                "|------|-----------|-------------|\n"
+                "| `lib/agent-api/auth.ts` | logic fix | Remove allowlist gate |\n",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step6_json_retry":
+            write_partial_step6_json(kwargs["cwd"])
+            return (True, "retry still wrote partial JSON", 0.1, "gpt-4")
+        if label == "step9":
+            return (True, "Applied direct edit.", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    observed_candidates = []
+
+    def fake_detect(worktree_path, direct_edit_candidates=None):
+        observed_candidates.extend(direct_edit_candidates or [])
+        return ["lib/agent-api/auth.ts"]
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._detect_worktree_changes",
+        side_effect=fake_detect,
+    ):
+        success, msg, _, _, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="Fix bug",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1850,
+            issue_author="me",
+            issue_title="Partial Step 6 JSON",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True, msg
+    assert observed_candidates == ["lib/agent-api/auth.ts"]
+    assert "lib/agent-api/auth.ts" in files
+
+
 def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
     """
     When step 9 fails (no files from either regex or worktree fallback),
@@ -3235,7 +5503,7 @@ def test_stale_state_detection_clears_and_restarts(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/test/repo/pull/123", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/123", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -3302,7 +5570,7 @@ def test_valid_resume_when_issue_unchanged(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/test/repo/pull/456", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/456", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -3390,7 +5658,7 @@ def test_bot_only_updated_at_drift_resumes_without_clearing(mock_dependencies, t
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/test/repo/pull/789", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/789", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -3455,7 +5723,7 @@ def test_backward_compat_state_without_issue_updated_at(mock_dependencies, temp_
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/test/repo/pull/789", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/789", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -3508,7 +5776,7 @@ def test_persisted_clean_restart_resume_still_detects_stale_state(mock_dependenc
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, f"ok {label}", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect_run
@@ -3582,7 +5850,7 @@ def test_stale_detect_after_persisted_clean_restart_preserves_flag(mock_dependen
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created https://github.com/o/r/pull/1", 0.1, "gpt-4")
+            return (True, "PR Created https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, f"ok {label}", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect_run
@@ -3817,7 +6085,7 @@ This output has various curly brace patterns:
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -4152,17 +6420,20 @@ def test_clean_restart_fallback_fetches_own_lease_ref_for_force_with_lease(tmp_p
 def _render_change_pr_prompt(head_branch):
     """Render the Step 13 PR prompt the way the orchestrator does, with a
     minimal context exercising ``head_branch`` and ``base_branch``."""
-    from pdd.load_prompt_template import load_prompt_template
     from pdd.preprocess import preprocess
     from pdd.agentic_common import substitute_template_variables
 
     context = {
         "issue_number": "1596",
+        "repo_owner": "owner",
+        "repo_name": "repo",
         "base_branch": "main",
         "head_branch": head_branch,
         "clean_restart": "true",
     }
-    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    template = Path("pdd/prompts/agentic_change_step13_create_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
     template = preprocess(template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))
     return substitute_template_variables(template, context)
 
@@ -4173,7 +6444,7 @@ def test_step13_prompt_head_branch_non_fallback_preserves_canonical():
     rendered = _render_change_pr_prompt("change/issue-1596")
     assert "git push --force-with-lease -u origin change/issue-1596" in rendered
     assert "git push -u origin change/issue-1596" in rendered
-    assert "gh pr list --head change/issue-1596" in rendered
+    assert "gh pr list --repo owner/repo --head change/issue-1596" in rendered
     assert "--head change/issue-1596" in rendered
 
 
@@ -4183,7 +6454,7 @@ def test_step13_prompt_head_branch_fallback_uses_fallback_branch():
     positions (issue links #N may still appear)."""
     rendered = _render_change_pr_prompt("change/issue-1596-job-deadbeef")
     assert "git push --force-with-lease -u origin change/issue-1596-job-deadbeef" in rendered
-    assert "gh pr list --head change/issue-1596-job-deadbeef" in rendered
+    assert "gh pr list --repo owner/repo --head change/issue-1596-job-deadbeef" in rendered
     assert "--head change/issue-1596-job-deadbeef" in rendered
     # Bare canonical branch token (boundary-checked) must not survive.
     assert "origin change/issue-1596\n" not in rendered
@@ -4201,7 +6472,9 @@ def test_step13_prompt_uses_head_branch_for_push_and_pr():
     )
     assert "git push --force-with-lease -u origin {head_branch}" in prompt
     assert "git push -u origin {head_branch}" in prompt
-    assert "gh pr list --head {head_branch}" in prompt
+    assert "gh pr list --repo {repo_owner}/{repo_name} --head {head_branch}" in prompt
+    assert "gh pr create --repo {repo_owner}/{repo_name}" in prompt
+    assert "gh pr edit <number> --repo {repo_owner}/{repo_name} --base {base_branch}" in prompt
     assert "--head {head_branch}" in prompt
     # No remaining hardcoded branch token; only issue links / titles may use it.
     assert "origin change/issue-{issue_number}" not in prompt
@@ -4636,9 +6909,16 @@ def test_orchestrator_returns_early_when_pr_exists(mock_dependencies, temp_cwd):
     """Orchestrator returns early without running any steps when PR already exists."""
     mocks = mock_dependencies
     mock_run = mocks["run"]
-    mock_check_pr = mocks["check_pr"]
+    mock_check_pr_candidates = mocks["check_pr_candidates"]
 
-    mock_check_pr.return_value = "https://github.com/owner/repo/pull/99"
+    existing_pr_candidate = {
+        "url": "https://github.com/owner/repo/pull/99",
+        "headRefName": "change/issue-756",
+        "headRefOid": "a" * 40,
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    mock_check_pr_candidates.return_value = [existing_pr_candidate]
 
     success, msg, cost, model, files = run_agentic_change_orchestrator(
         issue_url="http://url",
@@ -4658,6 +6938,154 @@ def test_orchestrator_returns_early_when_pr_exists(mock_dependencies, temp_cwd):
     assert cost == 0.0
     # No steps should have been executed
     mock_run.assert_not_called()
+
+
+def test_existing_pr_guard_does_not_return_unverified_pr(
+    mock_dependencies, temp_cwd
+):
+    """An existing PR must pass exact validation before early success."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    stale_candidate = {
+        "url": "https://github.com/owner/repo/pull/99",
+        "headRefName": "change/issue-1850",
+        "headRefOid": "",
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    mocks["check_pr_candidates"].return_value = [stale_candidate]
+    mocks["existing_pr_matches"].return_value = False
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Existing PR stale metadata",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+    assert mock_run.called
+
+
+def test_existing_pr_guard_accepts_verified_fallback_branch(
+    mock_dependencies, temp_cwd
+):
+    """Verified clean-restart fallback PRs still prevent duplicate PRs."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    fallback_pr = {
+        "url": "https://github.com/owner/repo/pull/43",
+        "headRefName": "change/issue-1850-job-deadbeef",
+        "headRefOid": "a" * 40,
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    mocks["check_pr_candidates"].return_value = [fallback_pr]
+    mocks["existing_pr_matches"].return_value = True
+
+    success, msg, cost, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Existing fallback PR",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True
+    assert msg == "PR already exists: https://github.com/owner/repo/pull/43"
+    assert cost == 0.0
+    mocks["existing_pr_matches"].assert_called_once()
+    mock_run.assert_not_called()
+
+
+def test_existing_pr_guard_resume_rejects_stale_pr_before_early_return(
+    mock_dependencies, temp_cwd
+):
+    """Resume state must not let the old PR guard bypass exact PR validation."""
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_check_pr_candidates = mocks["check_pr_candidates"]
+    mock_existing_pr_matches = mocks["existing_pr_matches"]
+
+    stale_candidate = {
+        "url": "https://github.com/owner/repo/pull/99",
+        "headRefName": "change/issue-1850",
+        "headRefOid": "",
+        "baseRefName": "main",
+        "state": "OPEN",
+    }
+    mock_check_pr_candidates.return_value = [stale_candidate]
+    mock_existing_pr_matches.return_value = False
+    mocks["load_state"].return_value = (
+        {
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "issue_updated_at": "2026-07-07T00:00:00Z",
+        },
+        "ghid",
+    )
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: prompts/fix_python.prompt", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/1850", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url",
+        issue_content="content",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1850,
+        issue_author="me",
+        issue_title="Resume rejects stale PR guard",
+        cwd=temp_cwd,
+        quiet=True,
+    )
+
+    assert success is True, msg
+    assert msg == "PR Created: https://github.com/owner/repo/pull/1850"
+    assert mock_run.called
+    first_match_call = mock_existing_pr_matches.call_args_list[0].args
+    assert first_match_call[:5] == (
+        "owner",
+        "repo",
+        stale_candidate,
+        "main",
+        temp_cwd,
+    )
 
 
 def test_post_step_comment_called_on_hard_stop(mock_dependencies, temp_cwd):
@@ -5542,7 +7970,7 @@ def test_review_loop_exits_on_lowercase_no_issues(mock_dependencies, temp_cwd):
             # LLM returns lowercase variant
             return (True, "**Status:** no issues found\n\nAll checks passed.", 0.1, "gpt-4")
         elif label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -5586,7 +8014,7 @@ def test_review_loop_exits_on_status_no_issues_variant(mock_dependencies, temp_c
         elif label.startswith("step11"):
             return (True, "Review complete. Status: no issues found. All files validated.", 0.1, "gpt-4")
         elif label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -5665,7 +8093,7 @@ def test_orchestrator_populates_impacted_tests_context(mock_dependencies, temp_c
         elif label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         elif label == "step13":
-            return (True, "PR Created", 0.1, "gpt-4")
+            return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -5765,7 +8193,7 @@ class TestReviewLoopEarlyExit:
         # Step 11 returns a variant phrase — should trigger early exit
         responses = [
             (True, "After thorough review, no issues identified.", 0.1, "gpt-4"),  # step11_iter1
-            (True, "PR Created", 0.1, "gpt-4"),  # step13
+            (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4"),  # step13
         ]
         mocks["run"].side_effect = responses
 
@@ -6085,7 +8513,8 @@ class TestSyncOrderPddPromptsPath:
              patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
              patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
              patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
-             patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
+             patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script, \
+             patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True):
 
             mock_load.return_value = (None, None)
             mock_save.return_value = 12345
@@ -6112,7 +8541,7 @@ class TestSyncOrderPddPromptsPath:
                 "FILES_MODIFIED: pdd/prompts/auto_include_python.prompt"
             )
             mock_load.return_value = (existing_state, 123)
-            mock_run.return_value = (True, "PR Created", 0.1, "gpt-4")
+            mock_run.return_value = (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
 
             success, msg, cost, model, files = run_agentic_change_orchestrator(
                 issue_url="http://issue", issue_content="Add embed retrieve",
@@ -6164,7 +8593,7 @@ class TestSyncOrderPddPromptsPath:
             }
             existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
             mock_load.return_value = (existing_state, 123)
-            mock_run.return_value = (True, "PR Created", 0.1, "gpt-4")
+            mock_run.return_value = (True, "PR Created: https://github.com/owner/repo/pull/1", 0.1, "gpt-4")
 
             run_agentic_change_orchestrator(
                 issue_url="http://issue", issue_content="Fix",
@@ -6269,7 +8698,7 @@ def test_step10_calls_register_untracked_prompts(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR https://github.com/o/r/pull/50", 0.1, "gpt-4")
+            return (True, "PR https://github.com/owner/repo/pull/50", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -6325,7 +8754,7 @@ def test_step10_auto_registered_appended_to_output(mock_dependencies, temp_cwd):
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR https://github.com/o/r/pull/51", 0.1, "gpt-4")
+            return (True, "PR https://github.com/owner/repo/pull/51", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -6406,7 +8835,7 @@ def test_step10_register_untracked_prompts_scope_narrowed_to_workflow(
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR https://github.com/o/r/pull/1143", 0.1, "gpt-4")
+            return (True, "PR https://github.com/owner/repo/pull/1143", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -6484,7 +8913,7 @@ def test_step10_register_untracked_prompts_skipped_when_no_prompt_files_touched(
         if label.startswith("step11"):
             return (True, "No Issues Found", 0.1, "gpt-4")
         if label == "step13":
-            return (True, "PR https://github.com/o/r/pull/1143", 0.1, "gpt-4")
+            return (True, "PR https://github.com/owner/repo/pull/1143", 0.1, "gpt-4")
         return (True, "ok", 0.1, "gpt-4")
 
     mock_run.side_effect = side_effect_run
@@ -7329,7 +9758,7 @@ class TestTrustedStepCommentPosting:
             if label == "step13":
                 return (
                     True,
-                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/owner/repo/pull/1",
                     0.2, "gpt-4",
                 )
             return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
@@ -7372,7 +9801,7 @@ class TestTrustedStepCommentPosting:
             if label.startswith("step11"):
                 return (True, "No Issues Found", 0.1, "gpt-4")
             if label == "step13":
-                return (True, "PR Created: https://github.com/o/r/pull/1", 0.2, "gpt-4")
+                return (True, "PR Created: https://github.com/owner/repo/pull/1", 0.2, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -7424,7 +9853,7 @@ class TestTrustedStepCommentPosting:
             if label == "step13":
                 return (
                     True,
-                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/owner/repo/pull/1",
                     0.2, "gpt-4",
                 )
             return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
@@ -7488,7 +9917,7 @@ class TestTrustedStepCommentPosting:
             if label == "step13":
                 return (
                     True,
-                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/owner/repo/pull/1",
                     0.2, "gpt-4",
                 )
             return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
@@ -7561,7 +9990,7 @@ class TestTrustedStepCommentPosting:
             if label == "step13":
                 return (
                     True,
-                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/owner/repo/pull/1",
                     0.2, "gpt-4",
                 )
             return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")

@@ -163,6 +163,7 @@ def test_pdd_change_cli_uses_json_artifacts_for_step9_and_step11_control_flow(tm
         patch("pdd.agentic_change_orchestrator._get_git_root", return_value=repo_dir),
         patch("pdd.agentic_change_orchestrator._resolve_main_ref_name", return_value="main"),
         patch("pdd.agentic_change_orchestrator.current_worktree_branch", return_value="change/issue-1871"),
+        patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head", return_value=True),
         patch("pdd.agentic_change_orchestrator.subprocess.run", return_value=completed),
         patch("pdd.agentic_change_orchestrator.run_agentic_task", side_effect=fake_agentic_task),
     ]
