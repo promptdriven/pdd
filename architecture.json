@@ -10286,6 +10286,11 @@
             "name": "ContentSelector.select",
             "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
             "returns": "str"
+          },
+          {
+            "name": "find_module_test_siblings",
+            "signature": "(code_file: str | Path)",
+            "returns": "list[Path]"
           }
         ]
       }

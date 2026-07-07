@@ -1999,6 +1999,7 @@ Generate or enhance unit tests for a given code file and its corresponding promp
 Test organization:
 - For each target `<basename>`, PDD maintains a single test file (by default named `test_<basename>.<language_extension>` and typically placed under a tests directory).
 - New tests accumulate in that same file over time rather than being regenerated from scratch. When augmenting tests, PDD can merge additions into the existing file (see `--merge`).
+- If a real test for the module already exists at a path your runner collects (e.g. a co-located `__test__/<name>.test.tsx`) but PDD would write to a different canonical path, PDD warns and does NOT overwrite it — otherwise it would keep a second "shadow" test that can pass while the real one drifts or breaks (issue #1903). PDD also warns when a brand-new JS/TS module's test would be written outside the module's own directory, where a co-located jest/vitest runner may not collect it. Same remediation either way: set `test_output_path` in your `.pddrc` or pass `--output` to target the existing (or co-located) test. The warning prints to your console and, in automated runs, is also emitted as a one-line review marker that survives `--quiet` and is captured in CI logs (best-effort collectable into the `pdd change` PR body; reliable PR-body surfacing is a follow-up), so it isn't silently lost.
 
 ```
 pdd [GLOBAL OPTIONS] test [OPTIONS] PROMPT_FILE CODE_OR_EXAMPLE_FILE

@@ -15,6 +15,10 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
+from .content_selector import (
+    _effective_test_write_target,
+    _warn_on_shadow_test,
+)
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -152,6 +156,27 @@ def cmd_test_main(
         and ((detected_language and detected_language.lower() != 'python') or agentic_mode)
         and not (detected_language and detected_language.lower() == 'python' and merge)
     )
+
+    # 3.6 Warn when a real test already exists at a path the runner collects
+    # but PDD would generate its test at a different canonical path (shadow/
+    # false-green, #1903). Placed after use_agentic_tests is known and before
+    # the agentic branch's early return so it fires for BOTH the agentic and
+    # native write paths. Only native merge writes existing_tests[0]; the
+    # agentic branch (including non-Python `--merge`) writes
+    # output_file_paths["output"], so pass agentic=use_agentic_tests to compare
+    # siblings against the true write target.
+    resolved_test_output = _effective_test_write_target(
+        output_file_paths.get("output"),
+        merge,
+        existing_tests,
+        agentic=use_agentic_tests,
+    )
+    _warn_on_shadow_test(
+        code_file,
+        resolved_test_output,
+        quiet=ctx.obj.get("quiet", False),
+    )
+
     if use_agentic_tests:
         from .agentic_test_generate import run_agentic_test_generate
 
