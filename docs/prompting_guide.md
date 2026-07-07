@@ -23,12 +23,29 @@ This metric, not "code volume" or "smallest possible prompt," is the thing to op
 
 ---
 
+## Concision Rules
+
+Readability is not in tension with reliability: review and edit cost sit in the denominator of the north-star metric, so a prompt a reviewer can absorb in one pass scores *better*, not worse. Reliability comes from the mold walls — a frozen interface, stable rule IDs, MUST/MUST NOT modals, defined vocabulary, and accumulated tests — none of which require verbosity. When creating or editing a prompt, apply these mechanical rules:
+
+1. **State each fact exactly once.** If a term is defined in `<vocabulary>`, don't restate the definition inside a contract rule; if a side effect is forbidden by a contract rule, don't repeat it in `<capabilities>`. Put each fact in the one section where it does the most work.
+2. **One line per contract rule by default.** Keep the stable `R<n>` ID and the MUST/MUST NOT modal; use the long template only when the trigger condition or forbidden outcome needs spelling out. (See [Contract Rule Format](#contract-rule-format).)
+3. **No implementation steps.** Specify interfaces, invariants, and outcomes; let the model — plus grounding or explicit examples — decide the how.
+4. **Don't restate what the preamble, grounding, examples, or tests already carry.** (See [What NOT to Include](#what-not-to-include).)
+5. **Omit sections that would be empty or obvious.** "This module does not send emails" is noise in a string formatter's prompt and signal in a payments prompt. Use the [Section Trigger Table](#section-trigger-table) to decide.
+6. **Prefer a plain sentence over a template** whenever the sentence is unambiguous and a test writer could act on it without follow-up questions.
+7. **Start from the [Minimal Skeleton](#minimal-skeleton-default)** and escalate section by section as risk triggers fire — never the other way around.
+8. **Back-propagate behavior, not implementation.** When syncing a prompt to match code that changed first, write the new requirement at behavior level — observable results, messages, exit codes. Never transcribe private helper names, exact API calls, or internal mechanics from the code. (See [Back-Propagation Altitude](#back-propagation-altitude).)
+
+> **Local / no-cloud carve-out:** without Cloud grounding, prompts must carry more structural guidance — explicit examples via `<include>` and interface pins. "Minimal" assumes grounding or explicit examples supply implementation patterns; don't strip a local prompt below what regenerates reliably.
+
+---
+
 ## Quickstart: PDD in 5 Minutes
 
 If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
 1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
-2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions. (See the [Reusable Prompt Skeleton](#reusable-prompt-skeleton).)
+2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies. (Start from the [Minimal Skeleton](#minimal-skeleton-default); escalate only when risk triggers fire.)
 3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML. (See [Directives & Context](#prompt-syntax-essentials).)
 4.  **Regenerate, Don't Patch:** Change behavior by changing the prompt and regenerating. If generated code fails to satisfy a correct prompt/test, use `pdd bug` / `pdd fix`. If the intended behavior is missing or wrong in the prompt, update the prompt first.
 5.  **Verify:** Run the generated code/tests. Without verification, regeneration just produces plausible wrong code faster — see [Verification](#verification-the-spine-of-pdd).
@@ -135,146 +152,6 @@ Notes:
 
 The durable PDD chain:
 
-<a name="automated-grounding"></a>
-## Automated Grounding (PDD Cloud)
-
-Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to reduce implementation drift.
-
-### How It Works
-
-When you run `pdd generate`, the system:
-1. Embeds your prompt into a vector
-2. Searches for similar prompts in the cloud database (cosine similarity)
-3. Auto-injects the closest (prompt, code) pair as a few-shot example
-
-**This is automatic.** You don't configure it. As you edit your prompt:
-- The embedding changes
-- Different examples may be retrieved
-- Generation naturally adapts to your prompt's content
-
-On first generation: Similar existing modules in your project may provide grounding.
-On re-generation: Your prior successful generation is typically the closest match.
-
-### Why This Matters for Prompt Writing
-
-- **Your prompt wording affects grounding.** Similar prompts retrieve similar examples.
-- **Implementation patterns can be handled automatically in Cloud workflows.** Grounding can provide structural consistency from similar modules (class vs functional, helper patterns, etc.).
-- **Prompts can be minimal in Cloud workflows.** Focus on requirements; Cloud grounding handles many implementation patterns when enough relevant history exists.
-
-*Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency). Grounding teaches the model how to **write** the current module.*
-
-> **Local users (no cloud):** Without grounding, prompts must be more detailed—include structural guidance and explicit examples via `<include>`. Use a shared preamble for coding style. The minimal prompt guidance in this document assumes cloud access.
-
----
-
-## Automated Context Compression
-
-To manage large context windows and reduce costs, PDD supports automated context compression. This feature reduces the token count of dependencies while maintaining their behavioral contract.
-
-### How It Works
-
-Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
-
-- **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
-- **`--compress-test-context`**: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in run telemetry. See [Ranked Test Selection](#ranked-test-selection) below.
-- **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
-
-Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
-
-### The "Mold Walls" Concept
-
-Compressed context acts as a "mold" that constrains the generated code. By sending only the interface of a dependency, you define the boundaries (the "mold walls") without cluttering the context with implementation details. This ensures the generated code respects the dependency's contract while staying within token budgets.
-
-### Fallback Behavior
-
-If compression fails (e.g., due to AST parsing errors in a dependency), the system defaults to full file inclusion to ensure correctness. This behavior can be controlled with the `--compression-fallback {full,error}` flag.
-
-### Reporting
-
-PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
-
-### Ranked Test Selection
-
-When `--context-compression test` (or `--compress-test-context`) is active, PDD selects which test files to include using a token-budget-aware ranking algorithm rather than including all available tests. This prevents context rot from old or unrelated tests crowding out the prompt, dependencies, and grounding examples.
-
-**How it works:**
-
-1. **Failing tests are always included first.** Tests listed in `PDD_FAILING_TESTS` or `.pytest_cache/v/cache/lastfailed` bypass budget accounting and are packed unconditionally. If a failing-test file exceeds the remaining budget, `PytestSlicer` reduces it to only the failing functions and their necessary fixtures.
-2. **Remaining candidates are ranked by a four-signal composite score:**
-   - Import-graph distance to the module under change (weight 0.40) — closer = higher score
-   - Symbol-reference overlap with the module's exported API (weight 0.30)
-   - Failure recency from `.pytest_cache` or `PDD_FAILING_TESTS` (weight 0.20)
-   - File modification recency (weight 0.10)
-3. **Greedy packing under a token budget** — Ranked candidates are packed highest-score-first until `PDD_TEST_TOKEN_BUDGET` (default: 2 000 tokens) is exhausted. A redundancy penalty (AdaGReS-style marginal scoring) is applied so that two test files exercising the same public symbols contribute diminishing value.
-4. **Cross-file deduplication** — Test files with Jaccard similarity above `PDD_TEST_DEDUP_THRESHOLD` (default: 0.8) on their imported symbol sets are deduplicated; only the higher-scoring file is retained.
-5. **A `TestPackingManifest` is emitted** for each invocation, listing every selected test (with file, token count, score, and reason) and every omitted test (with reason: budget exhausted, near-duplicate of a selected file, or unrelated import path). The manifest appears in the compressed-context telemetry alongside other compression events.
-
-**Configuration:**
-
-| Variable | Default | Description |
-|---|---|---|
-| `PDD_TEST_TOKEN_BUDGET` | `2000` | Token cap for test context. Set to `0` to skip test context entirely without error. |
-| `PDD_TEST_RANKING_WEIGHTS` | `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}` | JSON override for the four ranking weights. |
-| `PDD_TEST_DEDUP_THRESHOLD` | `0.8` | Jaccard similarity threshold above which two test files are considered near-duplicates. |
-
-**Graceful degradation:**
-- If the import graph cannot be built (unparseable module), ranking falls back to recency-only scoring.
-- If `.pytest_cache` is absent, the failure-recency signal is skipped and logged as unavailable.
-- If no test files exist, an empty manifest is returned without error.
-
----
-
-## Grounding Overrides: Pin & Exclude (PDD Cloud)
-
-For users with PDD Cloud access, you can override automatic grounding using XML tags:
-
-**`<pin>module_name</pin>`** — Force a specific example to always be included
-- Use case: Ensure a critical module always follows a "golden" pattern
-- Use case: Bootstrap a new module with a specific style
-
-**`<exclude>module_name</exclude>`** — Block a specific example(s) from being retrieved
-- Use case: Escape an old pattern that's pulling generation in the wrong direction
-- Use case: Intentionally break from established patterns for a redesign
-
-These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
-
-**Most prompts don't need these.** Automatic grounding works well for:
-- Standard modules with similar existing examples
-- Re-generations of established modules
-- Modules following common project patterns
-
-### When to Pin, Exclude, or Review for Critical Modules
-
-For high-risk modules — typically `auth`, `payments`, and `compliance` — the
-automatic top-similarity example is not enough evidence on its own. For these,
-explicitly choose **at least one** of:
-
-- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
-  cannot silently drift to a different prior implementation.
-- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
-  implementation from being retrieved.
-- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
-  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
-  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
-  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
-  pinned and pre-approved are still recorded in the manifest but leave
-  `reviewed` false.
-
-These decisions land in the evidence manifest (`generation.grounding`, see
-`docs/evidence_manifest.md`), so reviewers can audit exactly which examples
-shaped a critical module's generation.
-
-To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
-
-```yaml
-grounding:
-  require_review_for_critical_modules: true
-  require_pinned_examples_for:
-    - auth
-    - payments
-    - compliance
-```
-
 ```text
 Prompt = source of truth
 Contract rules = durable obligations
@@ -378,17 +255,10 @@ Validates a coupon code against a cart at a point in time and returns a result.
 </vocabulary>
 
 <contract_rules>
-R1 - Expiry
-For every coupon, the system MUST reject the coupon when `now` is at or after its expiry.
-
-R2 - Single use
-For every single-use coupon already marked redeemed, the system MUST reject the coupon.
-
-R3 - Minimum cart total
-For every coupon with a minimum cart total, the system MUST reject the coupon when the cart total is below that minimum.
-
-R4 - No side effects
-The system MUST NOT mutate the cart, MUST NOT mark the coupon redeemed, and MUST NOT emit any event.
+R1 (MUST): Reject the coupon when `now` is at or after its expiry.
+R2 (MUST): Reject a single-use coupon already marked redeemed.
+R3 (MUST): Reject the coupon when the cart total is below its minimum cart total.
+R4 (MUST NOT): Mutate the cart, mark the coupon redeemed, or emit any event.
 </contract_rules>
 
 <pdd-interface>
@@ -655,6 +525,17 @@ A good contract rule is observable, testable, scoped to this module, independent
 
 ### Contract Rule Format
 
+**Default — one line per rule**, keeping the stable ID and the modal verb:
+
+```md
+R1 (MUST): Reject refund requests when the requested amount exceeds the remaining refundable amount.
+R2 (MUST NOT): Call the payment provider for requests rejected by R1.
+```
+
+One line is enough whenever a test writer could implement the rule without follow-up questions. Lean on `<vocabulary>` for terms like "remaining refundable amount" instead of restating definitions inside the rule.
+
+**Escalated — long form**, for rules whose trigger condition or specific forbidden outcome doesn't fit in one clear line (idempotency, lifecycle, multi-part obligations):
+
 ```md
 R<ID> - <Short name>
 
@@ -665,19 +546,19 @@ when <condition>.
 This rule is violated if <specific forbidden outcome>.
 ```
 
-Do not renumber existing rule IDs after stories or tests reference them. If a rule is removed, mark it deprecated or leave a gap. If a rule changes meaning substantially, create a new rule ID.
-
-Example:
+Example of a rule that earns the long form:
 
 ```md
-R1 - Reject over-refunds
+R4 - Idempotency
 
-For every refund request,
-the system MUST reject the request
-when the requested amount is greater than the remaining refundable amount.
+For every duplicate request with the same payment ID and idempotency key,
+the system MUST NOT create more than one provider refund
+and MUST NOT write more than one successful-refund audit event.
 
-This rule is violated if the payment provider is called for an over-refund request.
+This rule is violated if repeated submissions produce different logical results.
 ```
+
+Both forms bind to stories and tests through the rule ID. Do not renumber existing rule IDs after stories or tests reference them. If a rule is removed, mark it deprecated or leave a gap. If a rule changes meaning substantially, create a new rule ID.
 
 ### Vocabulary and Ambiguity Control
 
@@ -805,6 +686,8 @@ A well-designed prompt contains **only what can't be handled elsewhere**. With C
 2. **Requirements** (5-10 items): Functional and non-functional specs
 3. **Dependencies** (via `<include>`): Only external or critical interfaces
 
+Copyable form: the [Minimal Skeleton](#minimal-skeleton-default).
+
 ### Required Sections for Non-Trivial Modules
 
 Use more structure when the module has external side effects, security risk, cross-module behavior, state transitions, or business-critical rules:
@@ -820,11 +703,20 @@ Use more structure when the module has external side effects, security risk, cro
 
 For trivial modules, you may combine Responsibility, Vocabulary, and Contract Rules into a concise Requirements section. Do not bloat prompts with every edge case. Use user stories and accumulated tests for examples and regressions.
 
-### Optional Sections
+### Section Trigger Table
 
-- **Instructions**: Only if default behavior needs overriding
-- **Deliverables**: Only if non-obvious
-- **Coverage**: Useful for non-trivial modules with named contract rules
+Include an optional section only when its trigger fires. If no trigger fires, omit the section — an empty or obvious section is noise, not rigor.
+
+| Section | Include only when… |
+|---|---|
+| `<vocabulary>` | A domain term could genuinely be read two ways by a test writer |
+| `<non_responsibilities>` | Scope confusion with a neighboring module is likely |
+| `<capabilities>` | The module touches external systems (network, DB, events, email) |
+| `<contract_rules>` long form | A rule's trigger condition or forbidden outcome isn't obvious in one line |
+| `<waivers>` | A high-risk rule is intentionally unchecked, with approver and expiry |
+| `<coverage>` | Production-critical module; story files remain the primary source of truth |
+| `<deliverables>` | The expected artifact is non-obvious |
+| **Instructions** | Default generation behavior needs overriding |
 
 ### What NOT to Include
 
@@ -852,6 +744,38 @@ See `pdd/pdd/templates/generic/generate_prompt.prompt` for a concrete scaffold.
 ---
 
 ## Reusable Prompt Skeleton
+
+### Minimal Skeleton (Default)
+
+Start here for every new prompt. With a shared preamble, Cloud grounding or explicit examples, and accumulated tests carrying style and patterns, this is enough for most modules:
+
+```xml
+% You are an expert <language/framework> engineer. Implement <module_name>.
+
+<include>context/project_preamble.prompt</include>
+
+<pdd-interface>
+{"type":"module","module":{"functions":[
+  {"name":"<function_name>","signature":"(<args>) -> <ReturnType>","returns":"<ReturnType>"}]}}
+</pdd-interface>
+
+% Requirements
+1. <Primary function: what the module does, one sentence>
+2. <Input contract: types, validation, accepted values>
+3. <Output contract: types, error conditions, return values>
+4. <Key invariant — use MUST/MUST NOT for non-negotiable behavior>
+5. <Security or performance constraint, if any>
+
+<dependencies>
+<include mode="interface">src/<critical_dependency>.py</include>
+</dependencies>
+```
+
+Promote a requirement to a numbered contract rule (stable `R<n>` ID) as soon as a story or test needs to reference it, and add further sections only when a [trigger](#section-trigger-table) fires.
+
+### Escalated Skeleton (High-Risk Modules)
+
+Use the full structure below only when the module has external side effects, security or privacy risk, state transitions, cross-module behavior, or business-critical rules — this refund module is deliberately the worst case. Every section beyond the minimal skeleton must earn its place via the [Section Trigger Table](#section-trigger-table).
 
 ```xml
 % Role:
@@ -897,14 +821,9 @@ This module validates and creates refunds for captured payments.
 </vocabulary>
 
 <contract_rules>
-R1 - Positive amount
-For every refund request, the system MUST reject the request when the requested amount is less than or equal to zero.
-
-R2 - Remaining balance
-For every refund request, the system MUST reject the request when the requested amount is greater than the remaining refundable amount.
-
-R3 - No provider call before validation
-The system MUST NOT call the payment provider for requests rejected by R1 or R2.
+R1 (MUST): Reject refund requests where the requested amount is less than or equal to zero.
+R2 (MUST): Reject refund requests where the requested amount exceeds the remaining refundable amount.
+R3 (MUST NOT): Call the payment provider for requests rejected by R1 or R2.
 
 R4 - Idempotency
 For every duplicate request with the same payment ID and idempotency key, the system MUST NOT create more than one provider refund, MUST NOT write more than one successful-refund audit event, and MUST return the same logical result for repeated submissions.
@@ -913,8 +832,7 @@ R5 - Auditability
 For every successful refund, the system MUST write exactly one durable successful-refund audit event.
 Provider failures MAY write a failed-refund audit event, but MUST NOT write a successful-refund audit event.
 
-R6 - Privacy
-The system MUST NOT expose card PAN, CVV, API keys, bearer tokens, or raw provider secrets in logs, audit events, errors, or return values.
+R6 (MUST NOT): Expose card PAN, CVV, API keys, bearer tokens, or raw provider secrets in logs, audit events, errors, or return values.
 </contract_rules>
 
 <capabilities>
@@ -1831,7 +1749,7 @@ To manage large context windows and reduce costs, PDD supports automated context
 Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
 
 - **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
-- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
+- **`--compress-test-context`**: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in run telemetry. See [Ranked Test Selection](#ranked-test-selection) below.
 - **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
 
 Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
@@ -1849,6 +1767,35 @@ If compression fails (e.g., due to AST parsing errors in a dependency), the syst
 ### Reporting
 
 PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
+
+### Ranked Test Selection
+
+When `--context-compression test` (or `--compress-test-context`) is active, PDD selects which test files to include using a token-budget-aware ranking algorithm rather than including all available tests. This prevents context rot from old or unrelated tests crowding out the prompt, dependencies, and grounding examples.
+
+**How it works:**
+
+1. **Failing tests are always included first.** Tests listed in `PDD_FAILING_TESTS` or `.pytest_cache/v/cache/lastfailed` bypass budget accounting and are packed unconditionally. If a failing-test file exceeds the remaining budget, `PytestSlicer` reduces it to only the failing functions and their necessary fixtures.
+2. **Remaining candidates are ranked by a four-signal composite score:**
+   - Import-graph distance to the module under change (weight 0.40) — closer = higher score
+   - Symbol-reference overlap with the module's exported API (weight 0.30)
+   - Failure recency from `.pytest_cache` or `PDD_FAILING_TESTS` (weight 0.20)
+   - File modification recency (weight 0.10)
+3. **Greedy packing under a token budget** — Ranked candidates are packed highest-score-first until `PDD_TEST_TOKEN_BUDGET` (default: 2 000 tokens) is exhausted. A redundancy penalty (AdaGReS-style marginal scoring) is applied so that two test files exercising the same public symbols contribute diminishing value.
+4. **Cross-file deduplication** — Test files with Jaccard similarity above `PDD_TEST_DEDUP_THRESHOLD` (default: 0.8) on their imported symbol sets are deduplicated; only the higher-scoring file is retained.
+5. **A `TestPackingManifest` is emitted** for each invocation, listing every selected test (with file, token count, score, and reason) and every omitted test (with reason: budget exhausted, near-duplicate of a selected file, or unrelated import path). The manifest appears in the compressed-context telemetry alongside other compression events.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PDD_TEST_TOKEN_BUDGET` | `2000` | Token cap for test context. Set to `0` to skip test context entirely without error. |
+| `PDD_TEST_RANKING_WEIGHTS` | `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}` | JSON override for the four ranking weights. |
+| `PDD_TEST_DEDUP_THRESHOLD` | `0.8` | Jaccard similarity threshold above which two test files are considered near-duplicates. |
+
+**Graceful degradation:**
+- If the import graph cannot be built (unparseable module), ranking falls back to recency-only scoring.
+- If `.pytest_cache` is absent, the failure-recency signal is skipped and logged as unavailable.
+- If no test files exist, an empty manifest is returned without error.
 
 ---
 
@@ -2161,30 +2108,23 @@ You only specify:
 
 ## Example (Minimal, Python)
 
-This simplified example illustrates a minimal functional prompt:
+This simplified example follows the [Minimal Skeleton](#minimal-skeleton-default):
 
 ```text
-% You are an expert Python engineer. Your goal is to write a function `get_extension` that returns the file extension for a given language.
+% You are an expert Python engineer. Implement `get_extension`, which returns the file extension for a given language.
 
 <include>context/python_preamble.prompt</include>
 
-% Inputs/Outputs
-  Input: language (str), like "Python" or "Makefile".
-  Output: str file extension (e.g., ".py"), or "" if unknown.
-
-% Data
-  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension,run_command,run_test_command,outputs
-
-% Steps
-  1) Load env var PDD_PATH and read the CSV
-  2) Normalize language case
-  3) Lookup extension
-  4) Return "" if not found or invalid
+% Requirements
+1. Function: get_extension(language: str) -> str
+2. Input: a language name such as "Python" or "Makefile"; match case-insensitively.
+3. Output: the file extension including the dot (e.g., ".py"), or "" for unknown or invalid languages; never raise.
+4. Data source: the CSV at $PDD_PATH/data/language_format.csv with columns language,comment,extension,run_command,run_test_command,outputs.
 ```
 
 This style:
 - Declares role and outcome
-- Specifies IO, data sources, and steps
+- Specifies IO and data sources as requirements, not implementation steps
 - Uses an `<include>` to pull a shared preamble
 
 ---
@@ -2207,7 +2147,7 @@ The PDD workflow (see `../whitepaper.md`):
 4) **Fix via Command:** When you use `pdd fix`, successful Prompt+Code pairs may be recorded for grounding, depending on your local or Cloud configuration. Treat this as part of your project's privacy and retention policy.
 5) **Fix via Prompt:** If the logic is fundamentally flawed, update the prompt text to clarify the requirement or constraint that was missed, then **go to step 1**.
 6) **Drift Check (Optional):** Occasionally regenerate the module *without* changing the prompt (e.g., after upgrading LLM versions or before major releases). If the output differs significantly or fails tests, your prompt has "drifted" (it relied on lucky seeds or implicit context). Tighten the prompt until the output is stable.
-7) **Update:** Once tests pass, back-propagate any final learnings into the prompt.
+7) **Update:** Once tests pass, back-propagate any final learnings into the prompt — at behavior level, not as transcribed implementation (see [Back-Propagation Altitude](#back-propagation-altitude)).
 
 Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts are permanent assets (accumulated and versioned).
 
@@ -2254,6 +2194,17 @@ After a successful fix, ask: "Where should this knowledge live?"
 - "Public API name changed" → Update prompt/interface
 
 If the intended behavior changed, update the prompt. For example, "The module should now accept null as a valid input" is a prompt/interface change, not just a test addition.
+
+### Back-Propagation Altitude
+
+When a behavior lands in code first and you sync the prompt to match it (manual back-propagation, `pdd update`, or a code→prompt sync commit), write the back-propagated requirement at the same altitude as any hand-authored requirement: observable behavior — inputs, outputs, messages, exit codes, state changes. The temptation during a sync is to *transcribe* the code; resist it:
+
+- **Don't pin private helpers.** "Decode the token with `_decode_jwt_payload`" pins an internal name; "report the cached token's audience and expiry status" states the behavior.
+- **Don't pin exact API calls.** "Delete with `Path.unlink()`" is the how; "delete the cache file" is the what.
+- **Don't dictate internal step ordering** unless the order is itself observable. "Validation happens before any provider call" is observable behavior; "parse, then decode, then print" is not.
+- **Don't describe a mechanism unless you have re-derived it from the code's behavior.** A transcribed mechanism that is even slightly wrong is worse than no mechanism at all. For example, "call `apply_color_preference(color)` through `ctx.call_on_close`" reads as *defer the call until close*, when the code actually applies the preference immediately and registers the **returned** restore callback on close — the next regeneration will faithfully implement the wrong description.
+
+The test for every back-propagated line: **could a different, equally correct implementation satisfy it?** If not, you transcribed instead of specified — move the detail out of the prompt and let the generated code (plus tests) own it.
 
 ### Prompt Defects vs. Code Bugs
 
@@ -2506,25 +2457,6 @@ flowchart LR
 - One prompt per module/file, named like `${BASENAME}_${LanguageOrFramework}.prompt` (see templates under `pdd/pdd/templates`).
 - Follow codebase conventions from README.md for Python and TypeScript style.
 - Use curated examples under `context/` to encode interfaces and behaviors.
-
----
-
-## Final Notes
-
-Think of prompts as your programming language. Keep them concise, explicit, and modular. Regenerate instead of patching, verify behavior with accumulating tests, and continuously back‑propagate implementation learnings into your prompts.
-
-The durable PDD chain is:
-
-```text
-Prompt = source of truth
-Contract rules = durable obligations
-User stories = prompt-level acceptance tests
-Generated tests = executable evidence
-Accumulated tests = mold walls
-Generated code = disposable artifact
-```
-
-That discipline is what converts maintenance from an endless patchwork into a compounding system of leverage.
 
 ---
 

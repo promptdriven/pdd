@@ -1367,6 +1367,11 @@ def _is_ignored_github_steer_comment(comment: Dict[str, Any]) -> bool:
         return True
 
     body = str(comment.get("body", "") or "")
+    return _is_pdd_status_comment_body(body)
+
+
+def _is_pdd_status_comment_body(body: str) -> bool:
+    """True for PDD-generated state/progress/status comment bodies."""
     if GITHUB_STATE_MARKER_START in body or GITHUB_STATE_MARKER_END in body:
         return True
     if "PDD-INCREMENTAL-STATUS" in body:
@@ -6803,10 +6808,10 @@ def _run_interactive_pty_until_reply(
     """Run an interactive CLI under a PTY until the MCP reply file appears.
 
     When ``stall_timeout`` is set, a no-progress watchdog (issue #1714) aborts
-    the run if the session transcript stops growing for that many seconds — a
-    parked TUI keeps the PTY busy with spinner frames, so only transcript growth
-    counts as real progress. ``None`` (default) leaves the run bounded solely by
-    the hard ``timeout``.
+    the run if the session transcript cannot be located or stops growing for
+    that many seconds — a parked TUI keeps the PTY busy with spinner frames, so
+    only transcript availability/growth counts as real progress. ``None``
+    (default) leaves the run bounded solely by the hard ``timeout``.
 
     When ``session_id`` is provided, the loop also fast-fails on a post-launch
     authentication failure (Issue #1365): a revoked or logged-out interactive
@@ -6890,9 +6895,7 @@ def _run_interactive_pty_until_reply(
                     # the watchdog the first time the transcript can actually be
                     # read — baselining its current size so pre-existing content on
                     # a resumed session is not mistaken for growth, and starting the
-                    # stall clock from this moment. If the transcript can never be
-                    # located the watchdog stays disarmed and the run falls back to
-                    # the hard timeout (never a spurious kill of a healthy run).
+                    # stall clock from this moment.
                     if not stall_armed:
                         stall_armed = True
                         stall_last_size = current_size
@@ -6914,6 +6917,17 @@ def _run_interactive_pty_until_reply(
                     if auth_failure is not None and quiescent:
                         _terminate_pty_proc_graceful(proc)
                         return False, auth_failure, 0.0, None
+                elif _stall_watchdog_triggered(start, now, stall_timeout):
+                    _terminate_pty_proc_graceful(proc)
+                    tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
+                    return (
+                        False,
+                        f"Claude interactive mode stalled: session transcript was "
+                        f"not located for {stall_timeout:.0f}s (issue #1714 "
+                        f"no-progress watchdog). Output tail: {tail}",
+                        0.0,
+                        None,
+                    )
                 next_auth_check = now + INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS
 
             # Issue #1714 no-progress watchdog: abort a stalled run (transcript
@@ -8380,6 +8394,8 @@ def drain_issue_steers(
                 if cid_val <= last_id_val:
                     continue
                 raw_body = str(entry.get("body", ""))
+                if _is_pdd_status_comment_body(raw_body):
+                    continue
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),

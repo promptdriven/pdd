@@ -369,7 +369,7 @@ def _zero_rate_is_unknown_subscription(model: str, rates: ModelPricing) -> bool:
     model_lower = (model or "").strip().lower()
     return (
         rates.interactive_only
-        or provider in {"github_copilot", "openai_chatgpt", "chatgpt"}
+        or provider in {"github_copilot", "openai_chatgpt", "chatgpt", "z.ai_coding_plan"}
         or model_lower.startswith(("github_copilot/", "chatgpt/"))
     )
 
@@ -426,13 +426,27 @@ def _load_model_pricing(csv_path: str) -> Dict[str, ModelPricing]:
                 if not model or input_cost in (None, ""):
                     continue
                 try:
+                    parsed_input = float(input_cost)
                     parsed_output = (
                         float(output_cost)
                         if output_cost not in (None, "")
                         else None
                     )
+                    # Don't overwrite a non-zero pricing entry with a zero-rate
+                    # row (e.g. a quota-backed Coding Plan row for the same
+                    # model ID). The first non-zero entry wins so callers get
+                    # real list prices rather than a $0.00 that looks "known".
+                    existing = pricing.get(model)
+                    if existing is not None:
+                        existing_nonzero = (
+                            existing.input_cost_per_million > 0
+                            or (existing.output_cost_per_million or 0) > 0
+                        )
+                        new_zero = parsed_input == 0.0 and (parsed_output or 0) == 0.0
+                        if existing_nonzero and new_zero:
+                            continue
                     pricing[model] = ModelPricing(
-                        float(input_cost),
+                        parsed_input,
                         parsed_output,
                         row.get("provider", "") or "",
                         _csv_bool(row.get("interactive_only")),

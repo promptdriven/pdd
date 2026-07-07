@@ -196,14 +196,14 @@ class TestInteractivePtyStallAbort:
         assert success is False
         assert "stall" not in message.lower()
 
-    def test_watchdog_disarmed_when_transcript_never_located(self, tmp_path):
-        """If the session transcript file can never be found, the watchdog must
-        stay DISARMED and let the hard timeout govern — never a spurious stall
-        kill of a (possibly healthy) run whose transcript we simply can't see.
+    def test_watchdog_aborts_when_transcript_never_located(self, tmp_path):
+        """If an opted-in run cannot locate the session transcript, abort before
+        the hard timeout.
 
-        Regression for the review finding: progress tracking only runs once the
-        transcript is located, so without arming the watchdog would fire on an
-        un-locatable transcript even while real work is happening.
+        Hosted checkup Step 2 can park in Claude interactive mode before a
+        transcript becomes locatable. A caller-supplied ``stall_timeout`` must
+        bound that path too; otherwise the watchdog never arms and the job burns
+        the full hard step timeout.
         """
         from pdd.agentic_common import _run_interactive_pty_until_reply
 
@@ -218,10 +218,10 @@ class TestInteractivePtyStallAbort:
         reply_path = tmp_path / "reply.json"  # never created
 
         hard_timeout = 1.5
-        stall_timeout = 0.3  # tiny — would fire almost immediately IF armed
+        stall_timeout = 0.3
 
         start = time.time()
-        # Session file can NEVER be located → watchdog must not arm.
+        # Session file can NEVER be located -> opted-in watchdog must abort.
         with patch("pdd.agentic_common._find_claude_interactive_session_file",
                    return_value=None):
             success, message, _cost, _model = _run_interactive_pty_until_reply(
@@ -237,14 +237,9 @@ class TestInteractivePtyStallAbort:
         elapsed = time.time() - start
 
         assert success is False
-        # The disarmed watchdog must NOT fire; the hard timeout ends the run.
-        assert "stall" not in message.lower(), (
-            f"watchdog fired despite an un-locatable transcript: {message!r}"
-        )
-        assert "timed out" in message.lower()
-        # Ran to (near) the hard timeout rather than aborting at the much smaller
-        # stall_timeout — proving the watchdog stayed disarmed.
-        assert elapsed >= hard_timeout - 0.5, (
-            f"run ended at {elapsed:.1f}s; expected it to reach the ~{hard_timeout}s "
-            "hard timeout, proving the watchdog stayed disarmed"
+        assert "transcript was not located" in message.lower()
+        # Must abort far sooner than the hard timeout (proves early detection).
+        assert elapsed < hard_timeout / 2, (
+            f"watchdog took {elapsed:.1f}s; expected abort shortly after "
+            f"stall_timeout={stall_timeout}s, well under hard timeout={hard_timeout}s"
         )
