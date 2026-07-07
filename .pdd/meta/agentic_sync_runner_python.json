@@ -1,17 +1,17 @@
 {
-  "pdd_version": "0.0.275.dev3",
-  "timestamp": "2026-06-16T01:31:18.161464+00:00",
-  "command": "fix",
-  "prompt_hash": "0784d6ff7f749b74e6938bfdd945a1cf97aed961ebea4bf3849fe512bf7163f9",
-  "code_hash": "587d51aaed8470de39bbefbb0882f481f269431cca8b50e45b22e90dbd2eb695",
-  "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22",
+  "pdd_version": "0.0.297",
+  "timestamp": "2026-07-07T23:36:35.744781+00:00",
+  "command": "example",
+  "prompt_hash": "8ae27e94b72b3297e48b5ab0a8d688421c345261dc2c63e841936e7dde2fb2a6",
+  "code_hash": "761da3c140761897bd34db51adb43c05f77e97a9d4aa152cc9811c213a766e8b",
+  "example_hash": "2c4972be9247a4f5db6653838fd3047b9f3730e3640bf8e0152fc97c55ce590b",
+  "test_hash": "06af82e118266ab4a61ae055da174f1597041accd7d8f4b479030170182954c6",
   "test_files": {
-    "test_agentic_sync_runner.py": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22"
+    "test_agentic_sync_runner.py": "06af82e118266ab4a61ae055da174f1597041accd7d8f4b479030170182954c6"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
-    "context/agentic_common_example.py": "f9cdb30a932973d341b795faf510056b95573610af5ac48e3849cf42c205998e",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
