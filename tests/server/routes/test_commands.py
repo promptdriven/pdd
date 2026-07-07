@@ -168,7 +168,7 @@ async def test_execute_command_success(commands_module, mock_job_manager, sample
 
     response = await commands_module["execute_command"](request, manager=mock_job_manager)
 
-    assert isinstance(response, JobHandle)
+    assert isinstance(response, commands_module["execute_command"].__globals__["JobHandle"])
     assert response.job_id == sample_job.id
     assert response.status == sample_job.status
     mock_job_manager.submit.assert_called_once_with(
@@ -237,7 +237,7 @@ async def test_get_job_status_found(commands_module, mock_job_manager, sample_jo
 
     result = await commands_module["get_job_status"]("job-123", manager=mock_job_manager)
 
-    assert isinstance(result, JobResult)
+    assert isinstance(result, commands_module["get_job_status"].__globals__["JobResult"])
     assert result.job_id == "job-123"
     mock_job_manager.get_job.assert_called_once_with("job-123")
 
