@@ -942,6 +942,25 @@ def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bo
     return not any(r is None for r in normalized_results)
 
 
+def _normalized_results_should_exit_nonzero(
+    normalized_results: List[Any], invoked_subcommands: List[str]
+) -> bool:
+    """Return True when normalized command results represent process failure."""
+    for i, result in enumerate(normalized_results):
+        command_name = (
+            invoked_subcommands[i]
+            if i < len(invoked_subcommands)
+            else f"Unknown Command {i + 1}"
+        )
+        if result is None and command_name != "install_completion":
+            return True
+        if isinstance(result, tuple) and len(result) == 3:
+            result_data = result[0]
+            if isinstance(result_data, dict) and result_data.get("passed") is False:
+                return True
+    return False
+
+
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
@@ -1083,5 +1102,10 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     if not (isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_core_dump")):
         _write_result_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
-    if fatal:
+    command_failed = (
+        ctx.obj.get("_command_failed") if isinstance(ctx.obj, dict) else None
+    )
+    if fatal or command_failed or _normalized_results_should_exit_nonzero(
+        normalized_results, invoked_subcommands
+    ):
         ctx.exit(1)

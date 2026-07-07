@@ -754,6 +754,7 @@ Commands:
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
+- Story validation prints PASS/FAIL and exits non-zero if any story fails. `pdd detect --stories` does not support `--output`; use `--evidence` to write machine-readable run evidence.
 
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:
@@ -2793,6 +2794,7 @@ Options:
 - `--prompts-dir DIR`: Directory containing `.prompt` files (stories mode only).
 - `--include-llm`: Include `*_llm.prompt` files in stories mode.
 - `--fail-fast/--no-fail-fast`: Stop on the first failing story in stories mode (default: `--fail-fast`).
+- In stories mode, `--output` is unavailable because the CSV change report applies only to standard detect mode; use PASS/FAIL output and `--evidence` for machine-readable run evidence.
   - In stories mode, PDD reads optional `pdd-story-prompts` metadata from each story to run prompt-subset (multi-prompt) validation.
   - If metadata is missing, validation uses all prompts and can auto-cache detected prompt links in the story file.
 

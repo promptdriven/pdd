@@ -70,7 +70,10 @@ def _capture_summary(invoked_subcommands, results):
     
     with patch('pdd.core.cli.console.print') as mock_print:
         with ctx:
-            process_commands(results=results)
+            try:
+                process_commands(results=results)
+            except click.exceptions.Exit:
+                pass
             
     return ["".join(str(arg) for arg in call.args) for call in mock_print.call_args_list]
 
