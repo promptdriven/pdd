@@ -49,6 +49,7 @@ from .interface_semantics import (
     annotations_compatible,
     build_module_default_symbols,
     compare_default_sources,
+    parse_callable_contract,
     signature_entries_compatible,
 )
 
@@ -176,6 +177,7 @@ class PublicSurfaceRegressionError(click.UsageError):
         total_cost: float = 0.0,
         model_name: str = "unknown",
         repair_directive: Optional[str] = None,
+        signature_details: Optional[List[Tuple[str, str, str, str]]] = None,
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -185,16 +187,32 @@ class PublicSurfaceRegressionError(click.UsageError):
         self.post_surface_size = int(post_surface_size)
         self.total_cost = float(total_cost or 0.0)
         self.model_name = model_name or "unknown"
+        # Structured per-symbol detail for signature mismatches (issue #1900):
+        # ``(symbol, expected_entry, actual_entry, source)`` where ``source`` is
+        # ``"pdd-interface"`` when the expected signature came from the prompt's
+        # declaration. Purely additive — the ``removed:`` / ``signature_changed:``
+        # message lines below stay byte-for-byte identical (the cloud parser and
+        # ~50 tests key on them).
+        self.signature_details = list(signature_details or [])
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
-        super().__init__(
-            f"Public surface regression for {prompt_name}:\n"
-            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}\n"
-            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}\n"
-            f"output: {output_display}\n"
-            f"pre_surface_size: {self.pre_surface_size}\n"
-            f"post_surface_size: {self.post_surface_size}"
-        )
+        message_lines = [
+            f"Public surface regression for {prompt_name}:",
+            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}",
+            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}",
+            f"output: {output_display}",
+            f"pre_surface_size: {self.pre_surface_size}",
+            f"post_surface_size: {self.post_surface_size}",
+        ]
+        # Append (never alter the lines above) one structured detail line per
+        # signature mismatch so the full expected-vs-actual contract is carried
+        # in the message the local + cloud repair loops read.
+        for symbol, expected_entry, actual_entry, source in self.signature_details:
+            message_lines.append(
+                f"signature_detail: {symbol} | expected: {expected_entry} | "
+                f"actual: {actual_entry} | source: {source}"
+            )
+        super().__init__("\n".join(message_lines))
 
     @property
     def repair_directive(self) -> str:
@@ -205,9 +223,30 @@ class PublicSurfaceRegressionError(click.UsageError):
             lines.append("Restore these public symbols from the existing module:")
             for sym in self.removed_symbols:
                 lines.append(f"- {sym}")
-        if self.changed_signatures:
+        # Prefer the DECLARED signature as the repair target when the prompt's
+        # <pdd-interface> is the source of truth: it is a stable target, unlike
+        # "restore compatible signatures" (compatible with the very code being
+        # regenerated) which dead-ended the change->sync loop (issue #1900).
+        declared_details = [
+            detail for detail in self.signature_details if detail[3] == "pdd-interface"
+        ]
+        if declared_details:
+            lines.append(
+                "Restore these public symbols to their declared "
+                "<pdd-interface> signatures:"
+            )
+            for symbol, expected_entry, actual_entry, _ in declared_details:
+                lines.append(
+                    f"- Restore `{symbol}` to its declared signature "
+                    f"`{expected_entry}` (found `{actual_entry}`)."
+                )
+        declared_changed = {detail[0] for detail in declared_details}
+        remaining_changed = [
+            sym for sym in self.changed_signatures if sym not in declared_changed
+        ]
+        if remaining_changed:
             lines.append("Restore compatible signatures for these public symbols:")
-            for sym in self.changed_signatures:
+            for sym in remaining_changed:
                 lines.append(f"- {sym}")
         lines.append(
             "Preserve backward-compatible public helpers unless the prompt lists "
@@ -2234,6 +2273,128 @@ def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
     return _prompt_has_breaking_change_marker(prompt_content)
 
 
+def _collect_declared_surface(
+    prompt_content: Optional[str],
+    prompt_name: str,
+) -> Dict[str, Optional[str]]:
+    """Collect declared public symbols and raw signatures from ``<pdd-interface>``.
+
+    Returns ``{name -> raw_signature_or_None}`` for every function the prompt's
+    ``type: "module"`` ``<pdd-interface>`` declares (``module.functions``).
+    Unlike :func:`_extract_pdd_interface_signatures`, a missing or non-paren
+    signature is KEPT (mapped to ``None``) so the surface gate can enforce
+    presence-only for description-only declarations (issue #1900).
+
+    Scoped to ``type: "module"`` ONLY. ``type: "cli"`` / ``type: "command"``
+    interfaces declare COMMAND strings (e.g. ``"sync-architecture"``,
+    ``"pdd extracts prune"`` — hyphens/spaces, not valid Python identifiers), not
+    module symbols; feeding those to the surface gate produced phantom
+    ``removed:`` diffs on valid generated code (codex review finding 1). CLI/
+    command signature conformance stays owned by the conformance gate
+    (:func:`_extract_pdd_interface_signatures` still covers them).
+
+    Returns ``{}`` when there is no prompt, no ``type: "module"``
+    ``<pdd-interface>`` block, or the JSON is malformed. The conformance gate owns
+    the parse-error warning, so this stays silent to avoid a duplicate warning.
+    """
+    declared: Dict[str, Optional[str]] = {}
+    if not prompt_content:
+        return declared
+    tags = parse_prompt_tags(prompt_content)
+    if tags.get("interface_parse_error"):
+        return declared
+    interface = tags.get("interface")
+    if not isinstance(interface, dict) or interface.get("type") != "module":
+        return declared
+
+    module_spec = interface.get("module") or {}
+    for item in module_spec.get("functions") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name or not isinstance(name, str):
+            continue
+        sig = item.get("signature")
+        declared[name] = sig if isinstance(sig, str) else None
+    return declared
+
+
+def _declared_signature_to_entry(
+    raw_signature: Optional[str],
+    binding_kind: str,
+    *,
+    is_async: bool = False,
+) -> Optional[str]:
+    """Normalize a declared ``<pdd-interface>`` signature into a snapshot entry.
+
+    Produces an entry shaped like :func:`_snapshot_public_signatures` values
+    (``[<kind>] (params) -> ret``) so :func:`signature_entries_compatible` can
+    compare the DECLARED contract against the generated one. The binding kind and
+    async marker are copied from the GENERATED symbol (``binding_kind`` /
+    ``is_async``) because a ``<pdd-interface>`` signature cannot express
+    ``self`` / property / ``async``; matching them by construction means only the
+    parameter list and return annotation are actually compared, and no
+    binding-kind drift is ever invented from the declaration.
+
+    Returns ``None`` (presence-only: the symbol must exist but its signature is
+    not checked) when the declared signature is not a parseable paren-list — a
+    missing signature, ``None``, a class header (``class Foo(Base)``),
+    ``dataclass ...``, ``...`` — or when the composed entry does not parse as a
+    callable contract.
+    """
+    if not raw_signature or not isinstance(raw_signature, str):
+        return None
+    sig = raw_signature.strip()
+    # Strip a leading ``async`` and/or ``def <name>`` prefix so a declaration
+    # written as ``async def foo(x)`` or ``def foo(x)`` reduces to the bare
+    # parameter list. The entry's async-ness is taken from the generated symbol,
+    # not the declaration, so any declared ``async`` is dropped here.
+    if sig.startswith("async "):
+        sig = sig[len("async "):].strip()
+    def_match = re.match(r"^def\s+[A-Za-z_]\w*\s*(.*)$", sig, re.DOTALL)
+    if def_match:
+        sig = def_match.group(1).strip()
+        if sig.startswith("async "):
+            sig = sig[len("async "):].strip()
+    if not sig.startswith("("):
+        return None
+    async_prefix = "async " if is_async else ""
+    entry = f"[{binding_kind}] {async_prefix}{sig}"
+    if parse_callable_contract(entry) is None:
+        return None
+    return entry
+
+
+def _entry_binding_context(entry: Optional[str]) -> Optional[Tuple[str, bool]]:
+    """Return ``(binding_kind, is_async)`` parsed off a snapshot entry.
+
+    Reads the ``[<kind>]`` prefix and a leading ``async `` from a
+    :func:`_snapshot_public_signatures` value (e.g. ``[async_function] async
+    (x)`` -> ``("async_function", True)``). Returns ``None`` when the entry has
+    no binding-kind prefix.
+    """
+    if not entry:
+        return None
+    match = re.match(r"^\[([^\]]+)\]\s*(.*)$", entry.strip())
+    if match is None:
+        return None
+    return match.group(1), match.group(2).lstrip().startswith("async ")
+
+
+def _declared_presence_name(name: str) -> str:
+    """Map a declared symbol to the surface name whose presence satisfies it.
+
+    A constructor's ABI is keyed on the CLASS symbol (``Foo``), never
+    ``Foo.__init__`` (see :func:`_snapshot_public_surface`), so a prompt that
+    declares ``Foo.__init__`` is present as long as ``Foo`` is — flagging it as
+    a removed symbol on valid code was a false positive (codex review finding 2).
+    Every other declared name maps to itself.
+    """
+    if name.endswith(".__init__"):
+        return name[: -len(".__init__")]
+    return name
+
+
 def _verify_public_surface_regression(
     existing_code: Optional[str],
     generated_code: str,
@@ -2312,11 +2473,40 @@ def _verify_public_surface_regression(
         for sym in before:
             if sym.startswith(prefix):
                 expanded_allowed.add(sym)
-    removed = [
+    # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
+    # (issue #1900): a legit ``pdd change`` that adds a symbol while regeneration
+    # drifts an unrelated DECLARED signature used to dead-end the change->sync
+    # loop, because the old-vs-new comparison had no stable target. Per-symbol
+    # hybrid — DECLARED symbols are validated against the declaration; UNDECLARED
+    # symbols keep the old-code baseline. Empty when there is no parseable
+    # ``<pdd-interface>`` (also on a JSON parse error — the conformance gate owns
+    # that warning), so undeclared modules behave exactly as before.
+    declared = _collect_declared_surface(prompt_content, prompt_name)
+    declared_names = set(declared)
+
+    # Removal, per-symbol. UNDECLARED: a public name dropped between before and
+    # after regresses unless BREAKING-CHANGE opts it out (today's behavior).
+    # DECLARED: a still-declared symbol absent from the generated surface
+    # regresses regardless — the declaration is authoritative, so a
+    # BREAKING-CHANGE: remove does NOT excuse it, and its absence counts even if
+    # it was never in ``before``.
+    undeclared_removed = [
         symbol
         for symbol in _diff_public_surface(before, after)
-        if symbol not in expanded_allowed
+        if symbol not in declared_names and symbol not in expanded_allowed
     ]
+    # ``Foo.__init__`` is present when the ``Foo`` class symbol is (the
+    # constructor ABI is keyed on the class, not ``Class.__init__``), so map each
+    # declared name through its presence-name before the surface membership test
+    # (codex review finding 2). The presence-name is also what gets reported when
+    # a declared symbol is genuinely missing.
+    declared_missing = [
+        presence
+        for symbol in declared_names
+        for presence in (_declared_presence_name(symbol),)
+        if presence not in after
+    ]
+    removed = sorted(set(undeclared_removed) | set(declared_missing))
     before_signatures = _snapshot_public_signatures(
         existing_code,
         language or "python",
@@ -2329,17 +2519,95 @@ def _verify_public_surface_regression(
     )
     # Per-side module default-symbol tables (issue #1558): a parameter default
     # written as a same-module constant (``max_chars=_LIMIT`` where
-    # ``_LIMIT = 25000``) resolves to the literal it stands for. Each side is
-    # resolved against its OWN module — the existing code for the ``before``
-    # signature and the generated code for the ``after`` — so a literal <->
-    # same-module-constant refactor of a default is not flagged as a regression,
-    # while the same constant name resolving to a different value across the two
-    # versions still is.
+    # ``_LIMIT = 25000``) resolves to the literal it stands for. For the
+    # UNDECLARED old-vs-new comparison each side is resolved against its OWN
+    # module — the existing code for the ``before`` signature and the generated
+    # code for the ``after`` — so a literal <-> same-module-constant refactor of a
+    # default is not flagged as a regression, while the same constant name
+    # resolving to a different value across the two versions still is.
     before_default_symbols = build_module_default_symbols(existing_code)
     after_default_symbols = build_module_default_symbols(generated_code)
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set: Set[str] = set()
+    signature_details: List[Tuple[str, str, str, str]] = []
+
+    # DECLARED symbols: validate the generated signature against the DECLARED
+    # PARAM/return contract (a stable target), NEVER re-comparing params against
+    # the old code. Defaults on BOTH sides resolve in the GENERATED module
+    # namespace — the prompt describes the generated module (issue #1558's
+    # declared-vs-generated resolution).
+    for symbol in sorted(declared_names):
+        if symbol.endswith(".__init__"):
+            # A declared ``Class.__init__`` is presence-only here: the snapshot
+            # keys the constructor ABI on the CLASS entry (receiver-stripped),
+            # never ``Class.__init__``, and the conformance gate already
+            # validates constructor params against the declaration. Comparing the
+            # declared ``(self, ...)`` against the receiver-stripped ``[class]``
+            # entry would need fragile self-stripping (codex review finding 2).
+            continue
+        if symbol in allowed_signature_changes:
+            # A ``BREAKING-CHANGE: change signature <sym>`` opt-out. Honor it for
+            # declared symbols too (mirroring the undeclared path): the
+            # ``<pdd-interface>`` cannot express an intended async/binding-kind
+            # change, so this is the only escape hatch for one (codex round-2
+            # finding 1a).
+            continue
+        actual_entry = after_signatures.get(symbol)
+        if actual_entry is None:
+            # Absent from the generated signature table (missing symbol or a
+            # non-callable form). Presence is enforced by the removal check
+            # above; there is no callable entry to compare here.
+            continue
+        actual_ctx = _entry_binding_context(actual_entry)
+        if actual_ctx is None:
+            continue
+        # Anchor the un-declarable structural facets (binding kind + async) to the
+        # PRIOR generation when the symbol already existed and was callable there:
+        # the ``<pdd-interface>`` cannot express ``self`` / property / ``async`` /
+        # function-vs-class, so old code is their only stable baseline and an
+        # async->sync or function->class drift on a declared symbol is a real
+        # regression (codex round-2 finding 1a). A NEWLY-added declared symbol (or
+        # one whose prior form was a non-callable assignment/import) has no prior
+        # callable contract, so fall back to the generated kind/async — the
+        # declaration still governs the params either way.
+        before_entry = before_signatures.get(symbol)
+        before_ctx = (
+            _entry_binding_context(before_entry)
+            if before_entry is not None
+            and parse_callable_contract(before_entry) is not None
+            else None
+        )
+        expected_kind, expected_async = (
+            before_ctx if before_ctx is not None else actual_ctx
+        )
+        expected_entry = _declared_signature_to_entry(
+            declared[symbol], expected_kind, is_async=expected_async
+        )
+        if expected_entry is None:
+            # Declared signature is not a parseable paren-list -> presence-only:
+            # the symbol must exist (enforced above) but its signature is not
+            # checked, and it is never re-compared against the old code.
+            continue
+        compatible = signature_entries_compatible(
+            expected_entry,
+            actual_entry,
+            old_symbols=after_default_symbols,
+            new_symbols=after_default_symbols,
+        )
+        if compatible is False:
+            changed_set.add(symbol)
+            signature_details.append(
+                (symbol, expected_entry, actual_entry, "pdd-interface")
+            )
+        # ``compatible is True`` -> compatible; ``None`` -> unparseable entry,
+        # conservative skip (presence already enforced above).
+
+    # UNDECLARED symbols: keep the historical old-vs-new comparison EXACTLY,
+    # skipping any DECLARED symbol (owned by the block above so it is never
+    # double-checked against the old code).
     for symbol, signature in before_signatures.items():
+        if symbol in declared_names:
+            continue
         if symbol not in after_signatures or symbol in allowed_signature_changes:
             continue
         after_signature = after_signatures[symbol]
@@ -2364,6 +2632,8 @@ def _verify_public_surface_regression(
             continue
         changed_set.add(symbol)
     for symbol in before_signatures:
+        if symbol in declared_names:
+            continue
         if symbol in after_signatures or symbol in changed_set:
             continue
         if "." in symbol:
@@ -2379,6 +2649,7 @@ def _verify_public_surface_regression(
             changed_signatures=changed_signatures,
             pre_surface_size=len(before),
             post_surface_size=len(after),
+            signature_details=signature_details,
         )
 
 

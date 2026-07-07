@@ -645,9 +645,67 @@ def build_conformance_hard_failure_from_error(
     return "\n".join(block_lines)
 
 
+def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, str]]:
+    """Parse ``signature_detail:`` lines into ``(symbol, expected, actual, source)``.
+
+    A ``signature_detail:`` line carries the full expected-vs-actual contract for
+    one declared signature mismatch (issue #1900). The subprocess path rebuilds
+    the repair directive from stdout, so it must recover these lines to keep the
+    DECLARED expected signature — the stable repair target — in the directive and
+    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` as:
+      ``signature_detail: <symbol> | expected: <entry> | actual: <entry> | source: <src>``
+
+    The signature entries themselves routinely contain ` | ` (PEP-604 unions such
+    as ``int | str``), so the fields are split from the RIGHT off their qualified
+    ``| <field>: `` delimiters rather than matched with a non-greedy regex that
+    would truncate at the first ` | ` (codex review finding 3). ``symbol`` is a
+    Python identifier and ``source`` is a fixed tag, so the outer delimiters are
+    unambiguous. De-duplicated, preserving first-seen order.
+    """
+    details: List[Tuple[str, str, str, str]] = []
+    seen: set = set()
+    for raw_line in combined.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("signature_detail:"):
+            continue
+        body = line[len("signature_detail:"):].strip()
+        # The three field delimiters must be present AND in order
+        # (``| expected:`` before ``| actual:`` before ``| source:``). A missing
+        # or out-of-order line is malformed and must be SKIPPED, never raise
+        # (codex round-2 finding 3: an out-of-order line previously reached the
+        # rsplit chain and raised ValueError on unpack). ``find`` uses the first
+        # occurrence, which still admits a valid line whose expected signature
+        # contains a ``| actual:`` substring — the rsplit chain below anchors on
+        # the trailing (real) delimiters.
+        exp_i = body.find(" | expected: ")
+        act_i = body.find(" | actual: ")
+        src_i = body.find(" | source: ")
+        if not (0 <= exp_i < act_i < src_i):
+            continue
+        try:
+            left, source = body.rsplit(" | source: ", 1)
+            left, actual = left.rsplit(" | actual: ", 1)
+            symbol, expected = left.split(" | expected: ", 1)
+        except ValueError:
+            continue
+        detail = (symbol.strip(), expected.strip(), actual.strip(), source.strip())
+        if detail in seen:
+            continue
+        seen.add(detail)
+        details.append(detail)
+    return details
+
+
 def _parse_public_surface_failure_fields(
     stdout: str, stderr: str
-) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+) -> Optional[
+    Tuple[
+        str,
+        Tuple[str, ...],
+        Tuple[str, ...],
+        Tuple[Tuple[str, str, str, str], ...],
+    ]
+]:
     """Detect a public-surface regression and keep removals/signatures separate."""
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
@@ -681,6 +739,9 @@ def _parse_public_surface_failure_fields(
             }
         )
     )
+    # Preserve declaration source order (de-duped) so the directive lists the
+    # declared repair targets deterministically.
+    details_tuple = tuple(_parse_signature_detail_lines(combined))
     if not removed and not changed:
         return None
     lines = ["Public surface regression repair required."]
@@ -688,16 +749,32 @@ def _parse_public_surface_failure_fields(
         lines.append("Restore these public symbols from the existing module:")
         for sym in removed:
             lines.append(f"- {sym}")
-    if changed:
+    # Prefer the DECLARED signature as the repair target: it is a stable target,
+    # unlike "restore compatible signatures" (compatible with the code being
+    # regenerated), which dead-ended the change->sync loop (issue #1900).
+    declared_details = [d for d in details_tuple if d[3] == "pdd-interface"]
+    if declared_details:
+        lines.append(
+            "Restore these public symbols to their declared "
+            "<pdd-interface> signatures:"
+        )
+        for symbol, expected_entry, actual_entry, _ in declared_details:
+            lines.append(
+                f"- Restore `{symbol}` to its declared signature "
+                f"`{expected_entry}` (found `{actual_entry}`)."
+            )
+    declared_changed = {d[0] for d in declared_details}
+    remaining_changed = [sym for sym in changed if sym not in declared_changed]
+    if remaining_changed:
         lines.append("Restore compatible signatures for these public symbols:")
-        for sym in changed:
+        for sym in remaining_changed:
             lines.append(f"- {sym}")
     lines.append(
         "Preserve backward-compatible public helpers unless the prompt lists "
         "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
         "or BREAKING-CHANGE: change signature <symbol> markers."
     )
-    return "\n".join(lines), removed, changed
+    return "\n".join(lines), removed, changed, details_tuple
 
 
 def _parse_public_surface_failure(
@@ -707,7 +784,7 @@ def _parse_public_surface_failure(
     parsed = _parse_public_surface_failure_fields(stdout, stderr)
     if parsed is None:
         return None
-    directive, removed, changed = parsed
+    directive, removed, changed, _details = parsed
     signature = tuple(
         [f"removed:{symbol}" for symbol in removed]
         + [f"signature_changed:{symbol}" for symbol in changed]
@@ -2623,6 +2700,7 @@ class AsyncSyncRunner:
         parsed = _parse_public_surface_failure_fields(stdout, stderr)
         removed = parsed[1] if parsed else tuple()
         changed = parsed[2] if parsed else tuple()
+        details = parsed[3] if parsed else tuple()
         combined = (stdout or "") + "\n" + (stderr or "")
 
         prompt_field = "<unknown>"
@@ -2660,18 +2738,28 @@ class AsyncSyncRunner:
                 return default
             return match.group(1).strip().rstrip(".").strip() or default
 
-        return "\n".join(
+        block_lines = [
+            failure_summary or "Public surface regression",
+            "",
+            "=== public surface regression ===",
+            f"prompt: {prompt_field}",
+            f"output: {_extract_field('Output')}",
+            "removed: " + (", ".join(removed) if removed else "<none>"),
+            "signature_changed: "
+            + (", ".join(changed) if changed else "<none>"),
+            f"pre surface size: {_extract_field('Pre surface size')}",
+            f"post surface size: {_extract_field('Post surface size')}",
+        ]
+        # Carry the full expected-vs-actual contract for each declared signature
+        # mismatch so criterion 4 (no truncation) holds on the agentic path too
+        # (issue #1900). Byte-identical to the ``signature_detail:`` message line.
+        for symbol, expected_entry, actual_entry, source in details:
+            block_lines.append(
+                f"signature_detail: {symbol} | expected: {expected_entry} | "
+                f"actual: {actual_entry} | source: {source}"
+            )
+        block_lines.extend(
             [
-                failure_summary or "Public surface regression",
-                "",
-                "=== public surface regression ===",
-                f"prompt: {prompt_field}",
-                f"output: {_extract_field('Output')}",
-                "removed: " + (", ".join(removed) if removed else "<none>"),
-                "signature_changed: "
-                + (", ".join(changed) if changed else "<none>"),
-                f"pre surface size: {_extract_field('Pre surface size')}",
-                f"post surface size: {_extract_field('Post surface size')}",
                 "",
                 "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
                 "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
@@ -2682,6 +2770,7 @@ class AsyncSyncRunner:
                 _env_fingerprint(),
             ]
         )
+        return "\n".join(block_lines)
 
     def _build_test_churn_hard_failure(
         self,
