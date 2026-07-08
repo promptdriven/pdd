@@ -73,3 +73,16 @@ def test_spot_template_provisioning_model_is_release_gate_overridable():
     )
     assert "PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL" in submit_text
     assert "{{SPOT_PROVISIONING_MODEL}}" in submit_text
+
+
+def test_cloud_batch_image_installs_and_verifies_github_cli():
+    dockerfile_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+    cloudbuild_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "cloudbuild.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert re.search(r"^\s*gh\s*\\$", dockerfile_text, re.MULTILINE)
+    assert '"gh"' in cloudbuild_text
+    assert "gh --version" in cloudbuild_text or '["gh", "--version"]' in cloudbuild_text
