@@ -28,6 +28,7 @@ from pdd.agentic_sync_runner import (
     _BOX_CHARS_RE,
     _format_duration,
     _parse_conformance_failure,
+    _parse_prose_output_failure,
     _parse_public_surface_failure,
     _parse_test_churn_failure,
     _parse_cost_from_csv,
@@ -1513,6 +1514,52 @@ class TestSyncOneModule:
         assert "Required missing exports" in directive
         assert "On `update_main`" in directive
 
+    def test_parse_prose_output_failure(self):
+        stderr = (
+            "Generation output extraction failure for foo_python.prompt:\n"
+            "model_name: local/lm_studio\n"
+            "language: python\n"
+            "output: pdd/foo.py\n"
+            "Extractor result: empty\n"
+            "Raw output excerpt: <empty>\n"
+        )
+
+        directive, signature = _parse_prose_output_failure("", stderr)
+
+        assert signature == ("prose",)
+        assert "Return the complete source file only" in directive
+        assert "Do not include any planning text" in directive
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_prose_output_hard_failure_includes_extraction_context(self, _mock_env):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Generation output extraction failure for foo_python.prompt:\n"
+            "model_name: local/lm_studio\n"
+            "language: python\n"
+            "output: pdd/foo.py\n"
+            "Extractor result: empty\n"
+            "Raw output excerpt: <empty>\n"
+        )
+
+        block = runner._build_prose_output_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== generation output extraction failure ===" in block
+        assert "prompt: foo_python.prompt" in block
+        assert "output: pdd/foo.py" in block
+        assert "model: local/lm_studio" in block
+        assert "extractor_result: empty" in block
+        assert "raw_output_excerpt: <empty>" in block
+        assert "Reproduce locally: pdd sync foo" in block
+
     def test_parse_public_surface_failure(self):
         stderr = (
             "Public surface regression for update_main_Python.prompt: "
@@ -1616,6 +1663,29 @@ class TestSyncOneModule:
     # tests prevent a builder field rename from silently breaking the
     # subprocess-level retry path.
     # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_prose_output_round_trip_through_parser(self, _mock_env):
+        from pdd.agentic_sync_runner import build_prose_output_hard_failure_from_error
+        from pdd.code_generator_main import ProseOutputError
+
+        exc = ProseOutputError(
+            "foo_python.prompt",
+            "pdd/foo.py",
+            "python",
+            model_name="local/lm_studio",
+            raw_output="",
+            extractor_result="empty",
+        )
+
+        block = build_prose_output_hard_failure_from_error(exc, "foo")
+        parsed = _parse_prose_output_failure("", block)
+
+        assert parsed is not None
+        directive, signature = parsed
+        assert signature == ("prose",)
+        assert "Return the complete source file only" in directive
+        assert "raw_output_excerpt: <empty>" in block
+
     @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
     def test_public_surface_round_trip_through_parser(self, _mock_env):
         """Build the hard-failure block from a typed error, feed it back
@@ -1871,6 +1941,48 @@ class TestSyncOneModule:
         second_env = mock_popen.call_args_list[1].kwargs["env"]
         assert "PDD_REPAIR_DIRECTIVE" not in first_env
         assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_prose_output_failure_retries_once_then_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_env, mock_unlink
+    ):
+        prose_error = (
+            "Generation output extraction failure for foo_python.prompt:\n"
+            "model_name: local/lm_studio\n"
+            "language: python\n"
+            "output: pdd/foo.py\n"
+            "Extractor result: empty\n"
+            "Raw output excerpt: <empty>\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=prose_error, exit_code=1),
+            _make_mock_popen(stderr_text=prose_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert not success
+        assert cost == pytest.approx(0.0)
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "Return the complete source file only" in second_env["PDD_REPAIR_DIRECTIVE"]
+        assert "=== generation output extraction failure ===" in error
+        assert "model: local/lm_studio" in error
+        assert "raw_output_excerpt: <empty>" in error
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
