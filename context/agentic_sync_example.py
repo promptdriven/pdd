@@ -4,173 +4,160 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+from rich.console import Console
 
-# Ensure the parent directory is in the sys.path so 'pdd' can be imported
+# Ensure we can import the pdd package
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pdd.agentic_sync import run_agentic_sync, run_global_sync
 
-def setup_mock_project(output_dir: Path) -> None:
+console = Console()
+
+def setup_mock_project(project_dir: Path) -> tuple[Path, Path]:
     """
-    Creates a minimal, valid PDD project structure with an architecture.json
-    and a sample prompt file in the temporary output directory.
+    Helper to set up a mock PDD project structure inside `./output`
+    for the sync runner to analyze.
     """
-    prompts_dir = output_dir / "prompts"
+    prompts_dir = project_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Create a minimal mock .pddrc
-    pddrc_content = {
+    # 1. Create a mock architecture.json
+    architecture_data = {
+        "modules": [
+            {
+                "filename": "math_helper_python.prompt",
+                "filepath": "math_helper.py",
+                "reason":"Core math operations utility",
+                "dependencies": []
+            },
+            {
+                "filename": "calculator_python.prompt",
+                "filepath": "calculator.py",
+                "reason": "High-level calculator wrapper",
+                "dependencies": ["math_helper_python.prompt"]
+            }
+        ]
+    }
+    arch_path = project_dir / "architecture.json"
+    arch_path.write_text(json.dumps(architecture_data, indent=2), encoding="utf-8")
+
+    # 2. Create a mock .pddrc file
+    pddrc_data = {
         "version": "1.0",
         "contexts": {
             "default": {
                 "defaults": {
-                    "generate_output_path": "src/",
-                    "test_output_path": "tests/",
+                    "generate_output_path": "./",
                     "default_language": "python"
                 }
             }
         }
     }
-    (output_dir / ".pddrc").write_text(json.dumps(pddrc_content, indent=2), encoding="utf-8")
+    pddrc_path = project_dir / ".pddrc"
+    pddrc_path.write_text(json.dumps(pddrc_data, indent=2), encoding="utf-8")
 
-    # 2. Create a mock architecture.json with one registered module
-    architecture_content = {
-        "modules": [
-            {
-                "filename": "calc_python.prompt",
-                "filepath": "src/calc.py",
-                "reason": "Performs basic mathematical operations.",
-                "dependencies": [],
-                "interface": {
-                    "type": "module",
-                    "module": {
-                        "functions": [
-                            {
-                                "name": "add_numbers",
-                                "signature": "def add_numbers(a: int, b: int) -> int:"
-                            }
-                        ]
-                    }
-                }
-            }
-        ]
-    }
-    (output_dir / "architecture.json").write_text(json.dumps(architecture_content, indent=2), encoding="utf-8")
+    # 3. Create mock prompt files
+    (prompts_dir / "math_helper_python.prompt").write_text(
+        """<pdd-reason>Provides basic sum and multiply capabilities.</pdd-reason>
+        <pdd-interface>{"type": "module"}</pdd-interface>
+        """, encoding="utf-8"
+    )
+    (prompts_dir / "calculator_python.prompt").write_text(
+        """<pdd-reason>Calculates complex equations.</pdd-reason>
+        <pdd-interface>{"type": "module"}</pdd-interface>
+        <include>prompts/math_helper_python.prompt</include>
+        """, encoding="utf-8"
+    )
 
-    # 3. Create the matching prompt file
-    prompt_content = """<pdd-reason>Basic math operations.</pdd-reason>\n<pdd-interface>\n{\n  "type": "module",\n  "module": {\n    "functions": [{"name": "add_numbers", "signature": "def add_numbers(a: int, b: int) -> int:"}]\n  }\n}\n</pdd-interface>\n"""
-    (prompts_dir / "calc_python.prompt").write_text(prompt_content, encoding="utf-8")
+    return arch_path, pddrc_path
 
 
-def run_example() -> None:
-    """
-    Demonstrates agentic sync execution flows.
-
-    How run_agentic_sync works:
-        1. Parses the GitHub issue URL.
-        2. Fetches the issue details and comments via 'gh api'.
-        3. Identifies modules needing changes (using deterministic branch diff or LLM).
-        4. Validates architecture dependencies.
-        5. Runs dry-run preflights.
-        6. Parallel syncs modules via AsyncSyncRunner.
-
-    Input Parameters for run_agentic_sync:
-        issue_url (str): The target GitHub issue URL.
-        verbose (bool): Prints raw logs, prompt previews, and costs.
-        quiet (bool): Suppresses non-essential console outputs.
-        budget (float): Maximum dollar budget for LLM operations.
-        dry_run (bool): Evaluates the plan and validation without performing writes.
-        use_github_state (bool): Writes progress logs as comments on the issue.
-
-    Returns:
-        Tuple[bool, str, float, str]: (success, message, total_cost, model_used)
-    """
+def main() -> None:
+    # Define our output directory structure
     output_dir = Path("./output").resolve()
-    if output_dir.exists():
-        import shutil
-        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[Setup] Generating temporary PDD project in: {output_dir}")
-    setup_mock_project(output_dir)
+    console.print("[bold blue]Setting up mock project workspace...[/bold blue]")
+    arch_path, pddrc_path = setup_mock_project(output_dir)
+    
+    # Temporarily change directory to output_dir so path discovery locates the mock files
+    original_cwd = os.getcwd()
+    os.chdir(output_dir)
 
-    # Mock the issue payload returned by 'gh api'
-    mock_issue_payload = {
-        "title": "Fix calculator addition logic",
-        "body": "The addition function in calc_python should support negative floats.",
-        "comments_url": "https://api.github.com/repos/example/pdd-project/issues/101/comments"
-    }
-
-    # Setup the subprocess run mock targeting standard git, gh, and child dry-runs
-    def mock_subprocess_run(args, **kwargs):
-        cmd = " ".join(args) if isinstance(args, list) else str(args)
-        response = MagicMock()
-        response.returncode = 0
+    try:
+        # =====================================================================
+        # Workflow 1: run_global_sync
+        # =====================================================================
+        console.print("\n[bold green]--- Testing run_global_sync (Dry Run) ---[/bold green]")
         
-        if "api repos/" in cmd:
-            response.stdout = json.dumps(mock_issue_payload)
-        elif "api" in cmd and "comments" in cmd:
-            response.stdout = json.dumps([])
-        elif "rev-parse" in cmd:
-            response.stdout = "main"
-        elif "diff" in cmd:
-            response.stdout = "prompts/calc_python.prompt"
-        elif "dry-run" in cmd:
-            response.stdout = "Dry run successful"
-        else:
-            response.stdout = ""
-        return response
-
-    print("\n--- Running run_agentic_sync() (Dry-Run Mode) ---")
-
-    # Patch environmental and subprocess prerequisites to guarantee execution in any CI environment
-    with patch("pdd.agentic_sync._check_gh_cli", return_value=True), \
-         patch("pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(mock_issue_payload))), \
-         patch("pdd.agentic_sync._find_project_root", return_value=output_dir), \
-         patch("pdd.agentic_sync._run_single_dry_run", return_value=(True, "")), \
-         patch("pdd.agentic_sync.subprocess.run", side_effect=mock_subprocess_run):
-
-        success, message, cost, model = run_agentic_sync(
-            issue_url="https://github.com/example/pdd-project/issues/101",
-            verbose=False,
+        # run_global_sync performs a Tier 1 (prompt staleness) analysis of all
+        # modules declared in the architecture config.
+        success, msg, cost, model = run_global_sync(
+            verbose=True,
             quiet=False,
+            dry_run=True,          # Dry run prevents actual file writes / LLM regeneration
             budget=10.0,
-            dry_run=True,
-            use_github_state=False
+            skip_verify=True,
+            skip_tests=True,
+            agentic_mode=True
         )
+        
+        console.print(f"[bold]Success:" , success)
+        console.print(f"[bold]Message:[" , msg)
+        console.print(f"[bold]LLM Cost:" , f"${cost:.4f}")
+        console.print(f"[bold]Model Engine:" , model)
 
-        print("\n[Result] run_agentic_sync output:")
-        print(f"  Success:      {success}")
-        print(f"  Message:      {message}")
-        print(f"  Cost (USD):   ${cost:.4f}")
-        print(f"  Model Used:   {model}")
+        # =====================================================================
+        # Workflow 2: run_agentic_sync (GitHub Issue Driven)
+        # =====================================================================
+        console.print("\n[bold green]--- Testing run_agentic_sync (Dry Run with mocked Git/GH CLI) ---[/bold green]")
+        
+        # Since run_agentic_sync queries the GitHub API using `gh`, we mock
+        # those external dependencies so the example runs flawlessly headless.
+        mock_issue_data = {
+            "title": "Support square root function in Calculator",
+            "body": "Please modify math_helper and calculator to support sqrt operations.",
+            "comments_url": "https://api.github.com/repos/example/repo/issues/1/comments"
+        }
 
+        with patch("pdd.agentic_sync._check_gh_cli", return_value=True),
+             patch("pdd.agentic_sync._run_gh_command") as mock_gh,
+             patch("pdd.agentic_sync.run_agentic_task") as mock_ll:
 
-    print("\n--- Running run_global_sync() (Dry-Run Mode) ---")
+            # Mock the GitHub API response for fetching issue detail and comments
+            mock_gh.side_effect = [
+                (True, json.dumps(mock_issue_data)),  # Repo Issue fetch
+                (True, "[]")                           # Comments fetch
+            ]
+            
+            # Mock the Module Identification LLM output response
+            mock_ll.return_value = (
+                True,
+                "MODULES_TO_SYNC: [\"math_helper_python\", \"calculator_python\"]\nDEPS_VALID: true",
+                0.015,  # mock cost
+                "mock-gpt-4o"
+            )
 
-    with patch("pdd.agentic_sync._find_project_root", return_value=output_dir), \
-         patch("pdd.agentic_sync._run_single_dry_run", return_value=(True, "")), \
-         patch("pdd.agentic_sync.subprocess.run", side_effect=mock_subprocess_run):
+            # Execute issue URL sync orchestration in dry_run mode
+            success_issue, msg_issue, cost_issue, model_issue = run_agentic_sync(
+                issue_url="https://github.com/example/repo/issues/1",
+                dry_run=True,
+                quiet=False,
+                verbose=True,
+                use_github_state=False  # Do not attempt to post update comments back to GitHub
+            )
 
-        success, message, cost, model = run_global_sync(
-            verbose=False,
-            quiet=False,
-            budget=5.0,
-            dry_run=True
-        )
+            console.print(f"[bold]Success:" , success_issue)
+            console.print(f"[bold]Message:" , msg_issue)
+            console.print(f"[bold]Total Accumulated Cost:" , f"${cost_issue:.4f}")
+            console.print(f"[bold]Model Engine:" , model_issue)
 
-        print("\n[Result] run_global_sync output:")
-        print(f"  Success:      {success}")
-        print(f"  Message:      {message}")
-        print(f"  Cost (USD):   ${cost:.4f}")
-        print(f"  Model Used:   {model}")
-
-    # Clean up temporary output directory
-    import shutil
-    shutil.rmtree(output_dir, ignore_errors=True)
-    print("\n[Cleanup] Cleaned up temporary directory.")
+    finally:
+        # Restore original working directory
+        os.chdir(original_cwd)
+        console.print("\n[bold blue]Example run completed safely.[/bold blue]")
 
 
 if __name__ == "__main__":
-    run_example()
+    main()
