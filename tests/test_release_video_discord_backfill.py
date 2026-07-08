@@ -619,6 +619,33 @@ def test_record_skip_is_idempotent_for_same_reason():
     assert github.edits == []
 
 
+def test_record_skip_replaces_prior_skip_reason():
+    module = load_backfill_module()
+    old_reason = "Provider quota blocked publication."
+    new_reason = "Provider quota and audit gate failures blocked safe publication."
+    old_marker = module.release_video_skip_marker("v0.0.297", old_reason)
+    github = FakeGitHubReleaseClient(
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {old_reason}\n\n"
+        "Existing notes\n\n"
+        f"{old_marker}\n"
+    )
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason=new_reason,
+        github=github,
+    )
+
+    assert result.release_body_updated is True
+    assert result.marker_added is True
+    assert f"Reason: {new_reason}" in github.body
+    assert old_reason not in github.body
+    assert old_marker not in github.body
+    assert module.release_video_skip_marker("v0.0.297", new_reason) in github.body
+
+
 def test_github_client_uses_gh_release_view_and_edit_without_network():
     module = load_backfill_module()
     calls: list[tuple[list[str], str | None]] = []
