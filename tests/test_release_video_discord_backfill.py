@@ -568,6 +568,57 @@ def test_backfill_requires_webhook_before_mutating_unmarked_release_body():
     assert github.edits == []
 
 
+def test_record_skip_marks_release_without_discord_or_youtube_url():
+    module = load_backfill_module()
+    github = FakeGitHubReleaseClient("Existing notes\n")
+    posts = []
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason="Provider quota and audit gate failures blocked safe publication.",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
+    )
+
+    assert result.posted is False
+    assert result.release_body_updated is True
+    assert result.marker_added is True
+    assert result.skipped_reason == "release-video-skipped"
+    assert posts == []
+    assert "Release video: skipped for v0.0.297." in github.body
+    assert "Reason: Provider quota and audit gate failures blocked safe publication." in github.body
+    assert module.release_video_skip_marker(
+        "v0.0.297",
+        "Provider quota and audit gate failures blocked safe publication.",
+    ) in github.body
+
+
+def test_record_skip_is_idempotent_for_same_reason():
+    module = load_backfill_module()
+    reason = "Provider quota and audit gate failures blocked safe publication."
+    marker = module.release_video_skip_marker("v0.0.297", reason)
+    github = FakeGitHubReleaseClient(
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {reason}\n\n"
+        "Existing notes\n\n"
+        f"{marker}\n"
+    )
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason=reason,
+        github=github,
+    )
+
+    assert result.posted is False
+    assert result.release_body_updated is False
+    assert result.marker_added is False
+    assert result.skipped_reason == "release-video-skip-already-marked"
+    assert github.edits == []
+
+
 def test_github_client_uses_gh_release_view_and_edit_without_network():
     module = load_backfill_module()
     calls: list[tuple[list[str], str | None]] = []
