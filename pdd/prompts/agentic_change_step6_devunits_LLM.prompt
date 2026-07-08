@@ -15,6 +15,7 @@ You are working on step 6 of 13 in an agentic change workflow. Previous steps co
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -200,6 +201,26 @@ Only these edit patterns are allowed:
 3. Remove temporary error throws (TEMPORARY markers)
 
 After the PR from `pdd change` is merged, run `pdd sync <module>` to regenerate code from prompts.
+
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON `status` to decide whether to stop or proceed, and reads `direct_edit_candidates` to pass to Step 9; the prose `**Status:**` line and the "Direct Edit Candidates" table below are now a FALLBACK only.
+
+1. `{artifacts_dir}/06_devunits.json` — the machine-readable decision. Emit valid JSON:
+   ```json
+   {{
+     "status": "proceed",
+     "direct_edit_candidates": ["frontend/src/path/Component.tsx"],
+     "rationale": "3 dev units to modify"
+   }}
+   ```
+   - `status`: `"no_dev_units"` ONLY for the "No Dev Units Found" hard stop (no dev units AND no direct-edit candidates). Use `"proceed"` when dev units were found OR any Direct Edit Candidates exist (both the "Found N dev units" and "No Prompt Dev Units Found - Direct Edits Required" cases continue).
+   - `direct_edit_candidates`: repo-relative paths from the "Direct Edit Candidates" table — passed to Step 9. Empty list if none.
+   - `rationale`: one-line reason.
+
+2. `{artifacts_dir}/06_devunits.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 6/13` issue comment.
+
+Still emit the `<step_report>` block, the `**Status:**` line, and the "Direct Edit Candidates" table below UNCHANGED — they are the orchestrator's fallback when these files are missing.
 
 % Output
 

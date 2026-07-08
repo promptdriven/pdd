@@ -18,6 +18,7 @@ You are working on step 11 of 13 in an agentic change workflow. Previous step up
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Worktree Path: {worktree_path}
+- Artifacts Directory: {artifacts_dir}
 - Files Modified: {files_to_stage}
 - Review Iteration: {review_iteration} of 5
 
@@ -82,6 +83,25 @@ Thoroughly review all modified/created files for issues:
    - Unclear or ambiguous wording
    - Missing context for future maintainers
 
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON `status` to decide whether the review loop is done; the "No Issues Found" prose below is now a FALLBACK only.
+
+1. `{artifacts_dir}/11_review.json` — the machine-readable decision. Emit valid JSON:
+   ```json
+   {{
+     "status": "clean",
+     "manual_review": [{{"path": "docs/x.md", "reason": "left for human review"}}]
+   }}
+   ```
+   - `status`: `"clean"` when there are NO remaining issues to fix — this exits the review loop and proceeds to Step 13. Use `"issues_found"` when issues remain for Step 12 to fix.
+   - `manual_review`: one object per item that cannot be auto-fixed and should be surfaced in the PR body. Empty list if none.
+   - The detailed, itemized issue list stays in your `<step_report>` / `.md` body below — Step 12 reads it from there to apply fixes.
+
+2. `{artifacts_dir}/11_review.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 11/13` issue comment.
+
+Still emit the `<step_report>` block and the `**Status:** No Issues Found` / `**Status:** Issues Found` prose below UNCHANGED — they are the orchestrator's fallback when these files are missing. (Each review iteration overwrites these two files; that is expected — the orchestrator reads them immediately after this step returns.)
+
 % Output
 
 After completing your review, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
@@ -110,6 +130,10 @@ Your final response must include exactly one `<step_report>...</step_report>` bl
    - **Type:** Documentation
    - **Issue:** [Description]
    - **Fix:** [What needs to be changed]
+
+### Manual Review
+For any issue that cannot be safely auto-fixed by Step 12, include one fallback marker line per item:
+MANUAL_REVIEW: `path/to/file` — [reason human review is required]
 
 ### Summary
 Found {{N}} issues requiring fixes.
