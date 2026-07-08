@@ -237,6 +237,73 @@ def _next_step(current: Union[int, float]) -> Union[int, float]:
         return STEP_ORDER[-1]
 
 
+_CHECKUP_STEP_STATE_KEYS: Dict[Union[int, float], str] = {
+    step: str(step).replace(".", "_") for step in STEP_ORDER
+}
+
+
+def _prune_rewound_checkup_state(
+    state: Dict[str, Any],
+    actual_last_success: Union[int, float],
+) -> None:
+    """Drop cached checkup state that is no longer reachable after a rewind.
+
+    Cached-state validation can lower ``last_completed_step`` when an earlier
+    output is missing or starts with ``FAILED:``. Any later step output,
+    telemetry entry, and loop metadata then belongs to an execution path the
+    resumed run must not trust.
+    """
+    try:
+        actual_idx = STEP_ORDER.index(actual_last_success)
+    except ValueError:
+        actual_idx = -1
+
+    completed_step_keys = {
+        _CHECKUP_STEP_STATE_KEYS[step] for step in STEP_ORDER[: actual_idx + 1]
+    }
+    step_outputs = state.get("step_outputs")
+    if isinstance(step_outputs, dict):
+        for key in list(step_outputs):
+            if (
+                key in _CHECKUP_STEP_STATE_KEYS.values()
+                and key not in completed_step_keys
+            ):
+                del step_outputs[key]
+        if actual_last_success < 7:
+            step_outputs.pop("pr_push", None)
+
+    step_by_id = {step_id: step for step, step_id in STEP_ID_MAP.items()}
+
+    def _telemetry_step(entry: Any) -> Optional[Union[int, float]]:
+        if not isinstance(entry, dict):
+            return None
+        raw_step = entry.get("internal_step")
+        if isinstance(raw_step, (int, float)):
+            return raw_step
+        if isinstance(raw_step, str):
+            try:
+                return float(raw_step) if "." in raw_step else int(raw_step)
+            except ValueError:
+                pass
+        raw_step_id = entry.get("step_id")
+        if isinstance(raw_step_id, str):
+            return step_by_id.get(raw_step_id)
+        return None
+
+    telemetry = state.get("step_telemetry")
+    if isinstance(telemetry, list):
+        state["step_telemetry"] = [
+            entry
+            for entry in telemetry
+            if (step := _telemetry_step(entry)) is None
+            or step in STEP_ORDER[: actual_idx + 1]
+        ]
+
+    if actual_last_success < 7:
+        state["fix_verify_iteration"] = 0
+        state["previous_fixes"] = ""
+
+
 # ---------------------------------------------------------------------------
 # Git helpers
 # ---------------------------------------------------------------------------
@@ -3672,6 +3739,7 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"(found FAILED steps in cache)[/yellow]"
                     )
                 last_completed_step = actual_last_success
+                _prune_rewound_checkup_state(state, actual_last_success)
 
         # External review (PR #1215) Finding 2: a loaded state whose run
         # already COMPLETED (last_completed_step is the terminal step) must NOT
