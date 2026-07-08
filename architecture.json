@@ -10200,6 +10200,11 @@
             "name": "resolve_generate_output_paths",
             "signature": "(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
             "returns": "list[str]"
+          },
+          {
+            "name": "resolve_test_output_paths",
+            "signature": "(prompt_file: str | Path, code_file: str | Path, *, output: Optional[str] = None, language: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
+            "returns": "list[str]"
           }
         ]
       }
