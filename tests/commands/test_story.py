@@ -476,21 +476,26 @@ class TestDuplicateDetection:
     def test_update_flag_allows_overwrite(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
-        """--update allows overwriting an existing story slug."""
-        stories_dir = tmp_path / "user_stories"
-        stories_dir.mkdir(parents=True, exist_ok=True)
-        existing = stories_dir / "story__my_feature.md"
-        existing.write_text("old content\n", encoding="utf-8")
+        """--update on an existing story slug relinks it and exits 0.
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            with patch("pdd.commands.story.generate_user_story") as mock_gen:
-                mock_gen.return_value = (
+        The story must exist in the *resolved* stories dir (the isolated cwd),
+        so the update takes the relink path (cache_story_prompt_links) rather
+        than falling through to fresh LLM generation (#1889 Bug 3).
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            existing = stories_dir / "story__my_feature.md"
+            existing.write_text("old content\n", encoding="utf-8")
+
+            with patch("pdd.commands.story.cache_story_prompt_links") as mock_link, \
+                 patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_link.return_value = (
                     True,
-                    f"Updated story file: {existing}. Story prompt metadata linked.",
-                    0.03,
-                    "claude-sonnet-4-6",
-                    str(existing),
-                    ["commands/x_python.prompt"],
+                    "Story prompt metadata linked.",
+                    0.0,
+                    "",
+                    ["prompts/x_python.prompt"],
                 )
                 result = runner.invoke(
                     story,
@@ -504,6 +509,8 @@ class TestDuplicateDetection:
                     obj={"quiet": True, "verbose": False},
                 )
         assert result.exit_code == 0, result.output
+        mock_link.assert_called_once()
+        mock_gen.assert_not_called()
 
     def test_update_existing_title_merges_metadata_without_regenerating(
         self, runner: CliRunner, tmp_path: Path
@@ -538,6 +545,39 @@ class TestDuplicateDetection:
         assert result.exit_code == 0, result.output
         mock_link.assert_called_once()
         mock_gen.assert_not_called()
+
+    def test_update_missing_slug_exits_nonzero_without_llm(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Bug #1889: `story add --update <missing-slug>` must fail fast, no LLM.
+
+        Previously --update on a slug with no existing story file fell through to
+        fresh LLM generation (which hangs on interactive device-auth offline)
+        instead of erroring. It must raise a clean ClickException before any LLM
+        call and exit nonzero.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            # No story__my_feature.md exists.
+            with patch("pdd.commands.story.generate_user_story") as mock_gen, \
+                 patch("pdd.commands.story.cache_story_prompt_links") as mock_link:
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--title", "My Feature",
+                        "--prompt", "prompts/x_python.prompt",
+                        "--update",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+
+        assert result.exit_code != 0, result.output
+        assert "update" in result.output.lower()
+        mock_gen.assert_not_called()
+        mock_link.assert_not_called()
 
     def test_case_insensitive_slug_collision_detected(
         self, runner: CliRunner, tmp_path: Path
@@ -850,6 +890,82 @@ class TestStoryLink:
             obj={"quiet": True, "verbose": False},
         )
         assert result.exit_code != 0
+
+    def test_link_missing_prompt_exits_nonzero_and_preserves_metadata(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Bug #1889: `story link --prompt <missing>` must fail without mutating.
+
+        A nonexistent explicit --prompt path was never existence-checked, so the
+        story's existing valid <!-- pdd-story-prompts: ... --> metadata was
+        re-resolved against the (missing-only) explicit pool, dropping the valid
+        link and writing a dangling basename -- while still exiting 0.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            prompt_file = root / "prompts" / "calc_python.prompt"
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            prompt_file.write_text("% calc prompt\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            original = (
+                "## Story\nAs a user, I want to add numbers.\n\n"
+                "<!-- pdd-story-prompts: prompts/calc_python.prompt -->\n"
+            )
+            story_file.write_text(original, encoding="utf-8")
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompt", "prompts/does_not_exist.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+            # Fails non-zero and names the missing prompt.
+            assert result.exit_code != 0, result.output
+            assert "does_not_exist.prompt" in result.output
+            # The story metadata is left completely untouched on failure.
+            assert story_file.read_text(encoding="utf-8") == original
+
+    def test_link_valid_new_prompt_preserves_existing_refs(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """A successful relink with a new valid prompt keeps already-valid refs."""
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            calc = root / "prompts" / "calc_python.prompt"
+            calc.parent.mkdir(parents=True, exist_ok=True)
+            calc.write_text("% calc prompt\n", encoding="utf-8")
+            adder = root / "prompts" / "adder_python.prompt"
+            adder.write_text("% adder prompt\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            story_file.write_text(
+                "## Story\nAs a user, I want to add numbers.\n\n"
+                "<!-- pdd-story-prompts: prompts/calc_python.prompt -->\n",
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompt", "prompts/adder_python.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        content = story_file.read_text(encoding="utf-8")
+        # Both the pre-existing valid ref and the newly linked one survive.
+        assert "calc_python.prompt" in content
+        assert "adder_python.prompt" in content
 
 
 # ---------------------------------------------------------------------------
