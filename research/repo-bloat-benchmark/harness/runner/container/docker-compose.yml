@@ -36,8 +36,8 @@
 # Bring-up + no-billing verification:
 #   docker compose build
 #   docker compose up -d agent
-#   docker compose run --rm runner python3 harness/runner/container/egress_check.py --role runner
-#   docker compose run --rm runner python3 -m harness.runner.container.integration_check
+#   docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
+#   docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
 # The integration check launches the real command arm inside the AGENT's
 # namespace, verifies it reaches the live advertised recording-proxy endpoint,
 # cannot reach the gateway directly, and can see the shared frozen-home/report
@@ -110,8 +110,9 @@ services:
       - rb-agent-requests:/bench/agent-requests
     networks:
       - rb-sandbox
-    depends_on:
-      - runner
+    # Do not depend on the runner service. The live recording proxy is hosted by
+    # the one-off `docker compose run --use-aliases runner ...` process; starting
+    # an idle runner service here can steal or mask the `runner` DNS alias.
     command: ["python3", "-m", "harness.runner.container.agent_worker"]
 
 volumes:

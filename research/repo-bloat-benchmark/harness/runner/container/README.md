@@ -55,12 +55,14 @@ cd research/repo-bloat-benchmark/harness/runner/container
 docker compose build
 # Start the isolated agent worker once per session:
 docker compose up -d agent
-# From the RUNNER namespace — the gateway ACL itself:
-docker compose run --rm runner python3 harness/runner/container/egress_check.py --role runner
+# From the RUNNER namespace — the gateway ACL itself. `--use-aliases` is
+# required because the live recording proxy runs in this one-off container and
+# the isolated agent resolves it by the stable `runner` service alias.
+docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
 # Zero-billing end-to-end smoke: launch the real command arm inside `agent`,
 # reach the live recording proxy at its advertised `runner:<port>` endpoint,
 # prove the frozen CODEX_HOME is shared, and confirm the gateway stays unreachable:
-docker compose run --rm runner python3 -m harness.runner.container.integration_check
+docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
 ```
 
 The **runner** role asserts the gateway grants the pinned provider and
@@ -75,7 +77,7 @@ For the real command path, run:
 
 ```bash
 docker compose up -d agent
-docker compose run --rm runner python3 -m harness.runner.container.integration_check
+docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
 ```
 
 That check stays zero-billing: it uses the same `container_worker` launch path

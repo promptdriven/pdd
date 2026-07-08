@@ -6,12 +6,13 @@ actions are connect/handshake probes.
 
 Asserts, from inside the agent's network namespace:
 
-1. direct egress is impossible at the kernel level across TCP, UDP, and
-   IPv6 — connects/sends to well-known outside addresses fail (the agent's
+1. direct egress is impossible at the kernel level across TCP, public UDP DNS,
+   and IPv6 — connects/sends to well-known outside addresses fail (the agent's
    only network is `internal: true` with no gateway; netns/routing
-   enforcement, not env convention). Includes a UDP/53 probe to Docker's
-   embedded resolver (127.0.0.11) and a public resolver, closing the
-   DNS-tunnel channel `internal: true` does not by itself block;
+   enforcement, not env convention). The agent role also probes Docker's
+   embedded resolver (127.0.0.11) for external-name forwarding; the runner role
+   intentionally allows Docker service DNS because it must resolve `gateway`
+   and be resolvable as `runner` by the agent;
 2. the **gateway is NOT reachable from the agent** — the agent has no
    interface on the proxy-egress network, so it cannot bypass the recording
    proxy by talking to the gateway directly (this is the property the
@@ -126,20 +127,28 @@ def _http_healthcheck_ok(base_url: str) -> bool:
         return False
 
 
-def _no_egress_checks() -> dict[str, bool]:
+def _no_egress_checks(*, include_docker_dns: bool) -> dict[str, bool]:
     """Kernel-level egress must be impossible from this namespace."""
-    return {
+    public_udp_probes = tuple(
+        probe for probe in OUTSIDE_UDP_PROBES if probe[0] != "127.0.0.11"
+    )
+    checks = {
         "no_direct_tcp_egress": all(
             not _tcp_connect(host, port) for host, port in OUTSIDE_TCP_PROBES
         ),
-        "no_udp_dns_egress": all(
-            not _udp_dns_reachable(host, port) for host, port in OUTSIDE_UDP_PROBES
+        "no_public_udp_dns_egress": all(
+            not _udp_dns_reachable(host, port) for host, port in public_udp_probes
         ),
         "no_ipv6_egress": all(
             not _tcp_connect(host, port, family=socket.AF_INET6)
             for host, port in OUTSIDE_IPV6_PROBES
         ),
     }
+    if include_docker_dns:
+        checks["no_docker_embedded_dns_egress"] = not _udp_dns_reachable(
+            "127.0.0.11", 53
+        )
+    return checks
 
 
 def _loopback_check() -> bool:
@@ -151,7 +160,7 @@ def _loopback_check() -> bool:
 
 def agent_checks(*, proxy_url: str) -> dict[str, bool]:
     """From the AGENT namespace: no egress, gateway unreachable, proxy reachable."""
-    checks = _no_egress_checks()
+    checks = _no_egress_checks(include_docker_dns=True)
     gw_host, gw_port = GATEWAY.rsplit(":", 1)
     # The agent must NOT be able to reach the gateway (recording-bypass guard).
     checks["gateway_unreachable_from_agent"] = not _tcp_connect(gw_host, int(gw_port))
@@ -164,7 +173,11 @@ def agent_checks(*, proxy_url: str) -> dict[str, bool]:
 def runner_checks() -> dict[str, bool]:
     """From the RUNNER namespace: no *direct* egress, but the ACL gateway
     grants the pinned provider and refuses everything else."""
-    checks = _no_egress_checks()
+    checks = _no_egress_checks(include_docker_dns=False)
+    # Docker's embedded resolver is intentionally available in the runner
+    # namespace for compose service discovery (`gateway`) and for the agent's
+    # `runner` alias. Public UDP DNS remains blocked above.
+    checks["docker_service_dns_allowed"] = True
     gw_host, gw_port = GATEWAY.rsplit(":", 1)
     checks["gateway_reachable"] = _tcp_connect(gw_host, int(gw_port))
     checks["gateway_allows_pinned_provider"] = _gateway_connect(PROVIDER_HOST, 443) == 200
