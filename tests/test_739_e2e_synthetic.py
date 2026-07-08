@@ -102,6 +102,8 @@ def _make_orchestrator_patches(worktree: Path):
         "gen": patch("pdd.agentic_change_orchestrator.generate_sync_order_script"),
         "pr": patch("pdd.agentic_change_orchestrator._check_existing_pr",
                     return_value=None),
+        "pr_matches": patch("pdd.agentic_change_orchestrator._pr_url_matches_current_head",
+                            return_value=True),
         "sub": patch("pdd.agentic_change_orchestrator.substitute_template_variables",
                      side_effect=lambda tmpl, ctx: f"prompt-{sorted(ctx.keys())}"),
         "setup": patch("pdd.agentic_change_orchestrator._setup_worktree",
@@ -170,7 +172,7 @@ class TestSyntheticHappyPath:
                 if "step11" in label:
                     return (True, "No Issues Found", 0.1, "claude")
                 if "step13" in label:
-                    return (True, "PR Created: https://example/pr/1", 0.1, "claude")
+                    return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "claude")
                 return (True, f"out-{label}", 0.1, "claude")
             m["run"].side_effect = fake
 
@@ -231,7 +233,7 @@ class TestSyntheticSilentDropCaught:
                 if "step11" in label:
                     return (True, "No Issues Found", 0.1, "claude")
                 if "step13" in label:
-                    return (True, "PR Created: https://example/pr/1", 0.1, "claude")
+                    return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "claude")
                 return (True, f"out-{label}", 0.1, "claude")
             m["run"].side_effect = fake
 
@@ -293,7 +295,7 @@ class TestSyntheticTransitiveDiscovery:
                 if "step11" in label:
                     return (True, "No Issues Found", 0.1, "claude")
                 if "step13" in label:
-                    return (True, "PR Created: https://example/pr/1", 0.1, "claude")
+                    return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "claude")
                 return (True, f"out-{label}", 0.1, "claude")
             m["run"].side_effect = fake
 
@@ -397,7 +399,7 @@ class TestSyntheticNegativeSpace:
                 if "step11" in label:
                     return (True, "No Issues Found", 0.1, "claude")
                 if "step13" in label:
-                    return (True, "PR Created: https://example/pr/1", 0.1, "claude")
+                    return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "claude")
                 return (True, f"out-{label}", 0.1, "claude")
             m["run"].side_effect = fake
 
@@ -431,7 +433,7 @@ class TestSyntheticNegativeSpace:
                 if "step11" in label:
                     return (True, "No Issues Found", 0.1, "claude")
                 if "step13" in label:
-                    return (True, "PR Created: https://example/pr/1", 0.1, "claude")
+                    return (True, "PR Created: https://github.com/o/r/pull/1", 0.1, "claude")
                 return (True, f"out-{label}", 0.1, "claude")
             m["run"].side_effect = fake
 

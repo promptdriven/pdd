@@ -67,7 +67,7 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -5995,7 +5995,7 @@
   },
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues, with optional clean restart.",
-    "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Hardens JSON/Markdown artifact handling by clearing artifacts before attempts and internal provider retries, persisting only accepted decision JSON, deriving Step 9 manual-review lines exactly from accepted Step 9 JSON, and requiring Step 13 PR success/recovery to validate an OPEN PR in the exact repo/base/head branch with non-empty PR head SHA plus remote/local head SHA alignment even when the provider result is classified as failed; Step 13 clears unaccepted Markdown before posting a trusted success comment after prose synthesis or exact-head recovery. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
@@ -6018,6 +6018,96 @@
             "name": "run_agentic_change_orchestrator",
             "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state, reasoning_time, clean_restart)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "_artifacts_dir_for",
+            "signature": "(work_dir: Path, issue_number: int) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "_clear_step_artifacts",
+            "signature": "(artifacts_dir: Path, step_num: int, name: str) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_read_step_json",
+            "signature": "(artifacts_dir: Path, filename: str) -> Optional[dict]",
+            "returns": "Optional[dict]"
+          },
+          {
+            "name": "_read_step_md",
+            "signature": "(artifacts_dir: Path, filename: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_allow_json_repair_rerun",
+            "signature": "(step_num: int) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_single_provider_attempt_for_step",
+            "signature": "(step_num: int) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_hard_stop_from_json_with_presence",
+            "signature": "(step_num: int, artifacts_dir: Path, name: str) -> Tuple[bool, Optional[str], List[str]]",
+            "returns": "Tuple[bool, Optional[str], List[str]]"
+          },
+          {
+            "name": "_valid_pr_url",
+            "signature": "(value: Any, repo_owner: str = \"\", repo_name: str = \"\") -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_git_head_oid",
+            "signature": "(cwd: Path) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_remote_branch_oid",
+            "signature": "(head_branch: str, cwd: Path) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_pr_number_from_url",
+            "signature": "(pr_url: str, repo_owner: str, repo_name: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_gh_pr_list_candidates",
+            "signature": "(base_args: Sequence[str], cwd: Optional[Path] = None) -> List[dict]",
+            "returns": "List[dict]"
+          },
+          {
+            "name": "_pr_url_matches_current_head",
+            "signature": "(repo_owner: str, repo_name: str, pr_url: str, head_branch: str, base_branch: str, cwd: Path) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_open_pr_for_head_branch",
+            "signature": "(repo_owner: str, repo_name: str, head_branch: str, base_branch: str, cwd: Path) -> Optional[dict]",
+            "returns": "Optional[dict]"
+          },
+          {
+            "name": "_check_existing_pr_candidates",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int) -> List[dict]",
+            "returns": "List[dict]"
+          },
+          {
+            "name": "_existing_pr_matches_remote_head",
+            "signature": "(repo_owner: str, repo_name: str, pr: dict, base_branch: str, cwd: Path) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "_step9_changed_files_from_json",
+            "signature": "(data: dict) -> Tuple[List[str], List[str], List[str], List[str]]",
+            "returns": "Tuple[List[str], List[str], List[str], List[str]]"
+          },
+          {
+            "name": "_step13_result_from_json_or_output",
+            "signature": "(data: Optional[dict], output: str) -> Tuple[str, str]",
+            "returns": "Tuple[str, str]"
           }
         ]
       }
@@ -6140,7 +6230,7 @@
   },
   {
     "reason": "LLM prompt template for creating a PR from the change workflow.",
-    "description": "Step 13 (final step) of the agentic change workflow. Creates a pull request from the worktree branch and links it to the original GitHub issue.",
+    "description": "Step 13 (final step) of the agentic change workflow. Pushes the worktree branch, checks for an existing open PR by head branch in the target repo before creating, creates or updates the pull request, and links it to the original GitHub issue.",
     "dependencies": [],
     "priority": 173,
     "filename": "agentic_change_step13_create_pr_LLM.prompt",

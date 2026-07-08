@@ -19,6 +19,7 @@ This step is the **preventive** half of the sync-drift problem: if the associate
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -95,6 +96,10 @@ This step is the **preventive** half of the sync-drift problem: if the associate
    - An **Associated Documents** section listing every file Step 9 should edit, with the drafted section-scoped content inline.
    - A **Conflicts** section listing any documents flagged for manual review (empty section if none).
    - Stable file paths (repo-root-relative, POSIX).
+
+% Structured Output Artifact (REQUIRED)
+
+Before finishing, write `{artifacts_dir}/05_docs_change.md` (into the already-created artifacts directory) — the exact Markdown comment body: the same content you place inside the `<step_report>` block below. The orchestrator posts this file verbatim (after secret-redaction/truncation) as the `## Step 5/13` issue comment. Still emit the `<step_report>` block below UNCHANGED (including the Associated Documents and Conflicts sections that Step 9 consumes); it is the orchestrator's fallback when the `.md` file is missing. (This step makes no orchestrator decision, so no decision JSON is required.)
 
 % Output
 
