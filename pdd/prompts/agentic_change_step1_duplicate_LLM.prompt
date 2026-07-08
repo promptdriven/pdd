@@ -9,6 +9,7 @@ You are working on step 1 of 13 in an agentic change workflow. Your findings wil
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -50,6 +51,26 @@ You are working on step 1 of 13 in an agentic change workflow. Your findings wil
    If no duplicates:
    - Report that this appears to be a new change request
    - Proceed with investigation
+
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). The orchestrator reads the JSON `status` to decide whether to stop or proceed; the prose `**Status:**` line below is now a FALLBACK only.
+
+1. `{artifacts_dir}/01_duplicate.json` — the machine-readable decision. Emit valid JSON:
+   ```json
+   {{
+     "status": "proceed",
+     "duplicates": ["#123"],
+     "rationale": "no resolved duplicate found"
+   }}
+   ```
+   - `status`: `"duplicate"` ONLY when this issue duplicates an already-RESOLVED issue (the hard stop that closes this issue). Use `"proceed"` otherwise — including when duplicates exist but the original is UNRESOLVED.
+   - `duplicates`: related issue refs like `"#123"` (empty list if none).
+   - `rationale`: one-line reason.
+
+2. `{artifacts_dir}/01_duplicate.md` — the exact Markdown comment body (the same content you place inside the `<step_report>` block below), posted verbatim as the `## Step 1/13` issue comment.
+
+Still emit the `<step_report>` block (including the `Duplicate of #XXX` status text when applicable) UNCHANGED below — it is the orchestrator's fallback when these files are missing.
 
 % Output
 
