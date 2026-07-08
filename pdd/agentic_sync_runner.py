@@ -652,15 +652,16 @@ def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, st
     one declared signature mismatch (issue #1900). The subprocess path rebuilds
     the repair directive from stdout, so it must recover these lines to keep the
     DECLARED expected signature — the stable repair target — in the directive and
-    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` as:
-      ``signature_detail: <symbol> | expected: <entry> | actual: <entry> | source: <src>``
+    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` and
+    ``_build_public_surface_hard_failure`` as a JSON object:
+      ``signature_detail: {"symbol": ..., "expected": ..., "actual": ..., "source": ...}``
 
-    The signature entries themselves routinely contain ` | ` (PEP-604 unions such
-    as ``int | str``), so the fields are split from the RIGHT off their qualified
-    ``| <field>: `` delimiters rather than matched with a non-greedy regex that
-    would truncate at the first ` | ` (codex review finding 3). ``symbol`` is a
-    Python identifier and ``source`` is a fixed tag, so the outer delimiters are
-    unambiguous. De-duplicated, preserving first-seen order.
+    JSON is bulletproof against signatures/defaults that contain the old ` | ` /
+    ``| actual: `` / ``| source: `` field delimiters (PEP-604 unions, string
+    defaults) — a class of corruption that recurred across several review passes
+    (codex round-8 finding 2). A line whose payload is not a well-formed JSON
+    object with the four string fields is SKIPPED (never raises). De-duplicated,
+    preserving first-seen order.
     """
     details: List[Tuple[str, str, str, str]] = []
     seen: set = set()
@@ -668,29 +669,18 @@ def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, st
         line = raw_line.strip()
         if not line.startswith("signature_detail:"):
             continue
-        body = line[len("signature_detail:"):].strip()
-        # All three field delimiters must be PRESENT (presence precheck only). Do
-        # NOT additionally require them in first-occurrence order: a valid
-        # signature/default can legitimately contain a ``| source: `` / ``| actual:
-        # `` substring (e.g. a default ``x=' | source: '``), which the first-
-        # occurrence ordering check would spuriously reject, dropping the line and
-        # losing the stable declared target (codex FM3). The right-anchored rsplit
-        # chain resolves the REAL trailing delimiters and correctly handles such a
-        # substring in the earlier expected field; a genuinely malformed / out-of-
-        # order line falls out via the ValueError guard (never crashes).
-        if (
-            " | expected: " not in body
-            or " | actual: " not in body
-            or " | source: " not in body
-        ):
-            continue
+        payload = line[len("signature_detail:"):].strip()
         try:
-            left, source = body.rsplit(" | source: ", 1)
-            left, actual = left.rsplit(" | actual: ", 1)
-            symbol, expected = left.split(" | expected: ", 1)
-        except ValueError:
+            obj = json.loads(payload)
+            detail = (
+                str(obj["symbol"]),
+                str(obj["expected"]),
+                str(obj["actual"]),
+                str(obj["source"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            # Not a well-formed JSON detail object -> malformed line, skip it.
             continue
-        detail = (symbol.strip(), expected.strip(), actual.strip(), source.strip())
         if detail in seen:
             continue
         seen.add(detail)
@@ -2796,11 +2786,19 @@ class AsyncSyncRunner:
         ]
         # Carry the full expected-vs-actual contract for each declared signature
         # mismatch so criterion 4 (no truncation) holds on the agentic path too
-        # (issue #1900). Byte-identical to the ``signature_detail:`` message line.
+        # (issue #1900). Byte-identical JSON to the ``signature_detail:`` message
+        # line emitted by ``PublicSurfaceRegressionError`` (codex round-8 #2).
         for symbol, expected_entry, actual_entry, source in details:
             block_lines.append(
-                f"signature_detail: {symbol} | expected: {expected_entry} | "
-                f"actual: {actual_entry} | source: {source}"
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
             )
         declared_changed = {
             d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"

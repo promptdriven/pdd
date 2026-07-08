@@ -206,11 +206,21 @@ class PublicSurfaceRegressionError(click.UsageError):
         ]
         # Append (never alter the lines above) one structured detail line per
         # signature mismatch so the full expected-vs-actual contract is carried
-        # in the message the local + cloud repair loops read.
+        # in the message the local + cloud repair loops read. JSON-encoded so a
+        # signature/default containing the old ` | ` field delimiters can't corrupt
+        # parsing (codex round-8 finding 2); parsed by
+        # ``agentic_sync_runner._parse_signature_detail_lines``.
         for symbol, expected_entry, actual_entry, source in self.signature_details:
             message_lines.append(
-                f"signature_detail: {symbol} | expected: {expected_entry} | "
-                f"actual: {actual_entry} | source: {source}"
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
             )
         super().__init__("\n".join(message_lines))
 
@@ -1842,6 +1852,43 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
+def _class_constructor_signature(
+    class_node: ast.ClassDef,
+    class_defs: Dict[str, ast.ClassDef],
+    imported_names: Set[str],
+) -> str:
+    """Return a class's constructor-ABI signature string (no ``[class]`` prefix).
+
+    Mirrors an explicit receiver-stripped ``__init__``, a synthesised stdlib
+    ``@dataclass`` init, or the bare ``()`` fallback — the exact logic
+    :func:`_snapshot_public_signatures` uses for the ``[class]`` entry, extracted
+    so a patch-target class (e.g. a declared underscore class whose constructor is
+    the contract) can reuse it (codex round-8 finding 3).
+    """
+    explicit_init: Optional[ast.AST] = None
+    for child in class_node.body:
+        if (
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and child.name == "__init__"
+        ):
+            explicit_init = child
+            break
+    if explicit_init is not None:
+        return _format_python_signature(explicit_init, skip_first=True)
+    dataclass_decorators = [
+        dec for dec in class_node.decorator_list if _is_dataclass_decorator(dec)
+    ]
+    is_dataclass = bool(dataclass_decorators)
+    init_synthesized = all(
+        _dataclass_decorator_synthesizes_init(dec) for dec in dataclass_decorators
+    )
+    if is_dataclass and init_synthesized:
+        return _synthesize_dataclass_init_signature(
+            class_node, class_defs=class_defs, imported_names=imported_names
+        )
+    return "()"
+
+
 def _patch_target_signature_entry(
     tree: ast.Module,
     symbol: str,
@@ -1981,54 +2028,13 @@ def _snapshot_public_signatures(
         # function/async-function/class kind tagging so a replacement
         # that swaps the class for a function with a matching constructor
         # signature is still flagged.
-        explicit_init: Optional[ast.AST] = None
-        for child in class_node.body:
-            if (
-                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and child.name == "__init__"
-            ):
-                explicit_init = child
-                break
-        if explicit_init is not None:
-            class_signature = _format_python_signature(
-                explicit_init, skip_first=True
-            )
-        else:
-            # No explicit ``__init__`` — but if the class is a stdlib
-            # ``@dataclass``, the synthesised init mirrors the field
-            # annotations. Build it from the ``AnnAssign`` field list so
-            # that adding/removing/reordering required fields shows up as
-            # a snapshot diff (reviewer reproducer for PR #1015). Falls
-            # back to the previous bare ``()`` for non-dataclass classes
-            # and for unsupported decorator forms (``@attr.s``,
-            # ``@pydantic.dataclasses.dataclass``, etc).
-            dataclass_decorators = [
-                dec
-                for dec in class_node.decorator_list
-                if _is_dataclass_decorator(dec)
-            ]
-            is_dataclass = bool(dataclass_decorators)
-            # ``@dataclass(init=False)`` keeps the class's natural
-            # ``__init__`` (typically ``object.__init__`` — no fields
-            # injected). When ANY dataclass decorator opts out, do NOT
-            # synthesise from the class body: adding fields under
-            # ``init=False`` does not change the runtime constructor and
-            # must not falsely trip the gate; flipping ``init=False`` →
-            # default DOES change the constructor and SHOULD trip it
-            # (the ``()`` snapshot here vs the synth signature on the
-            # default branch).
-            init_synthesized = all(
-                _dataclass_decorator_synthesizes_init(dec)
-                for dec in dataclass_decorators
-            )
-            if is_dataclass and init_synthesized:
-                class_signature = _synthesize_dataclass_init_signature(
-                    class_node,
-                    class_defs=class_defs,
-                    imported_names=imported_names,
-                )
-            else:
-                class_signature = "()"
+        # Record the class with its constructor-ABI signature (explicit
+        # receiver-stripped ``__init__`` / synthesised stdlib ``@dataclass`` init /
+        # bare ``()``). Shared with the patch-target class path via
+        # :func:`_class_constructor_signature`.
+        class_signature = _class_constructor_signature(
+            class_node, class_defs, imported_names
+        )
         signatures[qualname] = f"[class] {class_signature}"
 
         # First pass: accumulate property accessor roles per name so a
@@ -2266,6 +2272,17 @@ def _snapshot_public_signatures(
     if patch_targets:
         for symbol in sorted(patch_targets):
             if symbol in signatures:
+                continue
+            # A patch-target that is a top-level CLASS gets its ``[class]``
+            # constructor-ABI entry, so a declared (possibly underscore) class or
+            # ``Class.__init__`` is validated like a public class rather than being
+            # skipped for lack of a signature entry (codex round-8 finding 3).
+            # ``_patch_target_signature_entry`` only builds function/method entries.
+            if "." not in symbol and symbol in class_defs:
+                class_signature = _class_constructor_signature(
+                    class_defs[symbol], class_defs, imported_names
+                )
+                signatures[symbol] = f"[class] {class_signature}"
                 continue
             entry = _patch_target_signature_entry(tree, symbol, class_defs)
             if entry is not None:
@@ -2693,13 +2710,38 @@ def _verify_public_surface_regression(
         if compatible is None:
             # The GENERATED symbol is not a callable contract — a declared
             # callable regenerated as a non-callable (``def f`` -> ``f = 1`` /
-            # ``from pkg import f as f``). We cannot decide this from the
-            # declaration, so do NOT claim it as validated: let it fall through to
-            # the OLD-CODE baseline, which catches the ``[function]`` ->
-            # ``[assignment]``/``[import]`` kind flip via its exact-string
-            # comparison (codex round-7 finding 2). An UNCHANGED callable-
-            # assignment (``f = lambda: x``) compares equal old-vs-new there, so
-            # this does not false-positive.
+            # ``from pkg import f as f``). If the OLD form WAS a callable, the
+            # declared callable became non-callable: flag it DIRECTLY here — that
+            # break is not authorized by ``BREAKING-CHANGE: change signature``
+            # (which relaxes params, not de-callable-ing; de-callable-ing is a
+            # ``BREAKING-CHANGE: remove``), and the old-code loop would otherwise
+            # skip the symbol under such an opt-out (codex round-8 finding 1).
+            before_entry = before_signatures.get(snapshot_key)
+            before_ctx = (
+                _entry_binding_context(before_entry)
+                if before_entry is not None
+                and parse_callable_contract(before_entry) is not None
+                else None
+            )
+            if before_ctx is not None:
+                strip = before_ctx[0] in {"instance", "classmethod", "class"}
+                callable_expected = (
+                    _declared_signature_to_entry(
+                        declared[symbol],
+                        before_ctx[0],
+                        is_async=before_ctx[1],
+                        strip_receiver=strip,
+                    )
+                    or before_entry
+                )
+                changed_set.add(symbol)
+                signature_details.append(
+                    (symbol, callable_expected, actual_entry, "pdd-interface")
+                )
+            # else: the OLD form was ALSO non-callable (e.g. ``f = lambda: x`` that
+            # stayed an ``[assignment]``). Not validated -> falls through to the
+            # OLD-CODE baseline, which compares equal old-vs-new -> no false
+            # positive. Not added to ``declared_validated`` either way.
             continue
         # A real callable-vs-callable decision was made, so the declaration owns
         # this symbol: exclude its SNAPSHOT KEY from the old-code loops below (the
