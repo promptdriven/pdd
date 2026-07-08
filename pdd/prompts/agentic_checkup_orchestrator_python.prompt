@@ -109,6 +109,7 @@
     5. Maintain a `context` dictionary that accumulates outputs from previous steps to provide full context to subsequent LLM calls.
     6. In the iterative loop, track `previous_fixes` across iterations and inject them into the prompt context so the agent knows what has already been attempted.
     7. Use `rich.console` for all user-facing status updates and progress bars.
+    8. When cached-state validation corrects `last_completed_step` backward, prune any cached step outputs and telemetry entries after the corrected step. If the corrected step is before Step 7, also reset `fix_verify_iteration` to `0` and clear `previous_fixes` so the resumed run cannot skip the fix/verify loop and fail on an empty stale Step 7 verdict.
 
 5) Deliverable:
     - A Python module `agentic_checkup_orchestrator.py` containing the main entry point function `run_agentic_checkup_orchestrator`.

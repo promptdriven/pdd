@@ -33,6 +33,7 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_changed_files,
     _parse_expansion_items,
     _parse_failure_signal_block,
+    _prune_rewound_checkup_state,
     _pr_base_tracking_ref,
     _run_step5_shell_first_evidence,
     _select_step5_python_tests,
@@ -2287,6 +2288,87 @@ class TestResume:
         # All 10 steps should be re-executed since all cached outputs are FAILED
         assert mock_run.call_count == 10
         assert "step1" in executed_steps
+
+    def test_state_rewind_resets_stale_fix_verify_loop(
+        self, mock_dependencies, default_args, tmp_path
+    ):
+        """A rewind must not retain maxed loop state and skip Step 7."""
+        mock_run, _, _, _ = mock_dependencies
+        default_args["cwd"] = tmp_path
+
+        state_dir = _get_state_dir(tmp_path)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "checkup_state_1.json"
+        state = {
+            "workflow": "checkup",
+            "issue_number": 1,
+            "issue_url": default_args["issue_url"],
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "FAILED: provider parser returned empty output",
+                "2": "stale deps output",
+                "3": "stale build output",
+                "7": "",
+                "pr_push": "Skipped push because: stale verdict",
+            },
+            "step_telemetry": [
+                {"internal_step": 1, "step_id": "discover", "status": "failed"},
+                {"internal_step": 7, "step_id": "verify", "status": "failed"},
+            ],
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,
+            "previous_fixes": "stale fixes from exhausted loop",
+            "total_cost": 0.0,
+            "model_used": "",
+        }
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+
+        executed_steps = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_steps.append(label)
+            if "step5" in label:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert "Checkup complete" in msg
+        assert "step1" in executed_steps
+        assert "step3_iter1" in executed_steps
+        assert "step7_iter1" in executed_steps
+        assert not any("iter3" in label for label in executed_steps)
+
+    def test_rewind_prunes_future_outputs_and_loop_metadata(self):
+        """State pruning keeps rewound resume data internally consistent."""
+        state = {
+            "step_outputs": {
+                "1": "ok",
+                "2": "ok",
+                "3": "stale build",
+                "7": "",
+                "pr_push": "Skipped push because: stale verdict",
+            },
+            "step_telemetry": [
+                {"internal_step": 1, "step_id": "discover", "status": "completed"},
+                {"internal_step": 7, "step_id": "verify", "status": "failed"},
+            ],
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,
+            "previous_fixes": "stale fixes",
+        }
+
+        _prune_rewound_checkup_state(state, 2)
+
+        assert state["step_outputs"] == {"1": "ok", "2": "ok"}
+        assert state["step_telemetry"] == [
+            {"internal_step": 1, "step_id": "discover", "status": "completed"}
+        ]
+        assert state["fix_verify_iteration"] == 0
+        assert state["previous_fixes"] == ""
 
     def test_consecutive_failures_do_not_advance_last_completed_step(
         self, mock_dependencies, default_args, tmp_path
