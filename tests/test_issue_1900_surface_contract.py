@@ -380,13 +380,13 @@ class TestIssue1900SurfaceContract:
             prompt,
         )
 
-    def test_declared_dotted_method_with_self_is_presence_only(self):
-        """Codex FM1: the snapshot receiver-strips ``self``/``cls`` for methods,
-        so a declared ``Foo.method`` signature that carries ``self`` would
-        false-positive against unchanged code. Dotted declared names (methods) are
-        presence-only in the surface gate — the conformance gate validates their
-        params with proper receiver handling. Both the ``(self, x)`` and
-        ``def method(self, x)`` declaration forms must pass on unchanged code."""
+    def test_declared_dotted_method_receiver_stripped(self):
+        """Codex round-5: declared dotted methods are first-class declared-contract
+        citizens, validated against the DECLARED signature with the leading
+        ``self``/``cls`` receiver stripped to match the snapshot. So an UNCHANGED
+        method (declared with ``(self, x)`` OR ``def method(self, x)``) must NOT
+        raise (receiver-strip correctness), while a method whose params drift
+        incompatibly from the declaration MUST raise."""
         code = (
             "class Foo:\n"
             "    def method(self, x):\n"
@@ -397,6 +397,18 @@ class TestIssue1900SurfaceContract:
             _verify_public_surface_regression(
                 code, code, PROMPT, OUT, "python", prompt
             )
+        # Incompatible drift from the declared method signature -> raises.
+        prompt = _iface_prompt([("Foo.method", "(self, x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                code,
+                "class Foo:\n    def method(self, x, y):\n        return x\n",
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "Foo.method" in exc.value.changed_signatures
 
     def test_declared_dotted_method_dropped_still_raises(self):
         """Presence of a declared dotted method is still enforced: dropping
@@ -493,16 +505,83 @@ class TestIssue1900SurfaceContract:
             )
         assert "Service" in exc.value.changed_signatures
 
-    def test_breaking_change_opts_out_presence_only_declared_method(self):
-        """A presence-only declared dotted method now flows through the old-code
-        baseline, so its ``BREAKING-CHANGE: change signature Foo.method`` opt-out
-        must still suppress an intended change."""
-        prompt = _iface_prompt(
+    def test_breaking_change_on_declared_method_relaxes_only_kind(self):
+        """Codex round-5: now that declared methods are validated against the
+        declaration, ``BREAKING-CHANGE: change signature <method>`` must relax ONLY
+        the un-declarable binding-kind/async — a binding-kind flip opted out passes,
+        but an added-required PARAM that violates the declaration STILL raises
+        (consistent with FM2; the declaration is authoritative for params)."""
+        # (a) binding-kind flip (staticmethod -> instance) opted out -> passes.
+        flip_prompt = _iface_prompt(
+            [("Factory.build", "(path)")],
+            body="% engineer\nBREAKING-CHANGE: change signature Factory.build\n",
+        )
+        _verify_public_surface_regression(
+            "class Factory:\n    @staticmethod\n    def build(path):\n        return path\n",
+            "class Factory:\n    def build(self, path):\n        return path\n",
+            PROMPT,
+            OUT,
+            "python",
+            flip_prompt,
+        )
+        # (b) added-required param still raises despite the opt-out.
+        param_prompt = _iface_prompt(
             [("Foo.method", "(self, x)")],
             body="% engineer\nBREAKING-CHANGE: change signature Foo.method\n",
         )
-        before = "class Foo:\n    def method(self, x):\n        return x\n"
-        after = "class Foo:\n    def method(self, x, required):\n        return x\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "class Foo:\n    def method(self, x):\n        return x\n",
+                "class Foo:\n    def method(self, x, required):\n        return x\n",
+                PROMPT,
+                OUT,
+                "python",
+                param_prompt,
+            )
+        assert "Foo.method" in exc.value.changed_signatures
+
+    def test_new_declared_method_added_required_param_raises(self):
+        """Codex round-5: a NEWLY-added declared method (no old-code baseline) is
+        still validated against its DECLARED signature, so generating it with an
+        extra required parameter beyond the declaration raises."""
+        before = "def existing():\n    return 1\n"
+        after = (
+            "def existing():\n    return 1\n"
+            "class Foo:\n    def method(self, x, required):\n        return x\n"
+        )
+        prompt = _iface_prompt([("Foo.method", "(self, x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Foo.method" in exc.value.changed_signatures
+
+    def test_new_declared_constructor_added_required_param_raises(self):
+        """Codex round-5: a NEWLY-added declared constructor (``Class.__init__``,
+        keyed on the class ``[class]`` entry) is validated against its DECLARED
+        signature — an extra required ctor param beyond the declaration raises."""
+        before = "def existing():\n    return 1\n"
+        after = (
+            "def existing():\n    return 1\n"
+            "class Service:\n"
+            "    def __init__(self, config, region):\n"
+            "        self.config = config\n"
+        )
+        prompt = _iface_prompt([("Service.__init__", "(self, config)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Service.__init__" in exc.value.changed_signatures
+
+    def test_declared_method_change_authorized_by_declaration(self):
+        """Codex round-5 F3: the declaration is the permit for METHOD changes too.
+        A declared method whose signature was edited (dropping a param) and whose
+        regeneration follows the new declaration must PASS — the declared name is
+        excluded from the old-code baseline, so the dropped param is not flagged."""
+        before = "class Foo:\n    def method(self, a, b):\n        return a\n"
+        after = "class Foo:\n    def method(self, a):\n        return a\n"
+        prompt = _iface_prompt([("Foo.method", "(self, a)")])
         _verify_public_surface_regression(
             before, after, PROMPT, OUT, "python", prompt
         )
