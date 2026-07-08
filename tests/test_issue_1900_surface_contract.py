@@ -751,6 +751,74 @@ class TestIssue1900SurfaceContract:
             )
         assert "_Cls._m" in exc.value.changed_signatures
 
+    @staticmethod
+    def _nested_ctor_module(outer, inner, extra=""):
+        return (
+            f"class {outer}:\n"
+            f"    class {inner}:\n"
+            f"        def __init__(self, config{extra}):\n"
+            f"            self.config = config\n"
+        )
+
+    def test_declared_nested_ctor_underscore_outer_drift_raises(self):
+        """Codex round-9 case A: a declared NESTED constructor whose class path has
+        an underscore OUTER class (``_Outer.Inner.__init__``) must raise a signature
+        drift (``changed`` + a ``pdd-interface`` detail) on an added ctor param,
+        exactly like the public control — not pass silently."""
+        prompt = _iface_prompt([("_Outer.Inner.__init__", "(self, config)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                self._nested_ctor_module("_Outer", "Inner"),
+                self._nested_ctor_module("_Outer", "Inner", ", region"),
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "_Outer.Inner.__init__" in exc.value.changed_signatures
+
+    def test_declared_nested_ctor_underscore_inner_drift_raises(self):
+        """Codex round-9 case B: underscore INNER class (``Outer._Inner.__init__``)
+        drift must raise as a ``changed`` signature with a detail — NOT be
+        mischaracterized as a bare ``removed`` of the nested class."""
+        prompt = _iface_prompt([("Outer._Inner.__init__", "(self, config)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                self._nested_ctor_module("Outer", "_Inner"),
+                self._nested_ctor_module("Outer", "_Inner", ", region"),
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "Outer._Inner.__init__" in exc.value.changed_signatures
+        assert "Outer._Inner" not in exc.value.removed_symbols
+
+    def test_declared_nested_ctor_underscore_unchanged_passes(self):
+        """An unchanged declared nested constructor (underscore outer OR inner)
+        must NOT raise (captured and validated, no phantom removal)."""
+        for outer, inner in [("_Outer", "Inner"), ("Outer", "_Inner")]:
+            code = self._nested_ctor_module(outer, inner)
+            prompt = _iface_prompt([(f"{outer}.{inner}.__init__", "(self, config)")])
+            _verify_public_surface_regression(
+                code, code, PROMPT, OUT, "python", prompt
+            )
+
+    def test_declared_nested_ctor_public_control_raises(self):
+        """Codex round-9 control C (must stay working): an all-public declared
+        nested constructor drift raises ``changed=['Outer.Inner.__init__']``."""
+        prompt = _iface_prompt([("Outer.Inner.__init__", "(self, config)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                self._nested_ctor_module("Outer", "Inner"),
+                self._nested_ctor_module("Outer", "Inner", ", region"),
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "Outer.Inner.__init__" in exc.value.changed_signatures
+
 
 class TestIssue1900AgenticPropagation:
     def test_signature_detail_lines_reach_agentic_directive(self):
