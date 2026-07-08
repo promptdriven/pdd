@@ -3489,6 +3489,10 @@ such as pending or action-required status checks, Cloud Build state,
 mergeability, or auto-heal workflow status, unless the raw output ties that
 state to a concrete code or repository-file defect introduced by the PR.
 
+Do not preserve rows that merely verify an earlier finding is now fixed. If the
+raw output says a prior finding is fixed/resolved/addressed and does not request
+a further concrete change, return status "clean" with an empty findings array.
+
 Return ONLY JSON with this shape:
 {{
   "status": "clean" | "findings" | "failed",
@@ -3936,6 +3940,10 @@ Return status "findings" if any valid, in-scope finding remains that should be
 fixed before merge, even when its severity is outside that priority list. Return
 status "clean" when no actionable code, prompt, docs, architecture, test, or
 repository-file findings remain and the findings array is empty.
+Do not include verified-fixed prior findings in the findings array. If a prior
+finding is now fixed/resolved/addressed and you do not need a further concrete
+change, mention it only in summary and return status "clean" when nothing else
+is actionable.
 """
 
 
@@ -4127,8 +4135,100 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 def _filter_actionable_review_findings(
     findings: Sequence[ReviewFinding],
 ) -> List[ReviewFinding]:
-    """Drop findings that only reflect external PR readiness status."""
-    return [finding for finding in findings if not _is_external_status_finding(finding)]
+    """Drop reviewer rows that are not actionable PR defects."""
+    return [
+        finding
+        for finding in findings
+        if not _is_external_status_finding(finding)
+        and not _is_resolved_non_actionable_finding(finding)
+    ]
+
+
+_GENERIC_NOOP_REQUIRED_FIXES = {
+    "",
+    "-",
+    "n/a",
+    "na",
+    "none",
+    "no fix required",
+    "no fix needed",
+    "no action required",
+    "no action needed",
+    "not applicable",
+    "already fixed",
+    "already addressed",
+    "verified fixed",
+    "address the reviewer finding",
+}
+
+_RESOLVED_FINDING_MARKER_RE: re.Pattern[str] = re.compile(
+    r"\b(?:"
+    r"has\s+been\s+(?:fixed|resolved|addressed)"
+    r"|is\s+(?:fixed|resolved|addressed)"
+    r"|verified\s+(?:fixed|resolved|addressed)"
+    r"|confirmed\s+(?:fixed|resolved|addressed)"
+    r"|not\s+reproducible"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_RESOLVED_CHECKMARK_MARKER_RE: re.Pattern[str] = re.compile(
+    r"(?:\u2713|\u2705).*\bnow\s+(?:correctly\s+)?(?:uses?|includes?|handles?|"
+    r"accepts?|rejects?|preserves?|records?|reports?|parses?|passes?|"
+    r"returns?|treats?|emits?|checks?|classifies?|recognizes?)\b"
+    r"|\bnow\s+(?:correctly\s+)?(?:uses?|includes?|handles?|accepts?|rejects?|"
+    r"preserves?|records?|reports?|parses?|passes?|returns?|treats?|emits?|"
+    r"checks?|classifies?|recognizes?)\b.*(?:\u2713|\u2705)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_RESOLVED_FINDING_CONFLICT_RE: re.Pattern[str] = re.compile(
+    r"\b(?:but|however|except|still|needs?|must|should|remains?|"
+    r"unresolved|unfixed|open|regression|not\s+(?:fixed|resolved|addressed|"
+    r"yet)|does\s+not|did\s+not|cannot|can't|won't)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalized_noop_required_fix(value: str) -> str:
+    """Normalize a required-fix cell before comparing generic no-op values."""
+    normalized = re.sub(r"\s+", " ", (value or "").strip().lower())
+    normalized = normalized.strip(" .;:")
+    return normalized
+
+
+def _is_noop_required_fix(value: str) -> bool:
+    normalized = _normalized_noop_required_fix(value)
+    return normalized in _GENERIC_NOOP_REQUIRED_FIXES
+
+
+def _is_resolved_non_actionable_finding(finding: ReviewFinding) -> bool:
+    """True when a row only verifies a prior finding as already fixed.
+
+    This intentionally requires both a resolved marker and a no-op required-fix
+    cell. A row that says "now X, but/still/needs..." remains actionable even
+    if its required_fix was rendered generically.
+    """
+    if not _is_noop_required_fix(finding.required_fix):
+        return False
+    text = "\n".join(
+        part
+        for part in (finding.finding, finding.evidence)
+        if part and part.strip()
+    )
+    if not text:
+        return False
+    all_text = "\n".join(
+        part
+        for part in (finding.finding, finding.evidence, finding.required_fix)
+        if part and part.strip()
+    )
+    if _RESOLVED_FINDING_CONFLICT_RE.search(all_text):
+        return False
+    return bool(
+        _RESOLVED_FINDING_MARKER_RE.search(text)
+        or _RESOLVED_CHECKMARK_MARKER_RE.search(text)
+    )
 
 
 def _is_external_status_finding(finding: ReviewFinding) -> bool:

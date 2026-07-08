@@ -331,8 +331,16 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     with mock.patch('os.path.isfile', return_value=False):
         result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
-    # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure that the cost CSV was opened once for append. Other setup code in
+    # the shared test process can read unrelated auth files while builtins.open
+    # is patched, so this test should only constrain its own cost-file write.
+    append_calls = [
+        c for c in mock_open_file.call_args_list
+        if c.args[0] == '/path/to/cost.csv' and len(c.args) > 1 and c.args[1] == 'a'
+    ]
+    assert len(append_calls) == 1
+    assert append_calls[0].kwargs.get('newline') == ''
+    assert append_calls[0].kwargs.get('encoding') == 'utf-8'
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -412,8 +420,16 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     with mock.patch('os.path.isfile', return_value=False):
         result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
-    # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure that the cost CSV was opened once for append. Other setup code in
+    # the shared test process can read unrelated auth files while builtins.open
+    # is patched, so this test should only constrain its own cost-file write.
+    append_calls = [
+        c for c in mock_open_file.call_args_list
+        if c.args[0] == '/path/to/cost.csv' and len(c.args) > 1 and c.args[1] == 'a'
+    ]
+    assert len(append_calls) == 1
+    assert append_calls[0].kwargs.get('newline') == ''
+    assert append_calls[0].kwargs.get('encoding') == 'utf-8'
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -535,8 +551,16 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     with mock.patch('os.path.isfile', return_value=False):
         result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
-    # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure that the cost CSV was opened once for append. Other setup code in
+    # the shared test process can read unrelated auth files while builtins.open
+    # is patched, so this test should only constrain its own cost-file write.
+    append_calls = [
+        c for c in mock_open_file.call_args_list
+        if c.args[0] == '/path/to/cost.csv' and len(c.args) > 1 and c.args[1] == 'a'
+    ]
+    assert len(append_calls) == 1
+    assert append_calls[0].kwargs.get('newline') == ''
+    assert append_calls[0].kwargs.get('encoding') == 'utf-8'
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -558,8 +582,13 @@ def test_missing_click_context(mock_open_file, mock_rprint):
     with mock.patch('click.get_current_context', return_value=None):
         result = sample_command(None, '/path/to/prompt.txt')
 
-    # Ensure that open was not called
-    mock_open_file.assert_not_called()
+    # Ensure no cost CSV was opened. In full-suite parallel runs, unrelated
+    # auth-bridge code can read auth files while builtins.open is patched.
+    append_calls = [
+        c for c in mock_open_file.call_args_list
+        if len(c.args) > 1 and c.args[1] == 'a'
+    ]
+    assert append_calls == []
     # Ensure no error was printed
     mock_rprint.assert_not_called()
     # Ensure the command result is returned correctly

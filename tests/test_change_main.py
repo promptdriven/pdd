@@ -1156,6 +1156,76 @@ def test_change_main_skips_user_story_validation_for_csv_output(tmp_path):
     assert model_name == "model-a"
 
 
+def test_change_main_csv_resolves_pdd_prompt_root_layout_with_mocked_llm(tmp_path):
+    code_dir = tmp_path / "pdd"
+    prompt_path = code_dir / "prompts" / "commands" / "foo_python.prompt"
+    code_path = code_dir / "commands" / "foo.py"
+    csv_file = tmp_path / "changes.csv"
+    output_csv = tmp_path / "modified_prompts.csv"
+
+    prompt_path.parent.mkdir(parents=True)
+    code_path.parent.mkdir(parents=True)
+    prompt_path.write_text("Original prompt", encoding="utf-8")
+    code_path.write_text("def foo():\n    return 1\n", encoding="utf-8")
+    csv_file.write_text(
+        "prompt_name,change_instructions\n"
+        "prompts/commands/foo_python.prompt,Do it\n",
+        encoding="utf-8",
+    )
+
+    ctx_instance = create_mock_context(
+        obj={
+            "quiet": True,
+            "force": True,
+            "strength": DEFAULT_STRENGTH,
+            "temperature": 0,
+            "language": "python",
+            "extension": ".py",
+            "time": 0.25,
+            "no_prompt_checkup": True,
+            "skip_user_stories": True,
+        }
+    )
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.process_csv_change.get_extension", return_value=".py"), \
+         patch("pdd.process_csv_change.change") as mock_change:
+        mock_construct.return_value = (
+            {},
+            {"change_prompt_file": csv_file.read_text(encoding="utf-8")},
+            {},
+            "python",
+        )
+        mock_change.return_value = ("Modified prompt", 0.01, "test_model")
+
+        message, total_cost, model_name = change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(csv_file),
+            input_code=str(code_dir),
+            input_prompt_file=None,
+            output=str(output_csv),
+            use_csv=True,
+            budget=5.0,
+        )
+
+    assert message == "Multiple prompts have been updated."
+    assert total_cost == pytest.approx(0.01)
+    assert model_name == "test_model"
+    assert mock_change.call_args.kwargs["input_code"] == code_path.read_text(
+        encoding="utf-8"
+    )
+
+    with output_csv.open(newline="", encoding="utf-8") as output_file:
+        rows = list(csv.DictReader(output_file))
+
+    assert rows == [
+        {
+            "file_name": "prompts/commands/foo_python.prompt",
+            "modified_prompt": "Modified prompt",
+        }
+    ]
+
+
 def test_change_main_requires_change_prompt_and_input_code():
     ctx_instance = create_mock_context(obj={"quiet": True})
 

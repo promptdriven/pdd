@@ -46,6 +46,7 @@ from pdd.agentic_sync import (
     _filter_low_signal_comments,
     _is_low_signal_comment,
     _normalize_modules_for_sync,
+    _parse_changed_modules_env,
     _truncate_head_tail,
 )
 from pdd.agentic_common import build_agentic_task_instruction
@@ -4954,6 +4955,27 @@ class TestNormalizeModulesForSync:
         assert result == ["commands/contracts"]
 
 
+class TestParseChangedModulesEnv:
+    """Tests for the cloud-provided changed-module env parser."""
+
+    def test_empty_values_return_empty_list(self):
+        assert _parse_changed_modules_env("") == []
+        assert _parse_changed_modules_env("   ") == []
+        assert _parse_changed_modules_env(",, ,") == []
+
+    def test_splits_trims_dedupes_and_preserves_paths(self):
+        value = (
+            " src/services/foo, frontend/app/dashboard/page, "
+            "src/services/foo,,frontend/app/dashboard/page, agentic_sync "
+        )
+
+        assert _parse_changed_modules_env(value) == [
+            "src/services/foo",
+            "frontend/app/dashboard/page",
+            "agentic_sync",
+        ]
+
+
 # ---------------------------------------------------------------------------
 # _detect_modules_from_branch_diff
 # ---------------------------------------------------------------------------
@@ -5395,6 +5417,238 @@ class TestIdentifyModulesPromptSize:
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
         # The title (signal) survives the body truncation.
         assert "TRUNCATE_TITLE_TOKEN" in prompt
+
+
+class TestPddChangedModulesFastPath:
+    """Integration tests for PDD_CHANGED_MODULES issue-sync selection."""
+
+    def _run_with_env(
+        self,
+        monkeypatch,
+        tmp_path,
+        *,
+        env_value: str | None,
+        issue_body: str = "sync the current module",
+        user_feedback: str | None = None,
+        architecture: List[Dict[str, Any]] | None = None,
+        filter_synced: List[str] | None = None,
+        quiet: bool = True,
+    ):
+        if env_value is None:
+            monkeypatch.delenv("PDD_CHANGED_MODULES", raising=False)
+        else:
+            monkeypatch.setenv("PDD_CHANGED_MODULES", env_value)
+        if user_feedback is None:
+            monkeypatch.delenv("PDD_USER_FEEDBACK", raising=False)
+        else:
+            monkeypatch.setenv("PDD_USER_FEEDBACK", user_feedback)
+
+        modules_after_filter = filter_synced or ["foo"]
+        dry_run_cwds = {module: tmp_path for module in modules_after_filter}
+        dry_run_targets = {module: module.rsplit("/", 1)[-1] for module in modules_after_filter}
+        issue_data = {"title": "Issue", "body": issue_body, "comments_url": ""}
+        arch = architecture or [{"filename": "foo_python.prompt", "dependencies": []}]
+
+        patches = [
+            patch("pdd.agentic_sync._check_gh_cli", return_value=True),
+            patch("pdd.agentic_sync._run_gh_command", return_value=(True, json.dumps(issue_data))),
+            patch("pdd.agentic_sync._find_project_root", return_value=tmp_path),
+            patch("pdd.agentic_sync._load_architecture_json", return_value=(arch, tmp_path / "architecture.json")),
+            patch("pdd.agentic_sync._augment_architecture_from_pr_branch", side_effect=lambda a, _r, _i: a),
+            patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]),
+            patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False),
+            patch("pdd.agentic_sync.load_prompt_template", return_value="ISSUE {issue_content} ARCH {architecture_json}"),
+            patch("pdd.agentic_sync.run_agentic_task"),
+            patch("pdd.agentic_sync._build_targeted_dep_graph", return_value=({m: [] for m in modules_after_filter}, [])),
+            patch("pdd.agentic_sync._run_dry_run_validation", return_value=(True, dry_run_cwds, dry_run_targets, [], 0.0)),
+            patch("pdd.agentic_sync._filter_already_synced", return_value=modules_after_filter),
+        ]
+        with patches[0] as mock_gh_cli, patches[1] as mock_gh_cmd, patches[2], patches[3], \
+            patches[4], patches[5], patches[6], patches[7] as mock_load_prompt, \
+            patches[8] as mock_agentic_task, patches[9], patches[10] as mock_dry_run, \
+            patches[11] as mock_filter_synced:
+            mock_agentic_task.return_value = (
+                True,
+                'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+                0.5,
+                "anthropic",
+            )
+            result = run_agentic_sync(
+                "https://github.com/owner/repo/issues/1",
+                quiet=quiet,
+                dry_run=True,
+                use_github_state=False,
+            )
+
+        return {
+            "result": result,
+            "mock_gh_cli": mock_gh_cli,
+            "mock_gh_cmd": mock_gh_cmd,
+            "mock_load_prompt": mock_load_prompt,
+            "mock_agentic_task": mock_agentic_task,
+            "mock_dry_run": mock_dry_run,
+            "mock_filter_synced": mock_filter_synced,
+        }
+
+    def test_env_fast_path_bypasses_identify_modules_llm(self, monkeypatch, tmp_path):
+        observed_modules = ["src/services/foo", "frontend/app/dashboard/page"]
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value=(
+                " src/services/foo, frontend/app/dashboard/page, "
+                "src/services/foo,, "
+            ),
+            architecture=[
+                {"filename": "foo_python.prompt", "dependencies": []},
+                {"filename": "page_python.prompt", "dependencies": []},
+            ],
+            filter_synced=observed_modules,
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is True
+        assert msg == (
+            "Dry run complete: 2 module(s) would sync: "
+            "src/services/foo, frontend/app/dashboard/page"
+        )
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_load_prompt"].assert_not_called()
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_called_once()
+        assert result["mock_dry_run"].call_args.kwargs["modules"] == observed_modules
+
+    def test_stale_user_feedback_does_not_override_env_selection(self, monkeypatch, tmp_path):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="current_module",
+            user_feedback=(
+                "IMPORTANT: The following modules were changed and MUST be synced: "
+                "stale/abandoned/module"
+            ),
+            architecture=[{"filename": "current_module_python.prompt", "dependencies": []}],
+            filter_synced=["current_module"],
+        )
+
+        success, msg, _cost, _model = result["result"]
+        assert success is True
+        assert "current_module" in msg
+        assert "stale/abandoned/module" not in msg
+        result["mock_agentic_task"].assert_not_called()
+        assert result["mock_dry_run"].call_args.kwargs["modules"] == ["current_module"]
+
+    def test_any_unresolvable_env_entry_fails_even_with_valid_entries(
+        self, monkeypatch, tmp_path
+    ):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo,missing_module",
+            architecture=[{"filename": "foo_python.prompt", "dependencies": []}],
+            filter_synced=["foo"],
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is False
+        assert msg == "PDD_CHANGED_MODULES contained unresolved module targets: ['missing_module']"
+        assert "LLM identified no modules to sync" not in msg
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
+    def test_runtime_template_env_entry_has_specific_diagnostic(
+        self, monkeypatch, tmp_path
+    ):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo_LLM",
+            architecture=[{"filename": "foo_LLM.prompt", "dependencies": []}],
+            filter_synced=["foo_LLM"],
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is False
+        assert msg == "PDD_CHANGED_MODULES contained unresolved module targets: ['foo_LLM']"
+        assert "already synced" not in msg
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
+    def test_oversized_identify_context_is_not_constructed_when_env_is_valid(
+        self, monkeypatch, tmp_path
+    ):
+        huge_body = "{}" * (_IDENTIFY_MODULES_MAX_CHARS + 10_000)
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo",
+            issue_body=huge_body,
+            architecture=[_big_interface_entry("foo_python.prompt")],
+            filter_synced=["foo"],
+        )
+
+        success, msg, _cost, _model = result["result"]
+        assert success is True
+        assert "foo" in msg
+        result["mock_load_prompt"].assert_not_called()
+        result["mock_agentic_task"].assert_not_called()
+
+    def test_unset_or_empty_env_preserves_llm_fallback(self, monkeypatch, tmp_path):
+        for env_value in (None, " , , "):
+            result = self._run_with_env(
+                monkeypatch,
+                tmp_path,
+                env_value=env_value,
+                architecture=[{"filename": "foo_python.prompt", "dependencies": []}],
+                filter_synced=["foo"],
+            )
+
+            success, msg, cost, model = result["result"]
+            assert success is True
+            assert "foo" in msg
+            assert cost == pytest.approx(0.5)
+            assert model == "anthropic"
+            result["mock_load_prompt"].assert_called_once()
+            result["mock_agentic_task"].assert_called_once()
+
+    def test_unresolvable_env_entries_have_specific_diagnostic(self, monkeypatch, tmp_path):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="missing_module",
+            architecture=[{"filename": "foo_python.prompt", "dependencies": []}],
+            filter_synced=["missing_module"],
+        )
+
+        success, msg, cost, model = result["result"]
+        assert success is False
+        assert msg == "PDD_CHANGED_MODULES contained unresolved module targets: ['missing_module']"
+        assert "LLM identified no modules to sync" not in msg
+        assert cost == pytest.approx(0.0)
+        assert model == ""
+        result["mock_agentic_task"].assert_not_called()
+        result["mock_dry_run"].assert_not_called()
+
+    def test_env_fast_path_prints_selected_modules(self, monkeypatch, tmp_path, capsys):
+        result = self._run_with_env(
+            monkeypatch,
+            tmp_path,
+            env_value="foo",
+            architecture=[{"filename": "foo_python.prompt", "dependencies": []}],
+            filter_synced=["foo"],
+            quiet=False,
+        )
+
+        assert result["result"][0] is True
+        output = capsys.readouterr().out
+        assert "Using PDD_CHANGED_MODULES for module identification: ['foo']" in output
+        assert "Resolved PDD_CHANGED_MODULES module selection: ['foo']" in output
+
 
     @patch("pdd.agentic_sync._post_error_comment")
     @_identify_fallback_patches
