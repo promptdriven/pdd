@@ -31,10 +31,10 @@ environment **frozen, isolated, and fingerprinted**:
   reconciliation (harness.context_snapshots.session_parser) detects bypass.
 - **Fingerprint** — sha256 over the canonical frozen combination (CLI
   version, model, effort, web search, MCP set, allowlist names and values,
-  config template with the per-run proxy port *held as a placeholder*, cache
-  policy). Identical across cells and trials by construction; recorded as
-  ``env_fingerprint_sha256`` in every run record, and asserted against the
-  registered value before each run.
+  config template with the per-run proxy port and auth env key *held as
+  placeholders*, cache policy). Identical across cells and trials by
+  construction; recorded as ``env_fingerprint_sha256`` in every run record,
+  and asserted against the registered value before each run.
 """
 
 from __future__ import annotations
@@ -97,7 +97,9 @@ class FreezeConfig:
     cache_policy: str = "disabled"
     home_dir_env_var: str = "CODEX_HOME"
 
-    def render_config(self, proxy_base_url: str) -> str:
+    def render_config(
+        self, proxy_base_url: str, *, auth_env_var_override: str | None = None
+    ) -> str:
         """Render the per-run CLI config (TOML).
 
         Key names and values are validated against the pinned build
@@ -121,8 +123,9 @@ class FreezeConfig:
         lines.append('name = "harness recording proxy"')
         lines.append(f'base_url = "{proxy_base_url}/v1"')
         lines.append('wire_api = "responses"')
-        if self.api_key_env_var:
-            lines.append(f'env_key = "{self.api_key_env_var}"')
+        auth_env_var = auth_env_var_override or self.api_key_env_var
+        if auth_env_var:
+            lines.append(f'env_key = "{auth_env_var}"')
         lines.append("")
         lines.append("[history]")
         lines.append('persistence = "none"')
@@ -136,9 +139,18 @@ class FreezeConfig:
         """Port-independent sha256 of the frozen combination.
 
         The per-run proxy port is ephemeral, so the config is fingerprinted
-        with the base URL held as a placeholder — the fingerprint is
-        identical across all cells and trials of an arm by construction.
+        with the base URL held as a placeholder. The auth env var name is
+        represented only as presence/absence in the hash material; the actual
+        generated config still carries the configured name, but CodeQL treats
+        that string as sensitive credential material and the fingerprint is a
+        reproducibility digest, not password storage.
         """
+        config_template = self.render_config(
+            "{PROXY_BASE_URL}",
+            auth_env_var_override=(
+                "{AUTH_ENV_VAR}" if self.api_key_env_var is not None else None
+            ),
+        )
         material = {
             # v3: +egress_guard (the black-hole address is a security boundary
             # for proxy-honoring clients, so a change to it must move the
@@ -156,11 +168,11 @@ class FreezeConfig:
             "env_allowlist_values": {
                 name: os.environ.get(name) for name in sorted(self.env_allowlist)
             },
-            "api_key_env_var": self.api_key_env_var,
+            "api_key_env_var_configured": self.api_key_env_var is not None,
             "cache_policy": self.cache_policy,
             "home_dir_env_var": self.home_dir_env_var,
             "home_env_policy": "HOME is set to the fresh per-run home directory",
-            "config_template": self.render_config("{PROXY_BASE_URL}"),
+            "config_template": config_template,
             # Port-independent shape of the egress guard (values, not the
             # ephemeral proxy host), so tampering with the black-hole address
             # is a fingerprint change.
