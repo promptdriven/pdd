@@ -2277,6 +2277,7 @@ def _declared_signature_to_entry(
     binding_kind: str,
     *,
     is_async: bool = False,
+    strip_receiver: bool = False,
 ) -> Optional[str]:
     """Normalize a declared ``<pdd-interface>`` signature into a snapshot entry.
 
@@ -2288,6 +2289,11 @@ def _declared_signature_to_entry(
     ``self`` / property / ``async``; matching them by construction means only the
     parameter list and return annotation are actually compared, and no
     binding-kind drift is ever invented from the declaration.
+
+    ``strip_receiver=True`` (used for receiver-bound methods and constructors:
+    ``instance`` / ``classmethod`` / ``class`` kinds) drops a leading ``self`` /
+    ``cls`` positional so the declared ``(self, x)`` matches the snapshot's
+    receiver-stripped ``(x)``. An already-stripped ``(x)`` is left unchanged.
 
     Returns ``None`` (presence-only: the symbol must exist but its signature is
     not checked) when the declared signature is not a parseable paren-list — a
@@ -2311,6 +2317,20 @@ def _declared_signature_to_entry(
             sig = sig[len("async "):].strip()
     if not sig.startswith("("):
         return None
+    if strip_receiver:
+        # Mirror the snapshot's receiver stripping: parse the declared paren
+        # signature and drop a leading ``self``/``cls`` positional so a declared
+        # ``(self, x)`` compares against the snapshot's ``(x)``. A signature that
+        # does not parse or whose first positional is not a receiver is left
+        # unchanged (an already receiver-free ``(x)`` stays ``(x)``).
+        try:
+            parsed = ast.parse(f"def _pdd{sig}: pass").body[0]
+        except SyntaxError:
+            return None
+        if isinstance(parsed, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            positional = list(parsed.args.posonlyargs) + list(parsed.args.args)
+            if positional and positional[0].arg in {"self", "cls"}:
+                sig = _format_python_signature(parsed, skip_first=True)
     async_prefix = "async " if is_async else ""
     entry = f"[{binding_kind}] {async_prefix}{sig}"
     if parse_callable_contract(entry) is None:
@@ -2495,27 +2515,27 @@ def _verify_public_surface_regression(
 
     # DECLARED symbols: validate the generated signature against the DECLARED
     # PARAM/return contract (a stable target), NEVER re-comparing params against
-    # the old code. Defaults on BOTH sides resolve in the GENERATED module
-    # namespace — the prompt describes the generated module (issue #1558's
-    # declared-vs-generated resolution).
+    # the old code. Top-level functions AND dotted methods/constructors are all
+    # first-class declared-contract citizens here — the declaration is the permit
+    # for their params/return, while the un-declarable binding-kind/async are
+    # anchored to old code (below). Defaults on BOTH sides resolve in the
+    # GENERATED module namespace — the prompt describes the generated module
+    # (issue #1558's declared-vs-generated resolution).
     for symbol in sorted(declared_names):
-        if "." in symbol:
-            # A declared DOTTED name is a method (``Foo.method`` /
-            # ``Foo.__init__``): presence-only here. The snapshot receiver-strips
-            # ``self``/``cls`` and keys a constructor ABI on the CLASS entry, so
-            # comparing the declared ``(self, ...)`` signature would false-positive
-            # on unchanged code and need fragile self-stripping (codex FM1;
-            # generalizes the earlier ``.__init__`` special case). Presence is
-            # still enforced by the removal check above; the conformance gate
-            # (``_verify_pdd_interface_signatures``) validates method params with
-            # proper receiver handling. Top-level functions (no dot) keep full
-            # declared-signature validation (the #2971 case).
-            continue
-        actual_entry = after_signatures.get(symbol)
+        # A constructor's ABI is keyed on the CLASS symbol as a ``[class]`` entry,
+        # so a declared ``Class.__init__`` validates against the class entry;
+        # every other declared name (top-level function or ``Class.method``) keys
+        # on itself.
+        if symbol.endswith(".__init__"):
+            snapshot_key = symbol[: -len(".__init__")]
+        else:
+            snapshot_key = symbol
+        actual_entry = after_signatures.get(snapshot_key)
         if actual_entry is None:
             # Absent from the generated signature table (missing symbol or a
             # non-callable form). Presence is enforced by the removal check
-            # above; there is no callable entry to compare here.
+            # above; not validated -> left out of ``declared_validated`` so it
+            # falls back to the old-code baseline.
             continue
         actual_ctx = _entry_binding_context(actual_entry)
         if actual_ctx is None:
@@ -2535,7 +2555,7 @@ def _verify_public_surface_regression(
         if symbol in allowed_signature_changes:
             expected_kind, expected_async = actual_ctx
         else:
-            before_entry = before_signatures.get(symbol)
+            before_entry = before_signatures.get(snapshot_key)
             before_ctx = (
                 _entry_binding_context(before_entry)
                 if before_entry is not None
@@ -2545,19 +2565,30 @@ def _verify_public_surface_regression(
             expected_kind, expected_async = (
                 before_ctx if before_ctx is not None else actual_ctx
             )
+        # The snapshot receiver-strips ``self``/``cls`` for receiver-bound methods
+        # and constructors, so strip a leading receiver from the declared signature
+        # for those kinds before comparing (a declared ``(self, x)`` must match the
+        # snapshot's ``(x)``; a plain function/staticmethod is left as declared).
+        strip_receiver = expected_kind in {"instance", "classmethod", "class"}
         expected_entry = _declared_signature_to_entry(
-            declared[symbol], expected_kind, is_async=expected_async
+            declared[symbol],
+            expected_kind,
+            is_async=expected_async,
+            strip_receiver=strip_receiver,
         )
         if expected_entry is None:
             # Declared signature is not a parseable paren-list -> presence-only:
             # the symbol must exist (enforced above) but its signature is NOT
             # validated against the declaration here. It is intentionally left out
             # of ``declared_validated`` so the undeclared old-code loops below
-            # still protect its signature (codex over-skip fix).
+            # still protect its signature (codex over-skip fix, e.g. a declared
+            # class with a non-paren ``"class Service"`` signature).
             continue
         # We are actually validating this symbol against its declared signature,
-        # so the declaration owns it: exclude it from the old-code loops below.
-        declared_validated.add(symbol)
+        # so the declaration owns it: exclude its SNAPSHOT KEY from the old-code
+        # loops below (the class entry for a validated ``__init__``, the
+        # ``X.method`` entry for a validated method).
+        declared_validated.add(snapshot_key)
         compatible = signature_entries_compatible(
             expected_entry,
             actual_entry,
@@ -2565,6 +2596,8 @@ def _verify_public_surface_regression(
             new_symbols=after_default_symbols,
         )
         if compatible is False:
+            # Report the ORIGINAL declared name (``Foo.method`` /
+            # ``Service.__init__``), not the snapshot key.
             changed_set.add(symbol)
             signature_details.append(
                 (symbol, expected_entry, actual_entry, "pdd-interface")
