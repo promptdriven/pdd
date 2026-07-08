@@ -15,6 +15,7 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
+from .content_selector import configured_test_output_pinned, resolve_test_output_path
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -123,6 +124,64 @@ def cmd_test_main(
     except Exception as e:
         console.print(f"[bold red]Error constructing paths: {e}[/bold red]")
         return TestResult("", 0.0, f"Error: {e}", None, str(e))
+
+    # 2b. Issue #1903: when PDD used its derived default test path, adopt an
+    # existing, runner-collected co-located test as the canonical output so both
+    # the agentic and native branches target the real test CI runs instead of a
+    # runner-blind `tests/` shadow. The test location is treated as user-pinned
+    # (never overridden) when the user set it explicitly — via CLI `--output`, the
+    # `PDD_TEST_OUTPUT_PATH` env var, or an explicit `.pddrc test_output_path` for
+    # this module's context. The pin is read from the RAW `.pddrc` defaults (via
+    # configured_test_output_pinned), never from construct_paths' resolved_config,
+    # which injects a generated-default test_output_path and would always read as
+    # pinned. The context is resolved the way construct_paths resolves it: an
+    # explicit `--context` wins, else it is detected from the PROMPT file (whose
+    # `prompts_dir` selects the context — the code file's path may not match the
+    # context's `paths`), anchoring the .pddrc lookup on the prompt side. Mutating
+    # output_file_paths['output'] keeps a single source of truth for downstream
+    # write/churn steps.
+    pin_target = prompt_file or code_file
+    user_pinned_test_path = (
+        output is not None
+        or configured_test_output_pinned(
+            pin_target,
+            context_override=ctx.obj.get("context"),
+            search_from=Path(pin_target).parent if pin_target else None,
+        )
+    )
+    derived_output = output_file_paths.get("output")
+    if derived_output:
+        adopted_output = str(
+            resolve_test_output_path(
+                code_file, derived_output, user_pinned=user_pinned_test_path
+            )
+        )
+        output_file_paths["output"] = adopted_output
+        # Issue #1903: the write/churn steps read `output` (adopted above), but the
+        # native/cloud generation reads its destination from the separate
+        # `output_file` key (the `test_file_path` derivation below). For `test`
+        # commands generate_output_paths returns only `output`, so `output_file`
+        # is absent and would fall back to a bare `test_output.py` — prompting the
+        # LLM with the wrong destination (broken relative imports) while the write
+        # lands at the adopted/real path. This also covers sync, which passes the
+        # already-adopted path in as an explicit `output` (so no retarget happens
+        # here). Default `output_file` to the actual write target; `setdefault`
+        # leaves any explicitly-provided `output_file` untouched.
+        output_file_paths.setdefault("output_file", output_file_paths["output"])
+
+    # 2c. Issue #1903: sync regenerates a test by MERGING into an already-existing
+    # test, passing it as an explicit `output` with merge=True. With force=False,
+    # construct_paths renames that existing path to a numbered sibling (e.g.
+    # `page.test_1.tsx`), so the agentic/native write would create a NEW shadow
+    # beside the real test while sync keeps verifying the original (now stale) one —
+    # re-introducing the #1903 false-green for the core jest/TSX case. When merging
+    # into a known existing test, the write target IS that test: pin `output` /
+    # `output_file` to it so generation and the write both land on the real file
+    # (churn-guarded), never a numbered shadow.
+    if merge and existing_tests:
+        merge_target = existing_tests[0]
+        output_file_paths["output"] = merge_target
+        output_file_paths["output_file"] = merge_target
 
     # 3. Resolve effective configuration (strength, temperature, time)
     # Priority: Function Arg > CLI Context > Config File > Default
