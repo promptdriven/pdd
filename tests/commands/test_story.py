@@ -850,3 +850,78 @@ class TestStoryLink:
             obj={"quiet": True, "verbose": False},
         )
         assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8b: --with-regression-status honesty + project-root resolution (#1889)
+# ---------------------------------------------------------------------------
+
+class TestStoryListRegressionHonesty:
+    """`pdd story list --with-regression-status` must resolve the *project's*
+    tests dir (cwd), report a presence-honest term (never 'passing'), and make
+    'stale' reachable when a linked test records a mismatched story hash.
+    """
+
+    def _story(self, root: Path) -> Path:
+        story_path = root / "user_stories" / "story__widget.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: widget\n\nA widget renders on the page.\n", encoding="utf-8"
+        )
+        return story_path
+
+    def test_present_test_reports_honest_term_not_passing(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A linked regression test in the PROJECT tests dir is found (not
+        'missing' -> proves cwd resolution, not pdd's own suite) and reported
+        with a presence-honest term rather than the overclaiming 'passing'."""
+        self._story(tmp_path)
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        out = result.output.lower()
+        assert "widget" in out
+        assert "missing" not in out, (
+            f"project test not found -> dir resolved to pdd install, not cwd: {result.output!r}"
+        )
+        assert "passing" not in out, (
+            f"'passing' overclaims: gate never executes the test: {result.output!r}"
+        )
+        assert "has-test" in out, f"expected presence-honest term, got: {result.output!r}"
+
+    def test_stale_is_reachable(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A linked test recording a mismatched story hash must render 'stale'
+        (previously unreachable: only 'passing'/'missing' were emitted)."""
+        self._story(tmp_path)
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            'STORY_HASH = "0000000000000000"\n\n'
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        assert "stale" in result.output.lower(), (
+            f"'stale' must be reachable, got: {result.output!r}"
+        )
