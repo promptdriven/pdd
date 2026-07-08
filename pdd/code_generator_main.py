@@ -639,10 +639,14 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         ".test.tsx",
         ".test.js",
         ".test.jsx",
+        ".test.mjs",
+        ".test.cjs",
         ".spec.ts",
         ".spec.tsx",
         ".spec.js",
         ".spec.jsx",
+        ".spec.mjs",
+        ".spec.cjs",
     )
     # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that
     # live next to production code rather than under `tests/`. Go's
@@ -690,7 +694,7 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         name.startswith("test_")
         or lower_name.endswith(js_like_test_suffixes)
         or name.endswith(pascal_test_suffixes)
-        or any(part in {"tests", "__tests__"} for part in path.parts)
+        or any(part in {"tests", "__tests__", "__test__"} for part in path.parts)
     )
 
 
