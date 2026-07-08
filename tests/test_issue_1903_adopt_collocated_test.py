@@ -57,22 +57,26 @@ def _write(path: Path, content: str = "// placeholder\n") -> Path:
 # ---------------------------------------------------------------------------
 
 class TestFindCollocatedTest:
-    def test_finds_test_under_dunder_test_dir(self, tmp_path):
+    def test_finds_test_under_dunder_test_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         code = _write(tmp_path / "frontend/src/app/contributions/page.tsx")
         real = _write(code.parent / "__test__" / "page.test.tsx")
         assert find_collocated_test(code).resolve() == real.resolve()
 
-    def test_finds_spec_file(self, tmp_path):
+    def test_finds_spec_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         code = _write(tmp_path / "src/widget.ts")
         spec = _write(code.parent / "widget.spec.ts")
         assert find_collocated_test(code).resolve() == spec.resolve()
 
-    def test_finds_beside_module_test(self, tmp_path):
+    def test_finds_beside_module_test(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         code = _write(tmp_path / "src/button.tsx")
         test = _write(code.parent / "button.test.tsx")
         assert find_collocated_test(code).resolve() == test.resolve()
 
-    def test_finds_python_sibling(self, tmp_path):
+    def test_finds_python_sibling(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         code = _write(tmp_path / "src/foo.py", "def foo():\n    return 1\n")
         test = _write(tmp_path / "tests" / "test_foo.py",
                       "def test_foo():\n    assert True\n")
@@ -117,7 +121,8 @@ class TestFindCollocatedTest:
 # ---------------------------------------------------------------------------
 
 class TestResolveTestOutputPath:
-    def test_adopts_collocated_over_shadow(self, tmp_path):
+    def test_adopts_collocated_over_shadow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         code = _write(tmp_path / "frontend/src/app/contributions/page.tsx")
         real = _write(code.parent / "__test__" / "page.test.tsx")
         shadow = tmp_path / "tests" / "test_page.tsx"  # runner-blind, not on disk
@@ -828,3 +833,76 @@ def test_evidence_manifest_resolve_test_output_uses_adopted_path(tmp_path, monke
     monkeypatch.setenv("PDD_TEST_OUTPUT_PATH", "contract-tests/")
     got_pinned = resolve_test_output_paths(str(prompt), str(code))
     assert Path(got_pinned[0]).resolve() != real.resolve()
+
+
+# ---------------------------------------------------------------------------
+# CWE-022 containment (PR #1914 CodeQL alerts #339-#342): adoption candidates
+# derived from a caller-supplied code-file path must never escape the working
+# tree — the adopted path becomes a generated-test WRITE target.
+# ---------------------------------------------------------------------------
+
+
+def test_find_collocated_test_rejects_candidates_outside_cwd(tmp_path, monkeypatch):
+    """A code file outside the working tree (traversal shape) is never adopted:
+    its real sibling test exists but lies outside cwd -> no match."""
+    outside = tmp_path / "outside"
+    module = _write(outside / "widget.ts", "export const x = 1;\n")
+    _write(outside / "widget.test.ts", "test('x', () => {});\n")
+
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    # Reachable via traversal from cwd, but resolves outside the working tree.
+    traversal = Path("..") / "outside" / "widget.ts"
+    assert find_collocated_test(traversal) is None
+    assert find_collocated_test(module) is None  # absolute form, same escape
+
+
+def test_resolve_test_output_path_traversal_returns_derived(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    _write(outside / "widget.ts", "export const x = 1;\n")
+    _write(outside / "widget.test.ts", "test('x', () => {});\n")
+
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    derived = Path("tests") / "test_widget.ts"
+    got = resolve_test_output_path(
+        Path("..") / "outside" / "widget.ts", derived, user_pinned=False
+    )
+    assert got == derived  # no adoption, safe degradation
+
+
+def test_adopt_collocated_test_keeps_result_when_adoption_escapes_root(
+    tmp_path, monkeypatch
+):
+    """Sink-side defense in depth: even if a containing-escape path reached
+    _adopt_collocated_test, the derived result is kept unchanged."""
+    outside = tmp_path / "outside"
+    module = _write(outside / "widget.ts", "export const x = 1;\n")
+    _write(outside / "widget.test.ts", "test('x', () => {});\n")
+
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    derived = {
+        "code": module,
+        "test": Path("tests") / "test_widget.ts",
+        "test_files": [Path("tests") / "test_widget.ts"],
+    }
+    got = _adopt_collocated_test(dict(derived), user_pinned=False)
+    assert got["test"] == derived["test"]
+    assert got["test_files"] == derived["test_files"]
+
+
+def test_in_repo_adoption_still_works_after_containment(tmp_path, monkeypatch):
+    """Containment must not break the normal in-repo adoption path."""
+    monkeypatch.chdir(tmp_path)
+    code, real = _build_jest_project(tmp_path, test_output_path=None)
+    got = resolve_test_output_path(
+        code, Path("tests") / "test_page.tsx", user_pinned=False
+    )
+    assert Path(got).resolve() == real.resolve()

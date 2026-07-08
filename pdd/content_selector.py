@@ -509,6 +509,22 @@ def _collocated_js_ts_candidates(module_path: Path) -> list[Path]:
     return candidates
 
 
+def _contained_in_root(candidate_resolved: Path, root_resolved: Path) -> bool:
+    """CWE-022 containment barrier: *candidate_resolved* is *root* or inside it.
+
+    Both arguments MUST already be ``.resolve()``d (symlinks and ``..``
+    normalized). Adoption candidates are derived from a caller-supplied
+    code-file path — issue-influenced in the hosted/agentic flow — and must
+    never escape the working tree: a traversal like ``../../victim`` would
+    otherwise become a generated-test WRITE target (py/path-injection,
+    PR #1914 CodeQL alerts #339-#342).
+    """
+    candidate_s, root_s = str(candidate_resolved), str(root_resolved)
+    return candidate_s == root_s or candidate_s.startswith(
+        root_s.rstrip(os.sep) + os.sep
+    )
+
+
 def find_collocated_test(code_file: str | Path) -> Optional[Path]:
     """Return the single existing co-located test for *code_file*, else ``None``.
 
@@ -520,10 +536,13 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
     non-JS/TS module is never retargeted onto a same-stem ``.py`` sibling.
 
     Only EXISTING files are considered, the module itself is excluded, and
-    candidates are de-duped by resolved path. The match is returned only when
-    exactly one distinct test file exists (0 matches OR >1 match -> ``None``)
-    so an ambiguous project is never silently retargeted. Never raises: any
-    error yields ``None``.
+    candidates are de-duped by resolved path. Candidates outside the current
+    working tree are rejected (containment, CWE-022): adoption only ever
+    targets tests inside the project the CLI is operating on, so a
+    traversal-shaped *code_file* degrades to no-adoption rather than escaping
+    the repo. The match is returned only when exactly one distinct test file
+    exists (0 matches OR >1 match -> ``None``) so an ambiguous project is
+    never silently retargeted. Never raises: any error yields ``None``.
     """
     try:
         module_path = Path(code_file)
@@ -535,6 +554,7 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
         else:
             return None
 
+        root_resolved = Path.cwd().resolve()
         try:
             module_resolved = module_path.resolve()
         except OSError:
@@ -551,6 +571,10 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
                 # Skip only the bad candidate (e.g. a symlink loop raising
                 # RuntimeError, or a malformed path) — never abandon the whole
                 # detection and fall back to the runner-blind shadow (#1903).
+                continue
+            if not _contained_in_root(resolved, root_resolved):
+                # Containment (CWE-022): never adopt a test outside the
+                # working tree, regardless of how the candidate was derived.
                 continue
             if module_resolved is not None and resolved == module_resolved:
                 continue
@@ -598,7 +622,14 @@ def resolve_test_output_path(
         sibling = find_collocated_test(code_file)
         if sibling is None:
             return derived
-        if sibling.resolve() == derived.resolve():
+        sibling_resolved = sibling.resolve()
+        # Defense in depth (CWE-022): find_collocated_test already rejects
+        # candidates outside the working tree, but re-assert containment at
+        # the adoption sink — the returned path becomes a generated-test
+        # WRITE target downstream.
+        if not _contained_in_root(sibling_resolved, Path.cwd().resolve()):
+            return derived
+        if sibling_resolved == derived.resolve():
             return derived
         return sibling
     except Exception:  # pylint: disable=broad-except
