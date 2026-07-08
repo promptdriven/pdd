@@ -7,7 +7,13 @@ from typing import Optional
 
 import click
 
-from ..story_regression import has_regression_test
+from ..story_regression import build_story_map
+from ..story_regression_gate import (
+    STATUS_MISSING,
+    STATUS_PASSING,
+    STATUS_STALE,
+    evaluate_story_regression,
+)
 from ..user_story_tests import (
     STORY_PREFIX,
     STORY_SUFFIX,
@@ -280,6 +286,32 @@ def add_story(
 story_cli = story
 
 
+# Presence/freshness-honest labels for ``--with-regression-status``. This
+# surface is static (no test execution), so it must never print "passing":
+# pass/fail is verified separately by the story lane (``pytest -m story``).
+_REGRESSION_STATUS_LABELS = {
+    STATUS_MISSING: "missing",
+    STATUS_STALE: "stale",
+    STATUS_PASSING: "has-test",
+}
+
+
+def _project_tests_dir(story_path: Path) -> Path:
+    """Resolve the *project's* tests dir from a story path (mirrors
+    ``story_test_generation._default_output_for``): the sibling ``tests/`` of a
+    ``user_stories/`` story, else ``tests/`` under the current project root.
+
+    Using ``Path.cwd()`` (not ``pdd``'s install dir) means pip-installed users
+    scan their own suite instead of pdd's, so linked tests are actually found.
+    """
+    root = (
+        story_path.parent.parent
+        if story_path.parent.name == "user_stories"
+        else Path.cwd()
+    )
+    return root / "tests"
+
+
 @story.command("list")
 @click.option("--stories-dir", default="user_stories", type=click.Path(file_okay=False))
 @click.option("--with-regression-status", is_flag=True)
@@ -295,17 +327,41 @@ def list_stories(stories_dir: str, with_regression_status: bool) -> None:
         headers.append("Regression")
     click.echo(" | ".join(headers))
 
+    # Cache the collected story<->test map per resolved tests dir so a many-story
+    # listing does not re-run pytest collection once per story.
+    story_maps: dict[Path, object] = {}
+
     for story_path in story_paths:
+        story_path = Path(story_path)
         try:
-            story_text = Path(story_path).read_text(encoding="utf-8")
+            story_text = story_path.read_text(encoding="utf-8")
         except OSError:
             story_text = ""
         prompt_refs = _parse_story_prompt_metadata(story_text)
-        cells = [Path(story_path).stem, ", ".join(prompt_refs) if prompt_refs else "-"]
+        cells = [story_path.stem, ", ".join(prompt_refs) if prompt_refs else "-"]
         if with_regression_status:
-            status = "passing" if has_regression_test(story_id(story_path)) else "missing"
-            cells.append(status)
+            cells.append(_regression_status_label(story_path, story_maps))
         click.echo(" | ".join(cells))
+
+
+def _regression_status_label(story_path: Path, story_maps: dict) -> str:
+    """Presence/freshness-honest regression label (missing/has-test/stale).
+
+    Reuses the gate's classification so hash-freshness is honored ("stale" is
+    reachable) and never claims a test passed — the gate does not execute it.
+    """
+    tests_dir = _project_tests_dir(story_path)
+    smap = story_maps.get(tests_dir)
+    if smap is None:
+        smap = build_story_map(tests_dir)
+        story_maps[tests_dir] = smap
+    try:
+        evaluation = evaluate_story_regression(
+            story_path, tests_dir=tests_dir, story_map=smap
+        )
+    except OSError:
+        return _REGRESSION_STATUS_LABELS[STATUS_MISSING]
+    return _REGRESSION_STATUS_LABELS.get(evaluation.status, evaluation.status)
 
 
 @story.command("link")

@@ -90,7 +90,7 @@ def _render_result_table(result: CoverageResult) -> None:
         story_table.add_column("Tests")
         for story in result.stories:
             status_style = {
-                "story-regression-passing": "green",
+                "story-regression-present": "green",
                 "story-regression-missing": "yellow",
                 "story-regression-stale": "bold red",
             }.get(story.status, "")
