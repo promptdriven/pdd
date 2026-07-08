@@ -8267,15 +8267,12 @@ class TestSyncCompatibilityGates:
     # -----------------------------------------------------------------
     # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
     # generated body MUST trigger the compatibility gates rather than
-    # silently truncating the existing file to 0 bytes. The original
-    # code gated on `and generated_code_content` (truthy), which made
-    # the check skip whenever the provider returned "" — and the
-    # writer below then erased the existing module / test file
-    # without raising. Three regressions guard the three end-user
-    # surfaces: Python module (public surface), test file (churn),
-    # non-Python file (safety net).
+    # silently truncating the existing file to 0 bytes. Empty extraction is
+    # now classified before architecture/public-surface/test-churn gates so
+    # sync can retry with an output-shape directive instead of misdiagnosing
+    # the failure as a missing-symbol or churn problem.
     # -----------------------------------------------------------------
-    def test_empty_generation_over_existing_module_raises_public_surface(
+    def test_empty_generation_over_existing_module_raises_prose_output_error(
         self,
         mock_ctx,
         temp_dir_setup,
@@ -8284,10 +8281,10 @@ class TestSyncCompatibilityGates:
         mock_env_vars,
     ):
         """Empty local generation over an existing public Python module
-        MUST raise `PublicSurfaceRegressionError` (not silently
+        MUST raise `ProseOutputError` (not silently
         truncate the file)."""
         from pdd.code_generator_main import (
-            PublicSurfaceRegressionError,
+            ProseOutputError,
             code_generator_main,
         )
 
@@ -8314,17 +8311,25 @@ class TestSyncCompatibilityGates:
 
         with patch(
             "pdd.code_generator_main.is_git_repository", return_value=False
-        ):
-            with pytest.raises(PublicSurfaceRegressionError):
+        ), patch(
+            "pdd.code_generator_main._verify_architecture_conformance"
+        ) as mock_verify:
+            with pytest.raises(ProseOutputError) as excinfo:
                 code_generator_main(
                     mock_ctx, str(prompt_file), str(output_file), None, False
                 )
 
-        # The compat-gate restore branch must put the original module
-        # back on disk so the repair loop sees the pre-sync baseline.
+        mock_verify.assert_not_called()
+        assert "Generation output extraction failure for service_python.prompt" in str(excinfo.value)
+        assert "model_name: mock_model_v1" in str(excinfo.value)
+        assert "language: python" in str(excinfo.value)
+        assert "Extractor result: empty" in str(excinfo.value)
+        assert "Raw output excerpt: <empty>" in str(excinfo.value)
+        # The prose-output gate fires before any writer, so the original
+        # module remains on disk for the repair loop.
         assert "class Service" in output_file.read_text(encoding="utf-8")
 
-    def test_empty_generation_over_existing_test_raises_test_churn(
+    def test_empty_generation_over_existing_test_raises_prose_output_error(
         self,
         mock_ctx,
         temp_dir_setup,
@@ -8333,9 +8338,9 @@ class TestSyncCompatibilityGates:
         mock_env_vars,
     ):
         """Empty local generation over an existing test file MUST raise
-        `TestChurnError` (not silently truncate the test file)."""
+        `ProseOutputError` (not silently truncate the test file)."""
         from pdd.code_generator_main import (
-            TestChurnError,
+            ProseOutputError,
             code_generator_main,
         )
 
@@ -8360,15 +8365,15 @@ class TestSyncCompatibilityGates:
         with patch(
             "pdd.code_generator_main.is_git_repository", return_value=False
         ):
-            with pytest.raises(TestChurnError):
+            with pytest.raises(ProseOutputError):
                 code_generator_main(
                     mock_ctx, str(prompt_file), str(output_file), None, False
                 )
 
-        # Restore branch puts the original tests back on disk.
+        # The prose-output gate fires before the writer.
         assert output_file.read_text(encoding="utf-8") == existing_tests
 
-    def test_empty_generation_over_existing_non_python_file_raises_safety_guard(
+    def test_empty_generation_over_existing_non_python_file_raises_prose_output_error(
         self,
         mock_ctx,
         temp_dir_setup,
@@ -8377,12 +8382,9 @@ class TestSyncCompatibilityGates:
         mock_env_vars,
     ):
         """Empty local generation over an existing non-Python artifact
-        (one the public-surface / test-churn gates cannot inspect)
-        MUST be refused by the safety guard — silent truncation would
-        otherwise lose real work."""
-        import click
-
-        from pdd.code_generator_main import code_generator_main
+        MUST be refused before the writer — silent truncation would otherwise
+        lose real work."""
+        from pdd.code_generator_main import ProseOutputError, code_generator_main
 
         mock_ctx.obj['local'] = True
         prompt_file = temp_dir_setup["prompts_dir"] / "config_yaml.prompt"
@@ -8402,13 +8404,13 @@ class TestSyncCompatibilityGates:
         with patch(
             "pdd.code_generator_main.is_git_repository", return_value=False
         ):
-            with pytest.raises(click.UsageError, match="Refusing to overwrite"):
+            with pytest.raises(ProseOutputError):
                 code_generator_main(
                     mock_ctx, str(prompt_file), str(output_file), None, False
                 )
 
-        # The safety guard fires BEFORE the writer, so the original
-        # file is untouched on disk.
+        # The prose-output gate fires BEFORE the writer, so the original file
+        # is untouched on disk.
         assert output_file.read_text(encoding="utf-8") == existing_yaml
 
 
