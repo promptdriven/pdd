@@ -367,6 +367,61 @@ class TestIssue1900SurfaceContract:
             prompt,
         )
 
+    def test_declared_dotted_method_with_self_is_presence_only(self):
+        """Codex FM1: the snapshot receiver-strips ``self``/``cls`` for methods,
+        so a declared ``Foo.method`` signature that carries ``self`` would
+        false-positive against unchanged code. Dotted declared names (methods) are
+        presence-only in the surface gate — the conformance gate validates their
+        params with proper receiver handling. Both the ``(self, x)`` and
+        ``def method(self, x)`` declaration forms must pass on unchanged code."""
+        code = (
+            "class Foo:\n"
+            "    def method(self, x):\n"
+            "        return x\n"
+        )
+        for sig in ("(self, x)", "def method(self, x)"):
+            prompt = _iface_prompt([("Foo.method", sig)])
+            _verify_public_surface_regression(
+                code, code, PROMPT, OUT, "python", prompt
+            )
+
+    def test_declared_dotted_method_dropped_still_raises(self):
+        """Presence of a declared dotted method is still enforced: dropping
+        ``Foo.method`` from the generated code raises it as removed."""
+        before = (
+            "class Foo:\n"
+            "    def method(self, x):\n"
+            "        return x\n"
+        )
+        after = "class Foo:\n    pass\n"
+        prompt = _iface_prompt([("Foo.method", "(self, x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Foo.method" in exc.value.removed_symbols
+
+    def test_breaking_change_does_not_bypass_declared_params(self):
+        """Codex FM2: ``BREAKING-CHANGE: change signature`` relaxes ONLY the
+        un-declarable binding-kind/async, NOT the declared param/return contract.
+        An added-required param that violates the declared signature must STILL be
+        flagged even with the opt-out (the declaration is the source of truth for
+        params)."""
+        prompt = _iface_prompt(
+            [("f", "(a)")],
+            body="% engineer\nBREAKING-CHANGE: change signature f\n",
+        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "def f(a):\n    return a\n",
+                "def f(a, b):\n    return a\n",
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "f" in exc.value.changed_signatures
+
 
 class TestIssue1900AgenticPropagation:
     def test_signature_detail_lines_reach_agentic_directive(self):
@@ -449,3 +504,29 @@ class TestIssue1900AgenticPropagation:
         assert "Restore `good` to its declared signature `[function] (a)`" in directive
         # The malformed line contributed no declared-target line.
         assert "Restore `bad`" not in directive
+
+    def test_signature_detail_delimiter_substring_in_signature_parses(self):
+        """Codex FM3: a VALID ``signature_detail:`` line whose expected default
+        contains the ` | source: ` and ` | actual: ` delimiter substrings must
+        still parse — the right-anchored rsplit resolves the real trailing
+        delimiters — and must NOT be dropped (which would lose the stable declared
+        target and fall back to the generic directive)."""
+        from pdd.agentic_sync_runner import _parse_public_surface_failure
+
+        expected_sig = "[function] (mode=' | source: X | actual: Y')"
+        actual_sig = "[function] (mode='ok')"
+        stderr = (
+            "Public surface regression for demo_Python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: f\n"
+            "output: pdd/demo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+            f"signature_detail: f | expected: {expected_sig} | "
+            f"actual: {actual_sig} | source: pdd-interface\n"
+        )
+        parsed = _parse_public_surface_failure("", stderr)
+        assert parsed is not None
+        directive, _signature = parsed
+        assert expected_sig in directive
+        assert actual_sig in directive
