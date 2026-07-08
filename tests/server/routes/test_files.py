@@ -276,7 +276,8 @@ async def test_get_content_directory_error(files_module, temp_project_root, vali
 async def test_get_content_security_error(files_module, validator):
     """Test 403 on security violation."""
     from fastapi import HTTPException
-    validator.validate = MagicMock(side_effect=SecurityError("BAD", "No access"))
+    live_security_error = files_module["get_file_content"].__globals__["SecurityError"]
+    validator.validate = MagicMock(side_effect=live_security_error("BAD", "No access"))
     with pytest.raises(HTTPException) as exc:
         await files_module["get_file_content"](path="sensitive", validator=validator)
     assert exc.value.status_code == 403

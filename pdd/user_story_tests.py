@@ -42,8 +42,13 @@ STORY_SUFFIX = ".md"
 CONTRACTS_SUBDIR = "contracts"
 CONTRACT_SUFFIX = ".contract.md"
 STORY_PROMPTS_METADATA_KEY = "pdd-story-prompts"
+STORY_DEV_UNITS_METADATA_KEY = "pdd-story-dev-units"
 STORY_PROMPTS_METADATA_RE = re.compile(
     r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
+    flags=re.IGNORECASE,
+)
+STORY_DEV_UNITS_METADATA_RE = re.compile(
+    r"<!--\s*pdd-story-dev-units:\s*(?P<dev_units>.*?)\s*-->",
     flags=re.IGNORECASE,
 )
 STORY_PROMPT_REFERENCE_RE = re.compile(
@@ -160,6 +165,70 @@ def _parse_story_prompt_metadata(story_content: str) -> List[str]:
     return [entry.strip() for entry in raw.split(",") if entry.strip()]
 
 
+def parse_story_dev_unit_metadata(story_text: str) -> list[str]:
+    """Extract dev-unit references from optional pdd-story-dev-units metadata."""
+    match = STORY_DEV_UNITS_METADATA_RE.search(story_text)
+    if not match:
+        return []
+    raw = match.group("dev_units").strip()
+    if not raw:
+        return []
+    return [entry.strip() for entry in raw.split(",") if entry.strip()]
+
+
+def get_all_dev_units_for_story(story_text: str) -> list[str]:
+    """Return all dev units/prompts declared for a story, preserving order."""
+    refs: list[str] = []
+    seen: set[str] = set()
+    for ref in parse_story_dev_unit_metadata(story_text) + _parse_story_prompt_metadata(story_text):
+        key = ref.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(ref)
+    return refs
+
+
+def story_is_cross_unit(story_text: str) -> bool:
+    """Return True when a story declares two or more linked dev units/prompts."""
+    return len(get_all_dev_units_for_story(story_text)) >= 2
+
+
+def _dev_unit_ref_matches_prompt(ref: str, prompt_name: str) -> bool:
+    """Return True when metadata reference *ref* points at *prompt_name*."""
+    left = ref.lower()
+    right = prompt_name.lower()
+    return left == right or left.endswith("/" + right)
+
+
+def get_cross_unit_stories_for_prompt(prompt_name: str, stories_dir: Path | str) -> list[dict]:
+    """Return cross-unit stories that include *prompt_name* in their metadata."""
+    root = Path(stories_dir)
+    if not root.exists():
+        return []
+
+    matches: list[dict] = []
+    for story_path in sorted(root.rglob(f"{STORY_PREFIX}*{STORY_SUFFIX}")):
+        try:
+            story_text = story_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        dev_units = get_all_dev_units_for_story(story_text)
+        if len(dev_units) < 2:
+            continue
+        if not any(_dev_unit_ref_matches_prompt(ref, prompt_name) for ref in dev_units):
+            continue
+        matches.append(
+            {
+                "story": story_path.name,
+                "story_id": story_id(story_path),
+                "path": str(story_path),
+                "dev_units": dev_units,
+            }
+        )
+    return matches
+
+
 def _prompt_reference_for_metadata(prompt_path: Path, prompts_dir: Optional[Path]) -> str:
     """Return a stable metadata reference for a prompt path."""
     if prompts_dir:
@@ -193,6 +262,13 @@ def _upsert_story_prompt_metadata(
         updated = STORY_PROMPTS_METADATA_RE.sub(metadata_line, story_content, count=1)
     else:
         updated = f"{metadata_line}\n\n{story_content}"
+
+    if len(metadata_refs) >= 2:
+        dev_units_line = f"<!-- {STORY_DEV_UNITS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
+        if STORY_DEV_UNITS_METADATA_RE.search(updated):
+            updated = STORY_DEV_UNITS_METADATA_RE.sub(dev_units_line, updated, count=1)
+        else:
+            updated = updated.replace(metadata_line, f"{metadata_line}\n{dev_units_line}", 1)
 
     if updated == story_content:
         return False
@@ -355,6 +431,7 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     if not story_path.exists() or not story_path.is_file():
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
+    explicit_prompt_files = list(prompt_files) if prompt_files else None
     prompt_files = prompt_files or discover_prompt_files(
         prompts_dir, include_llm=include_llm_prompts
     )
@@ -363,6 +440,36 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
 
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
     story_content = _read_story(story_path)
+
+    # Explicit prompt inputs are authoritative: `pdd story link --prompt` and
+    # `pdd story add --update` name the exact prompts to link, so honor them
+    # all (merged with still-resolvable existing refs) without spending an LLM
+    # call second-guessing the caller.
+    if explicit_prompt_files and force_relink:
+        existing_paths: List[Path] = []
+        for ref in _parse_story_prompt_metadata(story_content):
+            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            if resolved:
+                existing_paths.append(resolved)
+        linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)
+        updated = _upsert_story_prompt_metadata(
+            story_path,
+            story_content,
+            linked_prompt_paths,
+            prompts_root,
+        )
+        linked_refs = sorted(
+            {
+                _prompt_reference_for_metadata(path.resolve(), prompts_root)
+                for path in linked_prompt_paths
+            }
+        )
+        message = (
+            "Story prompt metadata linked from explicit prompt inputs."
+            if updated
+            else "Story prompt metadata already up to date for explicit prompt inputs."
+        )
+        return True, message, 0.0, "", linked_refs
 
     # Keep existing valid metadata unchanged unless force_relink is requested.
     existing_refs = _parse_story_prompt_metadata(story_content)
@@ -784,6 +891,20 @@ def _slug_from_story_path(story_path: Path) -> str:
     return name
 
 
+def story_id(path: "str | Path") -> str:
+    """Return the canonical ``story_id`` (the ``<slug>``) for a story file path.
+
+    This is the single, public identity helper shared across PDD: a
+    ``user_stories/story__<slug>.md`` path maps to ``<slug>``. Accepts either a
+    ``str`` or a :class:`pathlib.Path`. The mapping is byte-identical to the
+    internal :func:`_slug_from_story_path` implementation, which this helper
+    wraps; both the ``@pytest.mark.story`` marker mechanism (see
+    ``pdd.story_regression``) and the on-disk story files therefore share one
+    identity space.
+    """
+    return _slug_from_story_path(Path(path))
+
+
 def _contract_path_for_story(story_path: Path) -> Path:
     """Return the sibling contract path for a human story file.
 
@@ -817,11 +938,12 @@ def _compose_story_oracle(story_path: Path, story_content: str) -> str:
 def _normalized_story_for_hash(story_text: str) -> str:
     """Return story text normalized for hashing.
 
-    Drops the ``pdd-story-prompts`` metadata comment and trailing whitespace so a
-    metadata-only edit (e.g. relinking prompts) does not look like a Story change,
-    while any edit to the human-facing prose does.
+    Drops story metadata comments and trailing whitespace so a metadata-only edit
+    (e.g. relinking prompts/dev units) does not look like a Story change, while
+    any edit to the human-facing prose does.
     """
     without_meta = STORY_PROMPTS_METADATA_RE.sub("", story_text)
+    without_meta = STORY_DEV_UNITS_METADATA_RE.sub("", without_meta)
     lines = [line.rstrip() for line in without_meta.strip().splitlines()]
     return "\n".join(line for line in lines if line.strip())
 

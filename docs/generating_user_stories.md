@@ -51,7 +51,7 @@ tracks alignment.
 
 ```mermaid
 flowchart TD
-    A[GitHub issue] --> B["pdd test --issue ISSUE prompts/module_lang.prompt"]
+    A[GitHub issue] --> B["pdd story add &lt;issue&gt; --devunit &lt;name&gt;<br/>(recommended)<br/>or: pdd test --issue ISSUE prompts/module_lang.prompt"]
     B --> C["story__slug.md<br/>(human-verified Story)"]
     B --> D["contracts/slug.contract.md<br/>(generated)"]
     C --> E{"Human review:<br/>is this the behavior I want?"}
@@ -60,7 +60,8 @@ flowchart TD
     E -- approved --> G["pdd detect --stories<br/>(validate vs linked prompts)"]
     G -- fails --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
     H --> G
-    G -- passes --> I[Commit Story + contract]
+    G -- passes --> I["pdd test --from-story story__slug.md<br/>(generate executable regression)"]
+    I --> J[Commit Story + contract + regression test]
 ```
 
 ## Step 1 — Get the issue
@@ -85,6 +86,80 @@ Markdown file and passing that path.
 > the contract's `## Acceptance Criteria` and `## Negative Cases`.
 
 ## Step 2 — Generate the story
+
+### Using `pdd story add` (recommended)
+
+`pdd story add` is the first-class CLI for creating a story. It resolves the issue, generates the story + contract, and links the target prompts in a single command. Identify the target dev unit(s) with `--devunit` (resolved the same way as `pdd checkup <devunit>`) or pass prompt paths directly with `--prompt`:
+
+```bash
+# From a GitHub issue URL — link via dev unit name
+pdd story add https://github.com/myorg/myrepo/issues/1454 \
+  --devunit commands/generate
+
+# From an issue number (repo inferred from git remote)
+pdd story add 1454 --devunit commands/generate --devunit commands/test
+
+# From a local issue file (offline / deterministic)
+pdd story add ./issue-1454.md --prompt prompts/commands/generate_python.prompt
+
+# Cross-devunit story — both dev-unit links are preserved in metadata
+pdd story add 1454 --devunit commands/generate --devunit commands/test
+
+# From inline text (use --text to avoid ambiguity with URLs/paths)
+pdd story add --text "As a developer, I want to validate coupon codes at checkout" \
+  --title "Coupon validation" --devunit commands/validate_coupon
+
+# Dry-run: print the proposed story path and linked prompts without writing
+pdd story add 1454 --devunit commands/generate --dry-run
+
+# Link the prompt files already changed in git status
+pdd story add 1454 --from-changed-files
+
+# Create the story and print the follow-up deterministic regression command
+pdd story add 1454 --devunit commands/generate --generate-regression
+```
+
+Pass `--update` to merge prompt links into an existing story file rather than erroring on a slug collision.
+
+### Using `pdd test --issue` (underlying mechanism / direct form)
+
+`pdd story add` calls the same library as `pdd test --issue` internally. You may still use `pdd test --issue` directly when you need to select specific prompt files manually.
+
+## Step 3 — Generate executable regression tests
+
+After the human story and generated contract are reviewed, compile the contract into deterministic pytest tests:
+
+```bash
+pdd test --from-story user_stories/story__checkout_total.md \
+  --output tests/story_regression/test_story_checkout_total.py
+```
+
+`pdd test --from-story` generates in one of two modes, chosen from the contract:
+
+**Behavioral (preferred).** If the contract declares a machine-readable `## Entry Point`, the generated test imports the callable, invokes it, and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result` — a true executable oracle that goes red when the *behavior* regresses.
+
+```markdown
+## Entry Point
+
+- module: checkout_app
+- callable: checkout_total
+- args: [1, 2]
+- kwargs: {}
+```
+
+Optional `## Seams` bullets patch runtime boundaries before the entry point is called:
+
+```markdown
+## Seams
+
+- checkout_app.TAX_RATE = 0
+```
+
+`## Oracle` and `## Negative Cases` bullets are then Python assertion expressions over `result`, the return value from the entry point.
+
+**Text-pin (fallback).** If the contract has no `## Entry Point`, the generated test pins the story+contract bundle instead: it asserts a content hash and the presence of each `## Oracle` / `## Negative Cases` clause. This still gives deterministic **staleness** detection — the test goes red when the story or contract text drifts — but it does not exercise runtime behavior. Prefer adding an `## Entry Point` when you want outcome-level (behavioral) coverage.
+
+Either way, generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`, so `make regression-stories`, story coverage, and the stale/missing gate can trace them back to the source story.
 
 Run `pdd test` with `--issue` and one or more `.prompt` files. The prompt files
 are the **validation targets** the story will be linked to — they are *not* shown
@@ -326,6 +401,39 @@ the narrowest assertion that still catches the regression.
 - Templates: `user_stories/story__template.md` and
   `user_stories/contracts/template.contract.md`.
 
+## Story regression tests (`@pytest.mark.story`)
+
+A story can be backed by **runnable, traceable** pytest regression tests. Mark a
+test with the `story` marker (registered in `pytest.ini`) to claim a story:
+
+```python
+import pytest
+
+@pytest.mark.story(story_id="refund_payment")
+def test_refund_rejects_zero_amount():
+    ...
+```
+
+- **`story_id` convention:** the marker's `story_id` equals the story file's
+  slug — `user_stories/story__<slug>.md` → `story_id="<slug>"` (the same slug
+  used elsewhere in this guide; see "File and naming conventions"). The
+  positional form `@pytest.mark.story("<slug>")` is also accepted.
+- **Select the regression tests:** `pytest -m story` runs exactly the
+  story-backed regression tests and nothing else.
+- **Traceability:** given a story, the API resolves the set of tests that claim
+  it; given a test node id, it resolves the owning story. A story may be claimed
+  by many tests, and a test may claim more than one story.
+- **Coverage:** `pdd checkup coverage <prompt>` reports per story whether an
+  executable regression test exists (`has_regression_test`) and whether the
+  generated test is current (`story-regression-missing` /
+  `story-regression-stale`); see
+  [`docs/coverage_contracts.md`](coverage_contracts.md), "Story regression
+  coverage".
+
+This is distinct from `pdd detect --stories`, which validates stories against
+prompts via an LLM oracle. The marker mechanism is deterministic and requires no
+LLM calls.
+
 ## CI integration
 
 Add story validation as a pre-merge gate so prompt drift is caught
@@ -343,15 +451,47 @@ Pair it with the related quality gates: prompt and story quality
 ([`docs/contract_check.md`](contract_check.md)), and the rule-to-story/test
 coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 
+## Story regression suite (executable oracles)
+
+`pdd detect --stories` catches prompt *drift* against the live prompts. The story
+**regression suite** is the complementary, fully executable layer: a story can
+carry a generated `@pytest.mark.story` test that runs in a public-safe lane with
+no secrets and no LLM/cloud credentials.
+
+- **Generate** a regression test from a story with
+  `pdd test --from-story user_stories/story__<slug>.md`.
+- **Run** the suite with `make regression-stories` (equivalent to `pytest -m story`).
+  It runs inside the no-secrets `regression-public` lane, so it is safe on forks/CI.
+- **Backfill from fixed bugs.** To make a previously-fixed bug permanently guarded,
+  author `user_stories/story__<slug>.md` from the *closed issue* (independent
+  oracle — never reverse-engineered from the prompt or code), set its `## Oracle`
+  to "the reported symptom no longer occurs", and generate the test. A good
+  bug-regression test **fails on the pre-fix behavior** and passes on `main` — that
+  is what proves it guards the fix.
+- Seed coverage ships for the top flows (`generate`, `sync`, `fix`, `change`,
+  `update`) plus an initial batch of bug regressions. Extend the suite by adding a
+  story and generating its test; the running count feeds the story-metrics report.
+
 ## Quick reference
 
 | Goal | Command |
 | --- | --- |
-| Generate a story + contract from an issue | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
+| Add a story from an issue (recommended) | `pdd story add <issue-url\|number\|file> --devunit <name>` |
+| Add a story from inline text | `pdd story add --text "As a user..." --devunit <name>` |
+| Add a cross-devunit story | `pdd story add <issue-source> --devunit a --devunit b` |
+| Link changed prompt files | `pdd story add <issue-source> --from-changed-files` |
+| Preview without writing (dry-run) | `pdd story add <issue-source> --devunit <name> --dry-run` |
+| Merge prompts into an existing story | `pdd story add <issue-source> --devunit <name> --update` |
+| Print the regression generation handoff | `pdd story add <issue-source> --devunit <name> --generate-regression` |
+| List stories with regression status | `pdd story list --with-regression-status` |
+| Link a prompt to an existing story | `pdd story link user_stories/story__<slug>.md --prompt prompts/<module>_<lang>.prompt` |
+| Generate executable story regression tests | `pdd test --from-story user_stories/story__<slug>.md --output tests/story_regression/test_story_<slug>.py` |
+| Generate a story + contract (direct form) | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
 | Validate all stories against their prompts | `pdd detect --stories` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |
 | Re-align a contract after editing the Story | `sync_user_story_contract(...)` (library function — no CLI yet; see Step 4) |
+| Run only story-backed regression tests | `pytest -m story` |
 
 ## See also
 
@@ -365,3 +505,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
   lint.
 - [`docs/prompt_lint.md`](prompt_lint.md) — pre-merge prompt and user-story
   quality checks.
+- [`docs/evidence_manifest.md`](evidence_manifest.md) — the **executable** story
+  regression suite (`@pytest.mark.story`) and its machine-readable coverage
+  artifact (`.pdd/evidence/stories/coverage.latest.json`). This is distinct from
+  the LLM-backed `pdd detect --stories` validation described in this guide.
