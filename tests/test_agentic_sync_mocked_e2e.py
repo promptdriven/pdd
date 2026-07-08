@@ -203,7 +203,11 @@ def harness(tmp_path):
         [
             sys.executable,
             "-c",
-            "import pathlib, pdd; print(pathlib.Path(pdd.__file__).resolve())",
+            (
+                "import os, pathlib, pdd; "
+                "print(pathlib.Path(pdd.__file__).resolve(), flush=True); "
+                "os._exit(0)"
+            ),
         ],
         cwd=project,
         env=env,
