@@ -516,8 +516,19 @@ def _render_stale_head_summary(
     )
 
 
-def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
-    """Classify `gh pr checks` output using both exit code and bucket values."""
+def _classify_check_result(
+    returncode: int,
+    checks: List[Dict[str, str]],
+    *,
+    pending_outranks_unknown: bool = False,
+) -> str:
+    """Classify `gh pr checks` output using both exit code and bucket values.
+
+    ``pending_outranks_unknown`` is opt-in and used ONLY by the final-gate REST
+    poller. By default unrecognized ("") buckets fail closed before pending is
+    considered, so the CI-fix loop and the ``no_checks`` cross-check keep unknown
+    required checks fail-closed.
+    """
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
     unknown_checks = [
         check
@@ -554,16 +565,17 @@ def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str
 
     if real_failures:
         return "failed"
-    # A still-running check outranks an unrecognized conclusion: keep waiting so a
-    # co-pending check is polled to resolution before an unknown ("") bucket
-    # settles the result as "failed" (mirrors pending winning over
-    # action_required below). Without this, an unknown/`stale` sibling would make
-    # _poll_check_runs_for_head return terminally and the final gate would block a
-    # pending check that might still go green.
-    if pending_checks:
+    # Only the final-gate REST poller opts into pending outranking unknown, so a
+    # still-running check is polled to resolution before an unknown/`stale`
+    # sibling settles the result — the final gate must not block a pending check
+    # that might still go green. The required-check loop and the no_checks
+    # cross-check leave this off so unknown buckets stay fail-closed.
+    if pending_outranks_unknown and pending_checks:
         return "pending"
     if unknown_checks:
         return "failed"
+    if pending_checks:
+        return "pending"
     if action_required_checks and len(action_required_checks) == len(non_success_checks):
         return "action_required"
     if checks and all(bucket in PASS_BUCKETS for bucket in buckets):
@@ -708,6 +720,7 @@ def _poll_check_runs_for_head(
     *,
     head_sha: str,
     quiet: bool,
+    wait_pending_over_unknown: bool = False,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Poll REST check runs for the exact PR head SHA.
 
@@ -716,6 +729,11 @@ def _poll_check_runs_for_head(
     ``checks:read`` while lacking commit-status permissions, and the GraphQL
     rollup fails even when real check runs are readable through the REST Checks
     API.
+
+    ``wait_pending_over_unknown`` (final gate only) keeps polling when an
+    unrecognized ("") conclusion co-exists with a still-pending check, so the
+    pending check is waited out instead of the unknown making the poll terminal.
+    The ``no_checks`` cross-check leaves it off so unknown checks stay fail-closed.
     """
     saw_checks = False
     saw_api_error = False
@@ -738,7 +756,11 @@ def _poll_check_runs_for_head(
 
         saw_checks = saw_checks or bool(latest_checks)
         if latest_checks:
-            status = _classify_check_result(result.returncode, latest_checks)
+            status = _classify_check_result(
+                result.returncode,
+                latest_checks,
+                pending_outranks_unknown=wait_pending_over_unknown,
+            )
             if status in {"passed", "failed", "action_required"}:
                 return status, latest_checks
 
@@ -821,6 +843,7 @@ def run_github_checks_gate(
             cwd,
             head_sha=head_sha,
             quiet=quiet,
+            wait_pending_over_unknown=True,
         )
     skipped = [
         check
@@ -897,9 +920,9 @@ def run_github_checks_gate(
             )
         # Pending applicable checks still BLOCK (deliberate deviation from issue
         # #1902's "wait then ignore"): a genuinely stuck required check must not
-        # be shipped. `_classify_check_result` ranks pending above unknown, so the
-        # poller waits a co-pending check out to its timeout before returning it
-        # here rather than short-circuiting on an unknown/`stale` sibling.
+        # be shipped. This poll ran with wait_pending_over_unknown=True, so a
+        # co-pending check was polled to its timeout before an unknown/`stale`
+        # sibling could settle the gate here.
         if pending:
             return (
                 False,

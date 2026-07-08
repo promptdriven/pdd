@@ -899,6 +899,51 @@ def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
     assert checks[0]["bucket"] == "pending"
 
 
+def test_poll_check_runs_for_head_waits_pending_over_unknown_only_when_opted_in(
+    tmp_path: Path,
+) -> None:
+    """Final-gate opt-in keeps unknown+pending non-terminal; loop path fails closed.
+
+    Issue #1902 follow-up (confinement): with ``wait_pending_over_unknown=True``
+    (final gate) an unrecognized/`stale` conclusion co-present with a still-pending
+    check does not make the poll terminal — it keeps polling until the pending
+    check times out. Without the flag (the CI-fix loop / ``no_checks`` cross-check)
+    the unknown bucket fails closed immediately.
+    """
+    payload = {
+        "check_runs": [
+            {"name": "stale-check", "status": "completed", "conclusion": "stale", "html_url": ""},
+            {"name": "slow-suite", "status": "in_progress", "conclusion": None, "html_url": ""},
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        opt_in_status, _checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+            wait_pending_over_unknown=True,
+        )
+    assert opt_in_status == "timeout"
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        default_status, _checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+    assert default_status == "failed"
+
+
 def test_poll_check_runs_for_head_reports_unreadable_permission_error(tmp_path: Path) -> None:
     """Unreadable REST check-runs are distinct from a real zero-check repo."""
     result = subprocess.CompletedProcess(
@@ -1789,19 +1834,22 @@ def test_classify_pending_wins_over_action_required() -> None:
     assert _classify_check_result(8, checks) == "pending"
 
 
-def test_classify_pending_wins_over_unknown() -> None:
-    """A still-running check must be waited out before an unknown conclusion.
+def test_classify_pending_outranks_unknown_only_when_opted_in() -> None:
+    """`pending_outranks_unknown` is opt-in (final gate only), off by default.
 
     Issue #1902 follow-up: a ``stale``/future GitHub conclusion maps to bucket
-    ``""`` (unknown). When it co-exists with a still-pending check, the aggregate
-    must stay ``pending`` so the poller keeps polling — otherwise the final gate
-    would block a pending check that could still go green without waiting it out.
+    ``""`` (unknown). By DEFAULT the classifier fails closed on unknown before
+    pending, so the CI-fix loop (`_poll_required_checks`) and the ``no_checks``
+    cross-check keep unknown required checks fail-closed. Only the final-gate REST
+    poller opts in, so a still-pending check is waited out before an unknown
+    sibling settles the result.
     """
     checks = [
         {"name": "stale-check", "state": "STALE", "bucket": "", "link": ""},
         {"name": "github-app-ci", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
     ]
-    assert _classify_check_result(8, checks) == "pending"
+    assert _classify_check_result(8, checks) == "failed"
+    assert _classify_check_result(8, checks, pending_outranks_unknown=True) == "pending"
 
 
 def test_classify_failure_state_wins_even_with_missing_bucket() -> None:
