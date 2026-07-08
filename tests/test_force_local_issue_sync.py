@@ -13,13 +13,14 @@ Two defects found by mocked agentic-sync E2E runs:
 """
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
-from pdd.agentic_sync import run_agentic_sync
+from pdd.agentic_sync import _run_dry_run_validation, run_agentic_sync
 from pdd.agentic_sync_runner import DepGraphFromArchitectureResult
 from pdd.cli import cli
 
@@ -70,6 +71,7 @@ class TestRunAgenticSyncForwardsLocal:
             mock_runner_cls, local=True,
         )
         assert success
+        assert mock_dry_run.call_args.kwargs["local"] is True
         sync_options = runner_cls.call_args.kwargs["sync_options"]
         assert sync_options["local"] is True
 
@@ -97,8 +99,55 @@ class TestRunAgenticSyncForwardsLocal:
             mock_runner_cls,
         )
         assert success
+        assert mock_dry_run.call_args.kwargs["local"] is False
         sync_options = runner_cls.call_args.kwargs["sync_options"]
         assert sync_options["local"] is False
+
+
+class TestDryRunValidationLocal:
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync._prompt_contract_errors_for_module", return_value=[])
+    @patch("pdd.agentic_sync._resolve_module_cwd_and_target")
+    @patch("pdd.agentic_sync._find_pdd_executable", return_value="/mock/bin/pdd")
+    def test_local_true_reaches_validation_subprocess_command_and_env(
+        self,
+        mock_find_pdd,
+        mock_resolve,
+        mock_contract_errors,
+        mock_subprocess_run,
+        tmp_path,
+    ):
+        mock_resolve.return_value = (tmp_path, "foo")
+        mock_subprocess_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+
+        all_valid, module_cwds, module_targets, errors, cost = (
+            _run_dry_run_validation(["foo"], tmp_path, local=True)
+        )
+
+        assert all_valid
+        assert module_cwds == {"foo": tmp_path}
+        assert module_targets == {"foo": "foo"}
+        assert errors == []
+        assert cost == 0.0
+        assert mock_find_pdd.called
+        assert mock_contract_errors.call_args.args == ("foo", tmp_path, tmp_path)
+        cmd = mock_subprocess_run.call_args.args[0]
+        env = mock_subprocess_run.call_args.kwargs["env"]
+        assert cmd == [
+            "/mock/bin/pdd",
+            "--force",
+            "--local",
+            "sync",
+            "foo",
+            "--dry-run",
+            "--agentic",
+            "--no-steer",
+        ]
+        assert env["PDD_FORCE"] == "1"
+        assert env["CI"] == "1"
+        assert env["PDD_FORCE_LOCAL"] == "1"
 
 
 class TestCliLocalPlumbing:

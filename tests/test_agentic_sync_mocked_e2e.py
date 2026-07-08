@@ -39,6 +39,15 @@ pytestmark = [
 ]
 
 ISSUE_URL = "https://github.com/e2e-org/greeter-proj/issues/7"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +192,31 @@ def harness(tmp_path):
         "PDD_AUTO_UPDATE": "false",
         "PDD_AGENTIC_PROVIDER": "anthropic",
         "PDD_MODULE_TIMEOUT_SECONDS": "120",
+        "PDD_SUPPRESS_SETUP_REMINDER": "1",
         "LITELLM_CACHE_DISABLE": "1",
         "PYTHONUNBUFFERED": "1",
+        "PYTHONPATH": str(REPO_ROOT),
     }
     (tmp_path / "tmp").mkdir()
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import pathlib, pdd; print(pathlib.Path(pdd.__file__).resolve())",
+        ],
+        cwd=project,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    imported_pdd = Path(probe.stdout.strip()).resolve()
+    assert _is_relative_to(imported_pdd, REPO_ROOT.resolve()), (
+        "E2E subprocess imported pdd outside this checkout: "
+        f"{imported_pdd}"
+    )
 
     git_env = {**env, "GIT_CONFIG_GLOBAL": str(fake_home / ".gitconfig")}
     for cmd in (
@@ -262,8 +292,14 @@ def test_dry_run_pipeline_end_to_end(harness):
 
     # Real child dry-run validation subprocesses ran for both modules.
     pdd_calls = read_log(harness, "pdd_calls.log")
-    assert "sync greeter --dry-run --agentic --no-steer" in pdd_calls
-    assert "sync textutil --dry-run --agentic --no-steer" in pdd_calls
+    assert (
+        "--force --local sync greeter --dry-run --agentic --no-steer"
+        in pdd_calls
+    )
+    assert (
+        "--force --local sync textutil --dry-run --agentic --no-steer"
+        in pdd_calls
+    )
 
     assert_no_billing(harness)
 
