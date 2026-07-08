@@ -2483,6 +2483,15 @@ def _verify_public_surface_regression(
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set: Set[str] = set()
     signature_details: List[Tuple[str, str, str, str]] = []
+    # Declared symbols that were ACTUALLY validated against the declaration below
+    # (top-level functions with a parseable declared signature). Only these are
+    # excluded from the undeclared old-code loops, so the declaration can
+    # authorize a change old code would flag (the #2971 case). A declared symbol
+    # that is PRESENCE-ONLY here — a dotted method, or a non-paren declared
+    # signature where ``_declared_signature_to_entry`` returns None — is NOT
+    # added, so it falls back to the exact old-code baseline (added-required-param
+    # / binding-kind flip / ctor ABI drift stay caught; codex over-skip fix).
+    declared_validated: Set[str] = set()
 
     # DECLARED symbols: validate the generated signature against the DECLARED
     # PARAM/return contract (a stable target), NEVER re-comparing params against
@@ -2541,9 +2550,14 @@ def _verify_public_surface_regression(
         )
         if expected_entry is None:
             # Declared signature is not a parseable paren-list -> presence-only:
-            # the symbol must exist (enforced above) but its signature is not
-            # checked, and it is never re-compared against the old code.
+            # the symbol must exist (enforced above) but its signature is NOT
+            # validated against the declaration here. It is intentionally left out
+            # of ``declared_validated`` so the undeclared old-code loops below
+            # still protect its signature (codex over-skip fix).
             continue
+        # We are actually validating this symbol against its declared signature,
+        # so the declaration owns it: exclude it from the old-code loops below.
+        declared_validated.add(symbol)
         compatible = signature_entries_compatible(
             expected_entry,
             actual_entry,
@@ -2558,11 +2572,13 @@ def _verify_public_surface_regression(
         # ``compatible is True`` -> compatible; ``None`` -> unparseable entry,
         # conservative skip (presence already enforced above).
 
-    # UNDECLARED symbols: keep the historical old-vs-new comparison EXACTLY,
-    # skipping any DECLARED symbol (owned by the block above so it is never
-    # double-checked against the old code).
+    # UNDECLARED (and presence-only DECLARED) symbols: keep the historical
+    # old-vs-new comparison EXACTLY. Only symbols VALIDATED against the
+    # declaration above are skipped here — a presence-only declared symbol (dotted
+    # method / non-paren class) falls through to this old-code baseline so its
+    # signature drift is still caught (codex over-skip fix).
     for symbol, signature in before_signatures.items():
-        if symbol in declared_names:
+        if symbol in declared_validated:
             continue
         if symbol not in after_signatures or symbol in allowed_signature_changes:
             continue
@@ -2588,7 +2604,7 @@ def _verify_public_surface_regression(
             continue
         changed_set.add(symbol)
     for symbol in before_signatures:
-        if symbol in declared_names:
+        if symbol in declared_validated:
             continue
         if symbol in after_signatures or symbol in changed_set:
             continue
