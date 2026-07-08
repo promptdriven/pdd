@@ -1,136 +1,152 @@
-"""
-Example showcasing how to use the agentic_sync_runner module to coordinate
-parallel sync operations with dependency-aware scheduling.
-"""
+"""Example showing how to use AsyncSyncRunner for parallel module sync."""
 
-from __future__ import annotations
-
-import json
-import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
-# Ensure the module can be discovered
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Prepend the project root to sys.path so the local checkout always wins
+# over an older installed `pdd` package (e.g. one missing recently-added
+# helpers like `_is_nonfatal_warning`).
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
 
 from pdd.agentic_sync_runner import (
-    AsyncSyncRunner,
-    build_dep_graph_from_architecture_data,
+    AsyncSyncRunner as _AsyncSyncRunner,
+    ModuleState,
+    build_dep_graph_from_architecture,
+    _format_duration,
+    _is_nonfatal_warning,
+    _parse_cost_from_csv,
 )
 
 
-def main() -> None:
-    # 1. Initialize output directory relative to this script
-    output_dir = Path("./output")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Define file paths within the output directory
-    architecture_path = output_dir / "architecture.json"
-    
-    print(f"Initializing example workspace in: {output_dir.resolve()}")
+class AsyncSyncRunner(_AsyncSyncRunner):
+    """Top-level subclass of the real `AsyncSyncRunner`.
 
-    # 2. Define a mock architecture data structure
-    # This architecture defines two modules:
-    # - 'auth' (no dependencies)
-    # - 'users' (depends on 'auth')
-    architecture_data = {
-        "modules": [
-            {
-                "filename": "auth_python.prompt",
-                "filepath": "src/auth.py",
-                "reason": "Handles secure user authentication",
-                "dependencies": [],
-                "priority": 1,
-                "interface": {
-                    "type": "module",
-                    "module": {
-                        "functions": [
-                            {"name": "login", "signature": "def login(u: str, p: str) -> str"}
-                        ]
-                    }
-                }
-            },
-            {
-                "filename": "users_python.prompt",
-                "filepath": "src/users.py",
-                "reason": "Manages user profiles and depends on auth",
-                "dependencies": ["auth_python.prompt"],
-                "priority": 2,
-                "interface": {
-                    "type": "module",
-                    "module": {
-                        "functions": [
-                            {"name": "get_profile", "signature": "def get_profile(token: str) -> dict"}
-                        ]
-                    }
-                }
-            }
-        ]
+    Exists so static-resolution tooling (e.g. the prompt-include selector
+    resolver invoked by auto-heal) can find a `class AsyncSyncRunner` symbol
+    in this example file and bind ``<include>`` references to it instead of
+    rewriting them as `Invalid selector` placeholders. Behavior is identical
+    to `pdd.agentic_sync_runner.AsyncSyncRunner` — no methods are
+    overridden.
+    """
+
+
+def main():
+    """Demonstrate the AsyncSyncRunner with mocked subprocess calls."""
+
+    # --- Dependency Graph Building ---
+    # build_dep_graph_from_architecture reads architecture.json and filters
+    # to only include dependencies within the target basenames.
+    print("--- Dependency Graph Example ---")
+    # With a real architecture.json:
+    # result = build_dep_graph_from_architecture(Path("architecture.json"), ["auth", "user_service", "api"])
+    # result.graph    -> {"auth": [], "user_service": ["auth"], "api": ["auth", "user_service"]}
+    # result.warnings -> ["architecture.json: module 'api' depends on 'logger' which is outside the target sync set ..."]
+    print("(would load architecture.json and produce a DepGraphFromArchitectureResult)")
+
+    # --- Module State Tracking ---
+    state = ModuleState()
+    print(f"Initial state: {state.status}")  # "pending"
+
+    # --- Duration Formatting (per spec: 'Xs' or 'Xm Ys') ---
+    print(f"45 seconds: {_format_duration(100.0, 145.0)}")   # "45s"
+    print(f"2 minutes: {_format_duration(0.0, 125.0)}")      # "2m 5s"
+
+
+    # --- Runner Execution (mocked) ---
+    print("\n--- AsyncSyncRunner Example ---")
+
+    # Define modules and their dependencies
+    basenames = ["db_schema", "models", "api_orders", "api_users"]
+    dep_graph = {
+        "db_schema": [],
+        "models": ["db_schema"],
+        "api_orders": ["models"],
+        "api_users": ["models"],
     }
 
-    # Write the mock architecture.json file to disk
-    with open(architecture_path, "w", encoding="utf-8") as f:
-        json.dump(architecture_data, f, indent=2)
-
-    # 3. Build the dependency graph from the architecture data
-    # Target basenames are normalized identifiers matching architecture prompt names
-    target_basenames = ["auth", "users"]
-    
-    print("\n--- Step 1: Building Dependency Graph ---")
-    dep_result = build_dep_graph_from_architecture_data(
-        architecture=architecture_data,
-        target_basenames=target_basenames,
-        source_name=str(architecture_path)
-    )
-
-    print("Resolved Dependency Graph:")
-    for module, dependencies in dep_result.graph.items():
-        print(f"  - Module '{module}' depends on: {dependencies}")
-    
-    if dep_result.warnings:
-        print(f"Warnings encountered: {dep_result.warnings}")
-
-    # 4. Configure sync options
-    # These parameters steer the LLM and the test/conformance verification gates
+    # Sync options passed through to each subprocess
     sync_options = {
-        "local": True,               # Run using local LLM models
-        "agentic": True,             # Run in agentic self-repair mode
-        "target_coverage": 80.0,     # Enforce 80% unit test coverage
-        "max_attempts": 3,           # Retry generation up to 3 times on compiler/conformance failures
-        "skip_verify": True          # Skip functional verification for this offline demonstration
+        "budget": 5.0,
+        "skip_verify": False,
+        "skip_tests": False,
+        "agentic": True,
+        "no_steer": True,
     }
 
-    # 5. Initialize the AsyncSyncRunner
-    # We pass None for github_info to run in clean offline mode.
-    # We specify module_cwds to ensure subprocesses execute within our isolated ./output folder.
-    print("\n--- Step 2: Instantiating AsyncSyncRunner ---")
+    # GitHub info for live comment updates (set to None to disable)
+    # github_info = {
+    #     "owner": "example",
+    #     "repo": "myproject",
+    #     "issue_number": 42,
+    #     "cwd": Path.cwd(),
+    # }
+
     runner = AsyncSyncRunner(
-        basenames=target_basenames,
-        dep_graph=dep_result.graph,
+        basenames=basenames,
+        dep_graph=dep_graph,
         sync_options=sync_options,
-        github_info=None,            # Disable live GitHub comment posting
-        quiet=False,
-        verbose=True,
-        issue_url=None,              # Disable resumable state comments
-        module_cwds={
-            "auth": str(output_dir),
-            "users": str(output_dir)
-        },
-        initial_cost=0.0             # Track baseline cost in USD
+        github_info=None,        # Disable GitHub comments for demo
+        quiet=True,
+        verbose=False,
+        issue_url=None,          # None disables resumability/state file
+        module_cwds=None,        # Defaults all modules to project_root
+        initial_cost=0.0,
     )
 
-    # 6. Run the parallel sync pipeline
-    # Since we are running in a mock environment without real underlying prompt contents,
-    # the subprocesses will gracefully report that the modules are not fully implemented.
-    print("\n--- Step 3: Executing AsyncSyncRunner.run() ---")
-    print("Executing dependency-aware scheduling (auth will run first, followed by users)...")
-    
-    success, message, total_cost = runner.run()
+    # Mock the per-module sync. `_sync_one_module` returns
+    # (success, cost, error_message). Returning success keeps the
+    # runner on the happy path.
+    fake_costs = {
+        "db_schema": 0.12, "models": 0.08, "api_orders": 0.15, "api_users": 0.10,
+    }
 
-    print("\n--- Execution Summary ---")
-    print(f"Overall Success : {success}")
-    print(f"Summary Message : {message}")
-    print(f"Total Cost (USD): ${total_cost:.4f}")
+    def fake_sync(basename):
+        return (True, fake_costs.get(basename, 0.0), "")
+
+    with patch.object(runner, "_sync_one_module", side_effect=fake_sync), \
+         patch.object(runner, "_update_github_comment"), \
+         patch.object(runner, "_update_github_comment_throttled"):
+        # --- EXECUTE THE RUNNER ---
+        success, message, total_cost = runner.run()
+
+    print(f"Success    : {success}")
+    print(f"Total Cost : ${total_cost:.2f}")
+    print(f"Message    : {message}")
+
+    # Show final module states
+    print("\n--- Module States ---")
+    for name, state in runner.module_states.items():
+        print(f"  {name}: {state.status} (cost: ${state.cost:.2f})")
+    print(
+        "A failed module blocks only modules that depend on it; unrelated "
+        "modules continue when their own dependencies are satisfied. The "
+        "blocked set is transitive, and total-budget exhaustion still stops "
+        "all new scheduling."
+    )
+
+    # --- Comment Body Preview ---
+    # `_build_comment_body(issue_number)` renders the markdown table that
+    # is posted/patched to the GitHub issue comment.
+    print("\n--- GitHub Comment Preview ---")
+    body = runner._build_comment_body(42)
+    print(body)
+
+    # --- Failure-summary contract (issue #1399) ---
+    # The error string for a failed module always leads with a deterministic
+    # failure reason (`Overall status: Failed` line if present, else
+    # `Exit code N`). High-signal lines (containing
+    # error/failed/traceback/exception/abort) follow, with known nonfatal
+    # preprocessing warnings filtered out:
+    print("\n--- Nonfatal-warning filter ---")
+    print(_is_nonfatal_warning('Warning: ContentSelector failed for select="class:Foo"'))  # True
+    print(_is_nonfatal_warning("RuntimeError: real failure"))                              # False
+
+    # --- Cost CSV parsing ---
+    # `_parse_cost_from_csv` reads the file pointed to by PDD_OUTPUT_COST_PATH
+    # and sums the `cost` column. Returns 0.0 when the path is missing.
+    print(f"Cost from missing file: ${_parse_cost_from_csv('/tmp/nonexistent.csv'):.2f}")
 
 
 if __name__ == "__main__":
