@@ -54,6 +54,13 @@ def _iface_prompt(functions, body="% engineer\n"):
     return f"<pdd-interface>{json.dumps(spec)}</pdd-interface>\n{body}"
 
 
+def _detail_line(symbol, expected, actual, source="pdd-interface"):
+    """Build a ``signature_detail:`` line in the JSON wire format (round-8 #2)."""
+    return "signature_detail: " + json.dumps(
+        {"symbol": symbol, "expected": expected, "actual": actual, "source": source}
+    )
+
+
 class TestIssue1900SurfaceContract:
     def test_2971_shape_flags_declared_drift_not_added_symbol(self):
         """The pdd_cloud#2971 shape: a legit change ADDS
@@ -663,6 +670,87 @@ class TestIssue1900SurfaceContract:
             code, code, PROMPT, OUT, "python", prompt
         )
 
+    def test_callable_to_noncallable_raises_even_with_breaking_change(self):
+        """Codex round-8 finding 1: ``BREAKING-CHANGE: change signature`` authorizes
+        a PARAMETER change, not de-callable-ing a declared callable (that would be
+        ``BREAKING-CHANGE: remove``). A declared callable regenerated as a
+        non-callable must raise even under the opt-out (which would otherwise make
+        the old-code fallback skip the symbol)."""
+        prompt = _iface_prompt(
+            [("f", "()")],
+            body="% engineer\nBREAKING-CHANGE: change signature f\n",
+        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "def f():\n    return 1\n",
+                "f = 1\n",
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "f" in exc.value.changed_signatures
+
+    def test_unchanged_callable_assignment_passes_with_breaking_change(self):
+        """Guard for finding 1: an UNCHANGED callable-assignment (its OLD form is
+        already a non-callable) must NOT raise, even with the opt-out present —
+        only a callable that BECAME non-callable is flagged."""
+        code = "f = lambda: x\n"
+        prompt = _iface_prompt(
+            [("f", "()")],
+            body="% engineer\nBREAKING-CHANGE: change signature f\n",
+        )
+        _verify_public_surface_regression(
+            code, code, PROMPT, OUT, "python", prompt
+        )
+
+    def test_declared_underscore_class_ctor_drift_raises(self):
+        """Codex round-8 finding 3: a declared UNDERSCORE class constructor is a
+        first-class declared contract. Its ``[class]`` constructor-ABI entry must be
+        captured (via the patch-target path) so an added required ctor param
+        raises."""
+        before = (
+            "class _Service:\n"
+            "    def __init__(self, config):\n"
+            "        self.config = config\n"
+        )
+        after = (
+            "class _Service:\n"
+            "    def __init__(self, config, region):\n"
+            "        self.config = config\n"
+        )
+        prompt = _iface_prompt([("_Service.__init__", "(self, config)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "_Service.__init__" in exc.value.changed_signatures
+
+    def test_declared_underscore_class_ctor_unchanged_passes(self):
+        """A declared underscore class constructor that is unchanged must NOT
+        raise (receiver-stripped ctor ABI matches on both sides)."""
+        code = (
+            "class _Service:\n"
+            "    def __init__(self, config):\n"
+            "        self.config = config\n"
+        )
+        prompt = _iface_prompt([("_Service.__init__", "(self, config)")])
+        _verify_public_surface_regression(
+            code, code, PROMPT, OUT, "python", prompt
+        )
+
+    def test_declared_underscore_method_drift_raises(self):
+        """A declared underscore method's signature is validated too: an added
+        required param beyond the declaration raises."""
+        before = "class _Cls:\n    def _m(self, x):\n        return x\n"
+        after = "class _Cls:\n    def _m(self, x, y):\n        return x\n"
+        prompt = _iface_prompt([("_Cls._m", "(self, x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "_Cls._m" in exc.value.changed_signatures
+
 
 class TestIssue1900AgenticPropagation:
     def test_signature_detail_lines_reach_agentic_directive(self):
@@ -678,9 +766,12 @@ class TestIssue1900AgenticPropagation:
             "output: pdd/demo.py\n"
             "pre_surface_size: 2\n"
             "post_surface_size: 3\n"
-            "signature_detail: list_secret_metadata | expected: "
-            "[function] (project_id, prefix='') | actual: "
-            "[function] (project_id, prefix='', *, region) | source: pdd-interface\n"
+            + _detail_line(
+                "list_secret_metadata",
+                "[function] (project_id, prefix='')",
+                "[function] (project_id, prefix='', *, region)",
+            )
+            + "\n"
         )
         parsed = _parse_public_surface_failure("", stderr)
         assert parsed is not None
@@ -693,11 +784,9 @@ class TestIssue1900AgenticPropagation:
         assert signature == ("signature_changed:list_secret_metadata",)
 
     def test_signature_detail_union_types_survive_parsing(self):
-        """Codex finding 3: a ``signature_detail:`` line whose expected AND actual
-        entries contain PEP-604 ` | ` union types must round-trip through the
-        parser with the FULL signatures intact (no truncation at the ` | ` inside
-        the signature). Right-anchored field splitting keeps the trailing
-        ``| actual:`` / ``| source:`` field delimiters unambiguous."""
+        """A ``signature_detail:`` line whose expected AND actual entries contain
+        PEP-604 ` | ` union types must round-trip through the JSON parser with the
+        FULL signatures intact."""
         from pdd.agentic_sync_runner import _parse_public_surface_failure
 
         expected_sig = "[function] (x: int | str) -> bool | None"
@@ -709,8 +798,7 @@ class TestIssue1900AgenticPropagation:
             "output: pdd/demo.py\n"
             "pre_surface_size: 1\n"
             "post_surface_size: 1\n"
-            f"signature_detail: f | expected: {expected_sig} | "
-            f"actual: {actual_sig} | source: pdd-interface\n"
+            + _detail_line("f", expected_sig, actual_sig) + "\n"
         )
         parsed = _parse_public_surface_failure("", stderr)
         assert parsed is not None
@@ -719,9 +807,9 @@ class TestIssue1900AgenticPropagation:
         assert actual_sig in directive
 
     def test_malformed_signature_detail_line_is_skipped_not_crash(self):
-        """Codex round-2 finding 3: a malformed ``signature_detail:`` line (fields
-        out of order) must be SKIPPED, never raise. A well-formed line in the same
-        payload must still parse."""
+        """A malformed ``signature_detail:`` line (invalid JSON) must be SKIPPED,
+        never raise. A well-formed JSON line in the same payload must still
+        parse."""
         from pdd.agentic_sync_runner import _parse_public_surface_failure
 
         stderr = (
@@ -731,12 +819,10 @@ class TestIssue1900AgenticPropagation:
             "output: pdd/demo.py\n"
             "pre_surface_size: 2\n"
             "post_surface_size: 2\n"
-            # Well-formed.
-            "signature_detail: good | expected: [function] (a) | "
-            "actual: [function] (a, b) | source: pdd-interface\n"
-            # Malformed: fields out of order -> must be skipped, not crash.
-            "signature_detail: bad | source: pdd-interface | "
-            "actual: [function] (a) | expected: [function] (b)\n"
+            # Well-formed JSON.
+            + _detail_line("good", "[function] (a)", "[function] (a, b)") + "\n"
+            # Malformed: not valid JSON -> must be skipped, not crash.
+            + "signature_detail: bad | this is not json\n"
         )
         parsed = _parse_public_surface_failure("", stderr)
         assert parsed is not None
@@ -747,11 +833,9 @@ class TestIssue1900AgenticPropagation:
         assert "Restore `bad`" not in directive
 
     def test_signature_detail_delimiter_substring_in_signature_parses(self):
-        """Codex FM3: a VALID ``signature_detail:`` line whose expected default
-        contains the ` | source: ` and ` | actual: ` delimiter substrings must
-        still parse — the right-anchored rsplit resolves the real trailing
-        delimiters — and must NOT be dropped (which would lose the stable declared
-        target and fall back to the generic directive)."""
+        """Codex round-8 finding 2: JSON encoding makes a signature/default that
+        contains the ` | actual: ` AND ` | source: ` delimiter substrings survive
+        intact — the recurring right-split corruption is gone."""
         from pdd.agentic_sync_runner import _parse_public_surface_failure
 
         expected_sig = "[function] (mode=' | source: X | actual: Y')"
@@ -763,8 +847,7 @@ class TestIssue1900AgenticPropagation:
             "output: pdd/demo.py\n"
             "pre_surface_size: 1\n"
             "post_surface_size: 1\n"
-            f"signature_detail: f | expected: {expected_sig} | "
-            f"actual: {actual_sig} | source: pdd-interface\n"
+            + _detail_line("f", expected_sig, actual_sig) + "\n"
         )
         parsed = _parse_public_surface_failure("", stderr)
         assert parsed is not None
