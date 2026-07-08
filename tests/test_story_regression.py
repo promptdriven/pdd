@@ -317,6 +317,40 @@ class TestStaticFallback:
         assert smap.tests_for_story("refund_flow") == {"test_static.py::test_literal_story_marker"}
         assert not sentinel.exists()
 
+    def test_constant_story_id_markers_survive_empty_pytest_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """pdd#1889 Bug 3: generated tests declare ``story_id=STORY_ID`` (a module
+        constant), not a bare literal. The static fallback (used when pytest
+        collection yields zero markers) must resolve those module constants --
+        exactly as the gate's own AST scanner already does -- or the whole story
+        is (wrongly) reported as having no regression test."""
+        d = tmp_path / "tests"
+        d.mkdir()
+        (d / "test_static_const.py").write_text(
+            "\n".join(
+                [
+                    "import pytest",
+                    'PDD_STORY_ID = "checkout_flow"',
+                    "@pytest.mark.story(story_id=PDD_STORY_ID)",
+                    "def test_const_marker():",
+                    "    assert True",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        def _empty_collect(*_args, **_kwargs):
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _empty_collect)
+        smap = build_story_map(d)
+
+        assert smap.tests_for_story("checkout_flow") == {
+            "test_static_const.py::test_const_marker"
+        }
+
 
 # --- R9: graceful degradation --------------------------------------------------
 
