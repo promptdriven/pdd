@@ -554,10 +554,16 @@ def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str
 
     if real_failures:
         return "failed"
-    if unknown_checks:
-        return "failed"
+    # A still-running check outranks an unrecognized conclusion: keep waiting so a
+    # co-pending check is polled to resolution before an unknown ("") bucket
+    # settles the result as "failed" (mirrors pending winning over
+    # action_required below). Without this, an unknown/`stale` sibling would make
+    # _poll_check_runs_for_head return terminally and the final gate would block a
+    # pending check that might still go green.
     if pending_checks:
         return "pending"
+    if unknown_checks:
+        return "failed"
     if action_required_checks and len(action_required_checks) == len(non_success_checks):
         return "action_required"
     if checks and all(bucket in PASS_BUCKETS for bucket in buckets):
@@ -891,8 +897,9 @@ def run_github_checks_gate(
             )
         # Pending applicable checks still BLOCK (deliberate deviation from issue
         # #1902's "wait then ignore"): a genuinely stuck required check must not
-        # be shipped. The poller already waited out its timeout before returning
-        # these as pending.
+        # be shipped. `_classify_check_result` ranks pending above unknown, so the
+        # poller waits a co-pending check out to its timeout before returning it
+        # here rather than short-circuiting on an unknown/`stale` sibling.
         if pending:
             return (
                 False,

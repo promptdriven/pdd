@@ -1789,6 +1789,21 @@ def test_classify_pending_wins_over_action_required() -> None:
     assert _classify_check_result(8, checks) == "pending"
 
 
+def test_classify_pending_wins_over_unknown() -> None:
+    """A still-running check must be waited out before an unknown conclusion.
+
+    Issue #1902 follow-up: a ``stale``/future GitHub conclusion maps to bucket
+    ``""`` (unknown). When it co-exists with a still-pending check, the aggregate
+    must stay ``pending`` so the poller keeps polling — otherwise the final gate
+    would block a pending check that could still go green without waiting it out.
+    """
+    checks = [
+        {"name": "stale-check", "state": "STALE", "bucket": "", "link": ""},
+        {"name": "github-app-ci", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
+    ]
+    assert _classify_check_result(8, checks) == "pending"
+
+
 def test_classify_failure_state_wins_even_with_missing_bucket() -> None:
     """Malformed/missing buckets must not hide a real failed state."""
     checks = [
