@@ -307,6 +307,10 @@ pdd detect --stories --no-fail-fast      # report all failures, don't stop at th
 pdd detect --stories --include-llm       # also validate against *_llm.prompt runtime templates
 ```
 
+Story mode prints PASS/FAIL for each story and exits non-zero if any story
+fails. `--output` is not supported with `--stories`; use `--evidence` when CI
+needs a machine-readable run manifest.
+
 `pdd change` also runs story validation after a prompt modification, so stories
 act as a regression gate during normal development.
 
@@ -438,6 +442,9 @@ automatically:
 ```bash
 pdd detect --stories --no-fail-fast
 ```
+
+For CI artifacts, add `--evidence`. The standard detect `--output` CSV is not
+available in story mode.
 
 Pair it with the related quality gates: prompt and story quality
 ([`docs/prompt_lint.md`](prompt_lint.md)), deterministic contract-section lint

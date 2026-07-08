@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from click.testing import CliRunner
 from pdd.commands.analysis import detect_change, conflicts, bug, crash, trace
+from pdd.cli import cli as pdd_cli
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -112,6 +113,209 @@ def test_detect_stories_rejects_output_option(runner, mock_context_obj):
 
     assert result.exit_code != 0
     assert "--output is not supported with --stories" in result.output
+
+
+def _failed_story_result():
+    return [
+        {
+            "story": "/tmp/issue1872_stories/story__provider_queue_dashboard.md",
+            "passed": False,
+            "prompt_files": ["prompts/provider_queue_dashboard.prompt"],
+            "changes_list": [{"change": "provider queue dashboard prompt drifted"}],
+        },
+        {
+            "story": "/tmp/issue1872_stories/story__provider_subscription_queue.md",
+            "passed": False,
+            "prompt_files": ["prompts/provider_subscription_queue.prompt"],
+            "changes_list": [{"change": "provider subscription queue prompt drifted"}],
+        },
+    ]
+
+
+def test_issue_1872_reproduction_failed_story_exits_nonzero():
+    """A story validation FAIL must make the top-level CLI fail."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            False,
+            _failed_story_result(),
+            0.046212,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(
+            pdd_cli,
+            ["--no-core-dump", "detect", "--stories", "--no-fail-fast"],
+        )
+
+    assert result.exit_code == 1
+    assert "gemini/gemini-2.5-flash" in result.output
+
+
+def test_issue_1872_reproduction_fatal_story_exception_exits_nonzero():
+    """Fatal provider/auth/LLM failures in story mode must fail the CLI."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.side_effect = RuntimeError("provider auth failed")
+
+        result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
+
+    assert result.exit_code == 1
+    assert "Error during 'detect' command" in result.output
+    assert "provider auth failed" in result.output
+
+
+def test_issue_1872_reproduction_passing_stories_exit_zero():
+    """All-passing story validation remains a successful CLI run."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [
+                {
+                    "story": "/tmp/issue1872_stories/story__provider_availability_routing.md",
+                    "passed": True,
+                    "prompt_files": ["prompts/provider_availability_routing.prompt"],
+                    "changes_list": [],
+                }
+            ],
+            0.01,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
+
+    assert result.exit_code == 0
+    assert "gemini/gemini-2.5-flash" in result.output
+
+
+def test_detect_stories_failed_result_direct_command_exits_nonzero(runner, mock_context_obj):
+    """The direct detect command should also signal failed story validation."""
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            False,
+            _failed_story_result(),
+            0.046212,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(
+            detect_change,
+            ["--stories", "--no-fail-fast"],
+            obj=mock_context_obj,
+        )
+
+    assert result.exit_code == 1
+
+
+def test_detect_stories_failed_result_top_level_exits_nonzero():
+    """A mocked failed story result should fail through the registered CLI."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            False,
+            _failed_story_result(),
+            0.046212,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(
+            pdd_cli,
+            ["--no-core-dump", "detect", "--stories", "--no-fail-fast"],
+        )
+
+    assert result.exit_code == 1
+
+
+def test_detect_stories_passing_result_top_level_exits_zero():
+    """Passing story mode remains successful through the registered CLI."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.return_value = (
+            True,
+            [{"story": "/tmp/issue1872_stories/story__ok.md", "passed": True}],
+            0.01,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
+
+    assert result.exit_code == 0
+
+
+def test_detect_stories_fatal_exception_top_level_exits_nonzero():
+    """Handled story-mode exceptions should still produce a failing process."""
+    runner = CliRunner()
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner:
+        mock_runner.side_effect = RuntimeError("provider auth failed")
+
+        result = runner.invoke(pdd_cli, ["--no-core-dump", "detect", "--stories"])
+
+    assert result.exit_code == 1
+    assert "provider auth failed" in result.output
+
+
+def test_detect_stories_evidence_written_before_failed_story_exit(runner, mock_context_obj):
+    """Failed story runs should write evidence before exiting non-zero."""
+    with patch("pdd.commands.analysis.run_user_story_tests") as mock_runner, patch(
+        "pdd.commands.analysis.write_evidence_manifest"
+    ) as mock_evidence:
+        mock_runner.return_value = (
+            False,
+            _failed_story_result(),
+            0.046212,
+            "gemini/gemini-2.5-flash",
+        )
+
+        result = runner.invoke(
+            detect_change,
+            ["--stories", "--evidence"],
+            obj=mock_context_obj,
+        )
+
+    mock_evidence.assert_called_once()
+    assert mock_evidence.call_args.kwargs["command"] == "pdd detect --stories"
+    assert mock_evidence.call_args.kwargs["validation"] == {"detect_stories": "failed"}
+    assert result.exit_code == 1
+
+
+def test_conflicts_handled_exception_top_level_exits_nonzero():
+    """A representative handled-exception path should fail via result callback."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open("p1.prompt", "w") as handle:
+            handle.write("prompt 1")
+        with open("p2.prompt", "w") as handle:
+            handle.write("prompt 2")
+        with patch("pdd.commands.analysis.conflicts_main") as mock_conflicts:
+            mock_conflicts.side_effect = RuntimeError("conflicts provider failed")
+
+            result = runner.invoke(
+                pdd_cli,
+                ["--no-core-dump", "conflicts", "p1.prompt", "p2.prompt"],
+            )
+
+    assert result.exit_code == 1
+    assert "Error during 'conflicts' command" in result.output
+    assert "conflicts provider failed" in result.output
+
+
+def test_detect_help_and_output_behavior_describe_story_output_contract():
+    """Runtime help and runtime rejection should agree on story output behavior."""
+    runner = CliRunner()
+
+    help_result = runner.invoke(pdd_cli, ["detect", "--help"])
+    reject_result = runner.invoke(
+        pdd_cli,
+        ["--no-core-dump", "detect", "--stories", "--output", "out.csv"],
+    )
+
+    assert help_result.exit_code == 0
+    assert "--output" in help_result.output
+    assert "not supported with --stories" in help_result.output
+    assert "--evidence" in help_result.output
+    assert reject_result.exit_code != 0
+    assert "--output is not supported with --stories" in reject_result.output
 
 # -----------------------------------------------------------------------------
 # Tests for 'conflicts' command
