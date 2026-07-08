@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -78,10 +77,6 @@ _GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
 _STRICT_FAIL_EXIT = 2
 _DEFAULT_TESTS_DIR = "tests"
-_HASH_ASSIGN_RE = re.compile(
-    r"^(?:PDD_)?STORY_HASH\s*=\s*(?P<value>['\"].*?['\"])",
-    re.MULTILINE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +316,32 @@ def discover_all_story_markers(tests_dir) -> Dict[str, List[StoryMarker]]:
 # ---------------------------------------------------------------------------
 
 
+def _acceptable_story_hashes(
+    story_path, story_text: Optional[str] = None
+) -> set:
+    """Hashes a fresh linked test may legitimately record for *story_path*.
+
+    The union of the content hash (``_story_content_hash``, story prose only)
+    and the bundle hash (``story_bundle_hash``, story + contract). Shared by the
+    full gate (:func:`_classify_story_from_markers`) and the wired coverage
+    evaluator (:func:`evaluate_story_regression`) so the two can never diverge on
+    what "fresh" means (pdd#1889 Bug 1). Both primitives are metadata-insensitive.
+    """
+    path = Path(story_path)
+    if story_text is None:
+        try:
+            story_text = path.read_text(encoding="utf-8")
+        except OSError:
+            story_text = ""
+    acceptable = {_story_content_hash(story_text)}
+    if path.exists():
+        try:
+            acceptable.add(story_bundle_hash(path))
+        except OSError:
+            pass
+    return acceptable
+
+
 def _classify_story_from_markers(
     story_path,
     story_markers: Sequence[StoryMarker],
@@ -339,12 +360,7 @@ def _classify_story_from_markers(
     if story_text is None:
         story_text = path.read_text(encoding="utf-8")
     current_hash = _story_content_hash(story_text)
-    acceptable_hashes = {current_hash}
-    if path.exists():
-        try:
-            acceptable_hashes.add(story_bundle_hash(path))
-        except OSError:
-            pass
+    acceptable_hashes = _acceptable_story_hashes(path, story_text)
 
     if not story_markers:
         return StoryRegressionResult(
@@ -746,18 +762,25 @@ def _test_file_for_nodeid(nodeid: str, tests_dir: Path) -> Optional[Path]:
     return None
 
 
-def _recorded_hash(test_path: Path) -> Optional[str]:
+def _recorded_story_hashes(test_path: Path, sid: str) -> List[str]:
+    """Every ``story_hash`` *test_path* records for story *sid*.
+
+    Resolves BOTH marker ``story_hash=`` kwargs AND module-level
+    ``PDD_STORY_HASH`` / ``STORY_HASH`` constants (via the gate's own AST scan,
+    :func:`_markers_in_source`), so the wired evaluator accepts the same forms as
+    the full gate (pdd#1889 Bug 1). A legacy hashless marker contributes nothing,
+    preserving the #1699 traceability-only "present" verdict.
+    """
     try:
-        text = test_path.read_text(encoding="utf-8")
+        source = test_path.read_text(encoding="utf-8")
     except OSError:
-        return None
-    match = _HASH_ASSIGN_RE.search(text)
-    if not match:
-        return None
-    try:
-        return str(ast.literal_eval(match.group("value")))
-    except (SyntaxError, ValueError):
-        return None
+        return []
+    target = story_id_from_path(sid)
+    hashes: List[str] = []
+    for marker in _markers_in_source(source, str(test_path)):
+        if marker.story_hash and story_id_from_path(marker.story_id) == target:
+            hashes.append(marker.story_hash)
+    return hashes
 
 
 def evaluate_story_regression(
@@ -789,15 +812,15 @@ def evaluate_story_regression(
         test_path = _test_file_for_nodeid(nodeid, tests_dir)
         if test_path is None:
             continue
-        found = _recorded_hash(test_path)
+        found = _recorded_story_hashes(test_path, sid)
         if found:
-            recorded[nodeid] = found
+            recorded[nodeid] = found[0]
 
     if not recorded:
         # Coverage uses this lightweight evaluator to preserve #1699
         # compatibility with legacy story markers that prove traceability but
-        # predate story-hash freshness metadata. The stricter full gate path
-        # still reports hashless markers as stale via classify_story().
+        # predate story-hash freshness metadata. A marker with NO hash at all
+        # stays "present"; a marker WITH a non-matching hash is stale (below).
         return StoryRegressionEvaluation(
             story_id=sid,
             status=STATUS_PASSING,
@@ -806,10 +829,13 @@ def evaluate_story_regression(
             recorded_hashes={},
         )
 
-    if current_hash not in set(recorded.values()):
+    # Same acceptance as the full gate: content hash UNION bundle hash. A
+    # recorded hash matching either form is fresh; otherwise the story changed.
+    acceptable = _acceptable_story_hashes(story_path)
+    if set(recorded.values()) & acceptable:
         return StoryRegressionEvaluation(
             story_id=sid,
-            status=STATUS_STALE,
+            status=STATUS_PASSING,
             current_hash=current_hash,
             tests=tests,
             recorded_hashes=recorded,
@@ -817,7 +843,7 @@ def evaluate_story_regression(
 
     return StoryRegressionEvaluation(
         story_id=sid,
-        status=STATUS_PASSING,
+        status=STATUS_STALE,
         current_hash=current_hash,
         tests=tests,
         recorded_hashes=recorded,
