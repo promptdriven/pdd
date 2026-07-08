@@ -975,27 +975,30 @@ def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
                 if node.value is not None and _assign_target_matches(node.target, symbol):
                     return True
         return False
-    cls_name, remainder = symbol.split(".", 1)
-    cls_node = next(
-        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name),
-        None,
-    )
-    if cls_node is None:
-        return False
-    if "." not in remainder:
-        return any(
-            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder
-            for child in cls_node.body
+    # Dotted: walk the leading segments as nested ``ClassDef`` containers, then
+    # match the final segment as a method OR a (nested) class. Resolving the final
+    # segment as a class too — not method-only — means a declared NESTED class
+    # constructor whose path includes an underscore (``_Outer.Inner`` /
+    # ``Outer._Inner``) is recognized as defined and captured via the patch-target
+    # path, mirroring how the public recursion already keys nested classes as
+    # ``Outer.Inner`` (codex round-9). This only ever recognizes MORE names as
+    # defined, so no previously-matched name stops matching.
+    parts = symbol.split(".")
+    body: List[ast.stmt] = list(tree.body)
+    for part in parts[:-1]:
+        cls_node = next(
+            (node for node in body if isinstance(node, ast.ClassDef) and node.name == part),
+            None,
         )
-    inner_cls, method_name = remainder.split(".", 1)
-    for child in cls_node.body:
-        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
-            return any(
-                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and method.name == method_name
-                for method in child.body
-            )
-    return False
+        if cls_node is None:
+            return False
+        body = list(cls_node.body)
+    last = parts[-1]
+    return any(
+        isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and child.name == last
+        for child in body
+    )
 
 
 def _effective_patch_targets(
@@ -1852,6 +1855,30 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
+def _resolve_class_node(
+    tree: ast.Module, symbol: str
+) -> Optional[ast.ClassDef]:
+    """Resolve a (possibly dotted / nested) class path to its ``ClassDef`` node.
+
+    Walks each dotted segment through nested class bodies (``Outer.Inner`` ->
+    the ``Inner`` node inside ``Outer``). Returns ``None`` when any segment is not
+    a class — so a dotted method path (``Outer.method``) resolves to ``None`` and
+    the caller falls back to method-signature capture. Used to give a patch-target
+    nested class its ``[class]`` constructor-ABI entry (codex round-9).
+    """
+    body: List[ast.stmt] = list(tree.body)
+    node: Optional[ast.ClassDef] = None
+    for part in symbol.split("."):
+        node = next(
+            (child for child in body if isinstance(child, ast.ClassDef) and child.name == part),
+            None,
+        )
+        if node is None:
+            return None
+        body = list(node.body)
+    return node
+
+
 def _class_constructor_signature(
     class_node: ast.ClassDef,
     class_defs: Dict[str, ast.ClassDef],
@@ -2273,14 +2300,17 @@ def _snapshot_public_signatures(
         for symbol in sorted(patch_targets):
             if symbol in signatures:
                 continue
-            # A patch-target that is a top-level CLASS gets its ``[class]``
+            # A patch-target that is a CLASS — top-level OR a nested
+            # ``Outer.Inner`` (incl. underscore paths) — gets its ``[class]``
             # constructor-ABI entry, so a declared (possibly underscore) class or
-            # ``Class.__init__`` is validated like a public class rather than being
-            # skipped for lack of a signature entry (codex round-8 finding 3).
-            # ``_patch_target_signature_entry`` only builds function/method entries.
-            if "." not in symbol and symbol in class_defs:
+            # ``Class.__init__`` / ``Outer.Inner.__init__`` is validated like a
+            # public class rather than skipped for lack of a signature entry (codex
+            # round-8 finding 3 + round-9). ``_patch_target_signature_entry`` only
+            # builds function/method entries.
+            class_node = _resolve_class_node(tree, symbol)
+            if class_node is not None:
                 class_signature = _class_constructor_signature(
-                    class_defs[symbol], class_defs, imported_names
+                    class_node, class_defs, imported_names
                 )
                 signatures[symbol] = f"[class] {class_signature}"
                 continue
