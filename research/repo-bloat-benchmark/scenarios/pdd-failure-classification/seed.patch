@@ -95,4 +95,3 @@ index 91ac6baa7..e7cc28113 100644
 +        return exception
      # Fallback: normalized head (avoid unbounded growth)
      return re.sub(r"\s+", " ", text[:240]).strip()
-
