@@ -449,6 +449,13 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
         existing_paths: List[Path] = []
         for ref in _parse_story_prompt_metadata(story_content):
             resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            # #1889: when explicit --prompt inputs are passed, `prompt_files` is
+            # the explicit-only pool, so an already-linked ref that isn't part of
+            # this operation would fail to resolve and be silently dropped. Keep
+            # any existing ref that still points to a real file on disk (relative
+            # to the run CWD) so a relink never destroys valid prior links.
+            if resolved is None and ref and Path(ref).is_file():
+                resolved = Path(ref)
             if resolved:
                 existing_paths.append(resolved)
         linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)

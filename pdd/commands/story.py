@@ -198,7 +198,7 @@ def story() -> None:
 @click.option("--generate-regression", is_flag=True, help="Print the pdd test --from-story handoff command.")
 @click.option("--cross-devunit", is_flag=True, help="Document that multiple linked dev units are intentional.")
 @click.option("--from-changed-files", is_flag=True, help="Use currently changed .prompt files from git status.")
-def add_story(
+def add_story(  # pylint: disable=too-many-branches
     source: Optional[str],
     inline_text: Optional[str],
     title: Optional[str],
@@ -260,6 +260,16 @@ def add_story(
                 f"--output tests/story_regression/test_story_{story_slug}.py`."
             )
         return
+
+    # #1889: `--update` must target an existing story. If we reach here with
+    # --update set, the update branch above did not fire (no story file for this
+    # slug), so fail fast with a clean error BEFORE any LLM-backed generation
+    # (fresh authoring otherwise hangs on interactive device-auth offline).
+    if update:
+        raise click.ClickException(
+            f"No existing story to update at {proposed_path}; "
+            "omit --update to create it."
+        )
 
     issue_source = source or _inline_source_path(inline_text or "", title)
     success, message, _cost, _model, _story_path, _linked_refs = generate_user_story(
@@ -374,6 +384,16 @@ def link_story(story_file: str, prompts: tuple[str, ...], prompts_dir: Optional[
     if not story_path.is_file():
         raise click.ClickException(f"Story file not found: {story_file}")
     _validate_story_inside_user_stories(story_path)
+
+    # #1889: validate explicit --prompt paths BEFORE touching the story. A
+    # nonexistent prompt was previously written into the metadata as a dangling
+    # basename while dropping the story's existing valid links -- and still
+    # exited 0. Fail loudly and leave the story file untouched.
+    missing_prompts = [prompt for prompt in prompts if not Path(prompt).is_file()]
+    if missing_prompts:
+        raise click.ClickException(
+            "Prompt file(s) not found: " + ", ".join(missing_prompts)
+        )
 
     success, message, _cost, _model, _linked_refs = cache_story_prompt_links(
         story_file=str(story_path),

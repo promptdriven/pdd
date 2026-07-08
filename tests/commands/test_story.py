@@ -476,21 +476,26 @@ class TestDuplicateDetection:
     def test_update_flag_allows_overwrite(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
-        """--update allows overwriting an existing story slug."""
-        stories_dir = tmp_path / "user_stories"
-        stories_dir.mkdir(parents=True, exist_ok=True)
-        existing = stories_dir / "story__my_feature.md"
-        existing.write_text("old content\n", encoding="utf-8")
+        """--update on an existing story slug relinks it and exits 0.
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            with patch("pdd.commands.story.generate_user_story") as mock_gen:
-                mock_gen.return_value = (
+        The story must exist in the *resolved* stories dir (the isolated cwd),
+        so the update takes the relink path (cache_story_prompt_links) rather
+        than falling through to fresh LLM generation (#1889 Bug 3).
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            existing = stories_dir / "story__my_feature.md"
+            existing.write_text("old content\n", encoding="utf-8")
+
+            with patch("pdd.commands.story.cache_story_prompt_links") as mock_link, \
+                 patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_link.return_value = (
                     True,
-                    f"Updated story file: {existing}. Story prompt metadata linked.",
-                    0.03,
-                    "claude-sonnet-4-6",
-                    str(existing),
-                    ["commands/x_python.prompt"],
+                    "Story prompt metadata linked.",
+                    0.0,
+                    "",
+                    ["prompts/x_python.prompt"],
                 )
                 result = runner.invoke(
                     story,
@@ -504,6 +509,8 @@ class TestDuplicateDetection:
                     obj={"quiet": True, "verbose": False},
                 )
         assert result.exit_code == 0, result.output
+        mock_link.assert_called_once()
+        mock_gen.assert_not_called()
 
     def test_update_existing_title_merges_metadata_without_regenerating(
         self, runner: CliRunner, tmp_path: Path
