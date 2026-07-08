@@ -1,0 +1,100 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Single enforced code path for all PDD fingerprint writes — atomic temp-file + os.replace with commit-or-fail semantics.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "FingerprintTransaction.__init__", "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = '') -> None", "returns": "None"},
+      {"name": "FingerprintTransaction.__enter__", "signature": "() -> FingerprintTransaction", "returns": "FingerprintTransaction"},
+      {"name": "FingerprintTransaction.__exit__", "signature": "(exc_type, exc_val, exc_tb) -> bool", "returns": "bool"},
+      {"name": "FingerprintTransaction.skip", "signature": "(reason: str) -> None", "returns": "None"},
+      {"name": "FingerprintTransaction.set_include_deps_override", "signature": "(deps: Dict[str, str]) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/fingerprint_transaction.py` — the single authoritative context manager for all PDD fingerprint writes. Replaces scattered `save_fingerprint` call sites with one enforced, atomic code path.
+
+% Role & Scope
+This module provides the `FingerprintTransaction` class used by every PDD mutating command (sync, generate, example, update, fix, auto-deps, ci-heal). It owns: eager identity and path resolution at entry, atomic file write (temp-file + `os.replace`) at exit, null-hash validation, commit-or-fail exit semantics, and dry-run/redirect skip control. It is a leaf import — it does NOT import from the seven caller modules, eliminating circular dependency risk.
+
+<non_responsibilities>
+- Does not invoke LLM calls.
+- Does not read or write run reports (that remains in operation_log).
+- Does not push commits or run git commands.
+- Does not own the `@log_operation` decorator (that stays in operation_log).
+</non_responsibilities>
+
+<vocabulary>
+- Commit: the `__exit__` path that writes the fingerprint file atomically and raises `FingerprintFinalizeError` on failure.
+- Skip: suppressing the commit so `__exit__` is a no-op; used for dry-run, redirected output, or run-report-not-cleared conditions.
+- Null hash: a `prompt_hash`, `code_hash`, `example_hash`, or `test_hash` value that is `None` — an indication that `calculate_current_hashes` could not resolve the file, producing a fingerprint that can never converge with on-disk state.
+</vocabulary>
+
+<contract_rules>
+R1 (MUST): When `__exit__` is called with `exc_type is None` (clean body) and `skip()` has NOT been called, write the fingerprint atomically (temp-file in `fingerprint_path.parent` + `os.fsync` + `os.replace`); raise `FingerprintFinalizeError` on ANY failure during this write.
+R2 (MUST): When `__exit__` is called with `exc_type is not None` (exception in body), propagate the exception without touching the fingerprint file. Return `False` (do not suppress the exception).
+R3 (MUST): Before writing, validate that `prompt_hash` is not `None`. If it is `None`, raise `FingerprintFinalizeError` naming the null-hash field and the fingerprint path (prevents the #1305 null-hash loop class).
+R4 (MUST): Resolve `fingerprint_path` eagerly in `__init__` via `get_fingerprint_path(basename, language, paths=paths)`. Never re-resolve it later (prevents the #1211/#1290 wrong-root class).
+R5 (MUST): Use a temp file in the **same directory** as the fingerprint (`dir=fingerprint_path.parent`) so that `os.replace` is a single-filesystem rename and is POSIX-atomic. Never write to a cross-device temp directory.
+R6 (MUST): `skip(reason)` suppresses the commit; log the reason at INFO level via stdlib `logging`. After `skip()` is called, `__exit__` on a clean body MUST be a no-op (no file write, no error).
+R7 (MUST NOT): Raise `FingerprintFinalizeError` when `skip()` has been called, even if `prompt_hash` would otherwise be `None`.
+R8 (MUST): `FingerprintFinalizeError` message MUST include the fingerprint path, the operation name, and the underlying cause (if any).
+</contract_rules>
+
+% Requirements
+
+1. **`FingerprintFinalizeError(RuntimeError)`** — raised when atomic fingerprint write fails or null-hash is detected. Message format: `"[{operation}] fingerprint finalization failed for {fingerprint_path}: {cause}"`. No additional base class is required (no PDD-specific exception hierarchy exists).
+
+2. **`FingerprintTransaction.__init__`**: Eagerly resolve everything needed for the commit:
+   - Accept `basename`, `language`, `operation`, `paths` (optional `Dict[str, Path]`), `cost`, and `model`.
+   - Call `get_fingerprint_path(basename, language, paths=paths)` and store as `self._fingerprint_path`.
+   - Store `basename`, `language`, `operation`, `cost`, `model`, and `paths` for use in `__exit__`.
+   - Initialize `self._skipped: bool = False`, `self._skip_reason: Optional[str] = None`, and `self._include_deps_override: Optional[Dict[str, str]] = None`.
+
+3. **`skip(reason: str)`**: Set `self._skipped = True` and `self._skip_reason = reason`. Log at `logging.INFO`: `"FingerprintTransaction.skip for %s/%s (%s): %s"`. Must be idempotent (calling twice is safe).
+
+4. **`set_include_deps_override(deps: Dict[str, str])`**: Store `deps` for use in `__exit__` when building the `Fingerprint` dataclass. Called by `auto_deps_main` after the prompt file is written but before `__exit__`.
+
+5. **`__enter__`**: Return `self`. No side effects.
+
+6. **`__exit__(exc_type, exc_val, exc_tb)`**:
+   - If `exc_type is not None`: return `False` (propagate the exception, do not write).
+   - If `self._skipped`: log at DEBUG that the commit was suppressed; return `False`.
+   - Otherwise (clean body, not skipped): execute the atomic commit:
+     a. Read the previous fingerprint via `read_fingerprint(self._basename, self._language, paths=self._paths)` to obtain stored `include_deps` (use `None` when no previous fingerprint exists).
+     b. Call `calculate_current_hashes(self._paths, stored_include_deps=stored_deps)` to get current file hashes, where `stored_deps` is the `include_deps` from step (a) (or `None` when no previous fingerprint exists).
+     c. If `current_hashes.get('prompt_hash') is None`: raise `FingerprintFinalizeError` (R3).
+     d. Build the `Fingerprint` dataclass: `command=self._operation`, `pdd_version=__version__` (imported from `pdd`), `timestamp=datetime.now(timezone.utc).isoformat()`, `prompt_hash/code_hash/example_hash/test_hash/test_files` from `current_hashes`, and `include_deps` from `current_hashes.get('include_deps')` — the freshly extracted deps from step (b) — or `self._include_deps_override` when set, which takes priority over the computed current include_deps. The corrected logic is: `include_deps = self._include_deps_override if self._include_deps_override is not None else current_hashes.get('include_deps')`.
+     e. Create a temp file: `fd, tmp_path = tempfile.mkstemp(dir=self._fingerprint_path.parent, suffix=".tmp")`.
+     f. Write JSON via `json.dump(asdict(fingerprint), f, indent=2)` then `os.fsync(fd)` then close.
+     g. Call `os.replace(tmp_path, self._fingerprint_path)` for atomic rename.
+     h. On ANY exception during steps (a)–(g): attempt `os.unlink(tmp_path)` (suppress `OSError`); then raise `FingerprintFinalizeError` with the original exception as cause.
+   - Return `False` (never suppress exceptions from the body).
+
+7. **Imports**: Use only stdlib and existing PDD primitives — `get_fingerprint_path` from `pdd.operation_log`; `read_fingerprint`, `calculate_current_hashes`, `Fingerprint` from `pdd.sync_determine_operation`; `__version__` from `pdd`; `datetime`, `timezone` from `datetime`. Use `dataclasses.asdict` for JSON serialization. Use `tempfile.mkstemp`, `os.replace`, `os.fsync`, `os.unlink`, `json`, `logging`.
+
+8. **Windows note**: Document in a module-level comment that `os.replace()` on Windows is not POSIX-atomic when the destination exists; this is the same behavior as the existing `_save_fingerprint_atomic` implementation and is a known limitation.
+
+% Dependencies
+<pdd.operation_log>
+    <include select="def:get_fingerprint_path" mode="interface">pdd/operation_log.py</include>
+</pdd.operation_log>
+<pdd.sync_determine_operation>
+    <include select="def:read_fingerprint,def:calculate_current_hashes,class:Fingerprint" mode="interface">pdd/sync_determine_operation.py</include>
+</pdd.sync_determine_operation>
+
+<operation_log_usage_example>
+    <include>context/operation_log_example.py</include>
+</operation_log_usage_example>
+
+% Deliverables
+- Code: `pdd/fingerprint_transaction.py`
+- Public API: `FingerprintTransaction`, `FingerprintFinalizeError`
