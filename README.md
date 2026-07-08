@@ -1163,7 +1163,7 @@ pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
 - **Compressed Context Telemetry**: Sync results and logs record whether compressed context was requested, the effective value after CLI and `.pddrc` resolution, whether it was actually applied for each phase, the source inputs used to build it, and whether the run fell back to agentic repair. This makes replay and benchmark comparisons distinguish normal sync from compressed-context sync.
 
 **Robust State Management**:
-- **Fingerprint Files**: Maintains `.pdd/meta/{basename}_{language}.json` with operation history
+- **Fingerprint Files**: Maintains `.pdd/meta/{basename}_{language}.json` with operation history. All fingerprint writes across every mutating command (sync, generate, example, update, fix, auto-deps, ci-heal) route through a single `FingerprintTransaction` context manager; writes are atomic (temp-file + `os.replace`) and enforced — a finalization failure is a command failure, not a silent warning.
 - **Run Reports**: Tracks test results, coverage, and execution status  
 - **Lock Management**: Prevents race conditions with file-descriptor based locking
 - **Git Integration**: Leverages version control for change detection and rollback safety
@@ -1909,7 +1909,7 @@ Where used:
 - Dependency references: Examples serve as lightweight (token efficient) interface references for other prompts and can be included as dependencies of a generate target.
 - Sanity checks: The example program is typically used as the runnable program for `crash` and `verify`, providing a quick end-to-end sanity check that the generated code runs and behaves as intended.
 - Auto-deps integration: The `auto-deps` command can scan example files (e.g., `examples/**/*.py`) and insert relevant references into prompts. Based on each example’s content (imports, API usage, filenames), it identifies useful development units to include as dependencies.
-- Metadata finalization: A successful `pdd example` updates the affected module's fingerprint and clears its stale `.pdd/meta/<basename>_<language>_run.json` runtime-verification report, so a regenerated example never leaves runtime state describing the pre-mutation output.
+- Metadata finalization: A successful `pdd example` updates the affected module's fingerprint and clears its stale `.pdd/meta/<basename>_<language>_run.json` runtime-verification report, so a regenerated example never leaves runtime state describing the pre-mutation output. The fingerprint write is atomic (temp-file + rename via `FingerprintTransaction`); a finalization failure exits non-zero rather than being surfaced as a warning.
 
 **When to use**: Choose this command when creating reusable references that other prompts can efficiently import. This produces token-efficient examples that are easier to reuse across multiple prompts compared to including full implementations.
 
@@ -3010,13 +3010,13 @@ The command uses a two-stage retrieval pipeline when candidates exceed 50:
 
 After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
 
-**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates a fingerprint in `.pdd/meta/` for the file that was actually written (with `operation="auto-deps"` and the current include-dependency hashes) and clears any stale per-module `_run.json` report keyed by the same identity, so downstream commands see a consistent view. The fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective) and use hash-based, language-agnostic helpers from `pdd.operation_log`. Finalization errors are surfaced as warnings and do not mask a successful `auto-deps` result. Invalid `<include>` tags stripped by the prompt sanitizer and architecture-merge failures (e.g. `architecture.json` could not be patched in place) are also surfaced as yellow warnings before the success summary.
+**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates a fingerprint in `.pdd/meta/` for the file that was actually written (with `operation="auto-deps"` and the current include-dependency hashes) and clears any stale per-module `_run.json` report keyed by the same identity, so downstream commands see a consistent view. The fingerprint write is atomic (temp-file + `os.replace` via `FingerprintTransaction`) and enforced — a finalization failure exits non-zero. Invalid `<include>` tags stripped by the prompt sanitizer and architecture-merge failures (e.g. `architecture.json` could not be patched in place) are surfaced as yellow warnings before the success summary.
 
 Identity is derived from the **output path**:
 - **In-place mode** (`--output <PROMPT_FILE>`, or `pdd sync`'s post-move flow): the output path is the canonical prompt, so the fingerprint lands at `.pdd/meta/<basename>_<language>.json`.
 - **Default mode** (output is the separate `<basename>_<language>_with_deps.prompt` derivative): the fingerprint lands at `.pdd/meta/<basename>_<language>_with_deps.json`. Canonical metadata is intentionally untouched in this case — the derivative fingerprint records that an `auto-deps` run produced that file without overwriting the canonical module's record.
 
-**Note on `pdd sync`:** `pdd sync` invokes `auto-deps` with a `*_with_deps.prompt` temp output and then moves it onto the canonical prompt. To avoid leaving orphan `.pdd/meta/*_with_deps.json` files for the moved temp prompt (and to avoid clearing the wrong run report), sync passes the internal `_skip_finalization=True` flag to `auto_deps_main` and owns canonical metadata itself: sync writes the canonical fingerprint via its atomic state machinery (`_save_fingerprint_atomic`) and clears the canonical `_run.json` via `clear_run_report` immediately after the move.
+**Note on `pdd sync`:** `pdd sync` invokes `auto-deps` with a `*_with_deps.prompt` temp output and then moves it onto the canonical prompt. To avoid leaving orphan `.pdd/meta/*_with_deps.json` files for the moved temp prompt (and to avoid clearing the wrong run report), sync passes the internal `_skip_finalization=True` flag to `auto_deps_main` and owns canonical metadata itself: sync writes the canonical fingerprint via `FingerprintTransaction` (atomic temp-file + rename) and clears the canonical `_run.json` via `clear_run_report` immediately after the move.
 
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
