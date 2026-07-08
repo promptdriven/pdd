@@ -298,17 +298,17 @@ _REGRESSION_STATUS_LABELS = {
 
 def _project_tests_dir(story_path: Path) -> Path:
     """Resolve the *project's* tests dir from a story path (mirrors
-    ``story_test_generation._default_output_for``): the sibling ``tests/`` of a
-    ``user_stories/`` story, else ``tests/`` under the current project root.
+    ``story_test_generation._default_output_for``): the ``tests/`` sibling of the
+    directory that holds the story (its stories-dir), i.e. under the project root.
 
-    Using ``Path.cwd()`` (not ``pdd``'s install dir) means pip-installed users
-    scan their own suite instead of pdd's, so linked tests are actually found.
+    Anchoring on the story's own parent dir (not ``Path.cwd()`` and not ``pdd``'s
+    install dir) means pip-installed users -- and users passing a custom
+    ``--stories-dir`` or running from a subdirectory -- scan their own suite, so
+    linked tests are actually found. Falls back to ``cwd`` only for a story that
+    has no parent directory at all (a bare filename).
     """
-    root = (
-        story_path.parent.parent
-        if story_path.parent.name == "user_stories"
-        else Path.cwd()
-    )
+    stories_dir = story_path.parent
+    root = stories_dir.parent if stories_dir != Path("") else Path.cwd()
     return root / "tests"
 
 

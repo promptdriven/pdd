@@ -766,7 +766,11 @@ def evaluate_story_regression(
     tests_dir: Path,
     story_map: Optional[StoryTestMap] = None,
 ) -> StoryRegressionEvaluation:
-    """Return missing/stale/passing status for a story without executing tests."""
+    """Return missing/stale/present status for a story without executing tests.
+
+    "present" means a fresh (or legacy hashless, traceability-only) linked test
+    exists; it does NOT mean the test passes -- this evaluator never runs it.
+    """
     sid = story_id(story_path)
     current_hash = story_bundle_hash(story_path)
     smap = story_map if story_map is not None else build_story_map(tests_dir)

@@ -925,3 +925,39 @@ class TestStoryListRegressionHonesty:
         assert "stale" in result.output.lower(), (
             f"'stale' must be reachable, got: {result.output!r}"
         )
+
+    def test_custom_stories_dir_resolves_sibling_tests(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """With a non-``user_stories`` ``--stories-dir``, the tests dir must
+        resolve to the stories-dir's sibling ``tests/`` (project root), not
+        ``cwd/tests`` -- so a run from a subdirectory still finds the test."""
+        story_path = tmp_path / "specs" / "story__widget.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: widget\n\nA widget renders on the page.\n", encoding="utf-8"
+        )
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        # Run from an unrelated subdirectory so a cwd-based resolver would miss.
+        subdir = tmp_path / "sub" / "here"
+        subdir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(subdir)
+        result = runner.invoke(
+            story,
+            ["list", "--stories-dir", str(tmp_path / "specs"), "--with-regression-status"],
+            obj={"quiet": True},
+        )
+        assert result.exit_code == 0, result.output
+        assert "widget" in result.output.lower()
+        assert "missing" not in result.output.lower(), (
+            f"custom stories-dir test not found -> resolved to cwd, not project root: {result.output!r}"
+        )
+        assert "has-test" in result.output.lower(), result.output
