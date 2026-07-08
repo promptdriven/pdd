@@ -1,11 +1,11 @@
-% Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a passing, non-stale executable regression test.
+% Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a present, non-stale executable regression test linked to it. The gate is static/AST-based: it checks marker presence and story-hash freshness and never executes a test body, so it does not (and must not claim to) prove that a test passes — pass/fail is verified separately by the story lane (`pytest -m story`).
 
 <include>context/python_preamble.prompt</include>
 
 <pdd-dependency>story_regression_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 
-<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a passing, non-stale executable regression test behind it. The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
+<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a present, non-stale executable regression test linked behind it (the gate proves presence + freshness statically; it never runs the test, so pass/fail is verified separately by the story lane). The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
 
 % Background
 - User stories live in `user_stories/story__<id>.md`. A story's `story_id` is the filename stem with the `story__` prefix removed (e.g. `story__pdd_sync.md` -> `pdd_sync`).

@@ -466,3 +466,68 @@ def test_gate_decision_is_deterministic_without_secrets(fixture_tree, monkeypatc
     assert first.ok == second.ok == False
     assert first.exit_code == second.exit_code == 2
     assert [r.status for r in first.results] == [r.status for r in second.results]
+
+
+# --------------------------------------------------------------------------- #
+# Evidence honesty (issue #1889): static presence/freshness surfaces must never
+# claim a test PASSED — the gate never executes test bodies.
+# --------------------------------------------------------------------------- #
+
+def test_module_docstring_does_not_claim_it_enforces_passing():
+    """The module docstring must describe presence + freshness, not passing.
+
+    The gate is AST/static: it checks marker presence and hash freshness and
+    never runs a test body, so it cannot enforce that a test *passes*.
+    """
+    doc = srg.__doc__ or ""
+    assert "passing, non-stale executable regression test" not in doc, (
+        "Docstring overclaims: gate does not execute tests / prove passing."
+    )
+
+
+def test_classify_ok_detail_does_not_claim_the_test_passed(tmp_path: Path):
+    """A fresh matching-hash marker whose test body is ``assert False`` still
+    classifies OK (presence+freshness), but the human-facing detail must NOT
+    imply the test passed — pass/fail is verified separately by the story lane.
+    """
+    story = _write(tmp_path / "story__x.md", FRESH_STORY)
+    current = _story_content_hash(FRESH_STORY)
+    # Marker records a fresh hash; the *body* deliberately fails.
+    markers = {"x": srg.StoryMarker("x", current, "t.py", "test_x", 1)}
+    result = classify_story(story, markers)
+    assert result.status == STATUS_STORY_REGRESSION_OK  # value unchanged
+    detail = result.detail.lower()
+    assert result.detail != "Story has a fresh regression test.", (
+        "detail must be reworded so it does not imply the test passed"
+    )
+    assert "verified separately" in detail, (
+        f"detail should point to separate pass/fail verification, got: {result.detail!r}"
+    )
+
+
+def test_evaluate_story_regression_status_never_says_passing(tmp_path: Path):
+    """The lightweight coverage evaluator's verdict value must be presence /
+    freshness neutral: the literal word 'pass' is the overclaim (#1889 Bug 2).
+    Holds for both legacy hashless markers and fresh markers with failing bodies.
+    """
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import STATUS_PASSING, evaluate_story_regression
+
+    assert "pass" not in STATUS_PASSING, (
+        f"the OK/present verdict value overclaims a pass: {STATUS_PASSING!r}"
+    )
+
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    story = _write(stories / "story__x.md", FRESH_STORY)
+    # Legacy hashless marker, failing body: traceability only, no pass proof.
+    _write(
+        tests / "test_x.py",
+        _test_module(
+            '@pytest.mark.story(story_id="x")\ndef test_x():\n    assert False'
+        ),
+    )
+    smap = build_story_map(tests)
+    ev = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
+    assert ev.status == STATUS_PASSING
+    assert "pass" not in ev.status

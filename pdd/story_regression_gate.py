@@ -1,9 +1,12 @@
 """Deterministic, public-safe CI gate for story-driven regression tests.
 
 Capstone of EPIC #1698 (issue #1702). Enforces that every user story ships
-with a passing, non-stale executable regression test. A regression test
-declares which story it protects -- and the story content it was generated
-against -- via a marker::
+with a *present*, non-stale executable regression test linked to it. This
+gate is static/AST-based: it verifies test presence and story-hash freshness
+only -- it never executes a test body, so it does not (and cannot) prove that
+a test *passes*. Pass/fail is verified separately by the story lane
+(``pytest -m story``). A regression test declares which story it protects --
+and the story content it was generated against -- via a marker::
 
     @pytest.mark.story(story_id="pdd_sync", story_hash="a1b2c3d4e5f6a7b8")
     def test_sync_round_trips():
@@ -61,7 +64,13 @@ logger = logging.getLogger(__name__)
 STATUS_STORY_REGRESSION_OK = "story-regression-ok"
 STATUS_STORY_REGRESSION_MISSING = "story-regression-missing"
 STATUS_STORY_REGRESSION_STALE = "story-regression-stale"
-STATUS_PASSING = "story-regression-passing"
+# Verdict emitted by the lightweight ``evaluate_story_regression`` evaluator for
+# a story that has a fresh (or legacy hashless, traceability-only) linked test.
+# The value is deliberately presence/freshness-neutral: this evaluator does NOT
+# execute tests, so it must never claim a test "passed" (pdd#1889 Bug 2). The
+# constant name is retained for import compatibility; the value carries the
+# honest wording rendered by ``pdd checkup coverage``.
+STATUS_PASSING = "story-regression-present"
 STATUS_MISSING = STATUS_STORY_REGRESSION_MISSING
 STATUS_STALE = STATUS_STORY_REGRESSION_STALE
 
@@ -360,7 +369,11 @@ def _classify_story_from_markers(
                 recorded_hash=marker.story_hash,
                 test_file=marker.test_file,
                 test_name=marker.test_name,
-                detail="Story has a fresh regression test.",
+                detail=(
+                    "Story has a fresh, linked regression test "
+                    "(pass/fail is verified separately by the story lane, "
+                    "`pytest -m story`)."
+                ),
             )
 
     # None fresh: prefer a marker that at least records a hash for a precise message.
@@ -753,7 +766,11 @@ def evaluate_story_regression(
     tests_dir: Path,
     story_map: Optional[StoryTestMap] = None,
 ) -> StoryRegressionEvaluation:
-    """Return missing/stale/passing status for a story without executing tests."""
+    """Return missing/stale/present status for a story without executing tests.
+
+    "present" means a fresh (or legacy hashless, traceability-only) linked test
+    exists; it does NOT mean the test passes -- this evaluator never runs it.
+    """
     sid = story_id(story_path)
     current_hash = story_bundle_hash(story_path)
     smap = story_map if story_map is not None else build_story_map(tests_dir)

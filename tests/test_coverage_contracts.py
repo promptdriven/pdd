@@ -1223,7 +1223,7 @@ class TestStoryRegressionDimension:
             {
                 "story_id": "foo_flow",
                 "has_regression_test": True,
-                "status": "story-regression-passing",
+                "status": "story-regression-present",
                 "tests": ["test_foo.py::test_foo_flow"],
                 "story_hash": "8ca87cfe7267abcb",
             }
