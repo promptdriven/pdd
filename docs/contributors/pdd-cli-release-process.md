@@ -17,11 +17,17 @@ resolved CLI version:
 make check-release-video-config
 ```
 
-Release-video creation sends `--claude-model glm-5.2` to PDS by default for
-non-vision pipeline stages such as specs and compositions. Override with
+Release-video creation uses `RELEASE_VIDEO_CLAUDE_MODEL=claude-opus-4-8` by
+default for local Claude Code script generation. Override that release-scoped
+setting only when intentionally changing the local script model; direct
+`scripts/release_video.py` invocations also accept non-empty `CLAUDE_MODEL` as
+a fallback. Empty or whitespace-only local model values are treated as unset.
+
+The wrapper sends `--claude-model glm-5.2` to PDS by default for non-vision
+pipeline stages such as specs and compositions. Override with
 `RELEASE_VIDEO_PDS_CLAUDE_MODEL=<model>` only when intentionally changing the
-downstream PDS model; the local script-generation `CLAUDE_MODEL` remains a
-separate setting.
+downstream PDS model; setting it to an empty string intentionally omits the PDS
+model flag and uses the server default.
 
 The release workflow also installs `@promptdriven/pds@0.1.7` by default when
 `PDS_CLI_PACKAGE` is unset and runs the same preflight before creating the

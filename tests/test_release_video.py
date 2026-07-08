@@ -18,10 +18,12 @@ def release_video_env(extra: dict | None = None) -> dict:
     for key in (
         "CLAUDE_MODEL",
         "CLAUDE_TIMEOUT",
+        "CLAUDE_CLI",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CLAUDE_CODE_OAUTH_TOKEN_1",
         "CLAUDE_CODE_OAUTH_TOKEN_2",
         "CLAUDE_CODE_OAUTH_TOKEN_3",
+        "RELEASE_VIDEO_CLAUDE_MODEL",
         "RELEASE_VIDEO_ATTEMPT_ID",
         "RELEASE_VIDEO_CLAUDE_TOOLS",
         "RELEASE_VIDEO_IDEMPOTENCY_KEY",
@@ -34,6 +36,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_PDS_CREATE_TIMEOUT",
         "RELEASE_VIDEO_RELEASE_NOTES_PATH",
         "RELEASE_VIDEO_SCRIPT_PATH",
+        "PDS_CLI",
         "PDS_API_URL",
         "PDS_PROFILE",
         "PDS_RELEASE_TOKEN",
@@ -76,6 +79,17 @@ def test_release_video_specific_claude_model_env_wins_over_global(monkeypatch):
     args = release_video.parse_args([])
 
     assert args.claude_model == "claude-release-local"
+
+
+def test_release_video_command_env_defaults_ignore_empty(monkeypatch):
+    release_video = load_release_video_module()
+    monkeypatch.setenv("CLAUDE_CLI", "")
+    monkeypatch.setenv("PDS_CLI", "   ")
+
+    args = release_video.parse_args([])
+
+    assert args.claude_cli == "claude"
+    assert args.pds_cli == "pds"
 
 
 def run(command, cwd: Path, **kwargs):
@@ -1950,6 +1964,18 @@ def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
     assert "--metadata-conflict" not in pds_call
 
 
+def test_release_video_empty_pds_claude_model_omits_downstream_override(
+    tmp_path: Path,
+):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=["--pds-claude-model", "   "],
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert "--claude-model" not in pds_call
+
+
 def test_release_video_makefile_passes_idempotency_env_vars():
     makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
 
@@ -2022,6 +2048,47 @@ def test_release_video_makefile_passes_local_claude_model_default():
     assert '--claude-model "$(RELEASE_VIDEO_CLAUDE_MODEL)"' in makefile_text
     assert '--claude-model "claude-opus-4-8"' in release_video.stdout
     assert '--claude-model "claude-opus-4-8"' in preflight.stdout
+
+
+def test_release_video_makefile_empty_local_defaults_are_unset():
+    release_video = subprocess.run(
+        [
+            "make",
+            "-n",
+            "release-video",
+            "RELEASE_TAG=v1.1.0",
+            "RELEASE_VIDEO_CLAUDE_MODEL=   ",
+            "CLAUDE_CLI=",
+            "PDS_CLI=",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    preflight = subprocess.run(
+        [
+            "make",
+            "-n",
+            "check-release-video-config",
+            "RELEASE_VIDEO_CLAUDE_MODEL=",
+            "PDS_CLI=   ",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert '--claude-cli "claude"' in release_video.stdout
+    assert '--claude-model "claude-opus-4-8"' in release_video.stdout
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.7 --timeout 120s"' in (
+        release_video.stdout
+    )
+    assert '--claude-model "claude-opus-4-8"' in preflight.stdout
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.7 --timeout 120s"' in (
+        preflight.stdout
+    )
 
 
 def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli():
