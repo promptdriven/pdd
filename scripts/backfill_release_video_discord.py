@@ -225,15 +225,25 @@ def ensure_release_body_has_skip_record(
         return body, False, False
 
     skip_text = f"Release video: skipped for {tag}.\nReason: {reason.strip()}"
-    body_without_old_skip = re.sub(
+    body_without_old_skip = remove_release_video_skip_records(body, tag).strip()
+    if body_without_old_skip:
+        return f"{skip_text}\n\n{body_without_old_skip}\n\n{marker}\n", True, True
+    return f"{skip_text}\n\n{marker}\n", True, True
+
+
+def remove_release_video_skip_records(body: str, tag: str) -> str:
+    body = re.sub(
         rf"(?m)^<!-- {re.escape(SKIP_MARKER_NAME)}: tag={re.escape(tag)} "
         r"reason_sha256=[0-9a-f]{64} -->\n?",
         "",
         body,
-    ).strip()
-    if body_without_old_skip:
-        return f"{skip_text}\n\n{body_without_old_skip}\n\n{marker}\n", True, True
-    return f"{skip_text}\n\n{marker}\n", True, True
+    )
+    return re.sub(
+        rf"(?m)^Release video: skipped for {re.escape(tag)}\.\n"
+        r"Reason: [^\n]*(?:\n\n|\n?\Z)",
+        "",
+        body,
+    )
 
 
 def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
