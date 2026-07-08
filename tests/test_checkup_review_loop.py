@@ -1864,6 +1864,185 @@ class TestCheckupReviewLoopRuntime:
         assert verdict.per_reviewer_status.get("codex") == "clean"
         assert verdict.per_reviewer_status.get("claude") == "clean"
 
+    def test_issue_1941_auto_degrades_to_same_family_fixer_on_fallback_findings(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: when the primary reviewer's family is down and the
+        fallback reviewer (the fixer's own role) reports real findings, the
+        loop must NOT dead-end with "findings remain". It must auto-degrade:
+        run a fresh same-family fixer session, keep the required fresh verify,
+        and disclose the weaker guarantee (``same-role-review-fix: true`` +
+        ``role-independence: degraded (...)``). Reproduces the
+        test_repo#4234/#4235 shape (codex dead, claude reviews+fixes).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(
+                context_arg, state_arg, reviewers_arg, artifacts_dir_arg
+            )
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                # Codex auth dead pool-wide (pdd_cloud#2897).
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            # claude:
+            if "fallback" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"addressed finding","changed_files":["tests/test_flow.py"]}',
+                    0.2,
+                    role,
+                )
+            # round-start re-review / verify passes are clean once fixed.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fix round MUST run as a fresh same-family claude session.
+        assert any(
+            "fix-claude-for-claude" in label for _, label in calls
+        ), f"same-family fix round did not run; calls={calls!r}"
+        # A fresh verify (same-family re-review) MUST still run.
+        assert any(
+            "verify-claude" in label for _, label in calls
+        ), f"fresh verify did not run; calls={calls!r}"
+        # Honest disclosure in the rendered report.
+        assert "same-role-review-fix: true" in report, report
+        assert "role-independence: degraded (codex unavailable)" in report, report
+        assert "active-reviewer: claude" in report
+        # The superseded primary is dropped from the required set so the
+        # cloud verdict adapter ships on the degraded-but-clean result.
+        assert "| codex | failed (optional, superseded by claude) |" in report, report
+        assert "reviewer-status: codex=failed claude=clean fresh-final=clean" in report
+        # No bare "findings remain" deadlock stop reason.
+        assert "reported findings (fallback)" not in report, report
+        # Machine-readable final-state.json (consumed by pdd_cloud) carries
+        # the disclosure fields so downstream verdict consumers see the
+        # weaker guarantee, not just humans reading the markdown.
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["role_independence"] == "degraded (codex unavailable)"
+        assert final_state["same_role_review_fix"] is True
+        assert final_state["mode"] == "single-role-review-fix"
+        # The whole point of the fix: the review-loop final gate must PASS
+        # (ship) instead of dead-locking. Assert the review-loop Machine
+        # Verdict passed rather than merely inspecting disclosure strings.
+        machine_verdict = report.split("### Machine Verdict", 1)[1]
+        assert '"stage": "review-loop"' in machine_verdict, machine_verdict
+        assert '"status": "passed"' in machine_verdict, machine_verdict
+        assert captured_state, "_finalize never called"
+        state = captured_state[-1]
+        assert state.same_role_review_fix is True
+        assert state.role_independence == "degraded (codex unavailable)"
+
+    def test_issue_1941_both_families_alive_stays_independent(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941 AC: when both families are alive, behavior is
+        unchanged — no degrade, no same-role stamp, and the fallback
+        reviewer's role is never promoted to fix its own review."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            # codex reviews clean on the first pass; claude never needed.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "role-independence: independent" in report, report
+        assert "same-role-review-fix: false" in report, report
+        assert not any(role == "claude" for role, _ in calls), calls
+
+    def test_issue_1941_degraded_same_family_fixer_failure_names_vacancy(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941 AC: if the degraded same-family fixer ALSO fails, the
+        loop stops with a precise reason that names the vacancy — never a bare
+        "findings remain" that hides why no independent fixer ran."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if "fallback" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            if "fix-" in label:
+                # The degraded same-family fixer hits its own outage.
+                return False, "exit code 1\nrate limit exceeded 429", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The degrade was attempted (fix round ran) …
+        assert any(
+            "fix-claude-for-claude" in label for _, label in calls
+        ), calls
+        # … and the terminal reason names the vacancy explicitly.
+        assert "role-independence degraded (codex unavailable)" in report, report
+        assert "could not address" in report, report
+
     def test_diagnostics_tail_scrubs_secrets(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

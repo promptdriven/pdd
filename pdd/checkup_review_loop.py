@@ -919,10 +919,37 @@ class ReviewLoopState:
     # final-state/report consumers from inferring the legacy independent
     # reviewer/fixer loop when one role intentionally handled both steps.
     same_role_review_fix: bool = False
+    # Issue #1941: role-independence disclosure. ``"independent"`` for the
+    # normal cross-family reviewer/fixer loop (and also for a deliberate
+    # config-time ``allow_same_reviewer_fixer`` run — that intent is disclosed
+    # separately by ``same_role_review_fix``; this field tracks only *runtime*
+    # degradation). Set to
+    # ``"degraded (<role> unavailable)"`` when the loop had to relax
+    # reviewer/fixer independence at runtime — running one family as both
+    # reviewer and fixer because the other family was unavailable and a
+    # guaranteed deadlock ("findings remain, no fix attempted") was the only
+    # alternative. Rendered verbatim in the final report and
+    # final-state.json so downstream verdict consumers and humans see the
+    # weaker guarantee. Kept in the appended field block so positional
+    # construction stays stable.
+    role_independence: str = "independent"
 
     @property
     def findings(self) -> List[ReviewFinding]:
         return list(self.findings_by_key.values())
+
+
+def _degraded_role_independence_note(unavailable_reviewer: Optional[str]) -> str:
+    """Render the ``role-independence`` degradation note for issue #1941.
+
+    Produced when the loop auto-degrades to a same-family review/fix session
+    because the ``unavailable_reviewer``'s provider family could not run. The
+    note is surfaced verbatim in the final report and ``final-state.json`` so
+    downstream verdict consumers know reviewer/fixer independence was relaxed
+    and which family was missing.
+    """
+    role = (unavailable_reviewer or "").strip() or "primary reviewer"
+    return f"degraded ({role} unavailable)"
 
 
 def run_checkup_review_loop(
@@ -1347,6 +1374,33 @@ def run_checkup_review_loop(
                             )
                             break
                         if fallback_result.status == "findings":
+                            # Issue #1941: AUTO-DEGRADE instead of dead-locking.
+                            # The fallback reviewer IS the fixer's own role,
+                            # promoted here only because the primary reviewer's
+                            # family is unavailable. Terminating now would strand
+                            # concrete, actionable findings with no fix attempt
+                            # even though a fresh same-family fixer session can
+                            # execute them and be re-reviewed — strictly better
+                            # than a guaranteed deadlock. Hand the findings to
+                            # the fixer on the next iteration (mirrors the
+                            # fallback-clean gate-findings handoff just above),
+                            # stamp the weaker guarantee, and let the normal
+                            # fix + fresh-verify path run. The superseded primary
+                            # already renders ``(optional, superseded by
+                            # <fallback>)`` because ``state.active_reviewer``
+                            # points at the fallback, so the cloud verdict
+                            # adapter drops it from the required-reviewer set.
+                            degraded_findings = _actionable_findings(
+                                state, fallback_result.findings
+                            )
+                            if degraded_findings:
+                                state.same_role_review_fix = True
+                                state.role_independence = (
+                                    _degraded_role_independence_note(reviewer)
+                                )
+                                reviewer = fallback_result.reviewer
+                                pending_findings = degraded_findings
+                                continue
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
                                 f"({review.status}); secondary reviewer {fixer} "
@@ -1567,13 +1621,26 @@ def run_checkup_review_loop(
                     # is the fallback once it has taken over from a prior
                     # round, so a later-round failure should attribute
                     # to it instead of the long-exhausted original.
+                    #
+                    # Issue #1941: when role-independence was auto-degraded
+                    # (the fixer is running same-family because the other
+                    # family was down), name that vacancy explicitly so the
+                    # terminal reason is never a bare "could not address" that
+                    # hides why no independent fixer was available.
+                    degrade_note = (
+                        f" [role-independence {state.role_independence}]"
+                        if state.role_independence != "independent"
+                        else ""
+                    )
                     state.stop_reason = (
                         f"Fixer {active_fixer} could not address {reviewer}'s findings"
                         + (
-                            f" (fallback fixer {config.fixer_fallback} also failed)."
+                            f" (fallback fixer {config.fixer_fallback} also failed)"
                             if fallback_fix is not None
-                            else "."
+                            else ""
                         )
+                        + degrade_note
+                        + "."
                     )
                 break
             # Fallback succeeded — it now drives the rest of this round.
@@ -7399,6 +7466,10 @@ def _write_final_state(
             if state.same_role_review_fix
             else "independent-reviewer-fixer"
         ),
+        # Issue #1941: role-independence disclosure. ``"independent"`` unless
+        # the loop auto-degraded to a same-family review/fix session because
+        # the other provider family was unavailable.
+        "role_independence": state.role_independence,
         "source_of_truth": state.source_of_truth,
         # SHA-backed verification trust boundary (issue #1088). Always
         # present so downstream consumers can rely on the schema rather
@@ -7894,6 +7965,7 @@ def _render_final_report(
         f"issue_aligned: {issue_aligned}",
         f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"same-role-review-fix: {str(state.same_role_review_fix).lower()}",
+        f"role-independence: {state.role_independence}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
         f"verified-head-sha: {verified_sha_line}",
