@@ -90,7 +90,8 @@ _FINGERPRINT = "f" * 64
 
 
 def _build_run_dir(tmp_path, *, model="gpt-5.1-codex-max", tamper_payload=False,
-                   fingerprint=_FINGERPRINT) -> Path:
+                   fingerprint=_FINGERPRINT, agent_error=False, returncode=0,
+                   timed_out=False) -> Path:
     run_dir = tmp_path / "run"
     (run_dir / "payloads").mkdir(parents=True)
     request = json.dumps({"model": model, "input": []}).encode()
@@ -117,6 +118,11 @@ def _build_run_dir(tmp_path, *, model="gpt-5.1-codex-max", tamper_payload=False,
         "env_fingerprint_sha256": fingerprint,
         "token_metrics_supported": True,
         "development_only": False,
+        "agent_error": agent_error,
+    }))
+    (run_dir / "agent_process.json").write_text(json.dumps({
+        "returncode": returncode,
+        "timed_out": timed_out,
     }))
     return run_dir
 
@@ -161,4 +167,13 @@ def test_calibration_no_go_when_a_snapshot_response_is_missing(tmp_path):
     (run_dir / "payloads" / "00001.response.body").unlink()
     verdict = calibrate(run_dir, _ARM, _FINGERPRINT)
     assert verdict["checks"]["response_parsed_for_every_request"] is False
+    assert verdict["go"] is False
+
+
+def test_calibration_no_go_when_run_record_marks_agent_error(tmp_path):
+    verdict = calibrate(
+        _build_run_dir(tmp_path, agent_error=True, returncode=3), _ARM, _FINGERPRINT
+    )
+    assert verdict["checks"]["agent_error_false"] is False
+    assert verdict["checks"]["agent_process_exit_zero"] is False
     assert verdict["go"] is False

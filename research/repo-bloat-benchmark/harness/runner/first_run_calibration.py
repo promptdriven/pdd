@@ -46,6 +46,8 @@ def calibrate(run_dir: Path, arm: dict, registered_fingerprint: str | None) -> d
     snapshots = sorted(_load_snapshots(run_dir), key=lambda s: s["ordinal"])
     record_path = run_dir / "run_record.json"
     record = json.loads(record_path.read_text()) if record_path.is_file() else {}
+    process_path = run_dir / "agent_process.json"
+    process = json.loads(process_path.read_text()) if process_path.is_file() else {}
 
     responses_analyses = []
     payload_sha_ok = True
@@ -86,6 +88,10 @@ def calibrate(run_dir: Path, arm: dict, registered_fingerprint: str | None) -> d
         ),
         "token_metrics_supported": record.get("token_metrics_supported") is True,
         "not_development_only": record.get("development_only") is False,
+        "agent_error_false": record.get("agent_error") is False,
+        "agent_process_exit_zero": (
+            process.get("timed_out") is False and process.get("returncode") == 0
+        ),
     }
     return {
         "run_dir": str(run_dir),

@@ -11,7 +11,26 @@ from __future__ import annotations
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+
+def validate_relative_path(raw_path: str, *, field_name: str) -> Path:
+    path = PurePosixPath(str(raw_path))
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be relative: {raw_path}")
+    if any(part == ".." for part in path.parts):
+        raise ValueError(f"{field_name} must not contain '..': {raw_path}")
+    if not path.parts:
+        raise ValueError(f"{field_name} must not be empty")
+    return Path(*path.parts)
+
+
+def resolve_within_root(root: str | Path, relative_path: str | Path, *, field_name: str) -> Path:
+    resolved_root = Path(root).resolve()
+    resolved_candidate = (resolved_root / relative_path).resolve()
+    if resolved_candidate != resolved_root and resolved_root not in resolved_candidate.parents:
+        raise ValueError(f"{field_name} escapes its root: {relative_path}")
+    return resolved_candidate
 
 
 class ManifestWriter:
@@ -35,15 +54,20 @@ class ManifestWriter:
         content_root = self.generated_dir / scenario / size
         for entry in manifest["files"]:
             destination = entry["upstream_path"]
+            destination_rel = validate_relative_path(
+                destination, field_name="upstream_path"
+            )
             if entry["mode"] == "regrow":
                 entry["content_path"] = None
                 continue
             content = generated[destination]
-            content_path = content_root / destination
+            content_path = resolve_within_root(
+                content_root, destination_rel, field_name="content_path"
+            )
             content_path.parent.mkdir(parents=True, exist_ok=True)
             content_path.write_text(content, encoding="utf-8")
             entry["content_path"] = str(
-                content_path.relative_to(self.out_dir).as_posix()
+                content_path.relative_to(self.out_dir.resolve()).as_posix()
             )
 
         self.manifest_dir.mkdir(parents=True, exist_ok=True)

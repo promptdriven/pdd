@@ -34,11 +34,17 @@ import json
 import os
 import socket
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
 
 GATEWAY = os.environ.get("RB_GATEWAY", "gateway:8888")
 PROVIDER_HOST = os.environ.get("RB_PROVIDER_HOST", "api.openai.com")
-# The recording proxy on the runner; the agent addresses it by service name.
-PROXY = os.environ.get("RB_PROXY", "runner:8080")
+# The recording proxy on the runner; for the live-path check prefer the same
+# advertised base URL the frozen agent receives.
+PROXY_URL = os.environ.get("RB_PROXY_URL")
+PROXY_ENDPOINT_JSON = os.environ.get("RB_PROXY_ENDPOINT_JSON")
 OUTSIDE_TCP_PROBES = (("1.1.1.1", 443), ("8.8.8.8", 53))
 # UDP exfil / DNS-tunnel channels: a public resolver and Docker's embedded
 # resolver (which forwards external lookups via the daemon even on an
@@ -93,6 +99,33 @@ def _gateway_connect(target_host: str, target_port: int) -> int | None:
         return None
 
 
+def _load_proxy_url(endpoint_json: str | None = None, proxy_url: str | None = None) -> str:
+    if proxy_url:
+        return proxy_url.rstrip("/")
+    if endpoint_json:
+        payload = json.loads(Path(endpoint_json).read_text(encoding="utf-8"))
+        return str(payload["base_url"]).rstrip("/")
+    if PROXY_URL:
+        return PROXY_URL.rstrip("/")
+    if PROXY_ENDPOINT_JSON:
+        payload = json.loads(Path(PROXY_ENDPOINT_JSON).read_text(encoding="utf-8"))
+        return str(payload["base_url"]).rstrip("/")
+    raise ValueError("proxy URL not configured; pass --proxy-url or --proxy-endpoint-json")
+
+
+def _http_healthcheck_ok(base_url: str) -> bool:
+    request = urllib.request.Request(
+        f"{base_url}/__rb_health__",
+        headers={"Accept": "text/plain"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            return response.status == 204
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 def _no_egress_checks() -> dict[str, bool]:
     """Kernel-level egress must be impossible from this namespace."""
     return {
@@ -116,15 +149,14 @@ def _loopback_check() -> bool:
         return _tcp_connect("127.0.0.1", probe.getsockname()[1])
 
 
-def agent_checks() -> dict[str, bool]:
+def agent_checks(*, proxy_url: str) -> dict[str, bool]:
     """From the AGENT namespace: no egress, gateway unreachable, proxy reachable."""
     checks = _no_egress_checks()
     gw_host, gw_port = GATEWAY.rsplit(":", 1)
     # The agent must NOT be able to reach the gateway (recording-bypass guard).
     checks["gateway_unreachable_from_agent"] = not _tcp_connect(gw_host, int(gw_port))
     # The recording proxy IS the agent's single sanctioned path to the provider.
-    proxy_host, proxy_port = PROXY.rsplit(":", 1)
-    checks["recording_proxy_reachable"] = _tcp_connect(proxy_host, int(proxy_port))
+    checks["recording_proxy_reachable"] = _http_healthcheck_ok(proxy_url)
     checks["loopback_works"] = _loopback_check()
     return checks
 
@@ -145,9 +177,15 @@ def runner_checks() -> dict[str, bool]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--role", choices=("agent", "runner"), default="agent")
+    parser.add_argument("--proxy-url", default=None)
+    parser.add_argument("--proxy-endpoint-json", default=None)
     args = parser.parse_args(argv)
 
-    checks = agent_checks() if args.role == "agent" else runner_checks()
+    checks = (
+        agent_checks(proxy_url=_load_proxy_url(args.proxy_endpoint_json, args.proxy_url))
+        if args.role == "agent"
+        else runner_checks()
+    )
     print(json.dumps({"role": args.role, "checks": checks}, indent=2))
     ok = all(checks.values())
     print(f"EGRESS LOCKDOWN ({args.role}) " + ("VERIFIED" if ok else "FAILED"))

@@ -62,8 +62,17 @@ recording proxy via the generated frozen config's `model_providers` block
 **confirmed** for `codex-cli 0.142.4` — see `CODEX_PIN.md` and
 `python3 -m harness.runner.codex_probe`, a zero-billing probe you can rerun
 against any candidate build before re-pinning. Nonzero agent exits abort the
-trial before a benchmark record is written and leave `agent_process.json`
-for diagnosis.
+trial no longer kill the cell; they are recorded as `agent_error` in the run
+record and leave `agent_process.json` for diagnosis. For the Docker hard
+tier, set `"agent_launcher": "container_worker"` and
+`"agent_request_dir"` to a path shared with the `agent` service so the real
+Codex process executes inside the isolated agent namespace while still
+writing its frozen `CODEX_HOME` under the shared reports volume.
+`harness.runner.container.integration_check` is the no-billing smoke for that
+path: it launches the command arm through the isolated worker, verifies the
+advertised proxy host is `runner`, confirms the gateway is unreachable from
+the agent namespace, and checks the shared frozen-home artifacts land in the
+report directory.
 
 Scenario verifier commands and command-arm `agent_command` entries may use
 `"{workdir}"` for the materialized variant and `"{python}"` for the Python

@@ -45,10 +45,19 @@ def load_experiment_config(path: Path) -> tuple[RunConfig, list[int], int]:
     trials = config_data.pop("trials", 1)
     if isinstance(config_data.get("freeze"), dict):
         config_data["freeze"] = FreezeConfig(**config_data["freeze"])
-    # Container hard tier sets RB_PROXY_HOST=0.0.0.0 so the agent container can
+    # Container hard tier sets RB_PROXY_HOST=0.0.0.0 so the isolated agent can
     # reach the recording proxy; an explicit config value still wins.
     if "proxy_host" not in config_data and os.environ.get("RB_PROXY_HOST"):
         config_data["proxy_host"] = os.environ["RB_PROXY_HOST"]
+    if (
+        "proxy_advertised_host" not in config_data
+        and os.environ.get("RB_PROXY_ADVERTISED_HOST")
+    ):
+        config_data["proxy_advertised_host"] = os.environ["RB_PROXY_ADVERTISED_HOST"]
+    if "agent_launcher" not in config_data and os.environ.get("RB_AGENT_LAUNCHER"):
+        config_data["agent_launcher"] = os.environ["RB_AGENT_LAUNCHER"]
+    if "agent_request_dir" not in config_data and os.environ.get("RB_AGENT_REQUEST_DIR"):
+        config_data["agent_request_dir"] = os.environ["RB_AGENT_REQUEST_DIR"]
     return RunConfig(**config_data), sizes, trials
 
 

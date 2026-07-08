@@ -40,25 +40,49 @@ agent is a **separate container** whose only network has no gateway on it.
 
 The runner binds the recording proxy to `0.0.0.0` (via
 `RunConfig.proxy_host`, set from `RB_PROXY_HOST` in the compose env) so the
-agent container can reach it; on a non-container run it stays on loopback.
+agent container can reach it, but advertises the routable service host
+`runner` (`RunConfig.proxy_advertised_host`, from
+`RB_PROXY_ADVERTISED_HOST`) so the frozen agent never receives
+`http://0.0.0.0:<port>`. The actual command-arm process is launched inside
+the agent container by `harness.runner.container.agent_worker`, which polls
+shared launch requests from the runner; the runner itself no longer executes
+the agent locally.
 
 ## Verify (Linux/CI or the pilot machine; no API key, no billing)
 
 ```bash
 cd research/repo-bloat-benchmark/harness/runner/container
 docker compose build
-# From the AGENT namespace — the one that must be locked down:
-docker compose run --rm agent  python3 harness/runner/container/egress_check.py --role agent
+# Start the isolated agent worker once per session:
+docker compose up -d agent
 # From the RUNNER namespace — the gateway ACL itself:
 docker compose run --rm runner python3 harness/runner/container/egress_check.py --role runner
+# Zero-billing end-to-end smoke: launch the real command arm inside `agent`,
+# reach the live recording proxy at its advertised `runner:<port>` endpoint,
+# prove the frozen CODEX_HOME is shared, and confirm the gateway stays unreachable:
+docker compose run --rm runner python3 -m harness.runner.container.integration_check
 ```
 
-Both must print `EGRESS LOCKDOWN … VERIFIED`. The **agent** role asserts: no
-TCP/UDP/IPv6 egress, the gateway is **unreachable** from the agent, the
-recording proxy **is** reachable, loopback works. The **runner** role
-asserts the gateway grants the pinned provider and refuses every other host.
-**Run both before every pilot session** — the container-tier analogue of the
-§6.6 calibration gate.
+The **runner** role asserts the gateway grants the pinned provider and
+refuses every other host. The integration check then exercises the actual
+isolated-agent launch path end-to-end with no billing: the agent container
+must reach the live recording proxy at its advertised endpoint, must not
+reach the gateway directly, and must see the shared frozen-home/report
+artifacts. **Run both before every pilot session** — the container-tier
+analogue of the §6.6 calibration gate.
+
+For the real command path, run:
+
+```bash
+docker compose up -d agent
+docker compose run --rm runner python3 -m harness.runner.container.integration_check
+```
+
+That check stays zero-billing: it uses the same `container_worker` launch path
+the pilot uses, verifies the agent can see the frozen `CODEX_HOME`/report
+artifacts on the shared volumes, confirms the advertised proxy endpoint is
+live from inside the isolated agent namespace, and proves the agent cannot
+reach the gateway directly.
 
 ## Status / provenance
 
@@ -69,6 +93,5 @@ attach no gateway; a container reaches only networks it joins), and
 pilot machine** rather than trusting configuration. Until both roles have
 printed VERIFIED on a Docker host, treat the tier as *implemented, field
 verification pending* — running both checks is mandatory, not optional. The
-`Allow` CIDRs and the `runner:8080` proxy port assume Docker's default
-address pools; adjust if your daemon differs (the checks will catch a
-mismatch).
+`Allow` CIDRs assume Docker's default address pools; adjust if your daemon
+differs (the checks will catch a mismatch).

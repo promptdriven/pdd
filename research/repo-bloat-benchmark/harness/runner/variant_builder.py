@@ -16,6 +16,8 @@ import hashlib
 import shutil
 from pathlib import Path
 
+from harness.distractors.manifest import resolve_within_root, validate_relative_path
+
 
 class VariantIntegrityError(RuntimeError):
     pass
@@ -57,19 +59,41 @@ def materialize_variant(
 
     for entry in manifest.get("files", []):
         rel = entry["upstream_path"]
-        target_path = destination / rel
+        try:
+            rel_path = validate_relative_path(rel, field_name="upstream_path")
+            target_path = resolve_within_root(
+                destination, rel_path, field_name="upstream_path"
+            )
+        except ValueError as exc:
+            raise VariantIntegrityError(str(exc)) from exc
         if target_path.exists():
             raise VariantIntegrityError(f"manifest path collides with core: {rel}")
         if entry["mode"] == "regrow":
             if pool_root is None:
                 raise VariantIntegrityError(f"regrow file {rel} but no pool_root given")
-            source = Path(pool_root) / entry["source_path"]
+            try:
+                source_path = validate_relative_path(
+                    entry["source_path"], field_name="source_path"
+                )
+                source = resolve_within_root(
+                    pool_root, source_path, field_name="source_path"
+                )
+            except ValueError as exc:
+                raise VariantIntegrityError(str(exc)) from exc
         else:
             if distractors_dir is None or not entry.get("content_path"):
                 raise VariantIntegrityError(
                     f"generated file {rel} but no content store given"
                 )
-            source = Path(distractors_dir) / entry["content_path"]
+            try:
+                content_path = validate_relative_path(
+                    entry["content_path"], field_name="content_path"
+                )
+                source = resolve_within_root(
+                    distractors_dir, content_path, field_name="content_path"
+                )
+            except ValueError as exc:
+                raise VariantIntegrityError(str(exc)) from exc
         if not source.is_file():
             raise VariantIntegrityError(f"missing distractor source: {source}")
         actual = _hash_file(source)

@@ -16,24 +16,33 @@
 #                                          the §8.1.1 frozen env; its sole
 #                                          reachable peer is the recording
 #                                          proxy (OPENAI_BASE_URL=runner:<port>).
-#                                          No route to the gateway or outside.
+#                                          A small worker loop receives launch
+#                                          requests from the runner via a
+#                                          shared volume and executes the real
+#                                          agent process here. No route to the
+#                                          gateway or outside.
 #   runner  [rb-sandbox + rb-proxy-egress] runs the harness + in-process
 #                                          RecordingProxy (bound to 0.0.0.0 via
-#                                          RunConfig.proxy_host). It — not the
-#                                          agent — forwards recorded traffic to
-#                                          the gateway (HTTPS_PROXY set in the
-#                                          RUNNER env only).
+#                                          RunConfig.proxy_host, advertised as
+#                                          `http://runner:<port>`). It — not
+#                                          the agent — forwards recorded
+#                                          traffic to the gateway (HTTPS_PROXY
+#                                          set in the RUNNER env only).
 #   gateway [rb-proxy-egress + rb-egress]  tinyproxy, ACL-pinned: CONNECT to
 #                                          api.openai.com:443 and nothing else;
 #                                          Allow restricted to the proxy-egress
 #                                          subnet.
 #
-# Bring-up + kernel verification (no API key, no billing):
+# Bring-up + no-billing verification:
 #   docker compose build
-#   docker compose run --rm agent python3 harness/runner/container/egress_check.py
-# egress_check runs from the AGENT's namespace and must show the gateway is
-# unreachable while the recording proxy is. Pilot cells then run in `runner`
-# with agent_command dispatched into the `agent` service (see README.md).
+#   docker compose up -d agent
+#   docker compose run --rm runner python3 harness/runner/container/egress_check.py --role runner
+#   docker compose run --rm runner python3 -m harness.runner.container.integration_check
+# The integration check launches the real command arm inside the AGENT's
+# namespace, verifies it reaches the live advertised recording-proxy endpoint,
+# cannot reach the gateway directly, and can see the shared frozen-home/report
+# artifacts. Pilot cells then run in `runner` with agent_command dispatched
+# into the `agent` service (see README.md).
 
 networks:
   rb-sandbox:
@@ -66,14 +75,19 @@ services:
       # vars, and the agent runs in a different container anyway).
       HTTPS_PROXY: http://gateway:8888
       HTTP_PROXY: http://gateway:8888
-      NO_PROXY: 127.0.0.1,localhost,agent
+      NO_PROXY: 127.0.0.1,localhost,agent,runner
       RB_PROXY_HOST: 0.0.0.0
+      RB_PROXY_ADVERTISED_HOST: runner
+      RB_AGENT_LAUNCHER: container_worker
+      RB_AGENT_REQUEST_DIR: /bench/agent-requests
       # The single permitted secret; set in the host shell only for the
       # calibration run and the pilot itself, never for egress_check.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
       - ../../..:/bench
       - rb-reports:/bench/reports
+      - rb-work:/bench/work
+      - rb-agent-requests:/bench/agent-requests
     networks:
       - rb-sandbox
       - rb-proxy-egress
@@ -91,10 +105,16 @@ services:
       NO_PROXY: 127.0.0.1,localhost
     volumes:
       - ../../..:/bench
+      - rb-reports:/bench/reports
+      - rb-work:/bench/work
+      - rb-agent-requests:/bench/agent-requests
     networks:
       - rb-sandbox
     depends_on:
       - runner
+    command: ["python3", "-m", "harness.runner.container.agent_worker"]
 
 volumes:
   rb-reports: {}
+  rb-work: {}
+  rb-agent-requests: {}

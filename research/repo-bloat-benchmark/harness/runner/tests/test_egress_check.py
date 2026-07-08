@@ -77,13 +77,13 @@ def test_agent_checks_flag_reachable_gateway_as_failure(monkeypatch):
     """Agent role: a REACHABLE gateway is a lockdown failure (bypass path)."""
     gateway = _FakeGateway(allowed_host="api.openai.com")
     monkeypatch.setattr(egress_check, "GATEWAY", f"127.0.0.1:{gateway.port}")
-    monkeypatch.setattr(egress_check, "PROXY", f"127.0.0.1:{gateway.port}")
+    monkeypatch.setattr(egress_check, "_http_healthcheck_ok", lambda base_url: True)
     monkeypatch.setattr(egress_check, "OUTSIDE_TCP_PROBES", (("192.0.2.1", 443),))
     monkeypatch.setattr(egress_check, "OUTSIDE_UDP_PROBES", (("192.0.2.2", 53),))
     monkeypatch.setattr(egress_check, "OUTSIDE_IPV6_PROBES", (("2001:db8::1", 443),))
     monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
     try:
-        checks = egress_check.agent_checks()
+        checks = egress_check.agent_checks(proxy_url="http://runner:8080")
         # gateway is reachable here → the bypass guard must report failure...
         assert checks["gateway_unreachable_from_agent"] is False
         # ...while the proxy-reachable and loopback checks still pass.
@@ -111,3 +111,9 @@ def test_tcp_connect_true_on_listener_false_on_closed_port():
     finally:
         listener.close()
     assert egress_check._tcp_connect("127.0.0.1", port) is False
+
+
+def test_load_proxy_url_prefers_endpoint_json(tmp_path):
+    path = tmp_path / "proxy.json"
+    path.write_text('{"base_url": "http://runner:43123"}\n', encoding="utf-8")
+    assert egress_check._load_proxy_url(str(path), None) == "http://runner:43123"

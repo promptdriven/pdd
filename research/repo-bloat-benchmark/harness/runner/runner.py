@@ -24,9 +24,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from harness.context_snapshots.attribution import TreeIndex, extract_payload_text
+from harness.context_snapshots.proxy import HEALTH_PATH
 from harness.context_snapshots.iteration_analyzer import analyze_run
 from harness.context_snapshots.proxy import RecordingProxy
 from harness.distractors.manifest import load_manifest, manifest_sha256, verify_lockfile
+from harness.runner.agent_launcher import (
+    AgentLaunchError,
+    FileAgentLauncher,
+    launch_local_subprocess,
+)
 from harness.runner.env_freeze import FreezeConfig, FrozenEnvironment
 from harness.runner.metrics import build_run_record, read_changed_paths
 from harness.runner.mock_agent import MockAgent, MockModelServer
@@ -75,14 +81,25 @@ class RunConfig:
     # the agent runs in a separate no-egress netns and reaches the proxy over
     # the sandbox network, so the proxy binds to the sandbox-facing address.
     proxy_host: str = "127.0.0.1"
+    # When the proxy binds to 0.0.0.0, the agent still needs a routable
+    # service address (for example `runner` inside docker compose).
+    proxy_advertised_host: str | None = None
+    # Command-arm launch path: either a local subprocess or the shared-filesystem
+    # worker protocol used by the isolated container tier.
+    agent_launcher: str = "local"  # "local" or "container_worker"
+    agent_request_dir: Path | None = None
 
     def __post_init__(self) -> None:
         for name in ("scenario_dir", "distractors_dir", "reports_dir", "work_root"):
             setattr(self, name, Path(getattr(self, name)))
+        if self.agent_request_dir is not None:
+            self.agent_request_dir = Path(self.agent_request_dir)
         if isinstance(self.freeze, dict):
             self.freeze = FreezeConfig(**self.freeze)
         if self.arm not in {"mock", "command"}:
             raise ValueError('RunConfig.arm must be "mock" or "command"')
+        if self.agent_launcher not in {"local", "container_worker"}:
+            raise ValueError('RunConfig.agent_launcher must be "local" or "container_worker"')
         if self.arm == "command" and not self.allow_unfrozen_command:
             if self.freeze is None:
                 raise ValueError(
@@ -94,6 +111,10 @@ class RunConfig:
                     'arm="command" requires registered_env_fingerprint; set '
                     "allow_unfrozen_command=True only for harness development runs"
                 )
+        if self.agent_launcher == "container_worker" and self.agent_request_dir is None:
+            raise ValueError(
+                'agent_launcher="container_worker" requires agent_request_dir'
+            )
 
 
 @dataclass
@@ -160,6 +181,32 @@ class ExperimentRunner:
                  "HOME": str(workdir)},
         )
 
+    def _launch_command_agent(
+        self,
+        *,
+        run_id: str,
+        command: list[str],
+        workdir: Path,
+        agent_env: dict[str, str],
+    ):
+        if self.config.agent_launcher == "local":
+            return launch_local_subprocess(
+                command=command,
+                cwd=workdir,
+                env=agent_env,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        if self.config.agent_launcher == "container_worker":
+            launcher = FileAgentLauncher(self.config.agent_request_dir)
+            return launcher.launch(
+                run_id=run_id,
+                command=command,
+                cwd=workdir,
+                env=agent_env,
+                timeout_seconds=self.config.timeout_seconds,
+            )
+        raise AgentLaunchError(f"unknown launcher: {self.config.agent_launcher}")
+
     # -- the run -------------------------------------------------------------
 
     def run_trial(self, size: int, trial_index: int) -> TrialResult:
@@ -219,8 +266,23 @@ class ExperimentRunner:
             archive_dir=report_dir,
             run_id=run_id,
             host=config.proxy_host,
+            advertised_host=config.proxy_advertised_host,
         )
         proxy_url = proxy.start()
+        (report_dir / "proxy_endpoint.json").write_text(
+            json.dumps(
+                {
+                    "base_url": proxy_url,
+                    "health_url": f"{proxy_url}{HEALTH_PATH}",
+                    "bind_host": config.proxy_host,
+                    "advertised_host": config.proxy_advertised_host or config.proxy_host,
+                    "port": proxy.port,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         # 4. Agent.
         timed_out = False
@@ -268,29 +330,30 @@ class ExperimentRunner:
                     agent_env = dict(os.environ)
                     agent_env["OPENAI_BASE_URL"] = f"{proxy_url}/v1"
                 try:
-                    completed = subprocess.run(
-                        command,
-                        cwd=str(workdir),
-                        env=agent_env,
-                        capture_output=True,
-                        text=True,
-                        timeout=config.timeout_seconds,
+                    completed = self._launch_command_agent(
+                        run_id=run_id,
+                        command=command,
+                        workdir=workdir,
+                        agent_env=agent_env,
                     )
                     (report_dir / "agent_process.json").write_text(
                         json.dumps(
                             {
-                                "command": command,
+                                "command": completed.command,
                                 "returncode": completed.returncode,
                                 "stdout": completed.stdout,
                                 "stderr": completed.stderr,
-                                "timed_out": False,
+                                "timed_out": completed.timed_out,
+                                "launcher": completed.launcher,
                             },
                             indent=2,
                         )
                         + "\n",
                         encoding="utf-8",
                     )
-                    if completed.returncode != 0:
+                    if completed.timed_out:
+                        timed_out = True
+                    elif completed.returncode != 0:
                         # A crashed/refused agent is a recorded failed run, not
                         # a cell-killing exception: raising here would abort
                         # every later trial in the cell and lose their data
@@ -298,22 +361,8 @@ class ExperimentRunner:
                         # diagnostics are in agent_process.json, and the cell
                         # continues.
                         agent_error = True
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    (report_dir / "agent_process.json").write_text(
-                        json.dumps(
-                            {
-                                "command": command,
-                                "returncode": None,
-                                "stdout": None,
-                                "stderr": None,
-                                "timed_out": True,
-                            },
-                            indent=2,
-                        )
-                        + "\n",
-                        encoding="utf-8",
-                    )
+                except AgentLaunchError:
+                    raise
         finally:
             if frozen is not None and frozen.home_dir.exists():
                 archived = frozen.collect_and_destroy()

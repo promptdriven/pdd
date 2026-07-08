@@ -185,6 +185,18 @@ def test_manifest_writer_and_lockfile(scenario, tmp_path):
     assert not verify_lockfile(path, lock)
 
 
+def test_manifest_writer_rejects_escape_destination(tmp_path):
+    writer = ManifestWriter(tmp_path / "out")
+    manifest = {
+        "scenario_id": "pagination-demo",
+        "size": "1x",
+        "files": [{"mode": "template", "upstream_path": "../escape.py", "sha256": "x"}],
+        "generated_contents": {"../escape.py": "print('x')\n"},
+    }
+    with pytest.raises(ValueError, match="relative|contain '\\.\\.'|escapes"):
+        writer.write(manifest)
+
+
 def test_leak_denylist_blocks_content(scenario):
     # Poison every pool file with the hidden assertion; regrow must reject all.
     for pool_file in (scenario / "pool").rglob("*.py"):

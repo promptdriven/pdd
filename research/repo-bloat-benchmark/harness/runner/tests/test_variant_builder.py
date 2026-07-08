@@ -80,3 +80,35 @@ def test_tree_hash_changes_with_content(tmp_path):
     (tmp_path / "b").mkdir()
     (tmp_path / "b" / "f.py").write_text("x = 2\n")
     assert tree_sha256(tmp_path / "a") != tree_sha256(tmp_path / "b")
+
+
+def test_upstream_path_must_stay_under_materialized_root(fixtures, tmp_path):
+    root, core, pool, manifest = fixtures
+    manifest["files"][0]["upstream_path"] = "../escape.py"
+    with pytest.raises(VariantIntegrityError, match="relative|contain '\\.\\.'|escapes"):
+        materialize_variant(
+            core, manifest, tmp_path / "v-escape", pool_root=pool,
+            distractors_dir=root / "distractors",
+        )
+
+
+def test_regrow_source_path_must_stay_under_pool_root(fixtures, tmp_path):
+    root, core, pool, manifest = fixtures
+    regrow = next(entry for entry in manifest["files"] if entry["mode"] == "regrow")
+    regrow["source_path"] = "../pool.py"
+    with pytest.raises(VariantIntegrityError, match="relative|contain '\\.\\.'|escapes"):
+        materialize_variant(
+            core, manifest, tmp_path / "v-regrow-escape", pool_root=pool,
+            distractors_dir=root / "distractors",
+        )
+
+
+def test_generated_content_path_must_stay_under_store(fixtures, tmp_path):
+    root, core, pool, manifest = fixtures
+    generated = next(entry for entry in manifest["files"] if entry["mode"] != "regrow")
+    generated["content_path"] = "../generated.py"
+    with pytest.raises(VariantIntegrityError, match="relative|contain '\\.\\.'|escapes"):
+        materialize_variant(
+            core, manifest, tmp_path / "v-content-escape", pool_root=pool,
+            distractors_dir=root / "distractors",
+        )

@@ -238,6 +238,17 @@ def test_upstream_failure_becomes_502_and_is_recorded(tmp_path):
         recording_proxy.stop()
 
 
+def test_healthcheck_is_served_locally_and_not_recorded(upstream, proxy):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{proxy.port}/__rb_health__",
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        assert response.status == 204
+        assert response.read() == b""
+    assert proxy.records == []
+
+
 def test_edit_tool_name_matching():
     assert is_edit_tool("apply_patch")
     assert is_edit_tool("apply_patch_call")

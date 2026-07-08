@@ -66,6 +66,14 @@ _CONFIG_HEADER = (
 )
 
 
+def _sha256_hex(data: bytes) -> str:
+    """Non-security digest used for reproducibility fingerprints only."""
+    try:
+        return hashlib.sha256(data, usedforsecurity=False).hexdigest()
+    except TypeError:
+        return hashlib.sha256(data).hexdigest()
+
+
 class FreezeViolation(RuntimeError):
     """A frozen-environment precondition failed; the run must not proceed."""
 
@@ -159,7 +167,7 @@ class FreezeConfig:
             "egress_guard": egress_guard_env("http://{PROXY_HOST}"),
         }
         canonical = json.dumps(material, sort_keys=True)
-        return hashlib.sha256(canonical.encode()).hexdigest()
+        return _sha256_hex(canonical.encode())
 
 
 def egress_guard_env(proxy_base_url: str) -> dict[str, str]:

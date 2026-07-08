@@ -7,6 +7,7 @@ guarantees held *inside* the agent process.
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from harness.runner.env_freeze import (
     capture_cli_version,
     egress_guard_env,
 )
+from harness.runner.agent_launcher import run_worker_loop
 from harness.runner.cli import load_experiment_config
 from harness.runner.mock_agent import MockModelServer
 from harness.runner.runner import ExperimentRunner, RunConfig
@@ -398,3 +400,53 @@ def test_run_config_coerces_freeze_dict_for_programmatic_callers(tmp_path):
     )
 
     assert isinstance(config.freeze, FreezeConfig)
+
+
+def test_container_worker_launcher_runs_agent_in_shared_worker(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPER_SECRET_TOKEN", "leak-me")
+    monkeypatch.setenv("FAKE_API_KEY", "sk-test")
+    scenario = json.loads((SCENARIO_DIR / "scenario.json").read_text())
+    generation = GenerationConfig(
+        scenario_id=scenario["scenario_id"],
+        core_root=SCENARIO_DIR / "core",
+        pool_root=SCENARIO_DIR / "pool",
+        target_file=scenario["target_files"][0],
+        template_file_tokens=150,
+    )
+    writer = ManifestWriter(tmp_path / "distractors")
+    manifest_path = writer.write(generate_manifest(generation, 1))
+    write_lockfile([manifest_path], tmp_path / "distractors" / "manifests.lock")
+
+    upstream = MockModelServer()
+    upstream_url = upstream.start()
+    worker = threading.Thread(
+        target=run_worker_loop,
+        kwargs={"request_dir": tmp_path / "agent-requests"},
+        daemon=True,
+    )
+    worker.start()
+    try:
+        freeze = _freeze_config()
+        config = RunConfig(
+            scenario_dir=SCENARIO_DIR,
+            distractors_dir=tmp_path / "distractors",
+            reports_dir=tmp_path / "reports",
+            work_root=tmp_path / "work",
+            arm="command",
+            agent_command=["{python}", "-c", AGENT_SCRIPT],
+            upstream_base_url=upstream_url,
+            freeze=freeze,
+            registered_env_fingerprint=freeze.fingerprint(),
+            timeout_seconds=60,
+            agent_launcher="container_worker",
+            agent_request_dir=tmp_path / "agent-requests",
+            proxy_host="127.0.0.1",
+            proxy_advertised_host="runner",
+        )
+        result = ExperimentRunner(config).run_trial(1, 0)
+        process = json.loads((result.report_dir / "agent_process.json").read_text())
+        endpoint = json.loads((result.report_dir / "proxy_endpoint.json").read_text())
+        assert process["launcher"] == "container_worker"
+        assert endpoint["base_url"].startswith("http://runner:")
+    finally:
+        upstream.stop()

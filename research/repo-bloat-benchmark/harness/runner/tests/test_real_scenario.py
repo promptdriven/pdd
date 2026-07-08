@@ -122,3 +122,24 @@ def test_no_scenario_denylist_string_leaks_into_any_agent_visible_tree():
 
 def test_calibration_gate_still_green(tmp_path):
     assert calibration_gate(tmp_path)["pass"]
+
+
+def _declared_core_files(path: Path) -> set[str]:
+    entries = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        item = line.split("#", 1)[0].strip()
+        if item:
+            entries.add(item)
+    return entries
+
+
+@pytest.mark.parametrize("scenario_id", PILOT_SCENARIOS)
+def test_core_files_manifest_matches_core_tree(scenario_id):
+    scenario_dir = BENCH_ROOT / "scenarios" / scenario_id
+    declared = _declared_core_files(scenario_dir / "core_files.txt")
+    actual = {
+        path.relative_to(scenario_dir / "core").as_posix()
+        for path in (scenario_dir / "core").rglob("*")
+        if path.is_file()
+    }
+    assert declared == actual

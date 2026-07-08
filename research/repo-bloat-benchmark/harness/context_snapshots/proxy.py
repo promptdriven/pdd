@@ -58,6 +58,7 @@ DEFAULT_EDIT_TOOL_NAMES = frozenset(
     {"apply_patch", "edit", "edit_file", "write_file", "create_file", "str_replace_editor"}
 )
 _EDIT_SUBSTRINGS = ("patch", "edit", "write_file")
+HEALTH_PATH = "/__rb_health__"
 
 
 def _sha256(data: bytes) -> str:
@@ -165,6 +166,10 @@ def is_edit_tool(name: str, edit_tool_names: frozenset[str] = DEFAULT_EDIT_TOOL_
     return any(sub in lowered for sub in _EDIT_SUBSTRINGS)
 
 
+def handler_path_is_healthcheck(path: str) -> bool:
+    return path.rstrip("/") in {HEALTH_PATH, f"/v1{HEALTH_PATH}"}
+
+
 class RecordingProxy:
     """Recording relay between an agent CLI and its model provider.
 
@@ -188,6 +193,7 @@ class RecordingProxy:
         run_id: str,
         host: str = "127.0.0.1",
         port: int = 0,
+        advertised_host: str | None = None,
         edit_tool_names: frozenset[str] = DEFAULT_EDIT_TOOL_NAMES,
         forward_timeout: float = 600.0,
     ) -> None:
@@ -197,6 +203,7 @@ class RecordingProxy:
         self.run_id = run_id
         self.host = host
         self.port = port
+        self.advertised_host = advertised_host
         self.edit_tool_names = edit_tool_names
         self.forward_timeout = forward_timeout
         self.records: list[SnapshotRecord] = []
@@ -223,13 +230,23 @@ class RecordingProxy:
                 proxy._handle(self, record=True)
 
             def do_GET(self) -> None:  # noqa: N802
+                if handler_path_is_healthcheck(self.path):
+                    self.send_response(204)
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    return
                 proxy._handle(self, record=False)
 
         self._server = ThreadingHTTPServer((self.host, self.port), Handler)
         self.port = self._server.server_address[1]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
-        return f"http://{self.host}:{self.port}"
+        return self.base_url()
+
+    def base_url(self) -> str:
+        host = self.advertised_host or self.host
+        return f"http://{host}:{self.port}"
 
     def stop(self) -> None:
         if self._server is not None:
