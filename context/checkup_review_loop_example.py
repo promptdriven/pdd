@@ -151,16 +151,6 @@ class ReviewLoopConfig:
     # mode. Off by default so reviewer/fixer independence remains the normal
     # contract.
     allow_same_reviewer_fixer: bool = False
-    # APPENDED: agentic-review-loop knobs — issue #1788
-    adversarial_prompt: Optional[str] = None
-    agentic_mode: bool = False
-    fresh_final_review_role: Optional[str] = None
-    agentic_artifact_path: Optional[str] = None
-    reviewer_commands: Dict[str, str] = field(default_factory=dict)
-    no_fix: bool = False
-    # Hosted fallback/mirror commands serialized as artifact metadata only;
-    # canonical reviewer prompts consume ``reviewer_commands`` above.
-    artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -181,11 +171,6 @@ class ReviewLoopContext:
     pr_number: int
     project_root: Path
     pr_content: str = ""
-    has_issue: bool = True
-    full_suite_source: str = "local"
-    test_scope: str = "full"
-    layer1_step5_evidence: str = ""
-    final_gate_canonical_status: str = ""
 
 
 @dataclass
@@ -244,51 +229,19 @@ class ReviewLoopState:
     final_refetch_attempted: bool = False
     gate_runs: List[Dict[str, Any]] = field(default_factory=list)
     source_of_truth: Optional[Dict[str, Any]] = None
-    # True only for explicit ``allow_same_reviewer_fixer`` runs where the
-    # resolved reviewer and fixer are the same role.
+    # True when the resolved reviewer and fixer are the same role — either an
+    # explicit ``allow_same_reviewer_fixer`` run OR a runtime auto-degrade
+    # (issue #1941) when a provider family was unavailable.
     same_role_review_fix: bool = False
-    # Explicit fresh-final sessions are distinct from the primary provider's
-    # review artifacts/status, even when both use the same role.
-    fresh_final_review_invocations: int = 0
-    fresh_final_findings: List[ReviewFinding] = field(default_factory=list)
-    # Actual consumption used to recompute mirror budget state at serialization
-    # time rather than trusting potentially stale in-loop flags.
-    rounds_completed: int = 0
-    elapsed_minutes: float = 0.0
-    started_monotonic: Optional[float] = None
-    # Set when the render-time remote-head check invalidates prior validation.
-    validation_stale: bool = False
+    # ``"independent"`` for the normal cross-family loop and for a deliberate
+    # config-time same-role run; ``"degraded (<role> unavailable)"`` only when
+    # role independence was relaxed at runtime because a family was down.
+    role_independence: str = "independent"
 
 
 # ---------------------------------------------------------------------------
 # Public API (signature contract)
 # ---------------------------------------------------------------------------
-
-
-def _scrub_secrets(text: str) -> str:
-    """Redact tokens and secrets from free-text before storing or logging.
-
-    Applies pattern-based redaction for bearer tokens, API keys, OAuth
-    payloads, and other known secret patterns. Returns the redacted string.
-    The caller MUST use this before persisting any raw reviewer/fixer output
-    to disk or emitting it in the structured JSON artifact.
-    """
-    return text
-
-
-def parse_reviewer_commands(value) -> Dict[str, str]:
-    """Parse ``role:/slash-command`` reviewer spec into a mapping.
-
-    Accepts a comma-separated string or list of ``role:/command`` pairs and
-    returns a ``{role: command}`` dict.  For example::
-
-        parse_reviewer_commands("codex:/review,claude:/code-review")
-        # -> {"codex": "/review", "claude": "/code-review"}
-
-    Unknown or malformed entries are dropped. An empty result means no
-    reviewer commands were resolved.
-    """
-    return {}
 
 
 def parse_reviewers(value):
@@ -445,6 +398,9 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "active_reviewer": "codex",
     "same_role_review_fix": False,
     "mode": "independent-reviewer-fixer",
+    # Issue #1941: ``"independent"`` here; ``"degraded (<role> unavailable)"``
+    # when the loop auto-degraded to a same-family review/fix session.
+    "role_independence": "independent",
     # Always present in ``final-state.json``. Empty on the happy path;
     # populated for any reviewer that ended in failed/degraded/missing
     # (see ``EXAMPLE_REVIEWER_STATUS_DETAILS`` above for the shape,
@@ -508,6 +464,7 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   issue_aligned: true|false
 #   active-reviewer: <role>
 #   same-role-review-fix: true|false
+#   role-independence: independent|degraded (<role> unavailable)
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
 #   verified-head-sha: <sha>|none
@@ -563,6 +520,7 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "issue_aligned: true\n"
     "active-reviewer: codex\n"
     "same-role-review-fix: false\n"
+    "role-independence: independent\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
     "verified-head-sha: 0123456789abcdef0123456789abcdef01234567\n"
