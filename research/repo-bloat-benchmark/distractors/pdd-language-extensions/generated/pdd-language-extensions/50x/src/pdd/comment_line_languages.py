@@ -10,12 +10,12 @@ def comment_line_languages(code_line, comment_characters):
     # Check if the language requires deletion of the line
     if comment_characters == 'del':
         return ''
-    
+
     # Check if the language uses separate start and end comment characters
     if ' ' in comment_characters:
         start_comment, end_comment = comment_characters.split(' ', 1)
         return f"{start_comment}{code_line}{end_comment}"
-    
+
     # For languages with a single comment character
     return f"{comment_characters}{code_line}"
 

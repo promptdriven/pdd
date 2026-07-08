@@ -4,7 +4,7 @@ index 5738365a1..33b301d4e 100644
 +++ core/research/repo-bloat-benchmark/scenarios/pdd-language-extensions/core/src/pdd/language_extensions.py
 @@ -1,13 +1,13 @@
  """Single source of truth for canonical file extensions.
- 
+
 -Both ``pdd.sync_determine_operation.get_extension`` (which decides the paths
 -sync *expects*) and ``pdd.construct_paths``' offline fallback (which decides
 -the paths generation *writes*) resolve extensions through this module, reading
@@ -22,12 +22,12 @@ index 5738365a1..33b301d4e 100644
 +commit in ``scenario.json``); comments and docstrings were normalized during
 +slicing — see ``seed.patch`` for the recorded transform.
  """
- 
+
  from __future__ import annotations
 @@ -27,11 +27,9 @@ _CSV_PATH = Path(__file__).parent / "data" / "language_format.csv"
  def _bundled_extension_map() -> Dict[str, str]:
      """Parse the bundled ``language_format.csv`` into ``{language: extension}``.
- 
+
 -    Languages are lower-cased and the extension is normalised to drop a leading
 -    dot (``.yml`` -> ``yml``); a language with no extension (e.g. ``Makefile``)
 -    maps to ``""``. The first matching row wins, so the duplicate YAML rows
@@ -36,7 +36,7 @@ index 5738365a1..33b301d4e 100644
 +    Languages are lower-cased and the extension is normalised to drop a
 +    leading dot (``.yml`` -> ``yml``); a language with no extension (e.g.
 +    ``Makefile``) maps to ``""``.
- 
+
      Parsed once and cached: the CSV is static package data.
      """
 @@ -40,11 +38,11 @@ def _bundled_extension_map() -> Dict[str, str]:
@@ -52,7 +52,7 @@ index 5738365a1..33b301d4e 100644
 +        # fall back to their hard-coded maps.
          logger.debug("Could not read bundled language CSV at %s: %s", _CSV_PATH, exc)
      return dict(mapping)
- 
+
 @@ -55,7 +53,6 @@ def bundled_extension(language: str) -> Optional[str]:
      Returns ``""`` for a known extensionless language (e.g. ``Makefile``) and
      ``None`` when the language is absent from the bundled CSV, so callers can

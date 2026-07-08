@@ -2,8 +2,8 @@
   "budget_met": true,
   "core_loc": 199,
   "core_tokens": 1696,
-  "distractor_loc": 681,
-  "distractor_tokens_on_disk": 6807,
+  "distractor_loc": 683,
+  "distractor_tokens_on_disk": 6804,
   "files": [
     {
       "content_path": null,
@@ -41,12 +41,12 @@
     {
       "content_path": null,
       "import_group": "gdb0528fa",
-      "loc": 35,
+      "loc": 36,
       "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 461,
+      "tokens": 460,
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
@@ -85,12 +85,12 @@
     {
       "content_path": "generated/pdd-failure-classification/5x/src/pdd/comment_line_cover.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "7ad937e21f1c44358c1438d0e128dd63086fd17ba372205943433a4f477f9a5b",
+      "sha256": "56118df1ce963bc09a0bed3361992ee680a248bb6c1effdb71e8c51eb37ada87",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_cover.py"
     },
     {
@@ -132,7 +132,7 @@
     "regrow": 4,
     "template": 0
   },
-  "realized_total_tokens": 8503,
+  "realized_total_tokens": 8500,
   "rejected": [],
   "scenario_id": "pdd-failure-classification",
   "schema_version": 3,

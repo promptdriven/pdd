@@ -1,11 +1,11 @@
 {
   "manifests": {
-    "pdd-failure-classification.10x.json": "900f6fda00087f94a24284bc0dcaa09cef13a928edba0e635e4b07b1065d0a7f",
+    "pdd-failure-classification.10x.json": "ad02b53c9c7c1b0f301ccbba265a6199e0db05604e36c4e19068913c8f017d2c",
     "pdd-failure-classification.1x.json": "212447d250194742263f56942d682cb3a276b0615e21ae30ae9b2bc335789b38",
-    "pdd-failure-classification.20x.json": "1139c7851bb06a39a19a4c79f3dc2d2f82c688c8030db724f99de6a566036dbf",
+    "pdd-failure-classification.20x.json": "4a444a2bb55dadc160307cbda8fad39f8e1e1fbcc2f11f4442308a9de004a2e8",
     "pdd-failure-classification.2x.json": "ef1a20f02c7166203b077940af4efca3b39a217d65459d7ae4b5b8bbbbb867e8",
-    "pdd-failure-classification.50x.json": "8983d6d8f4d1111aca8b7348dda61a27bd3073f352f4ea90c0e9787cd5a0d766",
-    "pdd-failure-classification.5x.json": "05ba1cae5066dfc0eafbaf9d41575e100593fbfbbc39fe841bec5b1e284a6d85"
+    "pdd-failure-classification.50x.json": "753eab414d519de28adae7248a4b91ce82cf64afa4a1dae761f1c23d825cd495",
+    "pdd-failure-classification.5x.json": "d06f56e8723d05e8352bc77e2a972e3704ed5de0b1c512c68cc616126f8663d2"
   },
   "schema_version": 1
 }

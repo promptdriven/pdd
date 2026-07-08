@@ -38,6 +38,15 @@ def stable_hash(*parts: object) -> str:
     return hashlib.sha256("|".join(str(p) for p in parts).encode()).hexdigest()
 
 
+def _strip_trailing_whitespace(text: str) -> str:
+    """Normalize generated artifacts so committed ladders pass whitespace checks."""
+    lines = text.splitlines()
+    normalized = "\n".join(line.rstrip(" \t") for line in lines)
+    if text.endswith("\n"):
+        normalized += "\n"
+    return normalized
+
+
 def tier_for(destination: str, target_file: str) -> str:
     """Tier from layout distance to the target (design §5.2)."""
     dest_dir = PurePosixPath(destination).parent
@@ -174,7 +183,7 @@ def _mutate_source(
 
     pure = PurePosixPath(source_path)
     destination = str(pure.with_name(f"{pure.stem}{suffix}{pure.suffix}"))
-    return destination, mutated
+    return destination, _strip_trailing_whitespace(mutated)
 
 
 # --------------------------------------------------------------------------
@@ -228,7 +237,7 @@ def _template_module(
         body_index += 1
         content = "\n".join(lines)
     destination = f"src/{shape}/{module_name}_{index}.py"
-    return destination, content + "\n"
+    return destination, _strip_trailing_whitespace(content + "\n")
 
 
 # --------------------------------------------------------------------------

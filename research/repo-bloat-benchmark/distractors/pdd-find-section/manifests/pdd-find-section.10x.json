@@ -2,8 +2,8 @@
   "budget_met": true,
   "core_loc": 148,
   "core_tokens": 1055,
-  "distractor_loc": 945,
-  "distractor_tokens_on_disk": 9406,
+  "distractor_loc": 948,
+  "distractor_tokens_on_disk": 9401,
   "files": [
     {
       "content_path": null,
@@ -41,12 +41,12 @@
     {
       "content_path": null,
       "import_group": "gdb0528fa",
-      "loc": 35,
+      "loc": 36,
       "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 461,
+      "tokens": 460,
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
@@ -85,12 +85,12 @@
     {
       "content_path": "generated/pdd-find-section/10x/src/pdd/comment_line_startswith.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "5eeb07d3033229bf6611c19c2a47642b5895c18ccf370429fdc2f53418ff8be5",
+      "sha256": "f9580fd3bb65f509543fee19fce6467d9a8ed4ba4f8801a63fa9f659239db72f",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 502,
+      "tokens": 500,
       "upstream_path": "src/pdd/comment_line_startswith.py"
     },
     {
@@ -129,12 +129,12 @@
     {
       "content_path": "generated/pdd-find-section/10x/src/pdd/comment_line_strip.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "4c1431326c83bfa20a6b962ca3becff2eaff91d33e3e5ff5cb31381d2c6dc1c9",
+      "sha256": "1817cdfdeb0678adcc84db65ce1e5da0d499eb198bd35d937f341ca183ddadc0",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_strip.py"
     },
     {
@@ -187,7 +187,7 @@
     "regrow": 4,
     "template": 1
   },
-  "realized_total_tokens": 10461,
+  "realized_total_tokens": 10456,
   "rejected": [],
   "scenario_id": "pdd-find-section",
   "schema_version": 3,

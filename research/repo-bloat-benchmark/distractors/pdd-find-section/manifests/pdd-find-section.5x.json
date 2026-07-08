@@ -2,8 +2,8 @@
   "budget_met": true,
   "core_loc": 148,
   "core_tokens": 1055,
-  "distractor_loc": 424,
-  "distractor_tokens_on_disk": 4223,
+  "distractor_loc": 425,
+  "distractor_tokens_on_disk": 4222,
   "files": [
     {
       "content_path": null,
@@ -41,12 +41,12 @@
     {
       "content_path": null,
       "import_group": "gdb0528fa",
-      "loc": 35,
+      "loc": 36,
       "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 461,
+      "tokens": 460,
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
@@ -88,7 +88,7 @@
     "regrow": 4,
     "template": 1
   },
-  "realized_total_tokens": 5278,
+  "realized_total_tokens": 5277,
   "rejected": [],
   "scenario_id": "pdd-find-section",
   "schema_version": 3,

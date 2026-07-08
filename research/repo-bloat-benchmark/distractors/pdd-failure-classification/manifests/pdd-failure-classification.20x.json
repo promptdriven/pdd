@@ -2,8 +2,8 @@
   "budget_met": true,
   "core_loc": 199,
   "core_tokens": 1696,
-  "distractor_loc": 3122,
-  "distractor_tokens_on_disk": 31925,
+  "distractor_loc": 3136,
+  "distractor_tokens_on_disk": 31899,
   "files": [
     {
       "content_path": null,
@@ -41,12 +41,12 @@
     {
       "content_path": null,
       "import_group": "gdb0528fa",
-      "loc": 35,
+      "loc": 36,
       "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 461,
+      "tokens": 460,
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
@@ -85,12 +85,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_cover.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "7ad937e21f1c44358c1438d0e128dd63086fd17ba372205943433a4f477f9a5b",
+      "sha256": "56118df1ce963bc09a0bed3361992ee680a248bb6c1effdb71e8c51eb37ada87",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_cover.py"
     },
     {
@@ -129,12 +129,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_hint.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "ddad85dff9cb14678a22b5f907e6ec0f3848deafd83213e63cf822bc9528ac94",
+      "sha256": "f3b48c7958ae5466983237392cb3fbf9c40d01ca10437b29d3c4c083cffd0525",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 493,
+      "tokens": 492,
       "upstream_path": "src/pdd/comment_line_hint.py"
     },
     {
@@ -173,12 +173,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_truncated.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "f55d9d8ffe66c04fa3425224844fe68dbaf1e50158880daf647ea8bc12648713",
+      "sha256": "0c93b0ff12bd8bbea7edf4bfd324a79b4387edb9549549a7c8227463bb82b355",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 501,
+      "tokens": 499,
       "upstream_path": "src/pdd/comment_line_truncated.py"
     },
     {
@@ -217,12 +217,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_sub.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "181d4a952101b64feeb3fe53056e12124ab8eb2fbff1490f8ff004f9a86a9a66",
+      "sha256": "f2d3eeb6815be8d3399dcda79abca9a60542bbc713d01b9e480b6907b220dce2",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 492,
+      "tokens": 490,
       "upstream_path": "src/pdd/comment_line_sub.py"
     },
     {
@@ -261,12 +261,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_hints.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "0c6f09322addd4c23a2433edd6ed94c718f54572c41b44c65e460f6f2c1d1b50",
+      "sha256": "e605130734db2f76008ed55e60fdb121e155a72eb17db941a0b2aaf9e654bac8",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_hints.py"
     },
     {
@@ -294,12 +294,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_strip.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "4c1431326c83bfa20a6b962ca3becff2eaff91d33e3e5ff5cb31381d2c6dc1c9",
+      "sha256": "1817cdfdeb0678adcc84db65ce1e5da0d499eb198bd35d937f341ca183ddadc0",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_strip.py"
     },
     {
@@ -338,12 +338,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_search.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "12e47a90424cc160561a028c66b0e656554ffe038b90e0c66198eedc09028aff",
+      "sha256": "2defde588e3ec22be57edf9d36c564f0f45c774f02365d8104d770e330be847c",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 496,
+      "tokens": 494,
       "upstream_path": "src/pdd/comment_line_search.py"
     },
     {
@@ -371,12 +371,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_truncates.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "f6c512465255c938715092f5e53a1a4e5c1050dbb4d5e4e1fe8ffcf90481ab76",
+      "sha256": "9d2441de8c4df3b8ca5b0307e3036ff4ac598e8cc6dc43e97ccf47bdf5ed82e9",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 501,
+      "tokens": 499,
       "upstream_path": "src/pdd/comment_line_truncates.py"
     },
     {
@@ -415,12 +415,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_timeout.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "c2c54448bfec1f7a194287e484725ca83b54351de16d69104b28d2d194913646",
+      "sha256": "8d89ae981b2e89223295b20282bc89f571322479d2ab2901f996e9e111f0a440",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 498,
+      "tokens": 496,
       "upstream_path": "src/pdd/comment_line_timeout.py"
     },
     {
@@ -459,12 +459,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_sig.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "276ce9e559a39a19fe5f63d4b2400750814c55b157a0a83e0e79c9e55fabc182",
+      "sha256": "9554b532d6992b89611458e2a6ecae5f62df20fa19c639eb9dd4145ec5af6a6a",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 492,
+      "tokens": 490,
       "upstream_path": "src/pdd/comment_line_sig.py"
     },
     {
@@ -514,12 +514,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_parametrize.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "e2dd1580b53c57945719ca29e6cbf7d470fc8a79d897a52c04f2e6ac0cc48cf1",
+      "sha256": "b9038d315b51edbc4143afb0607182ce96909a09fbd6c6b3d70840a8693a55c1",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 504,
+      "tokens": 502,
       "upstream_path": "src/pdd/comment_line_parametrize.py"
     },
     {
@@ -536,12 +536,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_extract.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "68b89971b9cddc8f56da6c93ac82ee704b4fa268cf563db31fabaca74a5b90b7",
+      "sha256": "3dbb27ab0d03d6ba948df479df3d9592faa3d90e5f9771101180ed29914a53b4",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 498,
+      "tokens": 496,
       "upstream_path": "src/pdd/comment_line_extract.py"
     },
     {
@@ -569,12 +569,12 @@
     {
       "content_path": "generated/pdd-failure-classification/20x/src/pdd/comment_line_match.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "1b40b9be37738cec63a8837d36acf124845f78a0d8321e130d79bc2ed9907305",
+      "sha256": "c4d57225b34f4447da7a06462df9ff711bbe0fa75c94c12c17201ca662ba9613",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 495,
+      "tokens": 493,
       "upstream_path": "src/pdd/comment_line_match.py"
     }
   ],
@@ -583,7 +583,7 @@
     "regrow": 4,
     "template": 0
   },
-  "realized_total_tokens": 33621,
+  "realized_total_tokens": 33595,
   "rejected": [],
   "scenario_id": "pdd-failure-classification",
   "schema_version": 3,

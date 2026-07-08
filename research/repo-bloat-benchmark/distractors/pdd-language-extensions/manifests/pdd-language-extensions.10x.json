@@ -2,8 +2,8 @@
   "budget_met": true,
   "core_loc": 108,
   "core_tokens": 1004,
-  "distractor_loc": 864,
-  "distractor_tokens_on_disk": 8815,
+  "distractor_loc": 867,
+  "distractor_tokens_on_disk": 8811,
   "files": [
     {
       "content_path": null,
@@ -41,12 +41,12 @@
     {
       "content_path": null,
       "import_group": "gdb0528fa",
-      "loc": 35,
+      "loc": 36,
       "mode": "regrow",
-      "sha256": "b17da17f86c6d5f20b8bfaef23d324930099d888ad80a916ee73a2c3c69028f6",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 461,
+      "tokens": 460,
       "upstream_path": "src/pdd/comment_line.py"
     },
     {
@@ -85,12 +85,12 @@
     {
       "content_path": "generated/pdd-language-extensions/10x/src/pdd/comment_line_leading.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "585d9794ddf771ef0f65f918d9af0a8e7919c2937f8d9e243fe8918f071c79b9",
+      "sha256": "60d1fd45cfa33eaa4718f917f78c6585da841668cdae086abcd72461ed62ede4",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 498,
+      "tokens": 496,
       "upstream_path": "src/pdd/comment_line_leading.py"
     },
     {
@@ -129,12 +129,12 @@
     {
       "content_path": "generated/pdd-language-extensions/10x/src/pdd/comment_line_file.py",
       "import_group": "g-mutate",
-      "loc": 40,
+      "loc": 41,
       "mode": "mutate",
-      "sha256": "0eebaafc2e7a1f5313cad3fdf56663b954064b22a792995cd036acebb25b718b",
+      "sha256": "35152b230e8fdcf72a4a811e342c162275d973363899f58a81fafa4a558fdd66",
       "source_path": "src/pdd/comment_line.py",
       "tier": "same-package",
-      "tokens": 493,
+      "tokens": 492,
       "upstream_path": "src/pdd/comment_line_file.py"
     },
     {
@@ -165,7 +165,7 @@
     "regrow": 4,
     "template": 0
   },
-  "realized_total_tokens": 9819,
+  "realized_total_tokens": 9815,
   "rejected": [],
   "scenario_id": "pdd-language-extensions",
   "schema_version": 3,

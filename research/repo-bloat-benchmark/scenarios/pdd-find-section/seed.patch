@@ -14,10 +14,10 @@ index d0a8d151a..18ebf8476 100644
  def find_section(lines, start_index=0, sub_section=False):
 -    sections = []
 -    stack = []
--    
+-
 -    for i, line in enumerate(lines):
 -        line = line.strip()
--        
+-
 -        if line.startswith('```'):
 -            if len(line) > 3:
 -                # Opening of a new block
@@ -62,13 +62,13 @@ index d0a8d151a..18ebf8476 100644
 +        start, language = open_blocks.pop()
 +        if not open_blocks and start >= start_index:
 +            found.append((language, start, len(lines)))
- 
+
 -    # Handle unclosed blocks
 -    while stack:
 -        start, lang = stack.pop()
 -        if not stack and start >= start_index:  # This is a top-level block
 -            sections.append((lang, start, len(lines) - 1))
--    
+-
 -    return sections
 \ No newline at end of file
 +    return found
