@@ -1,0 +1,138 @@
+% Write `pdd/story_coverage.py`, a deterministic (no-LLM) emitter that measures
+% the executable `@pytest.mark.story` regression suite and writes a
+% schema-versioned, machine-readable coverage artifact plus a one-line CI summary.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.</pdd-reason>
+
+<pdd-dependency>evidence_store_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+<pdd-dependency>gate_python.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "compute_story_coverage", "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> StoryCoverage", "returns": "StoryCoverage"},
+      {"name": "write_story_coverage", "signature": "(coverage: StoryCoverage, project_root: Path, *, run_id: Optional[str] = None) -> Path", "returns": "Path"},
+      {"name": "format_summary_line", "signature": "(coverage: StoryCoverage) -> str", "returns": "str"},
+      {"name": "emit_story_coverage", "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None, run_id: Optional[str] = None) -> StoryCoverage", "returns": "StoryCoverage"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Result type
+Define `StoryCoverage` as the structured public result — a Pydantic v2 model
+(per repo convention; a frozen dataclass is acceptable) whose attributes are the
+artifact fields, with this 1:1 mapping to the serialized JSON:
+- `schema_version: int`
+- `status: str` (`"ok"` | `"not_applicable"`)
+- `run_id: str`
+- `generated_at: str` (ISO-8601 UTC)
+- `story_count: int`
+- `story_backed_test_count: int`
+- `stories_covered: int`
+- `story_coverage_pct: Optional[float]` (`null` when `story_count` is `0`)
+- `pass_rate: Optional[float]` (fraction in `0.0..1.0`; `null` when real pass/fail verdicts are unavailable)
+- `passing_test_count: int`
+- `gap_stories: list[str]` (optional dashboard hint; default empty)
+- `orphan_tests: list[str]` (optional dashboard hint; default empty)
+
+`compute_story_coverage`/`emit_story_coverage` return a `StoryCoverage`;
+`write_story_coverage` and `format_summary_line` take one. The serialized
+artifact body is `StoryCoverage` rendered to JSON (mirroring the field list in
+`docs/evidence_manifest.md`).
+
+% Role & Scope
+Implement a stateless, deterministic emitter for the **executable**
+`@pytest.mark.story` regression suite (EPIC #1698, sub-issue #1704). It consumes
+the upstream marker/story↔test traceability API (#1699) and the story gate
+pass/stale verdicts (#1702) through a thin input adapter, computes coverage
+metrics, writes a schema-versioned JSON evidence artifact under the #833 evidence
+path, and prints a one-line CI summary.
+
+**Non-goals (state explicitly, do not implement):**
+- No LLM or network calls; this is the deterministic counterpart to the LLM-backed
+  `pdd detect --stories` / `user_story_tests` system, not a replacement.
+- No trend math: emit stateless per-run snapshots only; trend is computed
+  downstream in `pdd_cloud`.
+- No dashboard UI (lives in `pdd_cloud`).
+- Does NOT register the `story` pytest marker or add the `regression-stories`
+  Makefile lane — those are upstream wiring (#1699/#1701), not this module.
+
+% Requirements
+1. **Collect story tests deterministically.** Enumerate `-m story` test items via
+   `pytest.main(["--collect-only", "-m", "story", ...], plugins=[plugin])` with a
+   `pytest_collection_modifyitems`/`pytest_collection_finish` hook. Perform **no
+   test execution and no LLM/network call**. Count collected items, so
+   parametrizations count individually (matching the "142 tests" example).
+2. **Story↔test traceability via a thin input adapter.** Obtain the story
+   inventory and story→test links from the #1699 marker/traceability API when
+   present; when absent, the adapter returns an empty/degraded inventory rather
+   than raising. Support a `stories_dir`/`tests_dir` override for testing.
+3. **Compute metrics with distinct denominators.** Emit `story_count`,
+   `story_backed_test_count` (collected `-m story` items), `stories_covered`
+   (distinct stories with ≥1 passing, non-stale test), `story_coverage_pct`
+   (= `stories_covered / story_count`), and `pass_rate` / `passing_test_count`.
+   `pass_rate` is a fraction in `0.0..1.0`, not a percent. Support many-to-many
+   story↔test relationships (one test may cover multiple stories; one story may
+   be covered by multiple tests).
+4. **Coverage-semantics guards.** Exclude `skip`/`xfail` items from both
+   `pass_rate` and the "covered" count. A stale-but-green test does not count as
+   covered: defer to the #1702 gate verdict when available; when the gate status
+   is unavailable, do not award coverage credit on staleness it cannot confirm.
+   Collection-only marker data must never be converted into pass/fail evidence:
+   when real pytest/gate verdicts are unavailable, emit `status:
+   "not_applicable"`, `stories_covered: 0`, `story_coverage_pct: null`,
+   `pass_rate: null`, and `passing_test_count: 0`.
+5. **Zero-story guard.** When `story_count` is `0`, emit `story_coverage_pct` as
+   `null` and `status: "not_applicable"`. Never divide by zero and never report
+   `0%`.
+6. **Schema-versioned artifact.** Write a well-formed JSON object carrying an
+   **integer** `schema_version`, validated against the packaged
+   `pdd/schemas/story_coverage.schema.json`. Model the schema and versioning on
+   `pdd/schemas/evidence_manifest.schema.json`. Set `status` to `"ok"` for a real
+   measurement and `"not_applicable"` for the degraded case (zero stories per
+   Req 5, or upstream marker/traceability API or gate statuses absent per Req 9),
+   matching the `status` contract in `docs/evidence_manifest.md`; downstream
+   consumers (`pdd_cloud`, `pdd checkup`) branch on this field.
+7. **#833 path convention.** Write the stable
+   `.pdd/evidence/stories/coverage.latest.json` **and** a per-run snapshot
+   `.pdd/evidence/stories/runs/<run_id>.json`, mirroring the evidence-store layout
+   (`*.latest.json` + `runs/<run_id>.json`). Create parent directories as needed.
+8. **CI summary surface.** Print exactly
+   `story regression: <story_backed_test_count> tests across <stories_covered>/<story_count> stories (<story_coverage_pct>% covered), <passing_test_count> passing`
+   to stdout — note the first count (total story-backed tests) and the last count
+   (passing tests) are distinct metrics that coincide only at 100% pass-rate
+   (as in the all-142-passing example `story regression: 142 tests across 96/110
+   stories (87% covered), 142 passing`). Append the same line to
+   `$GITHUB_STEP_SUMMARY` when that env var is set (a no-op when unset, never a
+   failure). When `status` is `not_applicable`, surface that state rather than a
+   misleading `0%`.
+9. **Upstream-absent degradation.** When the marker/traceability API or gate
+   statuses are unavailable (the executable story suite is not yet present), emit a
+   complete, well-formed artifact with `status: "not_applicable"` and
+   `story_coverage_pct: null` rather than failing.
+10. **Determinism.** Given identical inputs, the artifact body (modulo
+    `run_id`/timestamp) is byte-stable; computation has no side effects beyond
+    writing the two artifact files and printing.
+
+% Optional dashboard hints
+Include `gap_stories[]` (stories with no test) and `orphan_tests[]` (story-marked
+tests pointing at no known story) in the artifact for the repo-health dashboard.
+
+% Dependencies
+- `pdd/evidence_store.py` — evidence-path / `*.latest.json` + `runs/<run_id>.json`
+  conventions to mirror (separate `stories/` subtree; no API change to it).
+- `pdd/user_story_tests.py` — story discovery interface wrapped by the input
+  adapter (falls back here until #1699 lands).
+- `pdd/gate_main.py` — gate pass/stale verdict shape consumed for the
+  "covered" / pass-rate joins (degraded when absent).
+- `pytest` — `pytest.main(... --collect-only ...)` with a collection plugin.
+
+% Deliverables
+- Code: `pdd/story_coverage.py`
+- Schema: `pdd/schemas/story_coverage.schema.json`

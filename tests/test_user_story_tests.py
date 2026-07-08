@@ -1771,3 +1771,48 @@ def test_user_story_fix_without_contract_passes_story_directly(tmp_path):
     assert success is True
     # No contract => change_main is handed the story path itself.
     assert mock_change.call_args[1]["change_prompt_file"] == str(story_path)
+
+
+def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch):
+    """Explicit --prompt inputs must all be linked, without an LLM call.
+
+    Regression for `pdd story link STORY --prompt a --prompt b` dropping
+    prompts whenever the story text happened to reference one of them (the
+    story's own metadata comment counts as such a reference).
+    """
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    prompt_a = prompts / "demo_python.prompt"
+    prompt_b = prompts / "demo2_python.prompt"
+    prompt_a.write_text("Demo prompt A.", encoding="utf-8")
+    prompt_b.write_text("Demo prompt B.", encoding="utf-8")
+
+    stories = tmp_path / "user_stories"
+    stories.mkdir()
+    story = stories / "story__demo.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: demo_python.prompt -->\n\n"
+        "# User Story: demo\n\n"
+        "## Story\n"
+        "As a user, I can run the demo, so that I see a response.\n",
+        encoding="utf-8",
+    )
+
+    def _no_llm(*_args, **_kwargs):
+        raise AssertionError("explicit prompt links must not call detect_change")
+
+    monkeypatch.setattr("pdd.user_story_tests.detect_change", _no_llm)
+
+    success, message, cost, _model, linked_refs = cache_story_prompt_links(
+        story_file=str(story),
+        prompts_dir=str(prompts),
+        prompt_files=[prompt_a, prompt_b],
+        force_relink=True,
+    )
+
+    assert success, message
+    assert cost == 0.0
+    assert linked_refs == ["demo2_python.prompt", "demo_python.prompt"]
+    metadata_line = story.read_text(encoding="utf-8").splitlines()[0]
+    assert "demo2_python.prompt" in metadata_line
+    assert "demo_python.prompt" in metadata_line

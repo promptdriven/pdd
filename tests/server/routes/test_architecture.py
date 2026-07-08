@@ -237,9 +237,14 @@ async def test_generate_tags_for_prompt_success_uses_cwd_prompts_dir(tmp_path, m
 
     monkeypatch.chdir(tmp_path)
 
-    with (
-        patch("pdd.server.routes.architecture.get_architecture_entry_for_prompt", return_value=entry),
-        patch("pdd.server.routes.architecture.generate_tags_from_architecture", return_value="<pdd-reason>Core reason</pdd-reason>"),
+    with patch.dict(
+        generate_tags_for_prompt.__globals__,
+        {
+            "get_architecture_entry_for_prompt": MagicMock(return_value=entry),
+            "generate_tags_from_architecture": MagicMock(
+                return_value="<pdd-reason>Core reason</pdd-reason>"
+            ),
+        },
     ):
         result = await generate_tags_for_prompt(
             GenerateTagsRequest(prompt_filename="core_python.prompt")
@@ -277,13 +282,14 @@ async def test_rearrange_does_not_mutate_file(tmp_path):
 
     with (
         patch("pdd.server.routes.commands.get_project_root", return_value=tmp_path),
-        patch(
-            "pdd.server.routes.architecture.run_agentic_task",
-            side_effect=fake_run_agentic_task,
-        ),
-        patch(
-            "pdd.server.routes.architecture.load_prompt_template",
-            return_value="layout {project_root} {architecture_path}",
+        patch.dict(
+            rearrange_graph_layout.__globals__,
+            {
+                "run_agentic_task": MagicMock(side_effect=fake_run_agentic_task),
+                "load_prompt_template": MagicMock(
+                    return_value="layout {project_root} {architecture_path}"
+                ),
+            },
         ),
     ):
         request = RearrangeRequest(architecture_path="architecture.json")

@@ -736,6 +736,16 @@ def example(
     ),
 )
 @click.option(
+    "--from-story",
+    "from_story",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help=(
+        "Generate deterministic pytest regression tests from a story__*.md "
+        "file. Execution of generated tests is offline and LLM-free."
+    ),
+)
+@click.option(
     "--evidence",
     is_flag=True,
     default=False,
@@ -758,26 +768,61 @@ def test(
     target_coverage: float,
     merge: bool,
     issue: Optional[str],
+    from_story: Optional[str],
     evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Generate or enhance unit tests, or link story prompt metadata.
 
-    Supports four modes:
+    Supports five modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
     3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
     4. Story Metadata Linking: pdd test user_stories/story__my_story.md
+    5. Story Regression Generation: pdd test --from-story user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
     from ..agentic_test import run_agentic_test
 
     try:
+        estimate_mode = _estimate_mode_active(ctx)
+        if from_story:
+            if args:
+                raise click.UsageError("--from-story does not accept positional arguments.")
+            if manual or issue:
+                raise click.UsageError("--from-story cannot be combined with --manual or --issue.")
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
+            from ..story_test_generation import generate_story_regression_test
+
+            generated = generate_story_regression_test(from_story, output=output)
+            obj = ctx.obj or {}
+            if not obj.get("quiet", False):
+                action = "generated" if generated.changed else "already current"
+                console.print(
+                    "[bold green]Story regression test "
+                    f"{action}:[/bold green] {generated.test_file}"
+                )
+            result_dict = {
+                "success": True,
+                "message": "Story regression test generated.",
+                **generated.as_dict(),
+            }
+            if evidence:
+                write_evidence_manifest(
+                    command="pdd test --from-story",
+                    output_files=[generated.test_file],
+                    model="deterministic",
+                    cost_usd=0.0,
+                    validation={"story_regression": "generated"},
+                    basename=generated.story_id,
+                )
+            return result_dict, 0.0, "deterministic"
+
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
-        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 

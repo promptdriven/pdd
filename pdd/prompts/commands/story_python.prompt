@@ -1,0 +1,102 @@
+<pdd-reason>Implements the `pdd story` CLI group (add, list, link) as thin wrappers over pdd.user_story_tests.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "story add", "description": "Create a user story file from an issue URL, number, or local file, linked to one or more dev units or prompts"},
+      {"name": "story list", "description": "List all user stories with their linked prompts and regression status"},
+      {"name": "story link", "description": "Add a prompt link to an existing story file without regenerating the story body"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Write `pdd/commands/story.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  Implement the `pdd story` CLI command group as a `@click.group(name="story")` named `story_cli`,
+  following the structural pattern of `pdd/commands/contracts.py`. The three subcommands (`add`,
+  `list`, `link`) are thin wrappers over already-existing library functions in `pdd.user_story_tests`.
+  No new library logic is introduced here.
+
+% Requirements
+
+<contract_rules>
+R1 - Issue source resolution
+For every `story add` invocation, the command MUST accept a positional argument that is a GitHub
+issue URL, `#N` / bare integer issue number, or local `.md` file path. Inline text MUST require the
+`--text` option to avoid ambiguity with URL/path detection. The command MUST fail with a clear error
+message if the source cannot be resolved via `resolve_issue_source()`.
+
+R1b - Story title override
+When `--title <value>` is supplied, the command MUST use the supplied value (slugified)
+as the story slug instead of the auto-derived slug. When `--title` is omitted and
+`--text` is used, the command MUST derive a slug from the first few meaningful words
+of the supplied text. When neither `--title` nor `--text` is used (URL/number/file
+source), the slug is derived from the issue title or prompt file name as usual.
+
+R2 - Dev-unit resolution
+For every `--devunit <name>`, the command MUST resolve the name to prompt file(s) via a
+`prompts/{name}_*.prompt` glob (excluding `*_LLM.prompt`), using the same logic as `pdd checkup`.
+The command MUST fail early with a descriptive error if no matching prompt files are found.
+
+R3 - Multi-devunit metadata preservation
+When multiple `--devunit` or `--prompt` values are supplied, ALL resolved prompt paths MUST be
+preserved in the `<!-- pdd-story-prompts: ... -->` metadata comment. The command MUST NOT keep
+only the first value while silently dropping the others.
+
+R4 - Dry-run no-write guarantee
+When `--dry-run` is supplied, the command MUST NOT write any files. It MUST print the proposed
+story file path and the list of linked prompts to stdout and exit 0.
+
+R5 - Slug collision handling
+When a story file with the same slug already exists and `--update` is NOT supplied, `story add`
+MUST exit with a non-zero code and a clear error message pointing to `--update`.
+When `--update` IS supplied, the command MUST merge the new prompt link(s) into the existing
+story file's metadata comment without regenerating or overwriting the story body.
+
+R6 - Path traversal prevention
+Story output paths MUST be validated to ensure they resolve inside `user_stories/`.
+Any path that resolves outside `user_stories/` MUST be rejected with a clear error.
+
+R7 - Changed-files resolution
+When `--from-changed-files` is supplied, the command MUST enumerate the set of currently
+modified `.prompt` files in the repository and use them as the resolved prompt list.
+It MUST fail with a descriptive error if the working directory is not a git repository
+or if no changed `.prompt` files are found.
+
+R8 - Regression generation handoff
+When `--generate-regression` is supplied, the command MUST print a human-readable message
+referencing issue #1700 and the follow-up `pdd test --from-story <story-file> --output ...`
+command. The story command MUST NOT run pytest generation inline; deterministic test generation
+belongs to `pdd test --from-story`.
+
+R9 - Story list rendering
+`story list` MUST render a formatted table with columns: story-id, file path, and linked prompts.
+When `--with-regression-status` is supplied, an additional regression status column MUST be
+included; that column MUST always show `-` until the #1699 traceability API is available.
+Without `--with-regression-status`, no regression column is shown. When `user_stories/` is empty
+or contains no story files, a friendly "No stories found" message MUST be printed and the command
+exits 0.
+
+R10 - Story link subcommand
+`story link <story-file> --prompt <path>` MUST add the specified prompt link to the story file's
+metadata comment (`<!-- pdd-story-prompts: ... -->`) and MUST NOT regenerate the story body or
+modify any other part of the file. It MUST validate that the story file resolves inside
+`user_stories/` (same R6 check) and fail with a clear error if it does not.
+</contract_rules>
+
+% Dependencies
+
+<user_story_tests_interface>
+<include mode="interface">pdd/user_story_tests.py</include>
+</user_story_tests_interface>
+
+% Deliverables
+- Code: `pdd/commands/story.py`
