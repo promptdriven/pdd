@@ -173,6 +173,86 @@ def create_mock_litellm_response(content, model_name="test-model", prompt_tokens
 
 # --- Test Cases ---
 
+def test_zai_bare_glm_default_selects_coding_plan_endpoint(tmp_path, monkeypatch, mock_set_llm_cache):
+    """PDD_MODEL_DEFAULT=glm-5.2 resolves to the Z.AI endpoint row, not a surrogate fallback."""
+    import pdd.llm_invoke as llm_mod
+
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,"
+        "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only\n"
+        "OpenAI,gpt-unrelated,1,2,1600,1600,test,,OPENAI_API_KEY,0,True,none,,False\n"
+        "Z.AI Coding Plan,openai/glm-5.2,0,0,1510,1510,test,"
+        "https://api.z.ai/api/coding/paas/v4,ZAI_API_KEY,0,False,effort,,False\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-test123456")
+
+    captured_kwargs = {}
+
+    def capture_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return create_mock_litellm_response("result", model_name=kwargs["model"])
+
+    with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+        llm_mod.llm_invoke(
+            prompt="Say {word}",
+            input_json={"word": "OK"},
+            strength=0.5,
+            time=0.8,
+            use_cloud=False,
+        )
+
+    assert captured_kwargs["model"] == "openai/glm-5.2"
+    assert captured_kwargs["base_url"] == "https://api.z.ai/api/coding/paas/v4"
+    assert captured_kwargs["api_base"] == "https://api.z.ai/api/coding/paas/v4"
+    assert captured_kwargs["api_key"] == "sk-zai-test123456"
+    assert captured_kwargs["reasoning_effort"] == "high"
+
+
+def test_zai_general_endpoint_preserved_for_openai_compatible_row(tmp_path, monkeypatch, mock_set_llm_cache):
+    """The selected Z.AI general API row keeps its endpoint through llm_invoke kwargs."""
+    import pdd.llm_invoke as llm_mod
+
+    csv_path = tmp_path / "llm_model.csv"
+    csv_path.write_text(
+        "provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,"
+        "base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only\n"
+        "Z.AI,openai/glm-5.2,1,3.2,1510,1510,test,"
+        "https://api.z.ai/api/paas/v4,ZAI_API_KEY,0,False,effort,,False\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+    monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "openai/glm-5.2")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-test123456")
+
+    captured_kwargs = {}
+
+    def capture_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return create_mock_litellm_response("result", model_name=kwargs["model"])
+
+    with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+        llm_mod.llm_invoke(
+            prompt="Say {word}",
+            input_json={"word": "OK"},
+            strength=0.5,
+            time=0.3,
+            use_cloud=False,
+        )
+
+    assert captured_kwargs["model"] == "openai/glm-5.2"
+    assert captured_kwargs["base_url"] == "https://api.z.ai/api/paas/v4"
+    assert captured_kwargs["api_base"] == "https://api.z.ai/api/paas/v4"
+    assert captured_kwargs["api_key"] == "sk-zai-test123456"
+
+
 def test_litellm_debug_suppression():
     """
     Test that LiteLLM debug messages are suppressed by verifying

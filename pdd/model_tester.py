@@ -147,6 +147,20 @@ def _calculate_cost(
     return (prompt_tokens * input_price_per_m + completion_tokens * output_price_per_m) / 1_000_000.0
 
 
+def _is_quota_backed_row(row: Dict[str, Any]) -> bool:
+    """Return True for catalog rows whose usage is quota/subscription-backed."""
+    provider = str(row.get("provider", "")).strip().lower()
+    return provider == "z.ai coding plan"
+
+
+def _format_price_cell(row: Dict[str, Any], column: str) -> str:
+    """Format price cells without inventing dollar costs for quota rows."""
+    if _is_quota_backed_row(row):
+        return "quota"
+    value = row.get(column, 0.0)
+    return f"${float(value):.2f}" if pd.notna(value) else "—"
+
+
 def _classify_error(exc: Exception) -> str:
     """Return a concise, user-friendly error description."""
     msg = str(exc).lower()
@@ -261,20 +275,24 @@ def _display_model_list(
         i = int(idx)
         provider = str(row.get("provider", ""))
         model = str(row.get("model", ""))
-        input_cost = row.get("input", 0.0)
-        output_cost = row.get("output", 0.0)
         elo = row.get("coding_arena_elo", "")
 
         # Format costs
-        input_str = f"${float(input_cost):.2f}" if pd.notna(input_cost) else "—"
-        output_str = f"${float(output_cost):.2f}" if pd.notna(output_cost) else "—"
+        row_dict = row.to_dict()
+        input_str = _format_price_cell(row_dict, "input")
+        output_str = _format_price_cell(row_dict, "output")
         elo_str = str(int(elo)) if pd.notna(elo) and elo else "—"
 
         # Test result
         if i in results:
             r = results[i]
             if r["success"]:
-                test_str = f"[green]✓ OK ({r['duration_s']:.1f}s, ${r['cost']:.4f})[/green]"
+                cost_label = (
+                    "quota-backed"
+                    if _is_quota_backed_row(row_dict)
+                    else f"${r['cost']:.4f}"
+                )
+                test_str = f"[green]✓ OK ({r['duration_s']:.1f}s, {cost_label})[/green]"
             else:
                 # Truncate error for table display
                 err = r["error"] or "Unknown error"
@@ -412,9 +430,10 @@ def test_model_interactive() -> None:
             token_info = ""
             if tokens:
                 token_info = f", {tokens.get('prompt', 0)}+{tokens.get('completion', 0)} tokens"
+            cost_info = "quota-backed" if _is_quota_backed_row(row) else f"${result['cost']:.4f}"
             console.print(
                 f"  LLM call   [green]✓ OK[/green] "
-                f"({result['duration_s']:.1f}s, ${result['cost']:.4f}{token_info})"
+                f"({result['duration_s']:.1f}s, {cost_info}{token_info})"
             )
         else:
             console.print(f"  LLM call   [red]✗ {result['error']}[/red]")

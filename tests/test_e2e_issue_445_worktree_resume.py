@@ -208,26 +208,29 @@ class TestIssue445WorktreeResumptionE2E:
             pass
 
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
+            if label == "step13":
+                return (True, "PR Created: https://github.com/test/repo/pull/445", 0.001, "mock-model")
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_change_orchestrator.load_workflow_state', side_effect=mock_load_state):
             with patch('pdd.agentic_change_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_change_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_change_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        success, message, cost, model, files = run_agentic_change_orchestrator(
-                            issue_url="https://github.com/test/repo/issues/445",
-                            issue_content="Worktree restoration bug",
-                            repo_owner="test",
-                            repo_name="repo",
-                            issue_number=445,
-                            issue_author="gltanaka",
-                            issue_title="Worktree restoration fails when resuming on existing issue branch",
-                            issue_updated_at="2024-01-01T00:00:00Z",
-                            cwd=main_repo,
-                            verbose=False,
-                            quiet=True,
-                            use_github_state=True,
-                        )
+                        with patch('pdd.agentic_change_orchestrator._pr_url_matches_current_head', return_value=True):
+                            success, message, cost, model, files = run_agentic_change_orchestrator(
+                                issue_url="https://github.com/test/repo/issues/445",
+                                issue_content="Worktree restoration bug",
+                                repo_owner="test",
+                                repo_name="repo",
+                                issue_number=445,
+                                issue_author="gltanaka",
+                                issue_title="Worktree restoration fails when resuming on existing issue branch",
+                                issue_updated_at="2024-01-01T00:00:00Z",
+                                cwd=main_repo,
+                                verbose=False,
+                                quiet=True,
+                                use_github_state=True,
+                            )
 
                         assert success, f"Orchestrator should succeed when resuming with checked-out branch, got: {message}"
                         assert isinstance(files, list), "Expected files to be a list"
@@ -287,27 +290,30 @@ class TestIssue445WorktreeResumptionE2E:
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM calls - verify we get to step 11 (requires worktree)."""
             step_calls.append(label)
+            if label == "step13":
+                return (True, "PR Created: https://github.com/test/repo/pull/445", 0.001, "mock-model")
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_change_orchestrator.load_workflow_state', side_effect=mock_load_state):
             with patch('pdd.agentic_change_orchestrator.save_workflow_state', side_effect=mock_save_state):
                 with patch('pdd.agentic_change_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                     with patch('pdd.agentic_change_orchestrator.run_agentic_task', side_effect=mock_run_agentic_task):
-                        # Run the orchestrator
-                        success, message, cost, model, files = run_agentic_change_orchestrator(
-                            issue_url="https://github.com/test/repo/issues/445",
-                            issue_content="Worktree restoration bug",
-                            repo_owner="test",
-                            repo_name="repo",
-                            issue_number=445,
-                            issue_author="gltanaka",
-                            issue_title="Worktree restoration fails when resuming on existing issue branch",
-                            issue_updated_at="2024-01-01T00:00:00Z",
-                            cwd=main_repo,
-                            verbose=False,
-                            quiet=True,
-                            use_github_state=True,
-                        )
+                        with patch('pdd.agentic_change_orchestrator._pr_url_matches_current_head', return_value=True):
+                            # Run the orchestrator
+                            success, message, cost, model, files = run_agentic_change_orchestrator(
+                                issue_url="https://github.com/test/repo/issues/445",
+                                issue_content="Worktree restoration bug",
+                                repo_owner="test",
+                                repo_name="repo",
+                                issue_number=445,
+                                issue_author="gltanaka",
+                                issue_title="Worktree restoration fails when resuming on existing issue branch",
+                                issue_updated_at="2024-01-01T00:00:00Z",
+                                cwd=main_repo,
+                                verbose=False,
+                                quiet=True,
+                                use_github_state=True,
+                            )
 
                         # After fix: should succeed
                         if success:

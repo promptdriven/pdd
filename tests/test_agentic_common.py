@@ -3105,6 +3105,7 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
 ):
     from pdd.routing_policy import default_policy
 
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
@@ -3136,6 +3137,74 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
     assert [row["verifier_result"] for row in records] == ["fail", "pass"]
     assert records[1]["escalation_step"] == 1
     assert records[1]["selected_config"]["harness"] == "google"
+
+
+def test_run_agentic_task_routing_escalation_preserves_before_attempt(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is True
+    assert before_attempts == [("anthropic", 1), ("google", 1)]
+
+
+def test_run_agentic_task_single_provider_attempt_disables_fallback(
+    mock_cwd,
+    monkeypatch,
+):
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+
+    providers = []
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        return (False, "first provider failed", 0.1, "anthropic-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Create PR",
+        mock_cwd,
+        max_retries=3,
+        single_provider_attempt=True,
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is False
+    assert providers == ["anthropic"]
+    assert before_attempts == [("anthropic", 1)]
 
 
 def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_back(

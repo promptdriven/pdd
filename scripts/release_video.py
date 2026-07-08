@@ -293,8 +293,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=DEFAULT_RELEASE_VIDEO_OUTPUT_DIR,
         help="Directory for generated release-video artifacts.",
     )
-    parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
-    parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
+    parser.add_argument("--claude-cli", default=env_default("CLAUDE_CLI", "claude"))
+    parser.add_argument("--claude-model", default=release_video_claude_model_default())
     parser.add_argument(
         "--pds-claude-model",
         default=os.environ.get(
@@ -338,7 +338,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "PDS selected-project recovery."
         ),
     )
-    parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
+    parser.add_argument("--pds-cli", default=env_default("PDS_CLI", "pds"))
     parser.add_argument(
         "--pds-create-timeout",
         type=float,
@@ -428,10 +428,36 @@ def env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def env_default(name: str, default: str) -> str:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def release_video_claude_model_default() -> str:
+    return env_default(
+        "RELEASE_VIDEO_CLAUDE_MODEL",
+        env_default("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL),
+    )
+
+
 def validate_release_video_create_options(args: argparse.Namespace) -> None:
     """Validate options that only apply to PDS release-video creation."""
+    validate_claude_script_model(args)
     validate_release_video_idempotency_options(args)
     validate_release_video_metadata_conflict_options(args)
+
+
+def validate_claude_script_model(args: argparse.Namespace) -> None:
+    model = str(getattr(args, "claude_model", "") or "").strip()
+    if not model:
+        raise ReleaseVideoError(
+            "Claude Code script-generation model must not be empty. "
+            "Set RELEASE_VIDEO_CLAUDE_MODEL, CLAUDE_MODEL, or --claude-model "
+            "to a non-empty value."
+        )
+    args.claude_model = model
 
 
 def validate_release_video_idempotency_options(args: argparse.Namespace) -> None:
@@ -1610,6 +1636,13 @@ def generate_raw_script_with_claude(
     timeout: float,
     cwd: Path,
 ) -> str:
+    claude_model = str(claude_model or "").strip()
+    if not claude_model:
+        raise ReleaseVideoError(
+            "Claude Code script-generation model must not be empty. "
+            "Set RELEASE_VIDEO_CLAUDE_MODEL, CLAUDE_MODEL, or --claude-model "
+            "to a non-empty value."
+        )
     command = split_command(claude_cli)
     ensure_command_exists(command[0], "Claude Code")
     command.extend(

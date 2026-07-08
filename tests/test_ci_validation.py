@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from pdd.ci_validation import (
+    _check_run_bucket,
     _classify_check_result,
     _classify_external_ci_failure,
     _collect_failure_logs,
@@ -356,6 +357,42 @@ def test_github_checks_gate_passes_all_checks_on_current_head(tmp_path: Path) ->
     mock_required_poll.assert_not_called()
 
 
+def test_github_checks_gate_uses_local_head_when_pr_head_lookup_is_empty(
+    tmp_path: Path,
+) -> None:
+    """Hosted PR-mode checkup can lose the late PR head lookup.
+
+    The gate should still check GitHub check-runs for the checked-out PR
+    worktree HEAD instead of failing before reading checks.
+    """
+    passing_checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""}
+    ]
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured.update(kwargs)
+        return "passed", passing_checks
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value=""), \
+         patch("pdd.ci_validation._get_head_sha", return_value="localhead"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", side_effect=fake_poll), \
+         patch("pdd.ci_validation._poll_required_checks") as mock_required_poll:
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "localhead"
+    assert "passed on PR head localhea" in message
+    assert captured["head_sha"] == "localhead"
+    mock_required_poll.assert_not_called()
+
+
 def test_github_checks_gate_fails_when_checks_missing(tmp_path: Path) -> None:
     """No checks is success for the legacy CI-fix loop, but failure for final gate."""
     with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
@@ -373,8 +410,35 @@ def test_github_checks_gate_fails_when_checks_missing(tmp_path: Path) -> None:
     assert "missing or unreadable" in message
 
 
-def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None:
-    """Skipped GitHub checks are not full-suite evidence."""
+def test_github_checks_gate_ignores_nonapplicable_skipped_checks(
+    tmp_path: Path,
+) -> None:
+    """Skipped/neutral REST check runs do not block when applicable checks pass."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "migrated workflow", "state": "NEUTRAL", "bucket": "skipped", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", checks)):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
+    assert "included skipped checks" not in message
+
+
+def test_github_checks_gate_fails_when_all_checks_skipped(tmp_path: Path) -> None:
+    """Skipped GitHub checks alone are not applicable full-suite evidence."""
     skipped_checks = [
         {"name": "full suite", "state": "SKIPPING", "bucket": "skipping", "link": ""}
     ]
@@ -390,17 +454,24 @@ def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None
         )
 
     assert success is False
-    assert "skipped checks" in message
+    assert "non-applicable" in message
+    assert "requires at least one applicable passing check" in message
 
 
-def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
-    """Unknown check states are not trustworthy full-suite evidence."""
-    unknown_checks = [
-        {"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}
+@pytest.mark.parametrize("state", ["FAILURE", "CANCELLED", "TIMED_OUT"])
+def test_github_checks_gate_fails_when_any_applicable_check_failed(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    """Real failed/cancelled/timed-out checks still block the strict gate."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "full suite", "state": state, "bucket": "fail", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
     ]
 
     with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
-         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", unknown_checks)):
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("failed", checks)):
         success, message, _head_sha = run_github_checks_gate(
             cwd=tmp_path,
             repo_owner="owner",
@@ -410,11 +481,78 @@ def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
         )
 
     assert success is False
+    assert "GitHub checks failed" in message
+    assert "full suite" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
+
+
+def test_github_checks_gate_fails_when_any_applicable_check_pending(
+    tmp_path: Path,
+) -> None:
+    """Pending applicable checks still block the strict gate."""
+    checks = [
+        {"name": "unit", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "slow suite", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
+        {"name": "path filtered", "state": "SKIPPED", "bucket": "skipped", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("pending", checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "were pending, stale, or not reported" in message
+    assert "slow suite" in message
+    assert "Ignored non-applicable skipped/neutral/manual-action checks" in message
+
+
+def test_github_checks_gate_required_only_fails_unknown_check_bucket(
+    tmp_path: Path,
+) -> None:
+    """required_only=True stays strict: unknown buckets still block the gate.
+
+    The default (required_only=False) path fails open on unrecognized
+    conclusions (issue #1902), but the strict required-only path must keep
+    blocking them.
+    """
+    unknown_checks = [
+        {"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("passed", unknown_checks),
+         ), \
+         patch("pdd.ci_validation._poll_check_runs_for_head") as mock_check_runs_poll:
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+            required_only=True,
+        )
+
+    assert success is False
     assert "unknown check states" in message
+    mock_check_runs_poll.assert_not_called()
 
 
-def test_github_checks_gate_fails_action_required_check(tmp_path: Path) -> None:
-    """Manual-action checks are inconclusive for fix, but fail the strict gate."""
+def test_github_checks_gate_fails_action_required_only_check(tmp_path: Path) -> None:
+    """A PR whose only check is action_required has no applicable passing check.
+
+    Issue #1902: action_required is now non-applicable (never a blocker on its
+    own), so an all-action_required PR blocks with the "requires at least one
+    applicable passing check" message rather than the old "require manual
+    action" wording.
+    """
     action_required_checks = [
         {
             "name": "manual trigger",
@@ -439,8 +577,137 @@ def test_github_checks_gate_fails_action_required_check(tmp_path: Path) -> None:
 
     assert success is False
     assert head_sha == "sha123"
-    assert "manual action" in message
+    assert "non-applicable" in message
+    assert "requires at least one applicable passing check" in message
     assert "manual trigger" in message
+    assert "require manual action" not in message
+
+
+def test_github_checks_gate_passes_green_with_action_required_sibling(
+    tmp_path: Path,
+) -> None:
+    """A green applicable check plus an idle action_required sibling passes.
+
+    Issue #1902: an ``action_required`` check run (e.g. an auto-heal bot that
+    never self-resolves) is non-applicable, not a blocker, in the default
+    final-gate path. It must be surfaced as ignored non-applicable evidence
+    while the gate still passes on the green ``pr-tests`` check.
+    """
+    checks = [
+        {"name": "pr-tests", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {
+            "name": "auto-heal",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/auto-heal",
+        },
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("action_required", checks),
+         ):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert "Ignored non-applicable" in message
+    assert "auto-heal" in message
+    assert "require manual action" not in message
+
+
+def test_github_checks_gate_passes_unknown_only_and_surfaces(
+    tmp_path: Path,
+) -> None:
+    """An unrecognized completed conclusion fails open and is surfaced.
+
+    Issue #1902: a future/unknown GitHub conclusion (bucket == "") must not
+    silently false-block the default final gate. It is surfaced as an
+    unrecognized conclusion instead of blocking as an "unknown check state".
+    """
+    unknown_checks = [
+        {"name": "full suite", "state": "SOME_NEW_CONCLUSION", "bucket": "", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("failed", unknown_checks),
+         ):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert "Surfaced unrecognized check conclusions" in message
+    assert "unknown check states" not in message
+
+
+def test_github_checks_gate_passes_green_with_unknown_sibling(
+    tmp_path: Path,
+) -> None:
+    """A green applicable check plus an unrecognized sibling passes and surfaces it."""
+    checks = [
+        {"name": "pr-tests", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "future check", "state": "BRAND_NEW", "bucket": "", "link": ""},
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("passed", checks),
+         ):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert "Surfaced unrecognized check conclusions" in message
+    assert "future check" in message
+
+
+@pytest.mark.parametrize(
+    "status,conclusion,expected",
+    [
+        ("completed", "success", "pass"),
+        ("completed", "skipped", "skipped"),
+        ("completed", "neutral", "skipped"),
+        ("completed", "action_required", "action_required"),
+        ("completed", "failure", "fail"),
+        ("completed", "cancelled", "fail"),
+        ("completed", "timed_out", "fail"),
+        ("completed", "startup_failure", "fail"),
+        ("completed", "some_unrecognized_conclusion", ""),
+        ("queued", "", "pending"),
+        ("in_progress", "", "pending"),
+        ("waiting", "success", "pending"),
+    ],
+)
+def test_check_run_bucket_maps_status_and_conclusion(
+    status: str, conclusion: str, expected: str
+) -> None:
+    """_check_run_bucket maps REST status/conclusion pairs to gh-style buckets."""
+    assert _check_run_bucket(status, conclusion) == expected
 
 
 def test_github_checks_gate_required_only_uses_required_pr_checks(tmp_path: Path) -> None:
@@ -630,6 +897,51 @@ def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
 
     assert status == "timeout"
     assert checks[0]["bucket"] == "pending"
+
+
+def test_poll_check_runs_for_head_waits_pending_over_unknown_only_when_opted_in(
+    tmp_path: Path,
+) -> None:
+    """Final-gate opt-in keeps unknown+pending non-terminal; loop path fails closed.
+
+    Issue #1902 follow-up (confinement): with ``wait_pending_over_unknown=True``
+    (final gate) an unrecognized/`stale` conclusion co-present with a still-pending
+    check does not make the poll terminal — it keeps polling until the pending
+    check times out. Without the flag (the CI-fix loop / ``no_checks`` cross-check)
+    the unknown bucket fails closed immediately.
+    """
+    payload = {
+        "check_runs": [
+            {"name": "stale-check", "status": "completed", "conclusion": "stale", "html_url": ""},
+            {"name": "slow-suite", "status": "in_progress", "conclusion": None, "html_url": ""},
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        opt_in_status, _checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+            wait_pending_over_unknown=True,
+        )
+    assert opt_in_status == "timeout"
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        default_status, _checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+    assert default_status == "failed"
 
 
 def test_poll_check_runs_for_head_reports_unreadable_permission_error(tmp_path: Path) -> None:
@@ -1520,6 +1832,24 @@ def test_classify_pending_wins_over_action_required() -> None:
         {"name": "github-app-ci", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
     ]
     assert _classify_check_result(8, checks) == "pending"
+
+
+def test_classify_pending_outranks_unknown_only_when_opted_in() -> None:
+    """`pending_outranks_unknown` is opt-in (final gate only), off by default.
+
+    Issue #1902 follow-up: a ``stale``/future GitHub conclusion maps to bucket
+    ``""`` (unknown). By DEFAULT the classifier fails closed on unknown before
+    pending, so the CI-fix loop (`_poll_required_checks`) and the ``no_checks``
+    cross-check keep unknown required checks fail-closed. Only the final-gate REST
+    poller opts in, so a still-pending check is waited out before an unknown
+    sibling settles the result.
+    """
+    checks = [
+        {"name": "stale-check", "state": "STALE", "bucket": "", "link": ""},
+        {"name": "github-app-ci", "state": "IN_PROGRESS", "bucket": "pending", "link": ""},
+    ]
+    assert _classify_check_result(8, checks) == "failed"
+    assert _classify_check_result(8, checks, pending_outranks_unknown=True) == "pending"
 
 
 def test_classify_failure_state_wins_even_with_missing_bucket() -> None:

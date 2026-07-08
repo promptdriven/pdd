@@ -15,8 +15,8 @@ steps:
       - 'ci/cloud-batch/Dockerfile'
       - '.'
   # Phantom-contract guard: verify the candidate image actually carries the
-  # pytest plugins our markers and config rely on. If a requirements.txt /
-  # Dockerfile drift leaves any plugin uninstalled, this step fails BEFORE we
+  # pytest plugins and CLI tools the tests rely on. If a requirements.txt /
+  # Dockerfile drift leaves anything missing, this step fails BEFORE we
   # republish :latest, so the next Cloud Batch run keeps using the last good
   # image instead of fanning 76 VMs out against a broken one.
   - name: 'gcr.io/cloud-builders/docker'
@@ -30,13 +30,21 @@ steps:
       - '${_AR_IMAGE}:$BUILD_ID'
       - '-c'
       - |
+        import shutil
+        import subprocess
+
         import pytest_timeout
         import xdist
         import pytest_mock
         import pytest_asyncio
         import pytest_cov
         import testmon
-        print("image pytest-plugin contract OK")
+
+        missing = [name for name in ("gh",) if shutil.which(name) is None]
+        if missing:
+            raise SystemExit(f"image missing expected CLI tools: {missing}")
+        subprocess.run(["gh", "--version"], check=True)
+        print("image pytest-plugin and CLI contract OK")
   # Only republish :latest after the candidate image clears the plugin
   # contract. Failure above leaves the candidate tag behind for forensic
   # inspection but does NOT update :latest.
