@@ -536,6 +536,7 @@ def test_checkup_issue_url_still_uses_agentic_path() -> None:
     run_checkup.assert_called_once()
 
 
+@pytest.mark.timeout(120)
 def test_source_set_repair_cli_smoke_script_runs_without_pythonpath() -> None:
     """Regression: smoke script must not require callers to set PYTHONPATH."""
     import os
@@ -554,6 +555,7 @@ def test_source_set_repair_cli_smoke_script_runs_without_pythonpath() -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=110,
     )
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
