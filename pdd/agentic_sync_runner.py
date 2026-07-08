@@ -765,17 +765,27 @@ def _parse_public_surface_failure_fields(
                 f"- Restore `{symbol}` to its declared signature "
                 f"`{expected_entry}` (found `{actual_entry}`)."
             )
+        lines.append(
+            "If a declared parameter change is intended, edit the prompt's "
+            "<pdd-interface> declaration to the intended signature (the "
+            "declaration is the contract for declared symbols)."
+        )
     declared_changed = {d[0] for d in declared_details}
     remaining_changed = [sym for sym in changed if sym not in declared_changed]
     if remaining_changed:
         lines.append("Restore compatible signatures for these public symbols:")
         for sym in remaining_changed:
             lines.append(f"- {sym}")
-    lines.append(
-        "Preserve backward-compatible public helpers unless the prompt lists "
-        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
-        "or BREAKING-CHANGE: change signature <symbol> markers."
-    )
+    # Keep the BREAKING-CHANGE guidance only for UNDECLARED / removed violations:
+    # for a declared symbol it relaxes only binding-kind/async, not the declared
+    # params, so advising it on a pure declared-param violation loops the user
+    # back into the dead-end #1900 removes (codex round-7 finding 3).
+    if removed or remaining_changed or not declared_details:
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+            "or BREAKING-CHANGE: change signature <symbol> markers."
+        )
     return "\n".join(lines), removed, changed, details_tuple
 
 
@@ -832,6 +842,36 @@ def _parse_test_churn_failure(
     return directive, signature
 
 
+def _public_surface_repair_advice(
+    has_declared: bool,
+    has_non_declared: bool,
+) -> List[str]:
+    """Repair-advice lines for a public-surface hard-failure block.
+
+    A declared ``<pdd-interface>`` violation is fixed by editing the declaration —
+    ``BREAKING-CHANGE: change signature`` relaxes only the un-declarable
+    binding-kind/async for declared symbols, NOT their parameters, so advising the
+    marker for a declared-param mismatch loops the user back into the dead-end
+    #1900 removes (codex round-7 finding 3). Undeclared / removed violations keep
+    the BREAKING-CHANGE guidance.
+    """
+    lines: List[str] = []
+    if has_declared:
+        lines += [
+            "For a declared `<pdd-interface>` symbol, update the prompt's",
+            "`<pdd-interface>` declaration to the intended signature (the",
+            "declaration is the contract), or restore the declared signature",
+            "shown above.",
+        ]
+    if has_non_declared or not has_declared:
+        lines += [
+            "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+            "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+            "`rename`, `change signature`).",
+        ]
+    return lines
+
+
 def build_public_surface_hard_failure_from_error(
     exc: Any,
     basename: str,
@@ -839,6 +879,10 @@ def build_public_surface_hard_failure_from_error(
     """Format a structured public-surface hard-failure block."""
     removed = list(getattr(exc, "removed_symbols", []) or [])
     changed = list(getattr(exc, "changed_signatures", []) or [])
+    details = list(getattr(exc, "signature_details", []) or [])
+    declared_changed = {d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"}
+    has_declared = bool(declared_changed)
+    has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
     block_lines = [
         str(exc),
         "",
@@ -850,9 +894,7 @@ def build_public_surface_hard_failure_from_error(
         f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
         f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
         "",
-        "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-        "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-        "`rename`, `change signature`).",
+        *_public_surface_repair_advice(has_declared, has_non_declared),
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -2760,12 +2802,17 @@ class AsyncSyncRunner:
                 f"signature_detail: {symbol} | expected: {expected_entry} | "
                 f"actual: {actual_entry} | source: {source}"
             )
+        declared_changed = {
+            d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"
+        }
+        has_declared = bool(declared_changed)
+        has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
+        block_lines.append("")
+        block_lines.extend(
+            _public_surface_repair_advice(has_declared, has_non_declared)
+        )
         block_lines.extend(
             [
-                "",
-                "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-                "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-                "`rename`, `change signature`).",
                 "",
                 f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",

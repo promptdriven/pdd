@@ -240,6 +240,16 @@ class PublicSurfaceRegressionError(click.UsageError):
                     f"- Restore `{symbol}` to its declared signature "
                     f"`{expected_entry}` (found `{actual_entry}`)."
                 )
+            # Declaration-aware guidance (codex round-7 finding 3): a declared
+            # PARAM change is authorized by EDITING the declaration, not by a
+            # BREAKING-CHANGE marker (which only relaxes the un-declarable
+            # binding-kind/async for declared symbols) — advising the marker here
+            # would loop the user back into the dead-end #1900 removes.
+            lines.append(
+                "If a declared parameter change is intended, edit the prompt's "
+                "<pdd-interface> declaration to the intended signature (the "
+                "declaration is the contract for declared symbols)."
+            )
         declared_changed = {detail[0] for detail in declared_details}
         remaining_changed = [
             sym for sym in self.changed_signatures if sym not in declared_changed
@@ -2415,6 +2425,40 @@ def _declared_presence_name(name: str) -> str:
     return name
 
 
+def _declared_patch_targets(
+    code: Optional[str],
+    declared_names: Set[str],
+    language: Optional[str],
+) -> Set[str]:
+    """Return the declared symbols DEFINED in *code*, as snapshot surface keys.
+
+    The prompt's ``<pdd-interface>`` declaration is authoritative (like ``__all__``),
+    so a declared ``_``-prefixed helper (real: ``_extract_step_report``) must be
+    captured in the public-surface / signature snapshots even though the default
+    heuristic filters underscore names out (codex round-7 finding 1). These are
+    fed as ``patch_targets`` (which force a defined name into the snapshot), so only
+    names actually DEFINED in *code* are returned — a genuinely removed declared
+    symbol stays out of the ``after`` snapshot and is still reported as removed.
+
+    Each declared name is mapped through :func:`_declared_presence_name` (so a
+    declared ``Class.__init__`` contributes the CLASS key, matching where the
+    snapshot puts the constructor ABI, and never injects a phantom ``Class.__init__``
+    signature entry that would bypass the declared-vs-old-code routing).
+    """
+    if not declared_names or (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return set()
+    targets: Set[str] = set()
+    for name in declared_names:
+        presence = _declared_presence_name(name)
+        if _symbol_exists_in_module(tree, presence):
+            targets.add(presence)
+    return targets
+
+
 def _verify_public_surface_regression(
     existing_code: Optional[str],
     generated_code: str,
@@ -2434,7 +2478,21 @@ def _verify_public_surface_regression(
     ):
         return
 
-    patch_targets = _effective_patch_targets(existing_code, language or "python", output_path)
+    # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
+    # (issue #1900), and it is authoritative like ``__all__``. Collect it BEFORE
+    # the snapshots so declared symbols — including ``_``-prefixed helpers the
+    # default heuristic would filter out (codex round-7 finding 1) — are forced
+    # into the surface/signature snapshots via ``patch_targets`` (only when
+    # actually DEFINED in the respective code, so a genuinely removed declared
+    # symbol still diffs as removed). Empty when there is no parseable
+    # ``<pdd-interface>`` (also on a JSON parse error — the conformance gate owns
+    # that warning), so undeclared modules behave exactly as before.
+    declared = _collect_declared_surface(prompt_content, prompt_name)
+    declared_names = set(declared)
+
+    patch_targets = _effective_patch_targets(
+        existing_code, language or "python", output_path
+    ) | _declared_patch_targets(existing_code, declared_names, language or "python")
     before = _snapshot_public_surface(
         existing_code,
         language or "python",
@@ -2472,7 +2530,7 @@ def _verify_public_surface_regression(
             ) from syntax_err
     after_patch_targets = _effective_patch_targets(
         generated_code, language or "python", output_path
-    )
+    ) | _declared_patch_targets(generated_code, declared_names, language or "python")
     after = _snapshot_public_surface(
         generated_code,
         language or "python",
@@ -2493,16 +2551,11 @@ def _verify_public_surface_regression(
         for sym in before:
             if sym.startswith(prefix):
                 expanded_allowed.add(sym)
-    # The prompt's ``<pdd-interface>`` declaration is the stable surface contract
-    # (issue #1900): a legit ``pdd change`` that adds a symbol while regeneration
-    # drifts an unrelated DECLARED signature used to dead-end the change->sync
-    # loop, because the old-vs-new comparison had no stable target. Per-symbol
-    # hybrid — DECLARED symbols are validated against the declaration; UNDECLARED
-    # symbols keep the old-code baseline. Empty when there is no parseable
-    # ``<pdd-interface>`` (also on a JSON parse error — the conformance gate owns
-    # that warning), so undeclared modules behave exactly as before.
-    declared = _collect_declared_surface(prompt_content, prompt_name)
-    declared_names = set(declared)
+    # Per-symbol hybrid (issue #1900): DECLARED symbols are validated against the
+    # declaration (a stable target) so a legit ``pdd change`` that also drifts an
+    # unrelated declared signature no longer dead-ends the change->sync loop;
+    # UNDECLARED symbols keep the old-code baseline. ``declared`` was collected
+    # above (it also seeds ``patch_targets``).
 
     # Removal, per-symbol. UNDECLARED: a public name dropped between before and
     # after regresses unless BREAKING-CHANGE opts it out (today's behavior).
@@ -2631,17 +2684,28 @@ def _verify_public_surface_regression(
             # still protect its signature (codex over-skip fix, e.g. a declared
             # class with a non-paren ``"class Service"`` signature).
             continue
-        # We are actually validating this symbol against its declared signature,
-        # so the declaration owns it: exclude its SNAPSHOT KEY from the old-code
-        # loops below (the class entry for a validated ``__init__``, the
-        # ``X.method`` entry for a validated method).
-        declared_validated.add(snapshot_key)
         compatible = signature_entries_compatible(
             expected_entry,
             actual_entry,
             old_symbols=after_default_symbols,
             new_symbols=after_default_symbols,
         )
+        if compatible is None:
+            # The GENERATED symbol is not a callable contract — a declared
+            # callable regenerated as a non-callable (``def f`` -> ``f = 1`` /
+            # ``from pkg import f as f``). We cannot decide this from the
+            # declaration, so do NOT claim it as validated: let it fall through to
+            # the OLD-CODE baseline, which catches the ``[function]`` ->
+            # ``[assignment]``/``[import]`` kind flip via its exact-string
+            # comparison (codex round-7 finding 2). An UNCHANGED callable-
+            # assignment (``f = lambda: x``) compares equal old-vs-new there, so
+            # this does not false-positive.
+            continue
+        # A real callable-vs-callable decision was made, so the declaration owns
+        # this symbol: exclude its SNAPSHOT KEY from the old-code loops below (the
+        # class entry for a validated ``__init__``, the ``X.method`` entry for a
+        # validated method).
+        declared_validated.add(snapshot_key)
         if compatible is False:
             # Report the ORIGINAL declared name (``Foo.method`` /
             # ``Service.__init__``), not the snapshot key.
@@ -2649,8 +2713,7 @@ def _verify_public_surface_regression(
             signature_details.append(
                 (symbol, expected_entry, actual_entry, "pdd-interface")
             )
-        # ``compatible is True`` -> compatible; ``None`` -> unparseable entry,
-        # conservative skip (presence already enforced above).
+        # ``compatible is True`` -> compatible (nothing to flag).
 
     # UNDECLARED (and presence-only DECLARED) symbols: keep the historical
     # old-vs-new comparison EXACTLY. Only symbols VALIDATED against the
