@@ -586,6 +586,83 @@ class TestIssue1900SurfaceContract:
             before, after, PROMPT, OUT, "python", prompt
         )
 
+    def test_declared_underscore_symbol_unchanged_no_false_positive(self):
+        """Codex round-7 finding 1: a prompt may declare ``_``-prefixed helpers in
+        its ``<pdd-interface>`` (real: ``_extract_step_report``). The declaration is
+        authoritative (like ``__all__``), so a declared underscore symbol that
+        EXISTS must NOT be reported as removed on unchanged code, even though the
+        public-surface snapshot normally filters underscore names out."""
+        code = (
+            "def _extract_step_report(x):\n    return x\n"
+            "def pub():\n    return 1\n"
+        )
+        prompt = _iface_prompt([("_extract_step_report", "(x)")])
+        _verify_public_surface_regression(
+            code, code, PROMPT, OUT, "python", prompt
+        )
+
+    def test_declared_underscore_symbol_removed_raises(self):
+        """A genuinely removed declared underscore symbol is still a violation."""
+        before = (
+            "def _helper(x):\n    return x\n"
+            "def pub():\n    return 1\n"
+        )
+        after = "def pub():\n    return 1\n"
+        prompt = _iface_prompt([("_helper", "(x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "_helper" in exc.value.removed_symbols
+
+    def test_declared_underscore_symbol_signature_drift_raises(self):
+        """A declared underscore symbol's signature is now validated too: an
+        added required param beyond the declaration raises."""
+        before = "def _helper(x):\n    return x\n"
+        after = "def _helper(x, y):\n    return x\n"
+        prompt = _iface_prompt([("_helper", "(x)")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "_helper" in exc.value.changed_signatures
+
+    def test_declared_callable_regenerated_as_assignment_raises(self):
+        """Codex round-7 finding 2: a declared callable regenerated as a
+        non-callable (``def f()`` -> ``f = 1``) is a break. The declared path can't
+        decide (the actual isn't a callable contract), so the symbol falls back to
+        the old-code baseline, which catches the ``[function]`` -> ``[assignment]``
+        kind flip."""
+        before = "def f():\n    return 1\n"
+        after = "f = 1\n"
+        prompt = _iface_prompt([("f", "()")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "f" in exc.value.changed_signatures
+
+    def test_declared_callable_regenerated_as_import_raises(self):
+        """Same as above but the callable becomes a re-exported import
+        (``[function]`` -> ``[import]``)."""
+        before = "def f():\n    return 1\n"
+        after = "from pkg import f as f\n"
+        prompt = _iface_prompt([("f", "()")])
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "f" in exc.value.changed_signatures
+
+    def test_unchanged_callable_assignment_declared_passes(self):
+        """Guard: an UNCHANGED callable-assignment declared as ``f()`` must NOT
+        false-positive — the old-code baseline compares equal old-vs-new."""
+        code = "f = lambda: x\n"
+        prompt = _iface_prompt([("f", "()")])
+        _verify_public_surface_regression(
+            code, code, PROMPT, OUT, "python", prompt
+        )
+
 
 class TestIssue1900AgenticPropagation:
     def test_signature_detail_lines_reach_agentic_directive(self):
@@ -694,3 +771,48 @@ class TestIssue1900AgenticPropagation:
         directive, _signature = parsed
         assert expected_sig in directive
         assert actual_sig in directive
+
+    def test_declared_violation_advice_points_at_declaration(self):
+        """Codex round-7 finding 3: since ``BREAKING-CHANGE: change signature`` no
+        longer bypasses a declared PARAM contract, the repair advice for a declared
+        violation (across the typed error, the agentic hard-failure block, and the
+        rebuilt directive) must point at editing the ``<pdd-interface>`` declaration
+        and must NOT tell the user to add a ``change signature`` marker (which would
+        loop back into the dead-end #1900 removes)."""
+        from unittest.mock import patch
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+            _parse_public_surface_failure,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="demo_Python.prompt",
+            output_path="pdd/demo.py",
+            removed_symbols=[],
+            changed_signatures=["f"],
+            pre_surface_size=1,
+            post_surface_size=1,
+            signature_details=[
+                ("f", "[function] (a)", "[function] (a, b)", "pdd-interface")
+            ],
+        )
+        # Typed error's repair directive.
+        directive = exc.repair_directive
+        assert "<pdd-interface>" in directive
+        assert "change signature" not in directive
+
+        # Agentic hard-failure block built from the typed error.
+        with patch(
+            "pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---"
+        ):
+            block = build_public_surface_hard_failure_from_error(exc, "demo")
+        assert "<pdd-interface>" in block
+        assert "change signature" not in block
+
+        # Agentic rebuilt directive parsed from the failure stdout.
+        rebuilt = _parse_public_surface_failure("", str(exc) + "\n")
+        assert rebuilt is not None
+        rebuilt_directive, _sig = rebuilt
+        assert "<pdd-interface>" in rebuilt_directive
+        assert "change signature" not in rebuilt_directive
