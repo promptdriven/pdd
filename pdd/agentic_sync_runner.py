@@ -287,6 +287,12 @@ def _format_duration(start: Optional[float], end: Optional[float]) -> str:
 
 
 _CONFORMANCE_PREFIX = "Architecture conformance error for "
+_PROSE_OUTPUT_PREFIX = "Generation output extraction failure for "
+_PROSE_OUTPUT_REPAIR_DIRECTIVE = (
+    "The previous response contained no extractable code. Return the complete "
+    "source file only, inside a single code block. Do not include any planning "
+    "text, prose explanation, or partial snippets outside the code block."
+)
 _MISSING_DECLARED_MARKER = "declared symbols missing from generated code"
 _MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
 _MISSING_PDD_INTERFACE_PARAMS_MARKER = (
@@ -300,6 +306,16 @@ _PDD_INTERFACE_DRIFT_MARKER = (
 )
 _PUBLIC_SURFACE_PREFIX = "Public surface regression for "
 _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
+
+
+def _parse_prose_output_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a prose/empty-output extraction failure in subprocess output."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _PROSE_OUTPUT_PREFIX not in combined:
+        return None
+    return _PROSE_OUTPUT_REPAIR_DIRECTIVE, ("prose",)
 
 
 def _parse_conformance_failure(
@@ -564,6 +580,34 @@ def _parse_conformance_failure(
 
     repair_directive = "\n".join(directive_lines)
     return repair_directive, missing_sorted
+
+
+def build_prose_output_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured generation-output extraction hard-failure block."""
+    block_lines = [
+        str(exc),
+        "",
+        "=== generation output extraction failure ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        f"language: {getattr(exc, 'language', '') or '<unknown>'}",
+        f"model: {getattr(exc, 'model_name', '') or '<unknown>'}",
+        f"extractor_result: {getattr(exc, 'extractor_result', '') or '<unknown>'}",
+        f"raw_output_excerpt: {getattr(exc, 'raw_output_excerpt', '') or '<unknown>'}",
+        (
+            "note: The model returned no extractable code. Check that the "
+            "provider/model is configured to return complete source files, not "
+            "planning text or agentic responses."
+        ),
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
 
 
 def build_conformance_hard_failure_from_error(
@@ -2471,11 +2515,16 @@ class AsyncSyncRunner:
             if success:
                 return True, total_cost, ""
 
+            prose_output = _parse_prose_output_failure(stdout, stderr)
             conformance = _parse_conformance_failure(stdout, stderr)
             public_surface = _parse_public_surface_failure(stdout, stderr)
             test_churn = _parse_test_churn_failure(stdout, stderr)
             failure_kind = "architecture"
-            parsed_failure = conformance
+            parsed_failure = prose_output
+            if parsed_failure is not None:
+                failure_kind = "prose_output"
+            if parsed_failure is None and conformance is not None:
+                parsed_failure = conformance
             if parsed_failure is None and public_surface is not None:
                 failure_kind = "public_surface"
                 parsed_failure = public_surface
@@ -2501,6 +2550,8 @@ class AsyncSyncRunner:
 
             if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
                 break
+            if failure_kind == "prose_output" and attempt >= 1:
+                break
             if failure_kind == "test_churn" and attempt >= 1:
                 break
             remaining_budget = self._remaining_total_budget(total_cost)
@@ -2517,7 +2568,11 @@ class AsyncSyncRunner:
                 break
 
         # Hard-failure path: include structured conformance block
-        if last_failure_kind == "public_surface":
+        if last_failure_kind == "prose_output":
+            hard_block = self._build_prose_output_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        elif last_failure_kind == "public_surface":
             hard_block = self._build_public_surface_hard_failure(
                 basename, last_error, last_stdout, last_stderr
             )
@@ -2530,6 +2585,56 @@ class AsyncSyncRunner:
                 basename, last_error, last_stdout, last_stderr
             )
         return False, total_cost, hard_block
+
+    def _build_prose_output_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured prose-output hard-failure error string."""
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _PROSE_OUTPUT_PREFIX in line:
+                tail = line.split(_PROSE_OUTPUT_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        def _extract_line_field(label: str, default: str = "<unknown>") -> str:
+            line_match = re.search(
+                rf"^{re.escape(label)}:\s*(.+)$",
+                combined,
+                re.MULTILINE | re.IGNORECASE,
+            )
+            if line_match:
+                return line_match.group(1).strip() or default
+            return default
+
+        return "\n".join(
+            [
+                failure_summary or "Generation output extraction failure",
+                "",
+                "=== generation output extraction failure ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_line_field('output')}",
+                f"language: {_extract_line_field('language')}",
+                f"model: {_extract_line_field('model_name')}",
+                f"extractor_result: {_extract_line_field('Extractor result')}",
+                f"raw_output_excerpt: {_extract_line_field('Raw output excerpt')}",
+                (
+                    "note: The model returned no extractable code. Check that "
+                    "the provider/model is configured to return complete source "
+                    "files, not planning text or agentic responses."
+                ),
+                "",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
 
     def _build_conformance_hard_failure(
         self,

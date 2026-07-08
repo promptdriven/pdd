@@ -82,6 +82,12 @@ _LANGUAGE_TEST_FILE_EXTS: Tuple[str, ...] = (
     ".php",
 )
 
+PROSE_OUTPUT_REPAIR_DIRECTIVE = (
+    "The previous response contained no extractable code. Return the complete "
+    "source file only, inside a single code block. Do not include any planning "
+    "text, prose explanation, or partial snippets outside the code block."
+)
+
 
 class ArchitectureConformanceError(click.UsageError):
     """Typed exception raised when generated code violates the architecture contract.
@@ -295,6 +301,47 @@ class TestChurnError(click.UsageError):
             f"({self.threshold:.2f}); current churn is {self.churn_ratio:.2f}.\n"
             "- Add or update only tests needed for the prompt change."
         )
+
+
+class ProseOutputError(click.UsageError):
+    """Raised when generation produced no extractable source code."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        language: str,
+        model_name: str = "unknown",
+        total_cost: float = 0.0,
+        raw_output: Optional[str] = None,
+        extractor_result: str = "empty",
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.language = language or "unknown"
+        self.model_name = model_name or "unknown"
+        self.total_cost = float(total_cost or 0.0)
+        self.extractor_result = extractor_result or "empty"
+        raw = "" if raw_output is None else str(raw_output)
+        excerpt = raw.strip()
+        if not excerpt:
+            excerpt = "<empty>"
+        elif len(excerpt) > 240:
+            excerpt = excerpt[:237] + "..."
+        self.raw_output_excerpt = excerpt
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Generation output extraction failure for {prompt_name}:\n"
+            f"model_name: {self.model_name}\n"
+            f"language: {self.language}\n"
+            f"output: {output_display}\n"
+            f"Extractor result: {self.extractor_result}\n"
+            f"Raw output excerpt: {self.raw_output_excerpt}"
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        return PROSE_OUTPUT_REPAIR_DIRECTIVE
 
 
 # --- Helper Functions ---
@@ -4675,6 +4722,20 @@ def code_generator_main(
                         if not generated_code_content:
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")
+                                language_name = str(language or "").strip().lower()
+                                if (
+                                    not _env_flag_enabled("PDD_ALLOW_EMPTY_GENERATION")
+                                    and language_name != "prompt"
+                                ):
+                                    raise ProseOutputError(
+                                        prompt_name=pathlib.Path(prompt_file).name,
+                                        output_path=output_path or "",
+                                        language=language or "unknown",
+                                        model_name=model_name or "unknown",
+                                        total_cost=float(total_cost or 0.0),
+                                        raw_output=generated_code_content or "",
+                                        extractor_result="empty",
+                                    )
                                 raise click.UsageError("Cloud execution returned no code")
                             console.print("[yellow]Cloud execution returned no code. Falling back to local.[/yellow]")
                             current_execution_is_local = True
@@ -4942,6 +5003,23 @@ def code_generator_main(
             except Exception as e:
                 console.print(f"[yellow]Post-process script error: {e}. Skipping.[/yellow]")
         if generated_code_content is not None:
+            prompt_name = pathlib.Path(prompt_file).name
+            language_name = str(language or "").strip().lower()
+            if (
+                not _env_flag_enabled("PDD_ALLOW_EMPTY_GENERATION")
+                and language_name != "prompt"
+                and not generated_code_content.strip()
+            ):
+                raise ProseOutputError(
+                    prompt_name=prompt_name,
+                    output_path=output_path or "",
+                    language=language or "unknown",
+                    model_name=model_name or "unknown",
+                    total_cost=float(total_cost or 0.0),
+                    raw_output=generated_code_content,
+                    extractor_result="empty",
+                )
+
             # Optional output_schema JSON validation before writing (only when LLM ran)
             if llm_enabled:
                 try:
@@ -5035,7 +5113,6 @@ def code_generator_main(
                 # public APIs and test coverage (external review iter-13
                 # follow-up; reproduced with mocked local generation).
                 try:
-                    prompt_name = pathlib.Path(prompt_file).name
                     _verify_public_surface_regression(
                         existing_code=existing_code_content,
                         generated_code=generated_code_content,
