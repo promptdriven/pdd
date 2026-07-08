@@ -2834,13 +2834,41 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
     "opencode": "OPENCODE_MODEL",
 }
 
+_DEFAULT_CODEX_MODEL = "gpt-5.5"
+_DEFAULT_CODEX_REASONING_EFFORT = "high"
+_CODEX_REASONING_EFFORT_VALUES = {"low", "medium", "high", "xhigh"}
+
+
+def _get_codex_model(env: Optional[Dict[str, str]] = None) -> str:
+    """Return the Codex model requested by env, falling back to PDD's default."""
+    env = os.environ if env is None else env
+    return (env.get("CODEX_MODEL") or "").strip() or _DEFAULT_CODEX_MODEL
+
+
+def _resolve_codex_reasoning_effort(
+    env: Optional[Dict[str, str]] = None,
+    reasoning_effort: Optional[str] = None,
+) -> str:
+    """Resolve the effective Codex reasoning effort, including PDD's default."""
+    env = os.environ if env is None else env
+    codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+    if codex_effort in _CODEX_REASONING_EFFORT_VALUES:
+        return codex_effort
+    if reasoning_effort:
+        return reasoning_effort
+    return _DEFAULT_CODEX_REASONING_EFFORT
+
 
 def _get_provider_model(provider: str) -> Optional[str]:
     """Return the requested model for *provider* from its env var.
 
-    Returns ``None`` when the env var is unset, empty, or the provider is
-    unknown, signalling "provider default" in the audit log.
+    Codex/OpenAI has a PDD-owned default, so unset or empty ``CODEX_MODEL``
+    resolves to that model. Other providers return ``None`` when the env var is
+    unset, empty, or the provider is unknown, signalling "provider default" in
+    the audit log.
     """
+    if provider == "openai":
+        return _get_codex_model()
     env_var = _PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
         return None
@@ -3035,10 +3063,7 @@ def _resolve_effort_for_provider_log(
         if requested not in {"low", "medium", "high"}:
             requested = None
     if provider == "openai":
-        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
-        if codex_effort in {"low", "medium", "high", "xhigh"}:
-            return requested, codex_effort
-        return requested, requested
+        return requested, _resolve_codex_reasoning_effort(env, requested)
     if provider == "anthropic":
         claude_effort = (env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip().lower()
         if claude_effort in {"low", "medium", "high", "xhigh", "max"}:
@@ -7197,6 +7222,7 @@ def _run_with_provider(
     # 3. ``PDD_REASONING_EFFORT`` env var set by pdd/core/cli.py for call
     #    sites that don't thread the kwarg (sync, split, test_generate,
     #    update, verify, crash, etc.).
+    # 4. Codex/OpenAI default: ``high`` when no explicit effort is supplied.
     # ``CODEX_REASONING_EFFORT`` only fires for the openai branch below; the
     # generic ``reasoning_effort`` resolved here covers paths 2 and 3 and is
     # what the anthropic/gemini logging notices read.
@@ -7327,20 +7353,12 @@ def _run_with_provider(
         # and additionally accepts ``xhigh`` for GPT-5.4 routing — the
         # cloud worker sets this env var directly when promoting Codex to
         # an extra-high reasoning budget regardless of the user's --time.
-        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
-        if codex_effort in {"low", "medium", "high", "xhigh"}:
-            effective_codex_effort: Optional[str] = codex_effort
-        elif reasoning_effort:
-            effective_codex_effort = reasoning_effort
-        else:
-            effective_codex_effort = None
-        if effective_codex_effort:
-            cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
+        effective_codex_effort = _resolve_codex_reasoning_effort(env, reasoning_effort)
+        cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
         # Codex --model is a top-level flag; keep it before the subcommand so
         # the final "-" remains the explicit stdin prompt operand.
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
+        codex_model = _get_codex_model(env)
+        cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,

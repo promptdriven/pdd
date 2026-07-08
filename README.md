@@ -2384,6 +2384,7 @@ For the agentic fallback to function, you need to have at least one of the suppo
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
+    *   Defaults to `CODEX_MODEL=gpt-5.5` and `CODEX_REASONING_EFFORT=high` for agentic Codex runs. Set those variables to override the default model or effort.
 4.  **OpenCode (provider-agnostic):**
     *   Requires the `opencode` CLI to be installed and in your `PATH` (`npm install -g opencode-ai`).
     *   Authenticates with OpenCode provider credentials from `opencode auth login` (stored in `~/.local/share/opencode/auth.json`), OpenCode JSON config (`~/.config/opencode/opencode.json` or project `opencode.json`), or underlying provider env vars such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, etc.
@@ -3615,7 +3616,8 @@ PDD uses several environment variables to customize its behavior:
 
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
 - **`GEMINI_MODEL`**: Override the model used by the legacy Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` only to the legacy `gemini` command. Antigravity `agy` does not expose an equivalent model flag; model routing is handled by the Antigravity CLI. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
-- **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
+- **`CODEX_MODEL`**: Model used by Codex (OpenAI) CLI in agentic workflows (default: `gpt-5.5`; for example, override with `gpt-5`). PDD always passes the resolved value as `--model` to the Codex CLI command. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
+- **`CODEX_REASONING_EFFORT`**: Reasoning effort used by Codex (OpenAI) CLI in agentic workflows (default: `high`). Accepted values are `low`, `medium`, `high`, and Codex-only `xhigh`; the resolved value is passed as `-c model_reasoning_effort=<value>` before `codex exec`.
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
