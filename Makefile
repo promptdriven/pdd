@@ -60,6 +60,7 @@ help:
 	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
 	@echo "  make release-video-status RELEASE_TAG=vX.Y.Z - Show persisted PDS release-video run metadata"
 	@echo "  make release-video-discord-backfill RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_YOUTUBE_URL=url - Post recovered video follow-up to Discord"
+	@echo "  make release-video-skip RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_SKIP_REASON=reason - Mark historical release video as skipped"
 	@echo "  make release-local           - Run release with local SOPS release secrets"
 	@echo "  make check-release-claude-oauth-config-local - Verify local SOPS Claude OAuth rotation slots"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
@@ -103,6 +104,7 @@ RELEASE_VIDEO_FORCE_REGENERATE ?= 0
 RELEASE_VIDEO_METADATA_CONFLICT ?=
 RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
+RELEASE_VIDEO_SKIP_REASON ?=
 RELEASE_VIDEO_PDS_CREATE_TIMEOUT ?= 1800
 RELEASE_VIDEO_CLAUDE_MODEL ?= claude-opus-4-8
 RELEASE_VIDEO_PDS_CLAUDE_MODEL ?= glm-5.2
@@ -143,7 +145,7 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-video-skip release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -164,7 +166,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill release-video-skip check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -913,6 +915,12 @@ release-video-discord-backfill:
 	@python scripts/backfill_release_video_discord.py \
 		--tag "$(RELEASE_TAG)" \
 		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
+		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
+
+release-video-skip:
+	@python scripts/backfill_release_video_discord.py \
+		--tag "$(RELEASE_TAG)" \
+		--skip-reason "$(RELEASE_VIDEO_SKIP_REASON)" \
 		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config

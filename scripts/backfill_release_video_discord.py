@@ -33,6 +33,7 @@ DISCORD_ERROR_BODY_MAX_BYTES = 4096
 DISCORD_ERROR_BODY_MAX_CHARS = 500
 MARKER_NAME = "pdd-release-video-discord-backfill"
 PENDING_MARKER_NAME = "pdd-release-video-discord-backfill-pending"
+SKIP_MARKER_NAME = "pdd-release-video-skipped"
 POST_MARKER_MAX_ATTEMPTS = 3
 POST_MARKER_RETRY_DELAY_SECONDS = 1.0
 
@@ -171,6 +172,11 @@ def discord_backfill_pending_marker(tag: str, youtube_url: str) -> str:
     return f"<!-- {PENDING_MARKER_NAME}: tag={tag} video_sha256={digest} -->"
 
 
+def release_video_skip_marker(tag: str, reason: str) -> str:
+    digest = hashlib.sha256(f"{tag}\n{reason.strip()}".encode("utf8")).hexdigest()
+    return f"<!-- {SKIP_MARKER_NAME}: tag={tag} reason_sha256={digest} -->"
+
+
 def release_body_has_youtube_video(body: str, video_id: str) -> bool:
     for match in YOUTUBE_URL_IN_TEXT_RE.finditer(body):
         try:
@@ -209,6 +215,25 @@ def ensure_release_body_has_pending_marker(
     if body.strip():
         return f"{body.rstrip()}\n\n{pending_marker}\n", True
     return f"{pending_marker}\n", True
+
+
+def ensure_release_body_has_skip_record(
+    body: str, tag: str, reason: str
+) -> tuple[str, bool, bool]:
+    marker = release_video_skip_marker(tag, reason)
+    if marker in body:
+        return body, False, False
+
+    skip_text = f"Release video: skipped for {tag}.\nReason: {reason.strip()}"
+    body_without_old_skip = re.sub(
+        rf"(?m)^<!-- {re.escape(SKIP_MARKER_NAME)}: tag={re.escape(tag)} "
+        r"reason_sha256=[0-9a-f]{64} -->\n?",
+        "",
+        body,
+    ).strip()
+    if body_without_old_skip:
+        return f"{skip_text}\n\n{body_without_old_skip}\n\n{marker}\n", True, True
+    return f"{skip_text}\n\n{marker}\n", True, True
 
 
 def remove_release_body_pending_marker(body: str, tag: str, youtube_url: str) -> tuple[str, bool]:
@@ -457,6 +482,50 @@ def validate_inputs(tag: str, youtube_url: str, repo: str) -> None:
         raise BackfillError(f"GitHub repo must look like owner/name, got {repo!r}.")
 
 
+def validate_skip_inputs(tag: str, reason: str, repo: str) -> None:
+    if not SEMVER_TAG_RE.fullmatch(tag):
+        raise BackfillError(f"Release tag must look like vX.Y.Z, got {tag!r}.")
+    if not GITHUB_REPO_RE.fullmatch(repo):
+        raise BackfillError(f"GitHub repo must look like owner/name, got {repo!r}.")
+    if not reason.strip():
+        raise BackfillError("Skip reason is required when recording a release-video skip.")
+
+
+def record_release_video_skip(
+    *,
+    tag: str,
+    repo: str,
+    reason: str,
+    github: GitHubReleaseClient,
+    post_discord: Callable[[str, dict[str, Any]], None] | None = None,
+) -> BackfillResult:
+    """Record that a historical release video was intentionally skipped."""
+    del post_discord
+    normalized_reason = " ".join(reason.split())
+    validate_skip_inputs(tag, normalized_reason, repo)
+
+    body = github.get_release_body(tag)
+    marked_body, updated, marker_added = ensure_release_body_has_skip_record(
+        body,
+        tag,
+        normalized_reason,
+    )
+    if updated:
+        github.edit_release_body(tag, marked_body)
+        return BackfillResult(
+            posted=False,
+            release_body_updated=True,
+            marker_added=marker_added,
+            skipped_reason="release-video-skipped",
+        )
+    return BackfillResult(
+        posted=False,
+        release_body_updated=False,
+        marker_added=False,
+        skipped_reason="release-video-skip-already-marked",
+    )
+
+
 def backfill_release_video_discord(
     *,
     tag: str,
@@ -542,11 +611,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Post an idempotent Discord follow-up after a release video is "
-            "recovered outside the normal release workflow."
+            "recovered outside the normal release workflow, or record an "
+            "explicit historical skip decision."
         )
     )
     parser.add_argument("--tag", required=True, help="Release tag, for example v0.0.283.")
-    parser.add_argument("--youtube-url", required=True, help="Recovered YouTube release-video URL.")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--youtube-url", help="Recovered YouTube release-video URL.")
+    mode.add_argument(
+        "--skip-reason",
+        help="Record that no release video will be backfilled for this release.",
+    )
     parser.add_argument(
         "--repo",
         default=os.environ.get("GITHUB_REPOSITORY", "promptdriven/pdd"),
@@ -569,13 +644,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     github = GitHubReleaseClient(gh_cli=args.gh_cli, repo=args.repo)
     try:
-        result = backfill_release_video_discord(
-            tag=args.tag,
-            youtube_url=args.youtube_url,
-            repo=args.repo,
-            webhook_url=args.webhook_url,
-            github=github,
-        )
+        if args.skip_reason is not None:
+            result = record_release_video_skip(
+                tag=args.tag,
+                repo=args.repo,
+                reason=args.skip_reason,
+                github=github,
+            )
+        else:
+            result = backfill_release_video_discord(
+                tag=args.tag,
+                youtube_url=args.youtube_url,
+                repo=args.repo,
+                webhook_url=args.webhook_url,
+                github=github,
+            )
     except BackfillError as exc:
         print(f"release-video-discord-backfill: {exc}", file=sys.stderr)
         return 1
@@ -584,6 +667,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Posted Discord release-video follow-up for {args.tag}.")
     elif result.skipped_reason == "discord-followup-already-marked":
         print(f"Skipped Discord follow-up for {args.tag}; matching marker already exists.")
+    elif result.skipped_reason == "release-video-skipped":
+        print(f"Recorded release-video skip decision for {args.tag}.")
+    elif result.skipped_reason == "release-video-skip-already-marked":
+        print(f"Skipped release-video skip update for {args.tag}; matching marker already exists.")
     if result.release_body_updated:
         print(f"Updated GitHub release body for {args.tag}.")
     return 0

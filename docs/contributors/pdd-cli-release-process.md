@@ -47,6 +47,19 @@ exact status and Discord backfill commands. Do not rerun package publishing,
 tag creation, or PyPI upload for this recovery path; wait for the PDS run and
 backfill the release-video announcement after YouTube is available.
 
+If a historical release video is intentionally abandoned because upstream PDS
+or GVS blockers prevent safe publication, record that decision on the GitHub
+release instead of leaving the backfill state ambiguous:
+
+```bash
+make release-video-skip \
+  RELEASE_TAG=<tag> \
+  RELEASE_VIDEO_SKIP_REASON="Provider quota and audit gate failures blocked safe publication."
+```
+
+This updates the release body with an idempotent skip marker and does not send a
+Discord follow-up.
+
 Keep `RELEASE_VIDEO_METADATA_CONFLICT` unset for ordinary retries so the PDS
 idempotency key still matches the original create request. Set
 `RELEASE_VIDEO_METADATA_CONFLICT=use-existing` only when PDS explicitly reports

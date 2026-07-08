@@ -236,7 +236,7 @@ def test_backfill_does_not_post_discord_when_release_link_edit_fails():
             post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
         )
 
-    assert posts == []
+    assert not posts
 
 
 def test_backfill_does_not_mark_release_when_discord_post_fails():
@@ -475,7 +475,7 @@ def test_backfill_is_idempotent_when_same_video_marker_exists():
     assert result.posted is False
     assert result.skipped_reason == "discord-followup-already-marked"
     assert posts == []
-    assert github.edits == []
+    assert not github.edits
 
 
 def test_backfill_adds_missing_link_without_reposting_when_marker_exists():
