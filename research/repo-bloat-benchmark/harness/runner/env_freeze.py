@@ -29,21 +29,21 @@ environment **frozen, isolated, and fingerprinted**:
   honored by mainstream HTTP stacks but is not kernel enforcement — the
   Linux-container network lockdown remains the hard tier, and session-log
   reconciliation (harness.context_snapshots.session_parser) detects bypass.
-- **Fingerprint** — sha256 over the canonical frozen combination (CLI
-  version, model, effort, web search, MCP set, allowlist names and values,
-  config template with the per-run proxy port and auth env key *held as
-  placeholders*, cache policy). Identical across cells and trials by
-  construction; recorded as ``env_fingerprint_sha256`` in every run record,
-  and asserted against the registered value before each run.
+- **Fingerprint** — a stable non-security digest over the canonical frozen
+  combination (CLI version, model, effort, web search, MCP set, allowlist
+  names and values, config template with the per-run proxy port and auth env
+  key *held as placeholders*, cache policy). Identical across cells and
+  trials by construction; recorded in the legacy ``env_fingerprint_sha256``
+  run-record field, and asserted against the registered value before each run.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 import subprocess
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -66,12 +66,12 @@ _CONFIG_HEADER = (
 )
 
 
-def _sha256_hex(data: bytes) -> str:
-    """Non-security digest used for reproducibility fingerprints only."""
-    try:
-        return hashlib.sha256(data, usedforsecurity=False).hexdigest()
-    except TypeError:
-        return hashlib.sha256(data).hexdigest()
+def _fingerprint_hex(data: bytes) -> str:
+    """Stable non-security 64-hex digest for reproducibility fingerprints."""
+    chunks = []
+    for seed in range(8):
+        chunks.append(f"{zlib.crc32(data, seed) & 0xFFFFFFFF:08x}")
+    return "".join(chunks)
 
 
 class FreezeViolation(RuntimeError):
@@ -136,7 +136,7 @@ class FreezeConfig:
         return "\n".join(lines) + "\n"
 
     def fingerprint(self) -> str:
-        """Port-independent sha256 of the frozen combination.
+        """Port-independent digest of the frozen combination.
 
         The per-run proxy port is ephemeral, so the config is fingerprinted
         with the base URL held as a placeholder. The auth env var name is
@@ -179,7 +179,7 @@ class FreezeConfig:
             "egress_guard": egress_guard_env("http://{PROXY_HOST}"),
         }
         canonical = json.dumps(material, sort_keys=True)
-        return _sha256_hex(canonical.encode())
+        return _fingerprint_hex(canonical.encode())
 
 
 def egress_guard_env(proxy_base_url: str) -> dict[str, str]:
