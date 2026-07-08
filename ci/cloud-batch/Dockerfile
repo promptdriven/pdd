@@ -3,6 +3,7 @@ FROM python:3.12-slim
 # System deps for building packages and git operations (regression tests use git)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
+    gh \
     build-essential \
     curl \
     zsh \
