@@ -44,6 +44,7 @@ from pdd.construct_paths import (
     construct_paths,
 )
 from pdd.content_selector import (
+    _contained_in_root,
     _pins_test_output_location,
     configured_test_output_pinned,
     resolve_test_output_path,
@@ -1791,7 +1792,13 @@ def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dic
         adopted = resolve_test_output_path(
             code_path, derived_test, user_pinned=user_pinned
         )
-        if Path(adopted).resolve() == Path(derived_test).resolve():
+        adopted_resolved = Path(adopted).resolve()
+        # Defense in depth (CWE-022, PR #1914 CodeQL): the adopted path becomes
+        # the generated-test WRITE target (result['test']/['test_files']); only
+        # accept it when it stays inside the working tree.
+        if not _contained_in_root(adopted_resolved, Path.cwd().resolve()):
+            return result
+        if adopted_resolved == Path(derived_test).resolve():
             return result
         result['test'] = adopted
         result['test_files'] = [adopted]
