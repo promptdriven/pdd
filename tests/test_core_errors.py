@@ -138,6 +138,25 @@ def test_handle_error_keyboard_interrupt_messages(mock_console):
 
 
 @patch('pdd.core.errors.console', new_callable=MagicMock)
+def test_handle_error_click_exception_is_not_labeled_unexpected(mock_console):
+    """A deliberate ClickException must be reported plainly, not as an
+    'unexpected error' (regression for `pdd story link` on a missing file)."""
+    from pdd.core.errors import handle_error
+
+    handle_error(
+        click.ClickException("Story file not found: user_stories/nope.md"),
+        "story",
+        quiet=False,
+    )
+
+    output = _console_output(mock_console)
+    assert "Error during 'story' command" in output
+    assert "Story file not found: user_stories/nope.md" in output
+    # The whole point: a deliberate user error is not "unexpected".
+    assert "An unexpected error occurred" not in output
+
+
+@patch('pdd.core.errors.console', new_callable=MagicMock)
 @patch('pdd.core.cli.auto_update')
 @patch.object(_generate_module, 'code_generator_main')
 def test_keyboard_interrupt_reports_correct_command_name(

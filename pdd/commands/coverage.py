@@ -73,6 +73,61 @@ def _render_result_table(result: CoverageResult) -> None:
         for message in result.read_errors:
             stdout_console.print(f"    {message}")
 
+    if result.regression_warnings:
+        stdout_console.print("  [yellow]Story regression warnings:[/yellow]")
+        for message in result.regression_warnings:
+            stdout_console.print(f"    {message}")
+
+    if result.stories:
+        story_table = Table(
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold",
+            expand=False,
+        )
+        story_table.add_column("Story", style="bold", no_wrap=True)
+        story_table.add_column("Regression", no_wrap=True)
+        story_table.add_column("Tests")
+        for story in result.stories:
+            status_style = {
+                "story-regression-passing": "green",
+                "story-regression-missing": "yellow",
+                "story-regression-stale": "bold red",
+            }.get(story.status, "")
+            story_table.add_row(
+                story.story_id,
+                f"[{status_style}]{story.status}[/{status_style}]",
+                _format_list(story.tests),
+            )
+        stdout_console.print(story_table)
+
+    if result.cross_unit_stories:
+        partners_by_story: dict[str, set[str]] = {
+            story_name: set() for story_name in result.cross_unit_stories
+        }
+        for rule in result.rules:
+            if not getattr(rule, "is_cross_unit", False):
+                continue
+            for story_name in rule.stories:
+                if story_name in partners_by_story:
+                    partners_by_story[story_name].update(rule.cross_unit_partners)
+
+        cross_table = Table(
+            title="Cross-dev-unit stories",
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold",
+            expand=False,
+        )
+        cross_table.add_column("Story", style="bold", no_wrap=True)
+        cross_table.add_column("Linked Units")
+        for story_name in result.cross_unit_stories:
+            cross_table.add_row(
+                story_name,
+                _format_list(sorted(partners_by_story.get(story_name, set()))),
+            )
+        stdout_console.print(cross_table)
+
     if not result.has_contract_rules:
         stdout_console.print("  [dim]No <contract_rules> section — no contract coverage data.[/dim]")
         return
@@ -117,6 +172,31 @@ def _render_result_table(result: CoverageResult) -> None:
         )
 
     stdout_console.print(table)
+
+    if result.cross_unit_stories:
+        cross_table = Table(
+            title="Cross-dev-unit stories",
+            box=box.SIMPLE_HEAD,
+            show_header=True,
+            header_style="bold",
+            expand=False,
+        )
+        cross_table.add_column("Story", style="bold")
+        cross_table.add_column("Linked units")
+        for story_name in result.cross_unit_stories:
+            partners: list[str] = []
+            seen: set[str] = set()
+            for rule in result.rules:
+                if story_name not in rule.stories:
+                    continue
+                for partner in rule.cross_unit_partners:
+                    key = partner.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    partners.append(partner)
+            cross_table.add_row(story_name, _format_list(partners))
+        stdout_console.print(cross_table)
 
     summary = result.summary
     total = summary["total"]
@@ -163,6 +243,14 @@ def _render_result_table(result: CoverageResult) -> None:
     type=click.Path(file_okay=False),
     help="Directory containing test_*.py files (default: tests/).",
 )
+@click.option(
+    "--story-regression-gate",
+    "story_regression_gate",
+    type=click.Choice(["off", "warn", "strict"]),
+    default="warn",
+    show_default=True,
+    help="How missing/stale story regression tests affect this coverage run.",
+)
 @click.argument(
     "target",
     default="prompts/",
@@ -175,6 +263,7 @@ def coverage_cmd(
     as_json: bool,
     stories_dir: Optional[str],
     tests_dir: Optional[str],
+    story_regression_gate: str,
     target: str,
 ) -> None:
     """Build a contract coverage matrix mapping rules to stories and tests.
@@ -219,12 +308,18 @@ def coverage_cmd(
         for r in results
         for rc in r.rules
     )
+    has_story_regression_gap = any(
+        story.status in {"story-regression-missing", "story-regression-stale"}
+        for r in results
+        for story in r.stories
+    )
 
     if as_json:
         output = {
             "results": [r.as_dict() for r in results],
             "total_prompts": len(results),
             "prompts_with_contracts": sum(1 for r in results if r.has_contract_rules),
+            "story_regression_gate": story_regression_gate,
         }
         print(json.dumps(output, indent=2))
     else:
@@ -236,5 +331,7 @@ def coverage_cmd(
 
     if has_fatal:
         raise click.exceptions.Exit(2)
+    if story_regression_gate == "strict" and has_story_regression_gap:
+        raise click.exceptions.Exit(1)
     if has_gap or has_read_errors:
         raise click.exceptions.Exit(1)
