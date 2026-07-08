@@ -21,7 +21,7 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -2915,6 +2915,7 @@ def _run_agentic_task_with_routing_config(
     use_playwright: bool,
     steers: Optional[List[SteerEntry]],
     claude_policy: Optional[ClaudePolicy],
+    before_attempt: Optional[Callable[[str, int], None]],
 ) -> AgenticTaskResult:
     """Run one routed escalation config without re-entering policy selection."""
     originals: Dict[str, Optional[str]] = {"PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")}
@@ -2937,6 +2938,7 @@ def _run_agentic_task_with_routing_config(
             claude_policy=claude_policy,
             routing_policy=None,
             task_class=None,
+            before_attempt=before_attempt,
         )
     finally:
         _restore_routing_model_env(originals)
@@ -2957,6 +2959,7 @@ def _run_feasible_routing_fallback(
     use_playwright: bool,
     steers: Optional[List[SteerEntry]],
     claude_policy: Optional[ClaudePolicy],
+    before_attempt: Optional[Callable[[str, int], None]],
 ) -> Optional[AgenticTaskResult]:
     """Run the standard provider cascade over still-untried feasible providers.
 
@@ -3005,6 +3008,7 @@ def _run_feasible_routing_fallback(
             claude_policy=claude_policy,
             routing_policy=None,
             task_class=None,
+            before_attempt=before_attempt,
         )
     finally:
         _restore_routing_model_env(originals)
@@ -4891,6 +4895,8 @@ def run_agentic_task(
     routing_policy: Optional[RoutingPolicy] = None,
     task_class: Optional[str] = None,
     set_git_work_tree: bool = True,
+    before_attempt: Optional[Callable[[str, int], None]] = None,
+    single_provider_attempt: bool = False,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4931,6 +4937,13 @@ def run_agentic_task(
             disable this because agents run repository tests that create nested
             temporary git repos; inherited git worktree variables make
             ``git init`` fail inside those tests.
+        before_attempt: Optional callback invoked immediately before each
+            provider attempt. Used by artifact-producing workflows to clear
+            per-attempt sidecar files before internal retries.
+        single_provider_attempt: When true, execute only the first feasible
+            provider exactly once, with no retries, provider fallback, or routing
+            escalation. Intended for side-effecting tasks that must not run
+            more than once.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4989,6 +5002,12 @@ def run_agentic_task(
                 routing_record.fallback_reason = (
                     f"selected_harness_unavailable:{routing_config.harness}"
                 )
+
+    if single_provider_attempt:
+        candidates = candidates[:1]
+        max_retries = 1
+        routing_policy = None
+        routing_record = None
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -5093,6 +5112,15 @@ def run_agentic_task(
 
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
+
+                if before_attempt is not None:
+                    try:
+                        before_attempt(provider, attempt)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: before-attempt callback failed for {label}: {exc}[/yellow]"
+                            )
 
                 provider_result = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
@@ -5520,6 +5548,7 @@ def run_agentic_task(
                     use_playwright=use_playwright,
                     steers=steers,
                     claude_policy=claude_policy,
+                    before_attempt=before_attempt,
                 )
                 attempted_harnesses.add(next_config.harness)
                 next_record.cost_usd = last_result.cost_usd
@@ -5550,6 +5579,7 @@ def run_agentic_task(
                     use_playwright=use_playwright,
                     steers=steers,
                     claude_policy=claude_policy,
+                    before_attempt=before_attempt,
                 )
                 if fallback_result is not None:
                     last_result = fallback_result

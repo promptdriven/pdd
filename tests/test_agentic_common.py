@@ -3105,6 +3105,7 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
 ):
     from pdd.routing_policy import default_policy
 
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
@@ -3136,6 +3137,74 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
     assert [row["verifier_result"] for row in records] == ["fail", "pass"]
     assert records[1]["escalation_step"] == 1
     assert records[1]["selected_config"]["harness"] == "google"
+
+
+def test_run_agentic_task_routing_escalation_preserves_before_attempt(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is True
+    assert before_attempts == [("anthropic", 1), ("google", 1)]
+
+
+def test_run_agentic_task_single_provider_attempt_disables_fallback(
+    mock_cwd,
+    monkeypatch,
+):
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+
+    providers = []
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        return (False, "first provider failed", 0.1, "anthropic-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Create PR",
+        mock_cwd,
+        max_retries=3,
+        single_provider_attempt=True,
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is False
+    assert providers == ["anthropic"]
+    assert before_attempts == [("anthropic", 1)]
 
 
 def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_back(
@@ -4753,7 +4822,7 @@ def test_anthropic_cost_all_tokens_cached():
 
 # --- Tests for run_agentic_task ---
 
-def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_run_agentic_task_anthropic_success_env_check(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test successful execution with Anthropic."""
     # Setup availability
     mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
@@ -4850,7 +4919,7 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     # Cost should include the 0.0 from the first attempt + the cost from the second
     assert cost > 0.0
 
-def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that the temp prompt file is created and then cleaned up."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -4875,7 +4944,7 @@ def test_run_agentic_task_temp_file_cleanup(mock_shutil_which, mock_subprocess_r
     temp_files = list(tmp_path.glob(".agentic_prompt_*.txt"))
     assert len(temp_files) == 0
 
-def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, tmp_path):
+def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_console, mock_env, tmp_path):
     """Test that suspicious files (C, E, T) are detected and logged."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -4896,7 +4965,7 @@ def test_suspicious_file_detection(mock_shutil_which, mock_subprocess_run, mock_
     assert "- C" in combined_output
     assert "- E" in combined_output
 
-def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, tmp_path):
+def test_run_agentic_task_timeout_override(mock_shutil_which, mock_subprocess_run, mock_env, tmp_path):
     """Test that explicit timeout overrides default."""
     mock_shutil_which.return_value = "/bin/claude"
     mock_subprocess_run.return_value.returncode = 0
@@ -8030,7 +8099,7 @@ def test_deadline_skips_attempt_when_insufficient_time(tmp_path):
     mock_run.assert_not_called()
 
 
-def test_deadline_caps_per_attempt_timeout(tmp_path):
+def test_deadline_caps_per_attempt_timeout(mock_env, tmp_path):
     """Per-attempt timeout is capped to remaining budget minus margin."""
     deadline = time.time() + 300  # 300s left; after 120s margin → 180s available
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
@@ -8056,7 +8125,7 @@ def test_deadline_caps_per_attempt_timeout(tmp_path):
     assert actual_timeout <= 185  # 300 - 120 + small tolerance
 
 
-def test_no_deadline_preserves_default_timeout(tmp_path):
+def test_no_deadline_preserves_default_timeout(mock_env, tmp_path):
     """Without deadline, default timeout is used."""
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "k"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/claude"), \

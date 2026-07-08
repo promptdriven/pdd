@@ -17,11 +17,17 @@ resolved CLI version:
 make check-release-video-config
 ```
 
-Release-video creation sends `--claude-model glm-5.2` to PDS by default for
-non-vision pipeline stages such as specs and compositions. Override with
+Release-video creation uses `RELEASE_VIDEO_CLAUDE_MODEL=claude-opus-4-8` by
+default for local Claude Code script generation. Override that release-scoped
+setting only when intentionally changing the local script model; direct
+`scripts/release_video.py` invocations also accept non-empty `CLAUDE_MODEL` as
+a fallback. Empty or whitespace-only local model values are treated as unset.
+
+The wrapper sends `--claude-model glm-5.2` to PDS by default for non-vision
+pipeline stages such as specs and compositions. Override with
 `RELEASE_VIDEO_PDS_CLAUDE_MODEL=<model>` only when intentionally changing the
-downstream PDS model; the local script-generation `CLAUDE_MODEL` remains a
-separate setting.
+downstream PDS model; setting it to an empty string intentionally omits the PDS
+model flag and uses the server default.
 
 The release workflow also installs `@promptdriven/pds@0.1.7` by default when
 `PDS_CLI_PACKAGE` is unset and runs the same preflight before creating the
@@ -40,6 +46,19 @@ with a pending `pds_response.json`. It prints the project/run/status plus the
 exact status and Discord backfill commands. Do not rerun package publishing,
 tag creation, or PyPI upload for this recovery path; wait for the PDS run and
 backfill the release-video announcement after YouTube is available.
+
+If a historical release video is intentionally abandoned because upstream PDS
+or GVS blockers prevent safe publication, record that decision on the GitHub
+release instead of leaving the backfill state ambiguous:
+
+```bash
+make release-video-skip \
+  RELEASE_TAG=<tag> \
+  RELEASE_VIDEO_SKIP_REASON="Provider quota and audit gate failures blocked safe publication."
+```
+
+This updates the release body with an idempotent skip marker and does not send a
+Discord follow-up.
 
 Keep `RELEASE_VIDEO_METADATA_CONFLICT` unset for ordinary retries so the PDS
 idempotency key still matches the original create request. Set

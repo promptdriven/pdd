@@ -236,7 +236,7 @@ def test_backfill_does_not_post_discord_when_release_link_edit_fails():
             post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
         )
 
-    assert posts == []
+    assert not posts
 
 
 def test_backfill_does_not_mark_release_when_discord_post_fails():
@@ -475,7 +475,7 @@ def test_backfill_is_idempotent_when_same_video_marker_exists():
     assert result.posted is False
     assert result.skipped_reason == "discord-followup-already-marked"
     assert posts == []
-    assert github.edits == []
+    assert not github.edits
 
 
 def test_backfill_adds_missing_link_without_reposting_when_marker_exists():
@@ -566,6 +566,84 @@ def test_backfill_requires_webhook_before_mutating_unmarked_release_body():
         )
 
     assert github.edits == []
+
+
+def test_record_skip_marks_release_without_discord_or_youtube_url():
+    module = load_backfill_module()
+    github = FakeGitHubReleaseClient("Existing notes\n")
+    posts = []
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason="Provider quota and audit gate failures blocked safe publication.",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
+    )
+
+    assert result.posted is False
+    assert result.release_body_updated is True
+    assert result.marker_added is True
+    assert result.skipped_reason == "release-video-skipped"
+    assert posts == []
+    assert "Release video: skipped for v0.0.297." in github.body
+    assert "Reason: Provider quota and audit gate failures blocked safe publication." in github.body
+    assert module.release_video_skip_marker(
+        "v0.0.297",
+        "Provider quota and audit gate failures blocked safe publication.",
+    ) in github.body
+
+
+def test_record_skip_is_idempotent_for_same_reason():
+    module = load_backfill_module()
+    reason = "Provider quota and audit gate failures blocked safe publication."
+    marker = module.release_video_skip_marker("v0.0.297", reason)
+    github = FakeGitHubReleaseClient(
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {reason}\n\n"
+        "Existing notes\n\n"
+        f"{marker}\n"
+    )
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason=reason,
+        github=github,
+    )
+
+    assert result.posted is False
+    assert result.release_body_updated is False
+    assert result.marker_added is False
+    assert result.skipped_reason == "release-video-skip-already-marked"
+    assert github.edits == []
+
+
+def test_record_skip_replaces_prior_skip_reason():
+    module = load_backfill_module()
+    old_reason = "Provider quota blocked publication."
+    new_reason = "Provider quota and audit gate failures blocked safe publication."
+    old_marker = module.release_video_skip_marker("v0.0.297", old_reason)
+    github = FakeGitHubReleaseClient(
+        "Release video: skipped for v0.0.297.\n"
+        f"Reason: {old_reason}\n\n"
+        "Existing notes\n\n"
+        f"{old_marker}\n"
+    )
+
+    result = module.record_release_video_skip(
+        tag="v0.0.297",
+        repo="promptdriven/pdd",
+        reason=new_reason,
+        github=github,
+    )
+
+    assert result.release_body_updated is True
+    assert result.marker_added is True
+    assert f"Reason: {new_reason}" in github.body
+    assert old_reason not in github.body
+    assert old_marker not in github.body
+    assert module.release_video_skip_marker("v0.0.297", new_reason) in github.body
 
 
 def test_github_client_uses_gh_release_view_and_edit_without_network():
