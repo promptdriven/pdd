@@ -197,21 +197,34 @@ class TestIssue1900SurfaceContract:
         assert "(a, b='x')" in text  # declared expected
         assert "*, c" in text  # actual generated drift
 
-    def test_presence_only_declared_signature(self):
-        """A declared signature that is not a parseable paren-list (here:
-        omitted) is presence-only: the symbol must exist but its signature is
-        NOT checked, so an arbitrary signature change passes; its ABSENCE is
-        still a violation."""
+    def test_presence_only_declared_signature_falls_back_to_old_code(self):
+        """A declared signature that is not a parseable paren-list (here: omitted)
+        is presence-only for the DECLARED check, but it FALLS BACK to the old-code
+        baseline (its exact pre-PR protection) rather than being skipped from every
+        check. So a backward-compatible change passes, an incompatible change
+        raises, and its ABSENCE is a violation."""
         prompt = _iface_prompt([("f", None)])
-        # Present with a wildly different signature -> no signature false-positive.
+        # Present with a backward-compatible change (added optional) -> no raise.
         _verify_public_surface_regression(
             "def f(a):\n    return a\n",
-            "def f(a, b, c, d):\n    return a\n",
+            "def f(a, b=None):\n    return a\n",
             PROMPT,
             OUT,
             "python",
             prompt,
         )
+        # Present with an incompatible change (added required) -> the old-code
+        # baseline still catches it (no longer silently unchecked).
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                "def f(a):\n    return a\n",
+                "def f(a, b):\n    return a\n",
+                PROMPT,
+                OUT,
+                "python",
+                prompt,
+            )
+        assert "f" in exc.value.changed_signatures
         # Absent from generated code -> violation.
         with pytest.raises(PublicSurfaceRegressionError) as exc:
             _verify_public_surface_regression(
@@ -421,6 +434,78 @@ class TestIssue1900SurfaceContract:
                 prompt,
             )
         assert "f" in exc.value.changed_signatures
+
+    def test_presence_only_declared_method_added_required_param_raises(self):
+        """Codex F1: a presence-only DECLARED dotted method must still fall back
+        to the OLD-CODE baseline for its signature (not be skipped from every
+        check). Adding a required parameter to ``Foo.method`` breaks callers and
+        must raise."""
+        prompt = _iface_prompt([("Foo.method", "(self, x)")])
+        before = "class Foo:\n    def method(self, x):\n        return x\n"
+        after = "class Foo:\n    def method(self, x, required):\n        return x\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Foo.method" in exc.value.changed_signatures
+
+    def test_presence_only_declared_method_binding_kind_flip_raises(self):
+        """Codex F2: a ``@staticmethod`` -> instance binding-kind flip on a
+        declared method must be caught via the old-code baseline (receiver-
+        stripped snapshot entries on both sides, so no self false positive)."""
+        prompt = _iface_prompt([("Factory.build", "(path)")])
+        before = (
+            "class Factory:\n"
+            "    @staticmethod\n"
+            "    def build(path):\n"
+            "        return path\n"
+        )
+        after = (
+            "class Factory:\n"
+            "    def build(self, path):\n"
+            "        return path\n"
+        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Factory.build" in exc.value.changed_signatures
+
+    def test_presence_only_declared_class_ctor_drift_raises(self):
+        """Codex F3: a declared class whose signature is a non-paren string
+        (``class Service``) is presence-only for the declared check (its
+        ``_declared_signature_to_entry`` is None) and must still fall back to the
+        old-code baseline, catching an added required ``__init__`` parameter."""
+        prompt = _iface_prompt([("Service", "class Service")])
+        before = (
+            "class Service:\n"
+            "    def __init__(self, config):\n"
+            "        self.config = config\n"
+        )
+        after = (
+            "class Service:\n"
+            "    def __init__(self, config, region):\n"
+            "        self.config = config\n"
+        )
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", prompt
+            )
+        assert "Service" in exc.value.changed_signatures
+
+    def test_breaking_change_opts_out_presence_only_declared_method(self):
+        """A presence-only declared dotted method now flows through the old-code
+        baseline, so its ``BREAKING-CHANGE: change signature Foo.method`` opt-out
+        must still suppress an intended change."""
+        prompt = _iface_prompt(
+            [("Foo.method", "(self, x)")],
+            body="% engineer\nBREAKING-CHANGE: change signature Foo.method\n",
+        )
+        before = "class Foo:\n    def method(self, x):\n        return x\n"
+        after = "class Foo:\n    def method(self, x, required):\n        return x\n"
+        _verify_public_surface_regression(
+            before, after, PROMPT, OUT, "python", prompt
+        )
 
 
 class TestIssue1900AgenticPropagation:
