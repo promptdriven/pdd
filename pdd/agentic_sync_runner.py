@@ -669,18 +669,20 @@ def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, st
         if not line.startswith("signature_detail:"):
             continue
         body = line[len("signature_detail:"):].strip()
-        # The three field delimiters must be present AND in order
-        # (``| expected:`` before ``| actual:`` before ``| source:``). A missing
-        # or out-of-order line is malformed and must be SKIPPED, never raise
-        # (codex round-2 finding 3: an out-of-order line previously reached the
-        # rsplit chain and raised ValueError on unpack). ``find`` uses the first
-        # occurrence, which still admits a valid line whose expected signature
-        # contains a ``| actual:`` substring — the rsplit chain below anchors on
-        # the trailing (real) delimiters.
-        exp_i = body.find(" | expected: ")
-        act_i = body.find(" | actual: ")
-        src_i = body.find(" | source: ")
-        if not (0 <= exp_i < act_i < src_i):
+        # All three field delimiters must be PRESENT (presence precheck only). Do
+        # NOT additionally require them in first-occurrence order: a valid
+        # signature/default can legitimately contain a ``| source: `` / ``| actual:
+        # `` substring (e.g. a default ``x=' | source: '``), which the first-
+        # occurrence ordering check would spuriously reject, dropping the line and
+        # losing the stable declared target (codex FM3). The right-anchored rsplit
+        # chain resolves the REAL trailing delimiters and correctly handles such a
+        # substring in the earlier expected field; a genuinely malformed / out-of-
+        # order line falls out via the ValueError guard (never crashes).
+        if (
+            " | expected: " not in body
+            or " | actual: " not in body
+            or " | source: " not in body
+        ):
             continue
         try:
             left, source = body.rsplit(" | source: ", 1)

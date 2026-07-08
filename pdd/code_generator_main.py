@@ -2537,20 +2537,17 @@ def _verify_public_surface_regression(
     # namespace — the prompt describes the generated module (issue #1558's
     # declared-vs-generated resolution).
     for symbol in sorted(declared_names):
-        if symbol.endswith(".__init__"):
-            # A declared ``Class.__init__`` is presence-only here: the snapshot
-            # keys the constructor ABI on the CLASS entry (receiver-stripped),
-            # never ``Class.__init__``, and the conformance gate already
-            # validates constructor params against the declaration. Comparing the
-            # declared ``(self, ...)`` against the receiver-stripped ``[class]``
-            # entry would need fragile self-stripping (codex review finding 2).
-            continue
-        if symbol in allowed_signature_changes:
-            # A ``BREAKING-CHANGE: change signature <sym>`` opt-out. Honor it for
-            # declared symbols too (mirroring the undeclared path): the
-            # ``<pdd-interface>`` cannot express an intended async/binding-kind
-            # change, so this is the only escape hatch for one (codex round-2
-            # finding 1a).
+        if "." in symbol:
+            # A declared DOTTED name is a method (``Foo.method`` /
+            # ``Foo.__init__``): presence-only here. The snapshot receiver-strips
+            # ``self``/``cls`` and keys a constructor ABI on the CLASS entry, so
+            # comparing the declared ``(self, ...)`` signature would false-positive
+            # on unchanged code and need fragile self-stripping (codex FM1;
+            # generalizes the earlier ``.__init__`` special case). Presence is
+            # still enforced by the removal check above; the conformance gate
+            # (``_verify_pdd_interface_signatures``) validates method params with
+            # proper receiver handling. Top-level functions (no dot) keep full
+            # declared-signature validation (the #2971 case).
             continue
         actual_entry = after_signatures.get(symbol)
         if actual_entry is None:
@@ -2561,25 +2558,31 @@ def _verify_public_surface_regression(
         actual_ctx = _entry_binding_context(actual_entry)
         if actual_ctx is None:
             continue
-        # Anchor the un-declarable structural facets (binding kind + async) to the
-        # PRIOR generation when the symbol already existed and was callable there:
-        # the ``<pdd-interface>`` cannot express ``self`` / property / ``async`` /
-        # function-vs-class, so old code is their only stable baseline and an
-        # async->sync or function->class drift on a declared symbol is a real
-        # regression (codex round-2 finding 1a). A NEWLY-added declared symbol (or
-        # one whose prior form was a non-callable assignment/import) has no prior
-        # callable contract, so fall back to the generated kind/async — the
-        # declaration still governs the params either way.
-        before_entry = before_signatures.get(symbol)
-        before_ctx = (
-            _entry_binding_context(before_entry)
-            if before_entry is not None
-            and parse_callable_contract(before_entry) is not None
-            else None
-        )
-        expected_kind, expected_async = (
-            before_ctx if before_ctx is not None else actual_ctx
-        )
+        # Binding kind + async are un-declarable (``<pdd-interface>`` cannot
+        # express ``self`` / property / ``async`` / function-vs-class), so their
+        # baseline is the PRIOR generation: an async->sync or function->class drift
+        # on a declared symbol is a real regression (codex round-2 finding 1a),
+        # anchored to the OLD entry when the symbol already existed and was
+        # callable there. A ``BREAKING-CHANGE: change signature <sym>`` opt-out
+        # relaxes ONLY these un-declarable facets — it uses the GENERATED kind/
+        # async — but the declared PARAM/return contract is STILL enforced below,
+        # so prose cannot wave through an added-required-param that violates the
+        # declaration (codex FM2). A newly-added declared symbol (or one whose
+        # prior form was a non-callable assignment/import) has no prior callable
+        # contract, so it also falls back to the generated kind/async.
+        if symbol in allowed_signature_changes:
+            expected_kind, expected_async = actual_ctx
+        else:
+            before_entry = before_signatures.get(symbol)
+            before_ctx = (
+                _entry_binding_context(before_entry)
+                if before_entry is not None
+                and parse_callable_contract(before_entry) is not None
+                else None
+            )
+            expected_kind, expected_async = (
+                before_ctx if before_ctx is not None else actual_ctx
+            )
         expected_entry = _declared_signature_to_entry(
             declared[symbol], expected_kind, is_async=expected_async
         )
