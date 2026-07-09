@@ -16,11 +16,12 @@ R7  ``has_regression_test`` predicate True/False -> TestHasRegressionTest.
 R8  MUST NOT execute test bodies / no e2e side effects -> TestNoExecution.
 R9  Graceful degradation (absent tests dir, unparseable module) -> TestGracefulDegradation.
 Marker registration: ``pytest -m story`` selects exactly story-backed tests
-    -> TestMarkerSelection; pytest.ini registers the marker -> TestMarkerRegistration.
+    -> TestMarkerSelection; pyproject.toml registers the marker -> TestMarkerRegistration.
 Default-map plumbing (set/reset + bare module-level resolvers) -> TestDefaultMap.
 """
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -317,6 +318,40 @@ class TestStaticFallback:
         assert smap.tests_for_story("refund_flow") == {"test_static.py::test_literal_story_marker"}
         assert not sentinel.exists()
 
+    def test_constant_story_id_markers_survive_empty_pytest_collection(
+        self, tmp_path: Path, monkeypatch
+    ):
+        """pdd#1889 Bug 3: generated tests declare ``story_id=STORY_ID`` (a module
+        constant), not a bare literal. The static fallback (used when pytest
+        collection yields zero markers) must resolve those module constants --
+        exactly as the gate's own AST scanner already does -- or the whole story
+        is (wrongly) reported as having no regression test."""
+        d = tmp_path / "tests"
+        d.mkdir()
+        (d / "test_static_const.py").write_text(
+            "\n".join(
+                [
+                    "import pytest",
+                    'PDD_STORY_ID = "checkout_flow"',
+                    "@pytest.mark.story(story_id=PDD_STORY_ID)",
+                    "def test_const_marker():",
+                    "    assert True",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        def _empty_collect(*_args, **_kwargs):
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _empty_collect)
+        smap = build_story_map(d)
+
+        assert smap.tests_for_story("checkout_flow") == {
+            "test_static_const.py::test_const_marker"
+        }
+
 
 # --- R9: graceful degradation --------------------------------------------------
 
@@ -349,10 +384,15 @@ class TestGracefulDegradation:
 # --- marker registration / selection -------------------------------------------
 
 class TestMarkerRegistration:
-    def test_pytest_ini_registers_story_marker(self):
-        ini = Path(__file__).resolve().parents[1] / "pytest.ini"
-        text = ini.read_text(encoding="utf-8")
-        assert "story(story_id, story_hash):" in text
+    def test_pyproject_registers_story_marker(self):
+        pyproject = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+
+        assert any(marker.startswith("story(") for marker in markers)
 
 
 class TestMarkerSelection:

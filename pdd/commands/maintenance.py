@@ -119,6 +119,7 @@ def _write_sync_evidence_manifest(
     default=False,
     help="Analyze sync state without executing operations. Shows what sync would do.",
 )
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable dry-run JSON.")
 @click.option(
     "--log",
     is_flag=True,
@@ -263,6 +264,7 @@ def sync(
     skip_tests: bool,
     target_coverage: Optional[float],
     dry_run: bool,
+    as_json: bool,
     log: bool,
     no_steer: bool,
     steer_timeout: Optional[float],
@@ -341,6 +343,22 @@ def sync(
             err=True
         )
         dry_run = True
+
+    if as_json:
+        if not dry_run:
+            raise click.UsageError("--json is only supported with sync --dry-run.")
+        if basename and _is_github_issue_url(basename):
+            raise click.UsageError("--json dry-run is not supported for GitHub issue sync.")
+        from ..continuous_sync import build_report
+        import json as _json
+
+        ctx.obj["_suppress_result_summary"] = True
+        report = build_report(
+            consumer="sync-dry-run",
+            modules=[basename] if basename else None,
+        )
+        click.echo(_json.dumps(report, indent=2, sort_keys=True))
+        return None
 
     effective_compressed_context = _resolve_compressed_context(compressed_context)
     ctx.obj["compressed_context"] = effective_compressed_context

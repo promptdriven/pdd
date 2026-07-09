@@ -8,6 +8,8 @@ from pydantic import BaseModel
 # Corrected import path to use the full package structure
 from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests, validate_inputs, CodeFix
 
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
 # Test data
 SAMPLE_UNIT_TEST = """
 def test_example():
@@ -736,7 +738,7 @@ def test_add_with_none():
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
+def test_integration_prompt_authoritative_with_live_llm(temp_error_file, monkeypatch):
     """
     INTEGRATION TEST: Verify live LLM respects prompt as authoritative.
 
@@ -745,6 +747,13 @@ def test_integration_prompt_authoritative_with_live_llm(temp_error_file):
 
     Run with: pytest -m integration tests/test_fix_errors_from_unit_tests.py
     """
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM integration tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
+        )
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
     # Prompt clearly specifies ONLY tracking specific file types
     prompt = """
 Write a Python function `track_file_changes` that:
