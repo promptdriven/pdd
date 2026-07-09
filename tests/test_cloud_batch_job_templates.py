@@ -106,3 +106,30 @@ def test_cloud_batch_uploaded_source_includes_story_artifacts():
     assert source_paths, "submit.sh must define SOURCE_PATHS"
 
     assert re.search(r"^\s*user_stories\s*$", source_paths.group(1), re.MULTILINE)
+
+
+def test_cloud_batch_entrypoint_scopes_jwt_exchange_to_cloud_regression():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "NEEDS_PDD_JWT=0" in entrypoint_text
+    assert "CLOUD_REGRESSION_START" in entrypoint_text
+    assert "PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E" in entrypoint_text
+    assert "Skipping PDD JWT exchange" in entrypoint_text
+
+
+def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+    pytest_branch = re.search(
+        r'if \[ "\$\{TASK_INDEX\}" -ge "\$\{PYTEST_START\}" \].*?'
+        r'CHUNK_INDEX="\$\{TASK_INDEX\}"',
+        entrypoint_text,
+        re.DOTALL,
+    )
+
+    assert pytest_branch, "entrypoint.sh must keep an explicit pytest shard branch"
+    assert "PDD_FORCE_LOCAL=1" in pytest_branch.group(0)
+    assert "unset PDD_JWT_TOKEN" in pytest_branch.group(0)
