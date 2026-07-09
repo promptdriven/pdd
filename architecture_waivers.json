@@ -91,7 +91,6 @@
       "cli_branding": "User-facing branding strings; low-risk constants. TODO add tests/test_cli_branding.py.",
       "compression_reporting": "context-compression reporting; TODO add tests/test_compression_reporting.py.",
       "config_resolution": "Centralized config resolution; TODO add tests/test_config_resolution.py.",
-      "continuous_sync": "continuous-sync classification; TODO add tests/test_continuous_sync.py.",
       "contract_ir": "Contract authoring IR; TODO add tests/test_contract_ir.py.",
       "edit_file": "LLM file editor; TODO add tests/test_edit_file.py.",
       "evidence_store": "Evidence manifest loader; TODO add tests/test_evidence_store.py.",
