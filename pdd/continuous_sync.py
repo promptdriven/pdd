@@ -108,6 +108,48 @@ def _metadata_identity(path: Path) -> Optional[tuple[str, str]]:
     return basename, language
 
 
+def _identity_matches_wanted(identity: tuple[str, str], wanted: set[str]) -> bool:
+    basename, language = identity
+    return (
+        basename in wanted
+        or f"{basename}_{language}" in wanted
+        or f"{basename}_{language}.prompt" in wanted
+    )
+
+
+def _unit_from_metadata_identity(
+    identity: tuple[str, str],
+    prompt_root: Path,
+    prompt_index: Dict[tuple[str, str], SyncUnit],
+) -> SyncUnit:
+    safe_basename, language = identity
+    prompt_unit = prompt_index.get((safe_basename, language))
+    if prompt_unit is not None:
+        return prompt_unit
+
+    prompt_path = prompt_root / f"{safe_basename}_{language}.prompt"
+    return SyncUnit(
+        basename=safe_basename,
+        language=language,
+        prompt_path=prompt_path,
+        prompts_dir=prompt_root,
+    )
+
+
+def _metadata_identities(meta_root: Path) -> List[tuple[str, str]]:
+    identities: List[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    if not meta_root.exists():
+        return identities
+    for path in sorted(meta_root.glob("*_*.json")):
+        identity = _metadata_identity(path)
+        if identity is None or identity in seen:
+            continue
+        seen.add(identity)
+        identities.append(identity)
+    return identities
+
+
 def discover_units(
     root: Optional[Path] = None,
     modules: Optional[Iterable[str]] = None,
@@ -116,29 +158,43 @@ def discover_units(
     base = project_root(root)
     wanted = set(modules or [])
     prompt_root = base / "prompts"
-    if not prompt_root.exists():
-        return []
-
-    prompt_units = _prompt_units(prompt_root)
-    if wanted:
-        return [unit for unit in prompt_units if _matches_module(unit, wanted)]
-
+    prompt_units = _prompt_units(prompt_root) if prompt_root.exists() else []
     meta_root = base / ".pdd" / "meta"
-    metadata_identities: set[tuple[str, str]] = set()
-    if meta_root.exists():
-        for path in sorted(meta_root.glob("*_*.json")):
-            identity = _metadata_identity(path)
-            if identity is not None:
-                metadata_identities.add(identity)
+    metadata_identities = _metadata_identities(meta_root)
+
+    prompt_index: Dict[tuple[str, str], SyncUnit] = {}
+    for unit in prompt_units:
+        prompt_index.setdefault((_safe_basename(unit.basename), unit.language), unit)
+
+    if wanted:
+        units: List[SyncUnit] = []
+        seen: set[tuple[str, str, Path]] = set()
+        for identity in metadata_identities:
+            if not _identity_matches_wanted(identity, wanted):
+                continue
+            unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
+            dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            units.append(unit)
+        for unit in prompt_units:
+            if not _matches_module(unit, wanted):
+                continue
+            dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            units.append(unit)
+        return units
+
     if not metadata_identities:
         return prompt_units
 
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
-    for unit in prompt_units:
-        key = (_safe_basename(unit.basename), unit.language)
-        if key not in metadata_identities:
-            continue
+    for identity in metadata_identities:
+        unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
         dedupe_key = (unit.basename, unit.language, unit.prompt_path)
         if dedupe_key in seen:
             continue
@@ -206,6 +262,24 @@ def _changed_artifacts(
     ):
         changes.append("test")
     return changes
+
+
+def _missing_fingerprinted_artifacts(
+    fingerprint: Fingerprint,
+    paths: Dict[str, Path],
+) -> List[str]:
+    missing: List[str] = []
+    field_by_artifact = {
+        "prompt": "prompt_hash",
+        "code": "code_hash",
+        "example": "example_hash",
+        "test": "test_hash",
+    }
+    for artifact, field in field_by_artifact.items():
+        path = paths.get(artifact)
+        if getattr(fingerprint, field) and (path is None or not path.exists()):
+            missing.append(artifact)
+    return missing
 
 
 def _missing_required_hashes(fingerprint: Fingerprint, paths: Dict[str, Path]) -> List[str]:
@@ -332,6 +406,22 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "fingerprint_path": str(fp_path),
             "paths": _paths_as_json(paths, base),
             "failure": "incomplete_metadata",
+        }
+
+    missing_artifacts = _missing_fingerprinted_artifacts(fingerprint, paths)
+    if missing_artifacts:
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": "missing fingerprinted artifacts: "
+            + ", ".join(sorted(missing_artifacts)),
+            "changed_files": missing_artifacts,
+            "metadata_valid": True,
+            "fingerprint_path": str(fp_path),
+            "paths": _paths_as_json(paths, base),
+            "failure": "missing_artifacts",
         }
 
     current_hashes = calculate_current_hashes(

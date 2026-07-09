@@ -1905,6 +1905,31 @@ class TestMain:
             result = main()
         assert result == 1
 
+    def test_plain_dry_run_reports_without_healing_or_pushing(self, capsys):
+        """--dry-run is non-mutating even without --json."""
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 1,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+
+        with patch("pdd.continuous_sync.build_report", return_value=report) as mock_report, \
+             patch("pdd.ci_drift_heal.detect_drift") as mock_detect, \
+             patch("pdd.ci_drift_heal.heal_module") as mock_heal, \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit:
+            result = main(modules=["auth"], dry_run=True, as_json=False)
+
+        assert result == 1
+        mock_report.assert_called_once_with(consumer="ci-heal", modules=["auth"])
+        mock_detect.assert_not_called()
+        mock_heal.assert_not_called()
+        mock_commit.assert_not_called()
+        assert "dry-run: metadata_stale=1" in capsys.readouterr().out
+
     def test_pr_mode_restores_test_extend_env_even_when_detection_raises(self):
         """#1403: the in-process guard flag must be restored to its prior value
         on every path, including when detect_drift raises."""

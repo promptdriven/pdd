@@ -340,3 +340,73 @@ def test_issue_1932_incomplete_metadata_reports_failure_not_success(pdd_project:
     assert report["ok"] is False
     assert report["failures"][0]["classification"] == "FAILURE"
     assert report["failures"][0]["failure"] == "incomplete_metadata"
+
+
+def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
+    pdd_project: Path,
+) -> None:
+    fingerprint_before = (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8")
+    (pdd_project / "src/widget.py").unlink()
+
+    report = _pdd_json(pdd_project, "reconcile", "--json", "--strict", check=False)
+    assert report["ok"] is False
+    assert report["summary"]["failures"] == 1
+    assert report["failures"][0]["classification"] == "FAILURE"
+    assert report["failures"][0]["failure"] == "missing_artifacts"
+    assert report["failures"][0]["changed_files"] == ["code"]
+
+    healed = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        "--heal",
+        check=False,
+    )
+    assert healed["ok"] is False
+    assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
+
+
+def test_issue_1932_deleted_prompt_stays_discovered_from_metadata(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / "prompts/widget_python.prompt").unlink()
+
+    default_report = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        check=False,
+    )
+    assert default_report["ok"] is False
+    assert default_report["summary"]["total"] == 1
+    assert default_report["failures"][0]["failure"] == "missing_artifacts"
+    assert default_report["failures"][0]["changed_files"] == ["prompt"]
+
+    explicit_report = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        "--module",
+        "widget",
+        check=False,
+    )
+    assert explicit_report["ok"] is False
+    assert explicit_report["summary"]["total"] == 1
+    assert explicit_report["failures"][0]["failure"] == "missing_artifacts"
+
+
+def test_issue_1932_install_hooks_supports_git_worktrees(pdd_project: Path) -> None:
+    worktree = pdd_project.parent / "repo-worktree"
+    _git(pdd_project, "worktree", "add", "-q", "-b", "hook-worktree", str(worktree))
+
+    _run(worktree, [sys.executable, "-m", "pdd", "install-hooks", "--force"])
+    hook_path_raw = _git(worktree, "rev-parse", "--git-path", "hooks/pre-commit").stdout.strip()
+    hook_path = Path(hook_path_raw)
+    if not hook_path.is_absolute():
+        hook_path = worktree / hook_path
+
+    assert hook_path.exists()
+    assert "# pdd continuous-sync drift ledger" in hook_path.read_text(encoding="utf-8")

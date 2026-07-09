@@ -1825,12 +1825,22 @@ def main(
     as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
-    if dry_run and as_json:
+    if dry_run:
         from pdd.continuous_sync import build_report
         import json as _json
 
         report = build_report(consumer="ci-heal", modules=modules)
-        print(_json.dumps(report, indent=2, sort_keys=True))
+        if as_json:
+            print(_json.dumps(report, indent=2, sort_keys=True))
+        else:
+            summary = report["summary"]
+            console.print(
+                "dry-run: "
+                f"metadata_stale={summary['metadata_stale']} "
+                f"conflicts={summary['conflicts']} "
+                f"unbaselined={summary['unbaselined']} "
+                f"failures={summary['failures']}"
+            )
         return 0 if report["ok"] else 1
 
     # PR auto-heal scope guard (#1403): in PR mode (no --skip-ci), suppress

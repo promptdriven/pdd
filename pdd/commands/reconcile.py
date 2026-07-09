@@ -3,12 +3,45 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
 
 from ..continuous_sync import build_report, project_root
+
+
+def _pre_commit_hook_path(root: Path) -> Path:
+    """Resolve the Git-managed pre-commit hook path for ``root``."""
+    commands = (
+        ["git", "rev-parse", "--path-format=absolute", "--git-path", "hooks/pre-commit"],
+        ["git", "rev-parse", "--git-path", "hooks/pre-commit"],
+    )
+    last_error = ""
+    for command in commands:
+        result = subprocess.run(
+            command,
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            last_error = (result.stderr or "").strip()
+            continue
+        raw_path = (result.stdout or "").strip()
+        if not raw_path:
+            continue
+        hook_path = Path(raw_path)
+        if not hook_path.is_absolute():
+            hook_path = root / hook_path
+        return hook_path
+    message = "Not inside a Git worktree."
+    if last_error:
+        message = last_error
+    raise click.ClickException(f"Unable to resolve Git hook path: {message}")
 
 
 def _emit_report(report: dict, as_json: bool) -> None:
@@ -94,10 +127,7 @@ def install_hooks(ctx: click.Context, force_hook: bool) -> None:
     """Install a lightweight pre-commit drift-ledger hook."""
     ctx.ensure_object(dict)
     root = project_root()
-    git_dir = root / ".git"
-    if not git_dir.exists():
-        raise click.ClickException("No .git directory found for hook installation.")
-    hook_path = git_dir / "hooks" / "pre-commit"
+    hook_path = _pre_commit_hook_path(root)
     hook_path.parent.mkdir(parents=True, exist_ok=True)
     marker = "# pdd continuous-sync drift ledger"
     if hook_path.exists() and marker not in hook_path.read_text(
