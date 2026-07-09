@@ -15,7 +15,7 @@ import re
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
@@ -477,6 +477,261 @@ def _sibling_test_paths(module_path: Path) -> list[Path]:
     if module_path.parent.name != "tests":
         candidates.append(module_path.parent.parent / "tests" / f"test_{stem}.py")
     return [path for path in candidates if path.is_file()]
+
+
+# JS/TS jest/vitest/Next.js co-located test conventions (issue #1903).
+_JS_TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_JS_TS_TEST_SUFFIXES = (".test", ".spec")
+_JS_TS_TEST_SUBDIRS = ("__test__", "__tests__", "tests")
+# Python modules whose sibling tests `_sibling_test_paths` (always `.py`) can
+# legitimately match (issue #1903). Any other suffix is unsupported and yields no
+# candidates — a safe no-op — so e.g. `src/foo.go` never adopts a same-stem
+# `tests/test_foo.py` and retargets Go generation into a Python file.
+_PYTHON_EXTENSIONS = (".py", ".pyi")
+
+
+def _collocated_js_ts_candidates(module_path: Path) -> list[Path]:
+    """Candidate co-located test files for a JS/TS module (issue #1903).
+
+    Covers ``{stem}.test.<ext>`` / ``{stem}.spec.<ext>`` beside the module and
+    under ``__test__/``, ``__tests__/`` and ``tests/`` — the conventions jest,
+    vitest and Next.js collect. Existence is filtered by the caller.
+    """
+    stem = module_path.stem
+    parent = module_path.parent
+    candidates: list[Path] = []
+    for ext in _JS_TS_EXTENSIONS:
+        for suffix in _JS_TS_TEST_SUFFIXES:
+            filename = f"{stem}{suffix}{ext}"
+            candidates.append(parent / filename)
+            for subdir in _JS_TS_TEST_SUBDIRS:
+                candidates.append(parent / subdir / filename)
+    return candidates
+
+
+def _contained_in_root(candidate_resolved: Path, root_resolved: Path) -> bool:
+    """CWE-022 containment barrier: *candidate_resolved* is *root* or inside it.
+
+    Both arguments MUST already be ``.resolve()``d (symlinks and ``..``
+    normalized). Adoption candidates are derived from a caller-supplied
+    code-file path — issue-influenced in the hosted/agentic flow — and must
+    never escape the working tree: a traversal like ``../../victim`` would
+    otherwise become a generated-test WRITE target (py/path-injection,
+    PR #1914 CodeQL alerts #339-#342).
+    """
+    candidate_s, root_s = str(candidate_resolved), str(root_resolved)
+    return candidate_s == root_s or candidate_s.startswith(
+        root_s.rstrip(os.sep) + os.sep
+    )
+
+
+def find_collocated_test(code_file: str | Path) -> Optional[Path]:
+    """Return the single existing co-located test for *code_file*, else ``None``.
+
+    Pure runner-awareness detector (issue #1903). Covers Python sibling
+    conventions (reusing :func:`_sibling_test_paths`) and JS/TS jest/vitest/
+    Next.js conventions (``{stem}.test.<ext>`` / ``{stem}.spec.<ext>`` beside
+    the module and under ``__test__/``, ``__tests__/``, ``tests/``). Any other
+    language is unsupported and returns ``None`` (no candidates) so a non-Python,
+    non-JS/TS module is never retargeted onto a same-stem ``.py`` sibling.
+
+    Only EXISTING files are considered, the module itself is excluded, and
+    candidates are de-duped by resolved path. Candidates outside the current
+    working tree are rejected (containment, CWE-022): adoption only ever
+    targets tests inside the project the CLI is operating on, so a
+    traversal-shaped *code_file* degrades to no-adoption rather than escaping
+    the repo. The match is returned only when exactly one distinct test file
+    exists (0 matches OR >1 match -> ``None``) so an ambiguous project is
+    never silently retargeted. Never raises: any error yields ``None``.
+    """
+    try:
+        module_path = Path(code_file)
+        suffix = module_path.suffix.lower()
+        if suffix in _JS_TS_EXTENSIONS:
+            raw_candidates = _collocated_js_ts_candidates(module_path)
+        elif suffix in _PYTHON_EXTENSIONS:
+            raw_candidates = _sibling_test_paths(module_path)
+        else:
+            return None
+
+        root_resolved = Path.cwd().resolve()
+        try:
+            module_resolved = module_path.resolve()
+        except OSError:
+            module_resolved = None
+
+        seen: set[Path] = set()
+        matches: list[Path] = []
+        for candidate in raw_candidates:
+            try:
+                if not candidate.is_file():
+                    continue
+                resolved = candidate.resolve()
+            except (OSError, RuntimeError, ValueError):
+                # Skip only the bad candidate (e.g. a symlink loop raising
+                # RuntimeError, or a malformed path) — never abandon the whole
+                # detection and fall back to the runner-blind shadow (#1903).
+                continue
+            if not _contained_in_root(resolved, root_resolved):
+                # Containment (CWE-022): never adopt a test outside the
+                # working tree, regardless of how the candidate was derived.
+                continue
+            if module_resolved is not None and resolved == module_resolved:
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            matches.append(candidate)
+
+        if len(matches) == 1:
+            return matches[0]
+        return None
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
+def resolve_test_output_path(
+    code_file: str | Path,
+    derived_test_path: str | Path,
+    *,
+    user_pinned: bool,
+) -> Path:
+    """Adopt an existing co-located test as the canonical test path (issue #1903).
+
+    PDD derives its test-output path from ``.pddrc`` / defaults, blind to the
+    project's real test runner, so on a jest/Next.js project it maintains a
+    ``tests/`` shadow while the co-located test the runner collects goes stale
+    (a false-green). When a single unambiguous co-located test exists, return
+    it so generate/change/sync target the real file instead.
+
+    Args:
+        code_file: The module under test.
+        derived_test_path: The test path PDD derived from config/defaults.
+        user_pinned: ``True`` when the user explicitly pinned the path (CLI
+            ``--output`` or an explicit ``.pddrc test_output_path``); such
+            paths are returned unchanged.
+
+    Returns:
+        The adopted co-located test when one is found and differs from the
+        derived path, otherwise *derived_test_path* unchanged. Never raises.
+    """
+    derived = Path(derived_test_path)
+    if user_pinned:
+        return derived
+    try:
+        sibling = find_collocated_test(code_file)
+        if sibling is None:
+            return derived
+        sibling_resolved = sibling.resolve()
+        # Defense in depth (CWE-022): find_collocated_test already rejects
+        # candidates outside the working tree, but re-assert containment at
+        # the adoption sink — the returned path becomes a generated-test
+        # WRITE target downstream.
+        if not _contained_in_root(sibling_resolved, Path.cwd().resolve()):
+            return derived
+        if sibling_resolved == derived.resolve():
+            return derived
+        return sibling
+    except Exception:  # pylint: disable=broad-except
+        return derived
+
+
+def _pins_test_output_location(config: Mapping[str, Any]) -> bool:
+    """Return True when *config* explicitly pins the test-output location (#1903).
+
+    Recognizes both the flat ``test_output_path`` key and the Issue #237
+    template form ``outputs.test.path``. It MUST be fed a RAW ``.pddrc`` context
+    ``defaults`` block (where these keys appear only when explicitly configured),
+    NEVER the ``resolved_config`` that ``construct_paths`` returns: that config
+    has a generated-default ``test_output_path`` injected back into it, so it is
+    ALWAYS present and would read as pinned even for a default derivation. Use
+    :func:`configured_test_output_pinned` to obtain the right raw defaults for a
+    file. Never raises.
+    """
+    try:
+        # Presence (not truthiness): an explicitly configured `test_output_path: ""`
+        # (root-level test output) or `outputs.test.path: ""` is still an explicit
+        # user pin. Only a genuinely ABSENT key (or an explicit null) means
+        # "default derivation" and is eligible for co-located adoption (#1903).
+        if config.get("test_output_path") is not None:
+            return True
+        outputs = config.get("outputs")
+        if isinstance(outputs, Mapping):
+            test_cfg = outputs.get("test")
+            if isinstance(test_cfg, Mapping) and test_cfg.get("path") is not None:
+                return True
+        return False
+    except Exception:  # pylint: disable=broad-except
+        return False
+
+
+def configured_test_output_pinned(
+    target_file: str | Path,
+    *,
+    context_override: Optional[str] = None,
+    search_from: Optional[str | Path] = None,
+) -> bool:
+    """True when the test-output location is user-pinned for *target_file* (#1903).
+
+    Reads the explicit-vs-default provenance from the SAME authoritative source
+    the path derivation is configured by — the RAW ``.pddrc`` context ``defaults``
+    (``test_output_path`` / ``outputs.test.path``) and the ``PDD_TEST_OUTPUT_PATH``
+    env var — and NEVER from ``construct_paths``' ``resolved_config`` (which injects
+    a generated-default ``test_output_path`` and so always reads as pinned).
+
+    The context is resolved the way ``construct_paths`` resolves it: an explicit
+    *context_override* wins; otherwise the context that owns *target_file* is
+    detected from its path (matching ``.pddrc`` ``prompts_dir`` / ``paths``), and
+    when nothing matches the ``default`` context's defaults apply. This keeps the
+    pin signal aligned with the derived path even when the owning context is
+    selected by a ``prompts_dir`` prefix rather than the bare basename/CWD.
+
+    Args:
+        target_file: The file whose owning context is inspected — the prompt file
+            for sync/change derivation, or the code file for ``pdd test``.
+        context_override: An explicit context name, when the caller already
+            resolved one (bypasses path-based detection).
+        search_from: Directory to locate the nearest ``.pddrc`` from (defaults to
+            *target_file*'s parent). Sync passes its ``prompts_root`` anchor so a
+            nested subproject finds its own ``.pddrc``.
+
+    Returns:
+        True when the location is explicitly pinned, else False. Never raises.
+    """
+    try:
+        # Presence (not truthiness): an explicitly exported `PDD_TEST_OUTPUT_PATH=`
+        # (even empty — a root-level pin) is an explicit user choice, consistent with
+        # the `.pddrc test_output_path: ""` handling in `_pins_test_output_location`.
+        # Only a genuinely UNSET env var (None) is default-eligible (#1903).
+        if os.environ.get("PDD_TEST_OUTPUT_PATH") is not None:
+            return True
+        # Lazy import: mirrors the repo's other construct_paths lookups from here
+        # and avoids any import cycle at module load.
+        from .construct_paths import (  # pylint: disable=import-outside-toplevel
+            _find_pddrc_file,
+            _load_pddrc_config,
+            detect_context_for_file,
+        )
+        start = Path(search_from) if search_from else Path(target_file).parent
+        pddrc_path = _find_pddrc_file(start)
+        if not pddrc_path:
+            return False
+        config = _load_pddrc_config(pddrc_path)
+        contexts = config.get("contexts", {})
+        context_name = context_override
+        if not context_name:
+            context_name, _ = detect_context_for_file(
+                str(target_file), repo_root=str(pddrc_path.parent)
+            )
+        # `.pddrc`'s `default` context is the fallback when no context matches
+        # (construct_paths applies it too), so a project that keeps all config in
+        # `default` is still recognized as pinned.
+        if not context_name and "default" in contexts:
+            context_name = "default"
+        defaults = contexts.get(context_name or "", {}).get("defaults", {})
+        return _pins_test_output_location(defaults)
+    except Exception:  # pylint: disable=broad-except
+        return False
 
 
 def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:

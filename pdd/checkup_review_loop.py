@@ -329,6 +329,7 @@ def _defang_severity_tags(text: str) -> str:
 #   - ``_ISSUE_ALIGNED_RE`` (``issue_aligned: true|false``) → ``_defang_issue_aligned``
 #   - ``_REVIEWER_STATUS_INLINE_RE`` (``reviewer-status:``) → ``_defang_reviewer_status_inline``
 #   - ``_FRESH_FINAL_INLINE_RE`` (``fresh-final-review:``) → ``_defang_fresh_final_inline``
+#   - ``_DEFANG_ROLE_INDEPENDENCE_INLINE_RE`` (``role-independence:``) → ``_defang_role_independence_inline``
 #   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
 #   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
 #     heading scanners) → ``_defang_section_headings``
@@ -377,6 +378,15 @@ _DEFANG_REVIEWER_STATUS_INLINE_RE: re.Pattern[str] = re.compile(
 )
 _DEFANG_FRESH_FINAL_INLINE_RE: re.Pattern[str] = re.compile(
     r"\b(fresh[-_ ]?final(?:[-_ ]?review)?)(\s*[:=])",
+    re.IGNORECASE,
+)
+# Issue #1941: the cloud verdict adapter reads ``role-independence:`` to route
+# a degraded run to ``ship_degraded``. A reviewer stderr tail echoing
+# ``role-independence: independent`` would otherwise let untrusted diagnostics
+# override the authoritative header and downgrade a degraded disclosure back to
+# a plain ship (or vice-versa).
+_DEFANG_ROLE_INDEPENDENCE_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(role[-_ ]?independence)(\s*[:=])",
     re.IGNORECASE,
 )
 
@@ -484,6 +494,13 @@ def _defang_fresh_final_inline(text: str) -> str:
     return _DEFANG_FRESH_FINAL_INLINE_RE.sub(r"\1*\2", text)
 
 
+def _defang_role_independence_inline(text: str) -> str:
+    """Neutralize inline ``role-independence:`` markers (issue #1941)."""
+    if not text:
+        return text
+    return _DEFANG_ROLE_INDEPENDENCE_INLINE_RE.sub(r"\1*\2", text)
+
+
 def _defang_budget_reached(text: str) -> str:
     """Neutralize ``max-*-reached: true`` budget markers."""
     if not text:
@@ -546,6 +563,7 @@ def _defang_adapter_trip_wires(text: str) -> str:
     text = _defang_issue_aligned(text)
     text = _defang_reviewer_status_inline(text)
     text = _defang_fresh_final_inline(text)
+    text = _defang_role_independence_inline(text)
     text = _defang_budget_reached(text)
     text = _defang_section_headings(text)
     text = _defang_pipe_table_lines(text)
@@ -919,10 +937,37 @@ class ReviewLoopState:
     # final-state/report consumers from inferring the legacy independent
     # reviewer/fixer loop when one role intentionally handled both steps.
     same_role_review_fix: bool = False
+    # Issue #1941: role-independence disclosure. ``"independent"`` for the
+    # normal cross-family reviewer/fixer loop (and also for a deliberate
+    # config-time ``allow_same_reviewer_fixer`` run — that intent is disclosed
+    # separately by ``same_role_review_fix``; this field tracks only *runtime*
+    # degradation). Set to
+    # ``"degraded (<role> unavailable)"`` when the loop had to relax
+    # reviewer/fixer independence at runtime — running one family as both
+    # reviewer and fixer because the other family was unavailable and a
+    # guaranteed deadlock ("findings remain, no fix attempted") was the only
+    # alternative. Rendered verbatim in the final report and
+    # final-state.json so downstream verdict consumers and humans see the
+    # weaker guarantee. Kept in the appended field block so positional
+    # construction stays stable.
+    role_independence: str = "independent"
 
     @property
     def findings(self) -> List[ReviewFinding]:
         return list(self.findings_by_key.values())
+
+
+def _degraded_role_independence_note(unavailable_reviewer: Optional[str]) -> str:
+    """Render the ``role-independence`` degradation note for issue #1941.
+
+    Produced when the loop auto-degrades to a same-family review/fix session
+    because the ``unavailable_reviewer``'s provider family could not run. The
+    note is surfaced verbatim in the final report and ``final-state.json`` so
+    downstream verdict consumers know reviewer/fixer independence was relaxed
+    and which family was missing.
+    """
+    role = (unavailable_reviewer or "").strip() or "primary reviewer"
+    return f"degraded ({role} unavailable)"
 
 
 def run_checkup_review_loop(
@@ -1347,6 +1392,33 @@ def run_checkup_review_loop(
                             )
                             break
                         if fallback_result.status == "findings":
+                            # Issue #1941: AUTO-DEGRADE instead of dead-locking.
+                            # The fallback reviewer IS the fixer's own role,
+                            # promoted here only because the primary reviewer's
+                            # family is unavailable. Terminating now would strand
+                            # concrete, actionable findings with no fix attempt
+                            # even though a fresh same-family fixer session can
+                            # execute them and be re-reviewed — strictly better
+                            # than a guaranteed deadlock. Hand the findings to
+                            # the fixer on the next iteration (mirrors the
+                            # fallback-clean gate-findings handoff just above),
+                            # stamp the weaker guarantee, and let the normal
+                            # fix + fresh-verify path run. The superseded primary
+                            # already renders ``(optional, superseded by
+                            # <fallback>)`` because ``state.active_reviewer``
+                            # points at the fallback, so the cloud verdict
+                            # adapter drops it from the required-reviewer set.
+                            degraded_findings = _actionable_findings(
+                                state, fallback_result.findings
+                            )
+                            if degraded_findings:
+                                state.same_role_review_fix = True
+                                state.role_independence = (
+                                    _degraded_role_independence_note(reviewer)
+                                )
+                                reviewer = fallback_result.reviewer
+                                pending_findings = degraded_findings
+                                continue
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
                                 f"({review.status}); secondary reviewer {fixer} "
@@ -1567,13 +1639,26 @@ def run_checkup_review_loop(
                     # is the fallback once it has taken over from a prior
                     # round, so a later-round failure should attribute
                     # to it instead of the long-exhausted original.
+                    #
+                    # Issue #1941: when role-independence was auto-degraded
+                    # (the fixer is running same-family because the other
+                    # family was down), name that vacancy explicitly so the
+                    # terminal reason is never a bare "could not address" that
+                    # hides why no independent fixer was available.
+                    degrade_note = (
+                        f" [role-independence {state.role_independence}]"
+                        if state.role_independence != "independent"
+                        else ""
+                    )
                     state.stop_reason = (
                         f"Fixer {active_fixer} could not address {reviewer}'s findings"
                         + (
-                            f" (fallback fixer {config.fixer_fallback} also failed)."
+                            f" (fallback fixer {config.fixer_fallback} also failed)"
                             if fallback_fix is not None
-                            else "."
+                            else ""
                         )
+                        + degrade_note
+                        + "."
                     )
                 break
             # Fallback succeeded — it now drives the rest of this round.
@@ -6159,6 +6244,100 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
+def _pddrc_default_prompts_dir(worktree: Path) -> Optional[Path]:
+    """Return the ``.pddrc`` default-context ``prompts_dir`` for ``worktree``.
+
+    Reuses the SAME ``.pddrc`` discovery/parse helpers the generate/sync paths
+    use (``construct_paths._find_pddrc_file`` / ``_load_pddrc_config``) so there
+    is a single source of truth for prompt-root config — checkup never forks its
+    own ``.pddrc`` reader. Returns a path relative to ``worktree`` (or absolute
+    made relative when it resolves inside the tree), or ``None`` when the key is
+    unset / the file is absent / anything fails to parse. Fail-soft by design:
+    the caller falls back to the layout defaults so a temporarily-broken
+    ``.pddrc`` never blocks a checkup round.
+    """
+    try:
+        from .construct_paths import _find_pddrc_file, _load_pddrc_config
+    except Exception:  # noqa: BLE001 — never let an import hiccup block checkup
+        return None
+    try:
+        pddrc_path = _find_pddrc_file(worktree)
+        if pddrc_path is None:
+            return None
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:  # noqa: BLE001 — fail-soft to layout defaults
+        return None
+    if not isinstance(config, dict):
+        return None
+    contexts = config.get("contexts")
+    if not isinstance(contexts, dict):
+        return None
+    default_ctx = contexts.get("default")
+    if not isinstance(default_ctx, dict):
+        return None
+    defaults = default_ctx.get("defaults")
+    if not isinstance(defaults, dict):
+        return None
+    raw = defaults.get("prompts_dir")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    prompts_dir = Path(raw.strip())
+    if prompts_dir.is_absolute():
+        try:
+            return prompts_dir.resolve().relative_to(worktree.resolve())
+        except (OSError, ValueError):
+            return None
+    return prompts_dir
+
+
+def _resolve_target_prompts_root(worktree: Path) -> Path:
+    """Resolve the repo-under-repair's base prompts root, relative to ``worktree``.
+
+    ``architecture.json`` stores each module's prompt ``filename`` relative to
+    the repo's top-level prompts root. pdd is self-hosted, so in pdd's OWN
+    checkout that root is ``pdd/prompts`` (with a ``prompts -> pdd/prompts``
+    convenience symlink) — but on every OTHER repo it is the ``.pddrc``-
+    configured ``prompts_dir`` (the same one generate/sync resolve), which
+    defaults to ``prompts``. Hardcoding ``pdd/prompts`` made the repair loop
+    probe a nonexistent path on external repos and wrongly conclude the owning
+    prompt was deleted, refusing to repair on any repo that is not pdd itself
+    (issue #1957).
+
+    Resolution order — first existing directory wins, with symlinks resolved to
+    the real, git-tracked path so pdd's ``prompts -> pdd/prompts`` symlink maps
+    to ``pdd/prompts`` (the path git actually reports for co-edit detection):
+
+      1. the ``.pddrc`` default-context ``prompts_dir`` (explicit config),
+      2. ``prompts`` — the universal PDD default / external-repo layout,
+      3. ``pdd/prompts`` — pdd self-hosted / vendored-pdd layout.
+
+    Falls back to ``prompts`` when none exist so a genuinely-missing prompt is
+    reported against the target repo's canonical root, never pdd's.
+    """
+    candidates: List[Path] = []
+    configured = _pddrc_default_prompts_dir(worktree)
+    if configured is not None:
+        candidates.append(configured)
+    for default in (Path("prompts"), Path("pdd") / "prompts"):
+        if default not in candidates:
+            candidates.append(default)
+
+    try:
+        worktree_resolved = worktree.resolve()
+    except OSError:
+        worktree_resolved = worktree
+
+    for candidate in candidates:
+        abs_candidate = worktree / candidate
+        if not abs_candidate.is_dir():
+            continue
+        try:
+            return abs_candidate.resolve().relative_to(worktree_resolved)
+        except (OSError, ValueError):
+            return candidate
+    return Path("prompts")
+
+
 def _load_prompt_source_map(
     worktree: Path, head_ref: str = "HEAD"
 ) -> Optional[Dict[str, str]]:
@@ -6218,6 +6397,7 @@ def _load_prompt_source_map(
         )
         return None
 
+    prompts_root = _resolve_target_prompts_root(worktree)
     mapping: Dict[str, str] = {}
     for entry in extract_modules(data):
         filepath = entry.get("filepath")
@@ -6227,7 +6407,7 @@ def _load_prompt_source_map(
         if not filepath or not filename:
             continue
         mapping[Path(filepath).as_posix()] = (
-            Path("pdd") / "prompts" / filename
+            prompts_root / filename
         ).as_posix()
 
     if not mapping:
@@ -6702,7 +6882,9 @@ def _source_of_truth_stop_reason(
     )
 
 
-def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+def _extract_arch_pairs(
+    data: Any, prompts_root: Path
+) -> Set[Tuple[str, str]]:
     """Build the canonical ``(code_path, prompt_path)`` pair set from an
     ``architecture.json`` payload.
 
@@ -6710,6 +6892,14 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
     pre-change (HEAD) and post-change (worktree) registry shapes. Paths
     are normalized to POSIX so comparisons match the changed-file form
     returned by ``_git_changed_files``.
+
+    ``prompts_root`` is the repo-under-repair's resolved base prompts root
+    (``_resolve_target_prompts_root``). The guard checks each prompt's presence
+    on disk, so this must reflect the TARGET repo's layout — not pdd's
+    self-hosted ``pdd/prompts`` tree — or every external-repo prompt reads as
+    missing and the guard fires spuriously (issue #1957). The caller resolves it
+    once and threads the same root into the HEAD and worktree extractions so the
+    two pair sets remain comparable.
     """
     pairs: Set[Tuple[str, str]] = set()
     for entry in extract_modules(data):
@@ -6722,7 +6912,7 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
         pairs.add(
             (
                 Path(filepath).as_posix(),
-                (Path("pdd") / "prompts" / filename).as_posix(),
+                (prompts_root / filename).as_posix(),
             )
         )
     return pairs
@@ -6873,7 +7063,8 @@ def _check_architecture_registry_edit_guard(
         )
         return None
 
-    head_pairs = _extract_arch_pairs(head_data)
+    prompts_root = _resolve_target_prompts_root(worktree)
+    head_pairs = _extract_arch_pairs(head_data, prompts_root)
     if not head_pairs:
         logger.warning(
             "architecture-registry guard: architecture.json at HEAD in "
@@ -6927,7 +7118,7 @@ def _check_architecture_registry_edit_guard(
                 exc,
             )
         else:
-            worktree_pairs = _extract_arch_pairs(worktree_data)
+            worktree_pairs = _extract_arch_pairs(worktree_data, prompts_root)
 
     added = worktree_pairs - head_pairs
     removed = head_pairs - worktree_pairs
@@ -7399,6 +7590,10 @@ def _write_final_state(
             if state.same_role_review_fix
             else "independent-reviewer-fixer"
         ),
+        # Issue #1941: role-independence disclosure. ``"independent"`` unless
+        # the loop auto-degraded to a same-family review/fix session because
+        # the other provider family was unavailable.
+        "role_independence": state.role_independence,
         "source_of_truth": state.source_of_truth,
         # SHA-backed verification trust boundary (issue #1088). Always
         # present so downstream consumers can rely on the schema rather
@@ -7894,6 +8089,7 @@ def _render_final_report(
         f"issue_aligned: {issue_aligned}",
         f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"same-role-review-fix: {str(state.same_role_review_fix).lower()}",
+        f"role-independence: {state.role_independence}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
         f"verified-head-sha: {verified_sha_line}",

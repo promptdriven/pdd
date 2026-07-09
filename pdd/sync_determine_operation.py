@@ -43,6 +43,12 @@ from pdd.construct_paths import (
     _load_pddrc_config,
     construct_paths,
 )
+from pdd.content_selector import (
+    _contained_in_root,
+    _pins_test_output_location,
+    configured_test_output_pinned,
+    resolve_test_output_path,
+)
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
@@ -1112,8 +1118,20 @@ def _generate_paths_from_templates(
     return result
 
 
-def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
-    """Returns a dictionary mapping file types to their expected Path objects.
+def _get_pdd_file_paths_uncollocated(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Tuple[Dict[str, Path], bool]:
+    """Derive PDD file paths and the explicit-vs-default test-output signal.
+
+    Raw path derivation delegate for :func:`get_pdd_file_paths`. Returns
+    ``(result, test_output_pinned)`` where *test_output_pinned* is True when the
+    user explicitly pinned the test-output location for THIS module — read from
+    the SAME authoritative config each branch derives paths from (``.pddrc``
+    context ``defaults.test_output_path`` / ``defaults.outputs.test.path``, or
+    the ``PDD_TEST_OUTPUT_PATH`` env var). The public wrapper uses it so the
+    runner-collected co-located test adoption (issue #1903) never overrides an
+    explicit test path. Computing it here (rather than re-resolving the context
+    from the bare basename/CWD) keeps a single source of truth and avoids a
+    context divergence when a ``prompts_dir``-anchored context differs from the
+    CWD default.
 
     Issue #225: Now checks architecture.json for filepath field before falling
     back to .pddrc configuration. This allows complex directory structures
@@ -1128,6 +1146,15 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"get_pdd_file_paths called: basename={basename}, language={language}, prompts_dir={prompts_dir}")
+
+    # Issue #1903: whether the test-output location is user-pinned. Seeded from
+    # the (global) env var so it is defined even if an exception fires before the
+    # prompt is resolved; refined ONCE below from the RAW .pddrc defaults of the
+    # module's context (never construct_paths' resolved_config, which injects a
+    # generated-default test_output_path and would always read as pinned).
+    # Presence (not truthiness): an explicit `PDD_TEST_OUTPUT_PATH=` (even empty) is a
+    # user pin, matching `_pins_test_output_location`'s empty-`.pddrc` handling (#1903).
+    test_output_pinned = os.environ.get("PDD_TEST_OUTPUT_PATH") is not None
 
     try:
         # Use construct_paths to get configuration-aware paths
@@ -1208,6 +1235,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 
+        # Issue #1903: resolve the explicit-vs-default test-output provenance ONCE,
+        # from the RAW .pddrc defaults of the context that owns this module's prompt
+        # (context_override/resolved_context_name when known, else path-detected the
+        # way construct_paths detects it, else the `default` context). Every branch
+        # below returns this single value so they all agree, and none re-reads the
+        # polluted resolved_config that construct_paths returns.
+        test_output_pinned = configured_test_output_pinned(
+            prompt_path,
+            context_override=context_override or resolved_context_name,
+            search_from=prompts_root_anchor,
+        )
+
         # If architecture.json has a filepath, use it for code/test/example paths
         arch_filepath = None
         if arch_path:
@@ -1237,6 +1276,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_dir = "examples/"
                 test_dir = "tests/"
                 generate_dir = ""
+                # Issue #1903 finding 1: the co-located-test adoption pin for THIS
+                # branch must be read from the SAME context the branch derives
+                # `test_dir` from. When no context_override/resolved_context_name is
+                # known, that context is DETECTED FROM THE ARCH CODE PATH just below
+                # (not the prompt side), so the early prompt-side `test_output_pinned`
+                # can miss an explicit `test_output_path` configured on the
+                # code-path-matched context and let adoption silently override it.
+                # Recompute a branch-local pin from that context's raw defaults,
+                # seeded from the env override.
+                arch_test_output_pinned = (
+                    os.environ.get("PDD_TEST_OUTPUT_PATH") is not None
+                )
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
@@ -1249,6 +1300,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                             )
                         context_config = config.get('contexts', {}).get(context_name or '', {})
                         defaults = context_config.get('defaults', {})
+                        arch_test_output_pinned = (
+                            arch_test_output_pinned
+                            or _pins_test_output_location(defaults)
+                        )
                         example_dir = defaults.get('example_output_path', 'examples/')
                         test_dir = defaults.get('test_output_path', 'tests/')
                         generate_dir = defaults.get('generate_output_path', '')
@@ -1326,7 +1381,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test_files': matching_test_files or [test_path]
                 }
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
-                return result
+                return result, arch_test_output_pinned
 
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
@@ -1372,7 +1427,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         context_name=context_name,
                     )
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
-                    return result
+                    return result, test_output_pinned
 
                 # Legacy path construction (backwards compatibility)
                 # Extract directory configuration from resolved_config
@@ -1467,7 +1522,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test_files': matching_test_files or [test_path]  # Bug #156
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
-                return result
+                return result, test_output_pinned
             except Exception as e:
                 # If construct_paths fails, fall back to current directory paths
                 # This maintains backward compatibility
@@ -1487,7 +1542,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
-                }
+                }, test_output_pinned
         
         input_file_paths = {
             "prompt_file": prompt_path
@@ -1528,7 +1583,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 context_name=context_name,
             )
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
-            return result
+            return result, test_output_pinned
 
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths
@@ -1677,7 +1732,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'example': example_path,
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
-        }
+        }, test_output_pinned
 
     except AmbiguousModuleError:
         # Issue #1677: ambiguity is a hard, actionable error — never let the broad
@@ -1710,7 +1765,63 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
-        }
+        }, test_output_pinned
+
+
+def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dict[str, Path]:
+    """Retarget *result* onto a single existing co-located test (issue #1903).
+
+    PDD derives its test path from ``.pddrc`` / defaults, blind to the project's
+    real test runner, so on a jest/Next.js project it maintains a ``tests/``
+    shadow while the co-located test the runner collects goes stale (a
+    false-green). When the module has exactly one unambiguous co-located test,
+    replace the derived ``test`` shadow with it and make it the sole
+    ``test_files`` entry.
+
+    *user_pinned* carries the real explicit-vs-default provenance computed by
+    :func:`_get_pdd_file_paths_uncollocated` from the SAME resolved context/config
+    that produced ``result['test']``: an explicitly configured test-output
+    location is never overridden. Never raises; on any error the original result
+    is returned.
+    """
+    try:
+        code_path = result.get('code')
+        derived_test = result.get('test')
+        if code_path is None or derived_test is None:
+            return result
+        adopted = resolve_test_output_path(
+            code_path, derived_test, user_pinned=user_pinned
+        )
+        adopted_resolved = Path(adopted).resolve()
+        # Defense in depth (CWE-022, PR #1914 CodeQL): the adopted path becomes
+        # the generated-test WRITE target (result['test']/['test_files']); only
+        # accept it when it stays inside the working tree.
+        if not _contained_in_root(adopted_resolved, Path.cwd().resolve()):
+            return result
+        if adopted_resolved == Path(derived_test).resolve():
+            return result
+        result['test'] = adopted
+        result['test_files'] = [adopted]
+        return result
+    except Exception:  # pylint: disable=broad-except
+        return result
+
+
+def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
+    """Return a dict mapping file types to their expected Path objects.
+
+    Derives the raw paths via :func:`_get_pdd_file_paths_uncollocated` (which also
+    reports whether the test-output location is explicitly pinned), then adopts a
+    runner-collected co-located test as the canonical ``test`` path (issue #1903)
+    so sync/change target the real test CI runs instead of a runner-blind
+    ``tests/`` shadow — unless the test-output location was explicitly configured,
+    which is always honored. See the delegate for the full derivation contract and
+    priority order.
+    """
+    result, test_output_pinned = _get_pdd_file_paths_uncollocated(
+        basename, language, prompts_dir, context_override=context_override
+    )
+    return _adopt_collocated_test(result, user_pinned=test_output_pinned)
 
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
