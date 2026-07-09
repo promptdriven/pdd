@@ -148,6 +148,47 @@ def create_run_report_file(path: Path, data: dict):
     with open(path, 'w') as f:
         json.dump(data, f)
 
+
+def _write_complete_unit_with_fingerprint(tmp_path: Path) -> dict:
+    """Create a complete synced Python unit and return its paths."""
+    paths = {
+        "prompt": tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        "code": tmp_path / f"{BASENAME}.py",
+        "example": tmp_path / "examples" / f"{BASENAME}_example.py",
+        "test": tmp_path / "tests" / f"test_{BASENAME}.py",
+    }
+    prompt_hash = create_file(paths["prompt"], "Generate a simple function.\n")
+    code_hash = create_file(paths["code"], "def value():\n    return 1\n")
+    example_hash = create_file(paths["example"], "from test_unit import value\nprint(value())\n")
+    test_hash = create_file(paths["test"], "from test_unit import value\n\ndef test_value():\n    assert value() == 1\n")
+    create_fingerprint_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json",
+        {
+            "pdd_version": "test",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+            "test_files": {paths["test"].name: test_hash},
+            "include_deps": {},
+        },
+    )
+    create_run_report_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json",
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 100.0,
+            "test_hash": test_hash,
+            "test_files": {paths["test"].name: test_hash},
+        },
+    )
+    return paths
+
 # --- Part 1: Core Components & Helper Functions ---
 
 class TestSyncLock:
@@ -945,7 +986,7 @@ def test_decision_update_on_code_change(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_environment):
-    """When both prompt and derived files changed, fingerprint should be deleted and sync restarts fresh."""
+    """When prompt and derived files changed, sync must return an explicit conflict."""
     prompts_dir = pdd_test_environment / "prompts"
     create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "modified prompt")
     create_file(pdd_test_environment / f"{BASENAME}.py", "modified code")
@@ -968,11 +1009,10 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
     })
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-    # Should restart fresh (generate) instead of returning analyze_conflict
-    assert decision.operation == 'generate'
-    # Fingerprint file should have been deleted (re-analysis treats it as new module)
-    assert not fp_path.exists(), "Fingerprint file should be deleted on conflict"
-    assert decision.details.get('fingerprint_found') == False
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
+    assert decision.details.get('changed_files') == ['prompt', 'code']
+    assert fp_path.exists(), "Conflict classification must not delete metadata"
 
 
 @patch('sync_determine_operation.construct_paths')
@@ -1009,21 +1049,16 @@ def test_log_mode_conflict_analysis_keeps_metadata(mock_construct, pdd_test_envi
         log_mode=True,
     )
 
-    assert decision.operation == 'generate'
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
     assert decision.details.get('read_only') is True
     assert fp_path.exists()
     assert rr_path.exists()
 
 
 @patch('sync_determine_operation.construct_paths')
-def test_conflict_deletes_fingerprint_and_run_report(mock_construct, pdd_test_environment):
-    """When both prompt and derived files changed (no run_report), fingerprint is deleted and sync restarts fresh.
-
-    Note: When a run_report exists alongside a fingerprint, prompt changes are caught
-    by an earlier code path (line ~1298) that returns 'generate' directly without
-    reaching the conflict detection. The conflict+deletion path is reached when
-    there is no run_report (e.g., after a generate that didn't run tests yet).
-    """
+def test_conflict_preserves_fingerprint_and_run_report(mock_construct, pdd_test_environment):
+    """Prompt+derived co-edits must not delete metadata or pick a winner."""
     prompts_dir = pdd_test_environment / "prompts"
     create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "modified prompt")
     create_file(pdd_test_environment / f"{BASENAME}.py", "modified code")
@@ -1058,11 +1093,34 @@ def test_conflict_deletes_fingerprint_and_run_report(mock_construct, pdd_test_en
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
 
-    # When run_report exists, the early prompt-change check (line ~1298) catches this
-    # and returns 'generate' directly — the conflict path is not reached.
-    # Either way, the result should be 'generate' (not 'analyze_conflict').
-    assert decision.operation == 'generate'
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
     assert decision.operation != 'analyze_conflict'
+    assert fp_path.exists()
+    assert rr_path.exists()
+
+
+def test_prompt_code_coedit_conflict_with_real_paths_preserves_metadata(pdd_test_environment):
+    """Critical #1932/#1929 closure: prompt+code co-edit is CONFLICT, not deletion."""
+    paths = _write_complete_unit_with_fingerprint(pdd_test_environment)
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    before_fp = fp_path.read_text(encoding="utf-8")
+
+    paths["prompt"].write_text("Generate a changed function.\n", encoding="utf-8")
+    paths["code"].write_text("def value():\n    return 2\n", encoding="utf-8")
+
+    decision = sync_determine_operation(
+        BASENAME,
+        LANGUAGE,
+        TARGET_COVERAGE,
+        prompts_dir=str(pdd_test_environment / "prompts"),
+    )
+
+    assert decision.operation == "fail_and_request_manual_merge"
+    assert decision.details["classification"] == "CONFLICT"
+    assert set(decision.details["changed_files"]) == {"prompt", "code"}
+    assert fp_path.read_text(encoding="utf-8") == before_fp
+    assert paths["prompt"].read_text(encoding="utf-8") == "Generate a changed function.\n"
 
 
 # --- Part 3: `analyze_conflict_with_llm` ---

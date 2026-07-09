@@ -557,8 +557,8 @@ class TestDetectDriftWithDiffBase:
         assert prompt_drifts[0].code_path == "pdd/auth.py"
         assert len(example_drifts) == 0
 
-    def test_auto_deps_with_code_and_prompt_changed_reclassified_as_example(self):
-        """When both code and prompt changed, clean-CI auto-deps drift is example-only."""
+    def test_auto_deps_with_code_and_prompt_changed_reclassified_as_conflict(self):
+        """When both code and prompt changed, clean-CI auto-deps drift is a conflict."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
         # Git reports prompt files via their canonical path (`pdd/prompts/...`)
@@ -576,7 +576,7 @@ class TestDetectDriftWithDiffBase:
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
-        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].operation == "conflict"
         assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
         assert example_drifts[0].code_path == "pdd/auth.py"
 
@@ -673,13 +673,8 @@ class TestDetectDriftWithDiffBase:
         assert prompt_drifts[0].operation == "update"
         assert len(example_drifts) == 0
 
-    def test_generate_with_code_and_prompt_changed_reclassified_as_example(self):
-        """When both code and prompt changed, clean-CI generate drift is example-only.
-
-        In a checkout without fingerprints, sync_determine_operation can report
-        "generate" even when the PR already updated both sides. Auto-heal should
-        refresh the example without invoking full code generation again.
-        """
+    def test_generate_with_code_and_prompt_changed_reclassified_as_conflict(self):
+        """When both code and prompt changed, clean-CI generate drift is a conflict."""
         decision = MagicMock(operation="generate", reason="New prompt ready for code generation")
         files, infer, sync = self._setup_mocks({"api": decision})
         changed_files = {"pdd/api.py", "pdd/prompts/api_python.prompt"}
@@ -694,7 +689,7 @@ class TestDetectDriftWithDiffBase:
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
-        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].operation == "conflict"
         assert example_drifts[0].prompt_path == "prompts/api_python.prompt"
         assert example_drifts[0].code_path == "pdd/api.py"
 
