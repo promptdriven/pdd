@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.413146+00:00",
+  "command": "fix",
+  "prompt_hash": "1d30710eab8191e5a651513484774f60603091ccc97fa9518ec2aef35b1d5a49",
+  "code_hash": "96f56cca2ab0ce86ec389e77057421d9d972d9fff9b937d60fcca92aac6adf9b",
+  "example_hash": null,
+  "test_hash": "f916a659d90399dbeb54e93d89fc21664bb1a6cc7ca6e24046ec24a0e32e4e1b",
+  "test_files": {
+    "test_incremental_prd_architecture.py": "f916a659d90399dbeb54e93d89fc21664bb1a6cc7ca6e24046ec24a0e32e4e1b",
+    "test_incremental_prd_architecture_real.py": "5ee10fda3e99b8c8ab3e7e51b83ee93bac711ac3a7655c7eefb833ad4404e2ef"
+  },
+  "include_deps": {
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
+    "context/change_example.py": "cc5f850c8e41a8c5b82c94b6667975d1811dff1f51888bb8caf4ff69815f8352",
+    "context/detect_change_example.py": "44d0c9172db01bd645d48a11a7afa527a7e509f5aac911fa41ed091d3f982096",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

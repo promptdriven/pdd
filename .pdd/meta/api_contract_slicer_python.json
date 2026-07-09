@@ -1,0 +1,15 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.292235+00:00",
+  "command": "fix",
+  "prompt_hash": "79768843f184f50c60dd2caf94ba173f115b04a4f6fc50eca601de9008c710d5",
+  "code_hash": "0170b39f8ac42c0ff86ea426c1f98449158a5f3321474422a252397283c77f3e",
+  "example_hash": "9eec29df45d8ce83496ddb65c5954d475e5eebf33c94914e1a716b124b6ba3ad",
+  "test_hash": "d8deb0dc7223949fbd47486d05adc7764e17d42a5b6e52a3e9de5daaed28f637",
+  "test_files": {
+    "test_api_contract_slicer.py": "d8deb0dc7223949fbd47486d05adc7764e17d42a5b6e52a3e9de5daaed28f637"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

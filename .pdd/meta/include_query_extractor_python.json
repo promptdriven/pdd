@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.409908+00:00",
+  "command": "fix",
+  "prompt_hash": "369d47b3113a0645885716e99e00eb6474834b38a91e30fa30b7625d53afcf0b",
+  "code_hash": "fa95489a0b7b8f3ad6e887844fe14f38350e56b3d2fc2e4add08318334bcd191",
+  "example_hash": "83c8b945de75bd49b258f4feabbdda3d9c08a06ad9afca3e90df7534f68a34aa",
+  "test_hash": "732d96c26df09674d07bce08f5e797c375025f0e9f2d9151d977f7d221dbc1dc",
+  "test_files": {
+    "test_include_query_extractor.py": "732d96c26df09674d07bce08f5e797c375025f0e9f2d9151d977f7d221dbc1dc"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/llm_invoke.py": "2c423dbe12dd22d1acfca6c658bfef36eaf3b016626ae4a2845576500bfcb54b",
+    "pdd/load_prompt_template.py": "903bb43e90d778fa04ba42cd8e329ac42e1b419bb372268f5955f26de43cce47",
+    "pdd/path_resolution.py": "7bcc2c4d994a9540b65f9dbd426787709c7ad012191e9ee2da20bb3db21faffb",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56"
+  }
+}

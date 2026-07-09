@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.441522+00:00",
+  "command": "fix",
+  "prompt_hash": "98fd165a7e3e936568815cff0b127c2504af6be42780b2e9c56a49bea3fd257d",
+  "code_hash": "3337699ac936552fa0e6d143fc70f6a0183edbbcbc73b1177922f3d8207dab56",
+  "example_hash": null,
+  "test_hash": "57fc855ee1f1b1bd6519e8d90495935cbe4b6cbfdc36e40040c2ce222df35532",
+  "test_files": {
+    "test_routing_policy.py": "57fc855ee1f1b1bd6519e8d90495935cbe4b6cbfdc36e40040c2ce222df35532"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/data/deepswe_manifest.json": "8d1f4d658bc01cd579c0d367e4906244d9e143f54033dd694fa403ef7ed13eea",
+    "pdd/gate_policy.py": "110ad068b2e5f1d4c0aa0e8ace3c8da8acb05d48f3116b6229459ed258d69667",
+    "pdd/reasoning.py": "b75e2beac078d86bcbee0ceb2a44cd19b4fab7a456890eead6510cd2823efa39"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.480073+00:00",
+  "command": "fix",
+  "prompt_hash": "e64578e078de825466c5b754a15fa32b4c50bdda7f7d34879d92d3c2efa1d6c7",
+  "code_hash": "27c7d14747d38df8edf24c8ef2ce1b7ca21d8f2eea38aec02ba06042ee144c0b",
+  "example_hash": "525c92e6dfd423097b29845182f7bfaca2ae8aea56da3bddbd00176e0480a509",
+  "test_hash": "f8d9545dfdace65a889ef4f4506716bb70cb4864453c6eb8717e5f14522e3abb",
+  "test_files": {
+    "test_test_context_packer.py": "f8d9545dfdace65a889ef4f4506716bb70cb4864453c6eb8717e5f14522e3abb"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/pytest_slicer.py": "c02a5488fe6f7248ed387636d5824cb2f1876544d3991e43ef253648a36e49a2"
+  }
+}

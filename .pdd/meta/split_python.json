@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.459639+00:00",
+  "command": "fix",
+  "prompt_hash": "b3d22d3a857a401b3e28f39864bef2a8bad98b59f0e2046731c878eae8a5b1a1",
+  "code_hash": "45894f5de8eb4f172b375f50858f89476bc39ab25bd1c6f0cf45dbb29f884b1e",
+  "example_hash": "c36a6c3e5ddac660ef95d72dabc89f5453a3ebcd47f5f82ddc5fec77806154d9",
+  "test_hash": "c0689f1b51cdf02e68d03f22a21828301701ab59c92fbf1ec9bad382ae8461c2",
+  "test_files": {
+    "test_split.py": "c0689f1b51cdf02e68d03f22a21828301701ab59c92fbf1ec9bad382ae8461c2",
+    "test_split_main.py": "fbc89f592fccf464f1ea1f31f912861a00bd8789f18b2f2d310901e59d969887",
+    "test_split_seam_resolution.py": "bce4215346ba2c4c22da9cd22313889df1229c6df8f66ffa1f561fa031f1233f",
+    "test_split_validation.py": "38159d3460e22b00859f413a841dbc515563bbeaf6c8e1c5b8671f9ba5a6ec98"
+  },
+  "include_deps": {
+    "context/change/13/initial_split.py": "61247194419b17b8cd986efdbbbb6782a34e89b3cfe6e895ce24419490b33578",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/llm_invoke.py": "2c423dbe12dd22d1acfca6c658bfef36eaf3b016626ae4a2845576500bfcb54b",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56"
+  }
+}

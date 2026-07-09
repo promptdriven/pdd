@@ -1,0 +1,11 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.308604+00:00",
+  "command": "fix",
+  "prompt_hash": "5abaf9a3e2e5ff24c024ff03f07ccc9c7686a13cd389f0e98870a78fd97cb1cb",
+  "code_hash": "82ef9d91f959a52ba334a15c89b9fa94afa164d6b69eae0f0c029579163035f2",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {}
+}

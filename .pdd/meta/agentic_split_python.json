@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.281302+00:00",
+  "command": "fix",
+  "prompt_hash": "216d6d2604fc6c2374b755be22a60994e34a73be331114b13ac7d8c5a5abc87e",
+  "code_hash": "044ff030cd6896b3a20507b6797033c2784fc2c17826024a304cea446d255038",
+  "example_hash": "25283e3976254717458001e7bcd058ae7d62af3c867a78e6206a9135091dadf4",
+  "test_hash": "8f3f1396daa31100274cd8a0c232b3bece8c2d46a1c0bc996f978fbeff739fa3",
+  "test_files": {
+    "test_agentic_split.py": "8f3f1396daa31100274cd8a0c232b3bece8c2d46a1c0bc996f978fbeff739fa3",
+    "test_agentic_split_orchestrator.py": "be3d9b082577fc7fac8bae292c109ab2d9df7b376f775825168c69941c10bbb7",
+    "test_agentic_split_real.py": "d68ec06d83da47934743bdb963d4eee4c7a46ee6ec5abedcee6c12b4bf022c15",
+    "test_agentic_split_v2.py": "a609bc2db408f669da9f3429b2389c244e53ca5c53da834a032ca2e2e9820ff5"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_split_orchestrator_example.py": "3f521ffaf006c3ab7fad663edc7d4bcc89f4bafe81ba43e760e9fe99ef7ea46c",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/agentic_common_worktree.py": "9d54b21c1801d1f708340917eeb265435d968698392e501c2d8d214da6f4ee3f"
+  }
+}

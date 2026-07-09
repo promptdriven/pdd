@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.453605+00:00",
+  "command": "fix",
+  "prompt_hash": "95bf0f052dbb0161c69f356bae8d9cc273dce51db1729e520f87fa48fa40c583",
+  "code_hash": "961fbae5ff5944b4be4104be65320c8bfb3bda62bff4db6eeaf4df8b1da1039a",
+  "example_hash": "a4c2313449f3174039edf4ab1f2030247b4da0eb31e6411b1008516be95eb3cf",
+  "test_hash": "d6167bdd4e173c9a3f00555361206d57130d280419edc1f051cbb8608acb8405",
+  "test_files": {
+    "test_websocket.py": "d6167bdd4e173c9a3f00555361206d57130d280419edc1f051cbb8608acb8405"
+  },
+  "include_deps": {
+    "context/job_manager_example.py": "e421698fdf16c5dfebf97eb3f2cb7210878efa1869804f871100489e35102543",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/server/models_example.py": "223a832718e72ca6640728e4bd700da58edb89667931085d7d949774d8fbc228"
+  }
+}

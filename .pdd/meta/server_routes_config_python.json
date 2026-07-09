@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.449296+00:00",
+  "command": "fix",
+  "prompt_hash": "7ba89c5ce719f92cc6c9e281f1c94bf2594dd4f0e0229ae9cf75431e2787b11c",
+  "code_hash": "efe80f308a6a2acdb6a207288f746d39f0947da597c44c358595ff7b70e587d9",
+  "example_hash": "58f2b27cdf85200a52fbe76324d02431dc62f339afd3896de37c0fe759f55cde",
+  "test_hash": "d56946a2922b543bd87bdf3f124e24b648a374676463f7e695aa6ef1b994290f",
+  "test_files": {
+    "test_config.py": "d56946a2922b543bd87bdf3f124e24b648a374676463f7e695aa6ef1b994290f"
+  },
+  "include_deps": {
+    "context/cloud_example.py": "92418beb7a1e7f25682bf2abce5b19013b95e7eed95256c930b83c1dd6dbfb0a",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/server/routes/config_example.py": "58f2b27cdf85200a52fbe76324d02431dc62f339afd3896de37c0fe759f55cde"
+  }
+}
