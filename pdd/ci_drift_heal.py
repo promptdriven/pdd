@@ -209,6 +209,29 @@ def _get_git_changed_files(diff_base: str) -> Set[str]:
     return {line.strip() for line in stdout.splitlines() if line.strip()}
 
 
+def _has_non_eol_whitespace_git_diff(diff_base: str, path: Any) -> bool:
+    """Return True when *path* has changes beyond end-of-line whitespace."""
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--quiet",
+                "--ignore-space-at-eol",
+                diff_base,
+                "--",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return True
+    # git diff --quiet: 0 = no diff, 1 = diff, >1 = error. Treat errors as
+    # changed so we do not accidentally suppress a real code/prompt conflict.
+    return result.returncode != 0
+
+
 def _numstat_line_counts(args: List[str]) -> Optional[Tuple[int, int]]:
     """Run `git diff --numstat <args>` and return (added, deleted) totals."""
     try:
@@ -457,7 +480,7 @@ def detect_drift(
             code_in_changes = False
             for c in _git_relative_path_candidates(code_path_raw, repo_root):
                 if c in changed_files:
-                    code_in_changes = True
+                    code_in_changes = _has_non_eol_whitespace_git_diff(diff_base, c)
                     break
             prompt_in_changes = False
             if prompt_from_paths is not None:
