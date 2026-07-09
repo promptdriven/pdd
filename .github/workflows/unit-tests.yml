@@ -61,6 +61,9 @@ jobs:
       - name: Validate architecture vs prompt includes (repo, non-sample trees)
         run: pdd checkup --validate-arch-includes
 
+      - name: Architecture completeness gate (module <-> architecture.json bijection)
+        run: pytest tests/test_architecture_completeness.py -q --no-header
+
       - name: Run unit tests
         run: >
           pytest tests/

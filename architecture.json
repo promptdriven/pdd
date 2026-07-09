@@ -6917,8 +6917,7 @@
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
     "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
+      "agentic_common_python.prompt"
     ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
@@ -11798,6 +11797,1104 @@
             "name": "generate_story_test",
             "signature": "(story_path: Path, output: Optional[Path] = None) -> StoryTestGenerationResult",
             "returns": "StoryTestGenerationResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "description": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "dependencies": [],
+    "priority": 251,
+    "filename": "api_key_scanner_python.prompt",
+    "filepath": "pdd/api_key_scanner.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "KeyInfo",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "get_provider_key_names",
+            "signature": "() -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "scan_environment",
+            "signature": "() -> Dict[str, KeyInfo]",
+            "returns": "Dict[str, KeyInfo]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Cross-validate architecture.json dependency entries against <include> tags in prompts.",
+    "description": "Cross-validate architecture.json dependency entries against <include> tags in prompts.",
+    "dependencies": [],
+    "priority": 252,
+    "filename": "architecture_include_validation_python.prompt",
+    "filepath": "pdd/architecture_include_validation.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "collect_architecture_include_validation_warnings",
+            "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "run_validate_arch_includes_cli",
+            "signature": "(project_root: Path, *, strict: bool, quiet: bool) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "list_validate_arch_include_warnings",
+            "signature": "(project_root: Path, *, strict: bool) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "print_architecture_include_validation_warnings",
+            "signature": "(*, quiet: bool, verbose: bool = False) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "resolve_architecture_prompt_path",
+            "signature": "(filename: str, project_root: Path) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "validate_prompt_contract_context",
+            "signature": "(prompt_path: Path, output_path: Path, project_root: Path, architecture_path: Optional[Path] = None, prompt_content: Optional[str] = None, require_prompt_local_source_context: bool = False) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "cross_validate_architecture_with_prompt_includes",
+            "signature": "(arch_data: List[Dict[str, Any]], project_root: Path) -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Update architecture.json dependencies after auto-deps inserts new module <include> tags.",
+    "description": "Update architecture.json dependencies after auto-deps inserts new module <include> tags.",
+    "dependencies": [],
+    "priority": 253,
+    "filename": "auto_deps_architecture_python.prompt",
+    "filepath": "pdd/auto_deps_architecture.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_include_paths_from_prompt_text",
+            "signature": "(text: str) -> Set[str]",
+            "returns": "Set[str]"
+          },
+          {
+            "name": "merge_auto_deps_includes_into_architecture",
+            "signature": "(project_root: Path, written_prompt_path: Path, old_prompt_text: str, new_prompt_text: str, *, dry_run: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "merge_auto_deps_includes_from_cwd",
+            "signature": "(written_prompt_path: Path, old_prompt_text: str, new_prompt_text: str, *, dry_run: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detect PDD module basenames affected by a git diff.",
+    "description": "Detect PDD module basenames affected by a git diff.",
+    "dependencies": [],
+    "priority": 254,
+    "filename": "ci_detect_changed_modules_python.prompt",
+    "filepath": "pdd/ci_detect_changed_modules.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect",
+            "signature": "(diff_base: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "main",
+            "signature": "() -> int",
+            "returns": "int"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralizes PDD CLI status progress messaging so every command reports start, current step, waiting-on-IO/LLM, success, and failure with one consistent, skimmable, non-duplicative, brand-themed vocabulary instead of ad-hoc per-module prints.",
+    "description": "Consistent status & progress messaging for the PDD CLI.",
+    "dependencies": [],
+    "priority": 255,
+    "filename": "cli_status_python.prompt",
+    "filepath": "pdd/cli_status.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "Status",
+            "kind": "enum"
+          },
+          {
+            "name": "StatusMessage",
+            "kind": "dataclass"
+          },
+          {
+            "name": "StatusReporter",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "StatusMessage.glyph",
+            "signature": "(self) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "StatusMessage.role",
+            "signature": "(self) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "StatusMessage.render_plain",
+            "signature": "(self) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "StatusMessage.render_markup",
+            "signature": "(self) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "StatusReporter.emit",
+            "signature": "(self, message: StatusMessage) -> StatusMessage",
+            "returns": "StatusMessage"
+          },
+          {
+            "name": "StatusReporter.start",
+            "signature": "(self, text: str, *, next_step: Optional[str] = None) -> StatusMessage",
+            "returns": "StatusMessage"
+          },
+          {
+            "name": "StatusReporter.step",
+            "signature": "(self, text: str) -> StatusMessage",
+            "returns": "StatusMessage"
+          },
+          {
+            "name": "StatusReporter.success",
+            "signature": "(self, text: str, *, next_step: Optional[str] = None) -> StatusMessage",
+            "returns": "StatusMessage"
+          },
+          {
+            "name": "StatusReporter.failure",
+            "signature": "(self, text: str, *, reason: Optional[str] = None, suggestions: Sequence[str] = ()) -> StatusMessage",
+            "returns": "StatusMessage"
+          },
+          {
+            "name": "StatusReporter.waiting",
+            "signature": "(self, text: str, *, on: str = 'LLM') -> Iterator[StatusMessage]",
+            "returns": "Iterator[StatusMessage]"
+          },
+          {
+            "name": "from_context",
+            "signature": "(ctx, command: Optional[str] = None) -> StatusReporter",
+            "returns": "StatusReporter"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralizes the PDD CLI color system so every command renders commands, tags, labels, and states with one consistent, brand-derived palette instead of ad-hoc per-module colors.",
+    "description": "Central CLI color system for PDD.",
+    "dependencies": [],
+    "priority": 256,
+    "filename": "cli_theme_python.prompt",
+    "filepath": "pdd/cli_theme.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "apply_global_color_preference",
+            "signature": "(preference: Optional[bool]) -> Callable[[], None]",
+            "returns": "Callable[[], None]"
+          },
+          {
+            "name": "hex_to_ansi",
+            "signature": "(hex_color: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "get_console",
+            "signature": "(**kwargs) -> Console",
+            "returns": "Console"
+          },
+          {
+            "name": "style",
+            "signature": "(role: str, text: str) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
+    "description": "Centralized config resolution for all commands.",
+    "dependencies": [],
+    "priority": 257,
+    "filename": "config_resolution_python.prompt",
+    "filepath": "pdd/config_resolution.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "set_cli_compression_override",
+            "signature": "(cli_config: Optional[Dict[str, Any]]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "merge_cli_compression_override",
+            "signature": "(additional: Dict[str, Any]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "get_cli_compression_override",
+            "signature": "() -> Optional[Dict[str, Any]]",
+            "returns": "Optional[Dict[str, Any]]"
+          },
+          {
+            "name": "effective_compression_config",
+            "signature": "(pddrc_config: Dict[str, Any]) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "apply_compression_env",
+            "signature": "(config: Dict[str, Any]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "resolve_effective_config",
+            "signature": "(ctx: click.Context, resolved_config: Dict[str, Any], param_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Detects and reports conflicts within prompt files.",
+    "description": "Detects and reports conflicts within prompt files.",
+    "dependencies": [],
+    "priority": 258,
+    "filename": "conflicts_in_prompts_python.prompt",
+    "filepath": "pdd/conflicts_in_prompts.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ConflictChange",
+            "kind": "class"
+          },
+          {
+            "name": "ConflictResponse",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "conflicts_in_prompts",
+            "signature": "(prompt1: str, prompt2: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[dict], float, str]",
+            "returns": "Tuple[List[dict], float, str]"
+          },
+          {
+            "name": "main",
+            "signature": "()"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Resolves configuration, validates input files, and determines output paths.",
+    "description": "Resolves configuration, validates input files, and determines output paths.",
+    "dependencies": [],
+    "priority": 259,
+    "filename": "construct_paths_python.prompt",
+    "filepath": "pdd/construct_paths.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_available_contexts",
+            "signature": "(start_path: Optional[Path] = None) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "detect_context_for_file",
+            "signature": "(file_path: str, repo_root: Optional[str] = None) -> Tuple[Optional[str], Dict[str, Any]]",
+            "returns": "Tuple[Optional[str], Dict[str, Any]]"
+          },
+          {
+            "name": "resolve_effective_config",
+            "signature": "(*, cli_options: Optional[Dict[str, Any]] = None, context_override: Optional[str] = None, cwd: Optional[Path] = None, prompt_file: Optional[str] = None, basename_hint: Optional[str] = None, quiet: bool = False) -> Tuple[Optional[str], Optional[Path], Dict[str, Any], Dict[str, Any], Dict[str, Any]]",
+            "returns": "Tuple[Optional[str], Optional[Path], Dict[str, Any], Dict[str, Any], Dict[str, Any]]"
+          },
+          {
+            "name": "get_tests_dir_from_config",
+            "signature": "(start_path: Optional[Path] = None) -> Optional[Path]",
+            "returns": "Optional[Path]"
+          },
+          {
+            "name": "get_language_outputs",
+            "signature": "(language_name: str) -> set[str]",
+            "returns": "set[str]"
+          },
+          {
+            "name": "construct_paths",
+            "signature": "(input_file_paths: Dict[str, str], force: bool, quiet: bool, command: str, command_options: Optional[Dict[str, Any]], create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]",
+            "returns": "Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "File editor module that uses Claude 3.7 to edit files based on natural language instructions.",
+    "description": "File editor module that uses Claude 3.7 to edit files based on natural language instructions.",
+    "dependencies": [],
+    "priority": 260,
+    "filename": "edit_file_python.prompt",
+    "filepath": "pdd/edit_file.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "EditFileState",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "calculate_hash",
+            "signature": "(content: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "read_file_content",
+            "signature": "(file_path: str) -> tuple[Optional[str], Optional[str]]",
+            "returns": "tuple[Optional[str], Optional[str]]"
+          },
+          {
+            "name": "write_file_content",
+            "signature": "(file_path: str, content: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "start_editing",
+            "signature": "(state: EditFileState) -> EditFileState",
+            "returns": "EditFileState"
+          },
+          {
+            "name": "format_tools_for_claude",
+            "signature": "(tools)"
+          },
+          {
+            "name": "plan_edits",
+            "signature": "(state: EditFileState) -> EditFileState",
+            "returns": "EditFileState"
+          },
+          {
+            "name": "execute_edit",
+            "signature": "(state: EditFileState) -> EditFileState",
+            "returns": "EditFileState"
+          },
+          {
+            "name": "handle_error",
+            "signature": "(state: EditFileState) -> EditFileState",
+            "returns": "EditFileState"
+          },
+          {
+            "name": "decide_next_step",
+            "signature": "(state: EditFileState) -> Literal['execute_edit', 'handle_error', END]",
+            "returns": "Literal['execute_edit', 'handle_error', END]"
+          },
+          {
+            "name": "check_edit_result",
+            "signature": "(state: EditFileState) -> Literal['plan_edits', 'handle_error']",
+            "returns": "Literal['plan_edits', 'handle_error']"
+          },
+          {
+            "name": "edit_file",
+            "signature": "(file_path: str, edit_instructions: str, mcp_config_path: str = None) -> tuple[bool, Optional[str]]",
+            "returns": "tuple[bool, Optional[str]]"
+          },
+          {
+            "name": "main",
+            "signature": "()"
+          },
+          {
+            "name": "run_edit_in_subprocess",
+            "signature": "(file_path: str, edit_instructions: str) -> Tuple[bool, Optional[str]]",
+            "returns": "Tuple[bool, Optional[str]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.",
+    "description": "CLI commands for managing the .pdd/extracts/ directory.",
+    "dependencies": [
+      "include_query_extractor_python.prompt",
+      "path_resolution_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 261,
+    "filename": "extracts_prune_python.prompt",
+    "filepath": "pdd/extracts_prune.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_include_tags",
+            "signature": "(text: str) -> list[tuple[str, str]]",
+            "returns": "list[tuple[str, str]]"
+          },
+          {
+            "name": "extracts",
+            "signature": "()"
+          },
+          {
+            "name": "prune",
+            "signature": "(ctx: click.Context, force: bool) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
+    "description": "Firecrawl caching module for PDD.",
+    "dependencies": [],
+    "priority": 262,
+    "filename": "firecrawl_cache_python.prompt",
+    "filepath": "pdd/firecrawl_cache.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "FirecrawlCache",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "FirecrawlCache.get",
+            "signature": "(self, url: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "FirecrawlCache.set",
+            "signature": "(self, url: str, content: str, ttl_hours: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "FirecrawlCache.clear",
+            "signature": "(self) -> int",
+            "returns": "int"
+          },
+          {
+            "name": "FirecrawlCache.get_stats",
+            "signature": "(self) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "get_firecrawl_cache",
+            "signature": "() -> FirecrawlCache",
+            "returns": "FirecrawlCache"
+          },
+          {
+            "name": "clear_firecrawl_cache",
+            "signature": "() -> int",
+            "returns": "int"
+          },
+          {
+            "name": "get_firecrawl_cache_stats",
+            "signature": "() -> dict",
+            "returns": "dict"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes a failing code module and its calling program using an LLM, given the prompt, code, and captured errors.",
+    "description": "Fixes a failing code module and its calling program using an LLM, given the prompt, code, and captured errors.",
+    "dependencies": [],
+    "priority": 263,
+    "filename": "fix_code_module_errors_python.prompt",
+    "filepath": "pdd/fix_code_module_errors.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "CodeFix",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "validate_inputs",
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "fix_code_module_errors",
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False, program_path: str = '', code_path: str = '') -> Tuple[bool, bool, str, str, str, float, str]",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deterministic completion checks for provider-finished generations.",
+    "description": "Deterministic completion checks for provider-finished generations.",
+    "dependencies": [],
+    "priority": 264,
+    "filename": "generation_completion_python.prompt",
+    "filepath": "pdd/generation_completion.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "completion_check_tail",
+            "signature": "(text: str, max_chars: int = 600) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "provider_reports_completion",
+            "signature": "(finish_reason: Any) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "provider_finished_structurally",
+            "signature": "(output: Any, finish_reason: Any, language: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "output_is_structurally_complete",
+            "signature": "(output: str, language: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "strip_outer_code_fence",
+            "signature": "(output: str) -> Tuple[str, bool]",
+            "returns": "Tuple[str, bool]"
+          },
+          {
+            "name": "python_code_parses",
+            "signature": "(code: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "json_parses",
+            "signature": "(text: str) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Module to retrieve file extensions for programming languages.",
+    "description": "Module to retrieve file extensions for programming languages.",
+    "dependencies": [],
+    "priority": 265,
+    "filename": "get_extension_python.prompt",
+    "filepath": "pdd/get_extension.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_extension",
+            "signature": "(language: str) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Module to retrieve run commands for programming languages.",
+    "description": "Module to retrieve run commands for programming languages.",
+    "dependencies": [],
+    "priority": 266,
+    "filename": "get_run_command_python.prompt",
+    "filepath": "pdd/get_run_command.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_run_command",
+            "signature": "(extension: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "get_run_command_for_file",
+            "signature": "(file_path: str) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
+    "description": "Semantic extraction from files using LLMs with persistent caching.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "path_resolution_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 267,
+    "filename": "include_query_extractor_python.prompt",
+    "filepath": "pdd/include_query_extractor.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "RepeatedRetrievalQueryError",
+            "kind": "class"
+          },
+          {
+            "name": "IncludeQueryExtractor",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "compute_cache_key",
+            "signature": "(source_file_path: str, query: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "IncludeQueryExtractor.reset_session",
+            "signature": "(cls) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "IncludeQueryExtractor.extract",
+            "signature": "(self, file_path: str, query: str) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads and caches prompt templates from the prompts directory.",
+    "description": "Loads and caches prompt templates from the prompts directory.",
+    "dependencies": [],
+    "priority": 268,
+    "filename": "load_prompt_template_python.prompt",
+    "filepath": "pdd/load_prompt_template.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "print_formatted",
+            "signature": "(message: str) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "load_prompt_template",
+            "signature": "(prompt_name: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "description": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "dependencies": [],
+    "priority": 269,
+    "filename": "model_tester_python.prompt",
+    "filepath": "pdd/model_tester.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "test_model_interactive",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.",
+    "description": "One-session sync: run example, crash-fix, verify, test, and fix steps in a single agentic session instead of separate sessions per step.",
+    "dependencies": [
+      "code_generator_main_python.prompt",
+      "fix_code_loop_python.prompt",
+      "fix_error_loop_python.prompt",
+      "fix_verification_errors_loop_python.prompt",
+      "generate_test_python.prompt"
+    ],
+    "priority": 270,
+    "filename": "one_session_sync_python.prompt",
+    "filepath": "pdd/one_session_sync.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_one_session_prompt",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "run_one_session_sync",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0, budget: Optional[float] = None, verbose: bool = False, quiet: bool = False, timeout: Optional[float] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
+    "description": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
+    "dependencies": [],
+    "priority": 271,
+    "filename": "pddrc_initializer_python.prompt",
+    "filepath": "pdd/pddrc_initializer.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "offer_pddrc_init",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "infer_contexts_from_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str]) -> Dict[str, Dict]",
+            "returns": "Dict[str, Dict]"
+          },
+          {
+            "name": "ensure_pddrc_for_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str], quiet: bool = False) -> Optional[Path]",
+            "returns": "Optional[Path]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Orchestrates the complete PDD sync workflow by coordinating operations and animations in parallel, serving as the core engine for the `pdd sync` command.",
+    "description": "Orchestrates the complete PDD sync workflow by coordinating operations and animations in parallel, serving as the core engine for the `pdd sync` command.",
+    "dependencies": [],
+    "priority": 272,
+    "filename": "pin_example_hack_python.prompt",
+    "filepath": "pdd/pin_example_hack.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "PendingStateUpdate",
+            "kind": "dataclass"
+          },
+          {
+            "name": "AtomicStateUpdate",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "AtomicStateUpdate.set_run_report",
+            "signature": "(self, report: Dict[str, Any], path: Path)"
+          },
+          {
+            "name": "AtomicStateUpdate.set_fingerprint",
+            "signature": "(self, fingerprint: Dict[str, Any], path: Path)"
+          },
+          {
+            "name": "load_sync_log",
+            "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]"
+          },
+          {
+            "name": "create_sync_log_entry",
+            "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "update_sync_log_entry",
+            "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "append_sync_log",
+            "signature": "(basename: str, language: str, entry: Dict[str, Any])"
+          },
+          {
+            "name": "log_sync_event",
+            "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None)"
+          },
+          {
+            "name": "save_run_report",
+            "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None)"
+          },
+          {
+            "name": "sync_orchestration",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "description": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "dependencies": [
+      "api_key_scanner_python.prompt"
+    ],
+    "priority": 273,
+    "filename": "provider_manager_python.prompt",
+    "filepath": "pdd/provider_manager.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_api_key_vars",
+            "signature": "(api_key_field: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "api_key_aliases",
+            "signature": "(key_name: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "expand_api_key_vars",
+            "signature": "(api_key_field: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "api_key_requirements_satisfied",
+            "signature": "(api_key_field: str, configured_key_names: Iterable[str]) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "resolve_api_key_from_env",
+            "signature": "(key_name: str, env: Optional[Dict[str, str]] = None, *, include_llm_invoke_aliases: bool = False) -> Tuple[Optional[str], Optional[str]]",
+            "returns": "Tuple[Optional[str], Optional[str]]"
+          },
+          {
+            "name": "preferred_api_key_name",
+            "signature": "(key_name: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "is_multi_credential",
+            "signature": "(api_key_field: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "add_provider_from_registry",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "add_custom_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_models_by_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_individual_models",
+            "signature": "() -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Python Environment Detector",
+    "description": "Python Environment Detector",
+    "dependencies": [],
+    "priority": 274,
+    "filename": "python_env_detector_python.prompt",
+    "filepath": "pdd/python_env_detector.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_host_python_executable",
+            "signature": "() -> str",
+            "returns": "str"
+          },
+          {
+            "name": "get_environment_info",
+            "signature": "() -> dict",
+            "returns": "dict"
+          },
+          {
+            "name": "is_in_virtual_environment",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_environment_type",
+            "signature": "() -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Shared helpers for mapping --time floats to provider reasoning effort.",
+    "description": "Shared helpers for mapping --time floats to provider reasoning effort.",
+    "dependencies": [],
+    "priority": 275,
+    "filename": "reasoning_python.prompt",
+    "filepath": "pdd/reasoning.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "time_to_effort_level",
+            "signature": "(time: float) -> EffortLevel",
+            "returns": "EffortLevel"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
+    "description": "Template expansion utility for output path configuration.",
+    "dependencies": [],
+    "priority": 276,
+    "filename": "template_expander_python.prompt",
+    "filepath": "pdd/template_expander.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "expand_template",
+            "signature": "(template: str, context: Dict[str, Any]) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Utilities for validating and cleaning <include> tags in generated prompt content.",
+    "description": "Utilities for validating and cleaning <include> tags in generated prompt content.",
+    "dependencies": [],
+    "priority": 277,
+    "filename": "validate_prompt_includes_python.prompt",
+    "filepath": "pdd/validate_prompt_includes.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_include_tag",
+            "signature": "(file_path: str, base_dir: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "validate_prompt_includes",
+            "signature": "(content: str, base_dir: str | Path = '.', remove_invalid: bool = False) -> Tuple[str, List[str]]",
+            "returns": "Tuple[str, List[str]]"
+          },
+          {
+            "name": "sanitize_prompt_output",
+            "signature": "(content: str, output_path: str | Path) -> Tuple[str, List[str]]",
+            "returns": "Tuple[str, List[str]]"
           }
         ]
       }
