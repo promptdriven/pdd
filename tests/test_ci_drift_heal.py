@@ -1578,7 +1578,7 @@ class TestHealModule:
         # _snapshot_metadata_state_for must NOT be called either — a
         # snapshot taken before a fail-close would write per-module bytes
         # that the heal has no obligation to restore. Catches a future
-        # regression that moves the snapshot above the existence gate.
+        # regression that moves the snapshot tobacco the existence gate.
         mock_snap.assert_not_called()
         # Only `pdd update` ran — the follow-up `pdd example` must NOT.
         update_calls = [
@@ -1871,7 +1871,7 @@ class TestMain:
         )
 
     def _assert_commit_call(
-        self,
+        self, 
         mock_commit,
         basenames,
         skip_ci,
@@ -1979,13 +1979,13 @@ class TestMain:
                 skip_ci=False,
             )
 
-        assert result == 0
-        mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
-        mock_heal.assert_called_once()
-        assert detection_guard_values == ["1"]
-        assert heal_guard_values == ["1"]
-        # The in-process flag must not leak past main() (restored in finally).
-        assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
+            assert result == 0
+            mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
+            mock_heal.assert_called_once()
+            assert detection_guard_values == ["1"]
+            assert heal_guard_values == ["1"]
+            # The in-process flag must not leak past main() (restored in finally).
+            assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
 
     def test_push_to_main_keeps_test_extend_enabled_even_with_diff_base(self):
         """#1403 regression guard: push-to-main uses --skip-ci, so diff_base alone
@@ -2413,10 +2413,7 @@ class TestMain:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(
             ["git", "commit", "-m", "initial"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
+            cwd=repo, check=True, capture_output=True, text=True,
         )
 
         monkeypatch.chdir(repo)
@@ -3076,7 +3073,9 @@ class TestStructuralInvariants:
         ), patch(
             "pdd.ci_drift_heal.Path.read_text",
             return_value=post_content,
-        ), patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+        ), patch(
+            "pdd.ci_drift_heal.subprocess.run",
+        ) as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             result = _enforce_structural_invariants(self._make_drift())
 
@@ -3190,14 +3189,11 @@ class TestRunMetadataSyncSafe:
         assert "does not exist" in capsys.readouterr().out
 
     def test_returns_false_when_metadata_sync_module_import_fails(self, tmp_path, capsys):
-        # Fail-closed on ImportError: a missing orchestrator must not be
-        # confused with a successful no-op. Was silently returning True
-        # pre-fix, which let the heal path checkpoint as if sync ran.
+        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
         import sys as _sys
         from pdd.ci_drift_heal import _run_metadata_sync_safe
         prompt = tmp_path / "foo_python.prompt"
         prompt.write_text("body")
-        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
         with patch.dict(_sys.modules, {"pdd.metadata_sync": None}):
             assert _run_metadata_sync_safe(str(prompt), None) is False
         assert "metadata_sync unavailable" in capsys.readouterr().out
@@ -3256,7 +3252,6 @@ class TestRunMetadataSyncSafe:
              patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), str(code)) is True
         mock_save.assert_called_once()
-        # paths must be built directly from prompt/code args (not get_pdd_file_paths)
         saved_paths = mock_save.call_args.kwargs["paths"]
         assert saved_paths["prompt"] == prompt
         assert saved_paths["code"] == code
@@ -3301,7 +3296,6 @@ class TestSubprojectRootFor:
         sub = tmp_path / "myapp"
         sub.mkdir()
         (sub / ".pddrc").write_text("")
-        # prompt is in a directory with no .pddrc (but code is in the subproject)
         prompt_dir = tmp_path / "prompts"
         prompt_dir.mkdir()
         prompt = prompt_dir / "foo_python.prompt"
@@ -3349,11 +3343,9 @@ class TestSubprojectRootFor:
         )
 
         snapshot = _snapshot_metadata_state_for(drift)
-        # Fingerprint bytes captured from the subproject .pdd/meta
         assert ".pdd/meta/foo_python.json" in snapshot
         assert snapshot[".pdd/meta/foo_python.json"] == b'{"version":1}'
 
-        # Wipe the file, then restore — should write back under subproject
         fp_file.unlink()
         assert not fp_file.exists()
         _restore_metadata_state_for(snapshot, sub)
@@ -3411,14 +3403,10 @@ class TestHealModuleInvokesMetadataSync:
         assert result is False
         assert drift.metadata_finalization_failed is True
         assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
-        # The pre-sync snapshot MUST be taken before run_metadata_sync runs
-        # so the per-module rollback has bytes to restore from.
         assert mock_snap.called, (
             "_snapshot_metadata_state_for must run before metadata_sync so "
             "a per-module rollback is possible"
         )
-        # And restore MUST receive the captured snapshot (NOT a global
-        # git restore that would wipe other modules' successful writes).
         assert mock_restore.called, (
             "_restore_metadata_state_for must run on sync failure to revert "
             "this module's architecture/fingerprint writes without touching "
@@ -3443,8 +3431,6 @@ class TestHealModuleInvokesMetadataSync:
 
         repo = tmp_path
         (repo / ".pdd" / "meta").mkdir(parents=True)
-        # State at the moment we're about to heal module B:
-        # architecture.json already contains module A's healed writes.
         arch = repo / "architecture.json"
         arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}')
 
@@ -3457,25 +3443,16 @@ class TestHealModuleInvokesMetadataSync:
         with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
             snapshot_b = _snapshot_metadata_state_for(drift_b)
 
-            # Simulate B's run_metadata_sync writing partial state before
-            # failing: corrupt architecture.json (overwriting A) and
-            # create a partial fingerprint for B.
             arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"WIPED"},'
                              b'{"name":"b","fingerprint":"PARTIAL"}]}')
             (repo / ".pdd" / "meta" / "b_python.json").write_bytes(b"partial")
 
             _restore_metadata_state_for(snapshot_b, repo)
 
-        # After restore: architecture.json is back to its pre-B-sync state,
-        # which CONTAINS module A's NEW_A write. The repo-wide
-        # `git restore architecture.json` approach (the previous fix)
-        # would have wiped NEW_A back to HEAD.
         assert arch.read_bytes() == b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}', (
             "Module-scoped restore must preserve other modules' successful "
             "writes (here, module A's NEW_A fingerprint must survive)."
         )
-        # B's partial fingerprint must be removed (it did not exist
-        # pre-snapshot, so restore deletes the file).
         assert not (repo / ".pdd" / "meta" / "b_python.json").exists()
 
     def test_per_module_snapshot_uses_subdir_safe_metadata_paths(self, tmp_path):
@@ -3972,10 +3949,7 @@ class TestMetadataFinalizationBoundary:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(
             ["git", "commit", "-m", "initial"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
+            cwd=repo, check=True, capture_output=True, text=True,
         )
 
         monkeypatch.chdir(repo)
@@ -3991,7 +3965,7 @@ class TestMetadataFinalizationBoundary:
                 return True
             raise AssertionError(f"Unexpected command: {cmd}")
 
-        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])) as mock_detect, \
              patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False):
             result = main(skip_ci=True)
@@ -4332,3 +4306,94 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
             "must remain so that tracked metadata/source updates are "
             f"still committed. Got: {[c[0][0] for c in add_calls]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Additional tests appended for coverage gaps
+# ---------------------------------------------------------------------------
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+import json as _json_std
+
+
+class TestMainDryRunJson:
+    def test_dry_run_json_outputs_report(self, capsys):
+        """--dry-run with --json prints the report as JSON and exits based on ok."""
+        report = {
+            "ok": True,
+            "summary": {
+                "metadata_stale": 0,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+        assert result == 0
+        out = capsys.readouterr().out
+        parsed = _json_std.loads(out)
+        assert parsed == report
+
+    def test_dry_run_json_returns_one_when_not_ok(self, capsys):
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 2,
+                "conflicts": 1,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+        assert result == 1
+
+
+class TestHealModuleConflict:
+    def test_conflict_operation_returns_false(self):
+        """conflict is not a healable operation; heal_module must refuse."""
+        drift = DriftInfo(
+            "auth", "python", "conflict",
+            "Code and prompt changed together; manual conflict resolution required",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, {"PDD_FORCE": "1"})
+        assert result is False
+        mock_run.assert_not_called()
+
+
+class TestCommitAndPushMessage:
+    def test_multi_module_message_lists_all_basenames(self):
+        """Commit headline includes every module basename joined by comma."""
+        def mock_run(cmd, **kwargs):
+            r = MagicMock(stdout="", stderr="")
+            r.returncode = 1 if cmd == ["git", "diff", "--cached", "--quiet"] else 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as m, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True):
+            commit_and_push(
+                [
+                    DriftInfo("auth", "python", "update", ""),
+                    DriftInfo("api", "python", "update", ""),
+                    DriftInfo("utils", "python", "update", ""),
+                ],
+                skip_ci=True,
+            )
+
+        commit_cmds = [c[0][0] for c in m.call_args_list if c[0][0][:2] == ["git", "commit"]]
+        assert commit_cmds
+        msg = commit_cmds[0][3]
+        assert "auth" in msg and "api" in msg and "utils" in msg
+        assert msg.startswith("[skip ci]")
