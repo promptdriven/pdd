@@ -367,6 +367,32 @@ def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
     assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
 
 
+def test_issue_1932_deleted_canonical_artifact_is_not_masked_by_duplicate(
+    pdd_project: Path,
+) -> None:
+    archive_path = pdd_project / "archive/widget.py"
+    archive_path.parent.mkdir()
+    archive_path.write_text(
+        (pdd_project / "src/widget.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (pdd_project / "src/widget.py").unlink()
+
+    report = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        "--module",
+        "widget",
+        check=False,
+    )
+    assert report["ok"] is False
+    assert report["failures"][0]["failure"] == "missing_artifacts"
+    assert report["failures"][0]["changed_files"] == ["code"]
+    assert report["failures"][0]["paths"]["code"] == "src/widget.py"
+
+
 def test_issue_1932_deleted_prompt_stays_discovered_from_metadata(
     pdd_project: Path,
 ) -> None:

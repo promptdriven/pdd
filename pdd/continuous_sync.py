@@ -547,12 +547,13 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "paths": _paths_as_json(paths, base),
         }
 
-    paths = _repair_missing_fingerprinted_paths(
-        paths,
-        fingerprint,
-        unit.basename,
-        base,
-    )
+    if not unit.prompt_path.exists():
+        paths = _repair_missing_fingerprinted_paths(
+            paths,
+            fingerprint,
+            unit.basename,
+            base,
+        )
 
     missing_hashes = _missing_required_hashes(fingerprint, paths)
     if missing_hashes:
