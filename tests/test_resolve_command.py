@@ -18,7 +18,6 @@ from typing import Tuple
 
 from click.testing import CliRunner
 
-from pdd import continuous_sync as cs
 from pdd.commands.resolve import resolve
 from pdd.sync_determine_operation import (
     calculate_sha256,
@@ -78,24 +77,19 @@ def _make_conflict_unit(base: Path) -> Tuple[str, str, Path]:
     return BASENAME, LANGUAGE, fp_path
 
 
-def _classification(base: Path) -> str:
-    return cs.classify_unit(cs.discover_units(base, modules=[BASENAME])[0], base)[
-        "classification"
-    ]
-
-
 def test_accept_current_resolves_conflict_to_in_sync():
     runner = CliRunner()
     with runner.isolated_filesystem() as tmp:
         base = Path(tmp)
         _make_conflict_unit(base)
-        assert _classification(base) == "CONFLICT"
 
         result = runner.invoke(resolve, [BASENAME, "--accept-current"], obj={})
 
         assert result.exit_code == 0, result.output
-        assert _classification(base) == "IN_SYNC"
         assert "Resolved 'widget'" in result.output
+        # Idempotent: a second accept-current now sees the unit already IN_SYNC.
+        again = runner.invoke(resolve, [BASENAME, "--accept-current", "--json"], obj={})
+        assert json.loads(again.output)["before"] == "IN_SYNC"
 
 
 def test_accept_current_stamps_the_current_tree_not_the_old_baseline():
@@ -170,7 +164,9 @@ def test_stub_previews_do_not_mutate_the_fingerprint():
         runner.invoke(resolve, [BASENAME, "--prompt-wins"], obj={})
 
         assert fp_path.read_text(encoding="utf-8") == before
-        assert _classification(base) == "CONFLICT"
+        # Still a conflict after a no-op preview (probed via the command itself).
+        probe = runner.invoke(resolve, [BASENAME, "--accept-current", "--json"], obj={})
+        assert json.loads(probe.output)["before"] == "CONFLICT"
 
 
 def test_requires_exactly_one_strategy():
