@@ -4129,6 +4129,89 @@ class TestMetadataFinalizationBoundary:
         assert "app/.pdd/meta/auth_python.json" in committed_paths
         assert ".pdd/meta/auth_python.json" not in committed_paths
 
+    def test_commit_and_push_verifies_staged_metadata_from_repo_root(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Metadata verification must compare repo-root-relative paths.
+
+        Git reports `diff --cached --name-only` paths relative to the current
+        working directory. When CI launches auto-heal from a package subdir,
+        staged root metadata appears as `../.pdd/...` unless the command runs
+        from the repo root, which made the verifier miss a correctly staged
+        fingerprint.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        TestMain._init_git_repo(repo)
+
+        package_dir = repo / "pdd"
+        prompt_path = package_dir / "prompts" / "auth_python.prompt"
+        code_path = package_dir / "auth.py"
+        meta_path = repo / ".pdd" / "meta" / "auth_python.json"
+        prompt_path.parent.mkdir(parents=True)
+        meta_path.parent.mkdir(parents=True)
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+        prompt_path.write_text("% Goal\ninitial prompt\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "old"}', encoding="utf-8")
+
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        prompt_path.write_text("% Goal\nupdated prompt\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "new"}', encoding="utf-8")
+        monkeypatch.chdir(package_dir)
+
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            prompt_path=str(prompt_path),
+            code_path=str(code_path),
+        )
+        original_run = subprocess.run
+
+        def patched_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd == ["git", "push"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=patched_run):
+            assert commit_and_push(
+                [drift],
+                skip_ci=True,
+                finalized_modules=[("auth", "python")],
+            )
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--name-only", "--pretty="],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        committed_paths = {
+            line.strip()
+            for line in log.stdout.splitlines()
+            if line.strip()
+        }
+        assert ".pdd/meta/auth_python.json" in committed_paths
+        assert "pdd/prompts/auth_python.prompt" in committed_paths
+
 
 # ---------------------------------------------------------------------------
 # Issue #1021 regression: auto-heal must not stage arbitrary untracked

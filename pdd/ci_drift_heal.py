@@ -1653,8 +1653,10 @@ def commit_and_push(
     try:
         diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
+            cwd=repo_root,
             capture_output=True,
             text=True,
+            check=False,
         )
     except Exception as exc:
         console.print(f"[red]git diff --cached failed: {exc}[/red]")
@@ -1684,8 +1686,10 @@ def commit_and_push(
         try:
             names = subprocess.run(
                 ["git", "diff", "--cached", "--name-only"],
+                cwd=repo_root,
                 capture_output=True,
                 text=True,
+                check=False,
             )
         except Exception as exc:
             console.print(f"[red]git diff --cached --name-only failed: {exc}[/red]")
@@ -1721,7 +1725,13 @@ def commit_and_push(
         msg_args.extend(["-m", _AUTO_HEAL_SUCCESS_TRAILER])
 
     try:
-        r = subprocess.run(msg_args, capture_output=True, text=True)
+        r = subprocess.run(
+            msg_args,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except Exception as exc:
         console.print(f"[red]git commit failed: {exc}[/red]")
         return False
@@ -1733,7 +1743,13 @@ def commit_and_push(
         return False
 
     try:
-        r = subprocess.run(["git", "push"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "push"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except Exception as exc:
         console.print(f"[red]git push failed: {exc}[/red]")
         return False
