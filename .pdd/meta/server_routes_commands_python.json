@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.448562+00:00",
+  "command": "fix",
+  "prompt_hash": "924811be56ddaf51635685a42a7a4019dd92d77486051d5e1e800bcdcf268b08",
+  "code_hash": "aaa1af05971354a74e545756b347fe1f718875bd71d12c4bd51962ad084e0fe4",
+  "example_hash": "2aee960b3f00528d1da6cd878806b82a9ea703827d66a8618d1899d6ea9076ea",
+  "test_hash": "a60d4df0560867a7cbab7edb3526fc4f5da7fb81cfa5ada9c925a029f7155f2c",
+  "test_files": {
+    "test_commands.py": "a60d4df0560867a7cbab7edb3526fc4f5da7fb81cfa5ada9c925a029f7155f2c"
+  },
+  "include_deps": {
+    "context/cli_example.py": "b2205688a0e74867c4e108ef97770861d2ecf21419d9f3e10991acbeb8c4235a",
+    "context/fastapi_example.py": "4b3d64175b8f46b48a4387e9cf98ed4024fd74a57413bd2f8a55c5d9c3dd0108",
+    "context/job_manager_example.py": "e421698fdf16c5dfebf97eb3f2cb7210878efa1869804f871100489e35102543",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/server/models_example.py": "223a832718e72ca6640728e4bd700da58edb89667931085d7d949774d8fbc228"
+  }
+}

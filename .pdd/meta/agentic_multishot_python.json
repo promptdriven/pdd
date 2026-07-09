@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.274",
-  "timestamp": "2026-06-16T01:03:00.882482+00:00",
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.276849+00:00",
   "command": "test",
-  "prompt_hash": "235a4c06a65d4cc3e27794db81c846aa988e056bf1896a559c3fbf9645f84fbb",
+  "prompt_hash": "0628511c4ecc1d928041296b13623b351b51e9596bd46485162b9b6a966b0073",
   "code_hash": "ecd0bfb52beb8172399b6da05f17d4ea308b22c4a5b10d5a32a98829c6e48edc",
   "example_hash": "7708a23b090f5cde8ace2e358fd35f4efcfcb3b96910d8e86aa0f6ab09447167",
   "test_hash": "8e1a14a52353590059265c6e59540c64b68ff650fb605fc78e831d6b3bac6d1d",
@@ -11,7 +11,7 @@
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/agentic_common.py": "922f9c3b140c10e04d8ddbacf50f1399df7fda0a5e6dbb99f6e0af0bb131d1dd",
+    "pdd/agentic_common.py": "7b9b57eac64bac2b4fd18d4eea3d2feb3c7d99ff43f0ca1961a0bfd22a9576da",
     "pdd/failure_classification.py": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff"
   }
 }

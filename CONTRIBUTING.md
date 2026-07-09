@@ -22,6 +22,23 @@ Each complete change ideally includes four elements:
 - Example interface: usage examples that enable prompt composability.
 - Tests: appended to relevant test files to reproduce bugs or validate features.
 
+## Fingerprints (`.pdd/meta`)
+Every dev unit has a committed fingerprint in `.pdd/meta/<unit>_<lang>.json` recording the
+SHA-256 of its prompt (plus `<include>` deps), code, example, and tests. This committed set is
+the oracle `pdd sync` trusts to decide whether a unit changed — a stale or missing fingerprint
+makes sync see phantom drift and regenerate a mature module. So:
+
+- **Never hand-edit `.pdd/meta`.** Regenerate the whole set with the stamper:
+  ```bash
+  python scripts/stamp_fingerprints.py          # restamp every unit
+  python scripts/stamp_fingerprints.py --check   # verify (what CI runs; exits non-zero on drift)
+  ```
+- **All** dev units are tracked (no `.gitignore` allowlist). If you add or change a prompt/code
+  file, run the stamper and commit the updated `.pdd/meta/*.json`. CI's `--check` gate fails
+  otherwise.
+- A unit that `pdd sync` genuinely cannot fingerprint (ambiguous module identity, or no code file
+  on disk) is listed with a justification in `scripts/fingerprint_waivers.json`.
+
 ## Contribution Workflow
 1) Get set up
 - Fork the repository and clone your fork.

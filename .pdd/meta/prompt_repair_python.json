@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.436108+00:00",
+  "command": "fix",
+  "prompt_hash": "7534fda4f31eaa0a65b13f01ad13ff704e3976d4a6ce7463320a9b51e293728b",
+  "code_hash": "3bb7949b5d27a078b93f2ec872b9af53b1265dcd2740780b128b527a1cf3346d",
+  "example_hash": null,
+  "test_hash": "f5cf48e8ee5aea58108f422cc6127e21b9736b79f5dcef3d1464eb557bceb72f",
+  "test_files": {
+    "test_prompt_repair.py": "f5cf48e8ee5aea58108f422cc6127e21b9736b79f5dcef3d1464eb557bceb72f"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/change.py": "d66d22f9ef9e6a80574d91b115bf72aac534d238dd8a8085d5744e1a8c1562a3",
+    "pdd/checkup_prompt_main.py": "538367ba6b7fa74d9f86ba6d1235219598f7a124c58cf00ad0abf6cf027526dc",
+    "pdd/prompt_lint.py": "df85f363082925c714e23be8d7b2e941d62a8542a3370a2581d16780cef1474e",
+    "pdd/server/token_counter.py": "847ac13e3804c451aca64652877940c06b72c2fc33edc00232f1d4aa16c957e8"
+  }
+}

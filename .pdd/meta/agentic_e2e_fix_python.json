@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.273641+00:00",
+  "command": "fix",
+  "prompt_hash": "fc0a1a8955b1b6c6848985a7a037eb7595bc0134357d599cd34c85cf41f885be",
+  "code_hash": "ab0b08e59e59b52431e7f4ba6a2b39f6267c7a43d0d45bf3573596c96649a57c",
+  "example_hash": "79fd30a0fa6d8a5b9e23b34f7328ba3f95089a0ebb83e8244dae79ea68cff33a",
+  "test_hash": "5e5507d9fc6035164d78e1dcf3ccf983694c4057185d5644ff47f7743e052c3b",
+  "test_files": {
+    "test_agentic_e2e_fix.py": "5e5507d9fc6035164d78e1dcf3ccf983694c4057185d5644ff47f7743e052c3b",
+    "test_agentic_e2e_fix_orchestrator.py": "b481eb0460268575f6816a13711049ca5df749871185df6759ece7d7bd5f6fcd",
+    "test_agentic_e2e_fix_orchestrator_resume_prompt.py": "8e29ea7eb6330f75fa53b2699663f417b43cb063b8ac5613f34cbf0a6ceaa917",
+    "test_agentic_e2e_fix_step10_prompt.py": "dd9b37268f192ce23b07dc9af157e4fcb1554c457adff67b719a00c89a8c7e63"
+  },
+  "include_deps": {
+    "context/agentic_e2e_fix_orchestrator_example.py": "180cc2c4316b531586040d61fc5f82f1f605d5c5736fd23bad63a889ac0b7d1e",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

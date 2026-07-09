@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.334010+00:00",
+  "command": "fix",
+  "prompt_hash": "9c6188da46f58639009a26f6848c90e714785bb0b89d8bb86ed44454209318a9",
+  "code_hash": "c33a045aa16c202eacc6c195bdef5d88c24ac7df2e36a9d7f3172de7963b768d",
+  "example_hash": "d1e77e2ab5a5b6f3c400a8a68a73bb633f6d45e39dd4a90306dcc18c729d9000",
+  "test_hash": "258c7340e7bcf624d67f5b5f25907cf55e328215c7f4aae9edd156d5f4066af7",
+  "test_files": {
+    "test_auth.py": "258c7340e7bcf624d67f5b5f25907cf55e328215c7f4aae9edd156d5f4066af7"
+  },
+  "include_deps": {
+    "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/commands/__init___example.py": "cc6e0de7d94b1dddda35d9c8ecb800710263d928191f1d4cb2400bae36c31cb4",
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/get_jwt_token_example.py": "76a87c8257cb1f4cfdc2edff6225c752432afb3a5e352fcb016d08d8eae16e01",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

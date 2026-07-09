@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.246.dev34",
-  "timestamp": "2026-05-21T04:24:21.384951+00:00",
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.483135+00:00",
   "command": "update",
-  "prompt_hash": "413975fcaf5d900d1c7edd631ad843a00c1ebe983e70812f86e689821c6218fa",
-  "code_hash": "3a1282ced73cc96c0428a006db619282c23c31aed6a50e2d427f106505ebd0ce",
+  "prompt_hash": "caff809a3e28802d4aa83f89a1b9b4c183e484713d91f8324444093817c272ad",
+  "code_hash": "b8776071f0f9c97a4fd10d6f9bf55faab99dde3757d47e836ef51d1c41b8513c",
   "example_hash": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6",
-  "test_hash": "2d272934a7ce4f40ffb1555451ed71fb09ff5fb451b7fd5a6893374968e99d0f",
+  "test_hash": "62f0edf3a67830bb686edd5de6b053b0d8bf1e861547608979616beef8ca6f29",
   "test_files": {
-    "test_track_cost.py": "2d272934a7ce4f40ffb1555451ed71fb09ff5fb451b7fd5a6893374968e99d0f"
+    "test_track_cost.py": "62f0edf3a67830bb686edd5de6b053b0d8bf1e861547608979616beef8ca6f29"
   },
   "include_deps": {}
 }

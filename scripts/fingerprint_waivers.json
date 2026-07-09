@@ -1,0 +1,21 @@
+{
+  "_comment": "Units enumerated from pdd/prompts/*_python.prompt that intentionally have NO committed .pdd/meta fingerprint. scripts/stamp_fingerprints.py --check excludes these from both the coverage requirement and hash verification. Keep the list minimal and justified; a unit belongs here only when `pdd sync` itself cannot produce a fingerprint for it (ambiguous module identity, or no code file on disk).",
+  "waivers": [
+    {
+      "basename": "cli",
+      "reason": "Ambiguous module identity: the bare leaf 'cli' maps to two files in architecture.json (pdd/cli.py and pdd/core/cli.py), so `pdd sync cli` raises AmbiguousModuleError and never writes a fingerprint. The path-qualified unit core/cli is stamped for pdd/core/cli.py; pdd/cli.py is a thin re-export shim reached only by path-qualified sync."
+    },
+    {
+      "basename": "gate",
+      "reason": "Ambiguous module identity: the bare leaf 'gate' maps to two files in architecture.json (pdd/commands/gate.py and pdd/gate_main.py) and has no pdd/gate.py by .pddrc convention, so `pdd sync gate` raises AmbiguousModuleError. The path-qualified unit commands/gate is stamped for pdd/commands/gate.py; pdd/gate_main.py has no prompt of its own."
+    },
+    {
+      "basename": "core_dump_smoke",
+      "reason": "No code file on disk: pdd/core_dump_smoke.py does not exist, so there is nothing to hash. The prompt is a smoke-test fixture with no generated module."
+    },
+    {
+      "basename": "server/routes/session",
+      "reason": "No code file on disk: pdd/server/routes/session.py does not exist (session handling lives elsewhere), so there is nothing to hash."
+    }
+  ]
+}

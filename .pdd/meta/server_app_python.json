@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.442755+00:00",
+  "command": "fix",
+  "prompt_hash": "4c5bfabf92ab16c46596507eb86161fc85295e660f90b3120a1e19b95f9e8059",
+  "code_hash": "28394e19c9174f44cda9cf37b93229d74012bd2e61c49e0d03e665796be94279",
+  "example_hash": "554bb0307f2f7a0dc79ef86f8a4fd42e5017225d0c56379ad99d2939f3c1087a",
+  "test_hash": "3e5be61ccaf4a5ba709fc6429e029972e25548a7859b28c5712042856484806f",
+  "test_files": {
+    "test_app.py": "3e5be61ccaf4a5ba709fc6429e029972e25548a7859b28c5712042856484806f"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/server/jobs_example.py": "7694bd486d012fd9d52543c5f79a289f61dac3ed0f8c94c2ea9fd25ed6333f12",
+    "context/server/models_example.py": "223a832718e72ca6640728e4bd700da58edb89667931085d7d949774d8fbc228",
+    "context/server/security_example.py": "dc4f3dc06455ba6180f4536aa67ce4e9a5efd52e0e9cd7702c3f2ec6ef96aac9"
+  }
+}

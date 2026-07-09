@@ -1,0 +1,15 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.461439+00:00",
+  "command": "fix",
+  "prompt_hash": "3c3381a2d75792bdc45e201fe44dc9a1b24cca4a1162c37b1415b043df9a52a9",
+  "code_hash": "51d3dc49dda8a594f71816a83143b1cc14b5c01ac917d17fd9505fc3da2ea06c",
+  "example_hash": null,
+  "test_hash": "95e60df5f061c90e881fc50d89870dd86cadf109627049a9dc729d4dab74e6f3",
+  "test_files": {
+    "test_story_regression_gate.py": "95e60df5f061c90e881fc50d89870dd86cadf109627049a9dc729d4dab74e6f3"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T19:38:58.269693+00:00",
+  "command": "fix",
+  "prompt_hash": "54aa28a454f27094d61f5ab79d3e52e379ffc0d3e240df1d7746e220846d6757",
+  "code_hash": "78b5f9651c10d3ce474ff62b32f8f8953135847858fd6873c0824356068285c4",
+  "example_hash": "4a79b152db522063ccf099eca0419b419a656f168839d197f85781ae4fe1b5f6",
+  "test_hash": "413b22619a7acea9126f270cd4b99da1cf27108bd1d56a92e32cd58594c4b0c8",
+  "test_files": {
+    "test_agentic_crash.py": "413b22619a7acea9126f270cd4b99da1cf27108bd1d56a92e32cd58594c4b0c8"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/get_run_command_example.py": "4d187e844adb255c2738274556f4828728d0d73d84ebf8bda885d51d4be9414f",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "prompts/agentic_crash_explore_LLM.prompt": "1a63eddbf271c5976841de535dcc518db58a5b4b5a61b7a6c08472458ad9ed3c"
+  }
+}
