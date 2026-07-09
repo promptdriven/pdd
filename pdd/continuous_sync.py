@@ -806,15 +806,18 @@ def _append_ledger(root: Path, consumer: str, units: List[Dict[str, Any]]) -> Op
     return str(ledger_path) if wrote else None
 
 
-def _stampable_now(classification: str, *, accept_current: bool, backfill: bool) -> bool:
+def _stampable_now(
+    classification: str, *, heal: bool, accept_current: bool, backfill: bool
+) -> bool:
     """Should a unit with this classification be stamped this run?
 
-    Single-sided drift is always safe to stamp. CONFLICT (both sides moved) is
-    stamped only with an explicit ``--accept-current`` (the human declares the
-    current tree the agreed state); UNBASELINED only with ``--backfill``.
+    ``heal`` stamps single-sided drift (the safe cases). CONFLICT (both sides
+    moved) is stamped only with an explicit ``--accept-current`` (the human
+    declares the current tree the agreed state); UNBASELINED only with
+    ``--backfill``. Each flag is scoped to exactly its class.
     """
     if classification in DRIFT_CLASSIFICATIONS:
-        return True
+        return heal
     if classification == CONFLICT_CLASSIFICATION:
         return accept_current
     if classification == UNBASELINED_CLASSIFICATION:
@@ -859,6 +862,7 @@ def build_report(
             for entry in classified:
                 if _stampable_now(
                     entry["classification"],
+                    heal=heal,
                     accept_current=accept_current,
                     backfill=backfill,
                 ):
