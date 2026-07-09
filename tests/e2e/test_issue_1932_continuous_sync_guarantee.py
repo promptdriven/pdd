@@ -398,6 +398,63 @@ def test_issue_1932_deleted_prompt_stays_discovered_from_metadata(
     assert explicit_report["failures"][0]["failure"] == "missing_artifacts"
 
 
+def test_issue_1932_path_qualified_deleted_prompt_matches_module_scope(
+    pdd_project: Path,
+) -> None:
+    prompt_path = pdd_project / "prompts/commands/foo_python.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    prompt_path.write_text("Build a command foo module.\n", encoding="utf-8")
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(pdd_project)
+        paths = get_pdd_file_paths("commands/foo", "python", "prompts")
+        paths["code"].parent.mkdir(parents=True, exist_ok=True)
+        paths["example"].parent.mkdir(parents=True, exist_ok=True)
+        paths["test"].parent.mkdir(parents=True, exist_ok=True)
+        paths["code"].write_text("def value():\n    return 1\n", encoding="utf-8")
+        paths["example"].write_text(
+            "from commands.foo import value\nprint(value())\n",
+            encoding="utf-8",
+        )
+        paths["test"].write_text(
+            "from commands.foo import value\n\n\ndef test_value():\n    assert value() == 1\n",
+            encoding="utf-8",
+        )
+        save_fingerprint("commands/foo", "python", "fix", paths, 0.0, "baseline")
+    finally:
+        os.chdir(old_cwd)
+
+    prompt_path.unlink()
+
+    reconcile = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        "--module",
+        "commands/foo",
+        check=False,
+    )
+    assert reconcile["ok"] is False
+    assert reconcile["summary"]["total"] == 1
+    assert reconcile["failures"][0]["basename"] == "commands/foo"
+    assert reconcile["failures"][0]["changed_files"] == ["prompt"]
+    assert reconcile["failures"][0]["paths"]["prompt"] == "prompts/commands/foo_python.prompt"
+
+    sync = _pdd_json(
+        pdd_project,
+        "sync",
+        "commands/foo",
+        "--dry-run",
+        "--json",
+        check=False,
+    )
+    assert sync["ok"] is False
+    assert sync["summary"]["total"] == 1
+    assert sync["failures"][0]["basename"] == "commands/foo"
+
+
 def test_issue_1932_install_hooks_supports_git_worktrees(pdd_project: Path) -> None:
     worktree = pdd_project.parent / "repo-worktree"
     _git(pdd_project, "worktree", "add", "-q", "-b", "hook-worktree", str(worktree))

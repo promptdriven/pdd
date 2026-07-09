@@ -5,6 +5,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import combinations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -17,6 +18,7 @@ from .operation_log import (
 from .sync_determine_operation import (
     Fingerprint,
     calculate_current_hashes,
+    calculate_sha256,
     get_pdd_file_paths,
     read_fingerprint,
 )
@@ -108,28 +110,114 @@ def _metadata_identity(path: Path) -> Optional[tuple[str, str]]:
     return basename, language
 
 
+def _module_token_basename(token: str, language: str) -> str:
+    basename = token[:-7] if token.endswith(".prompt") else token
+    language_suffix = f"_{language}"
+    if basename.endswith(language_suffix):
+        return basename[: -len(language_suffix)]
+    return basename
+
+
+def _requested_basename_for_identity(
+    identity: tuple[str, str],
+    wanted: set[str],
+) -> Optional[str]:
+    safe_basename, language = identity
+    for item in sorted(wanted):
+        basename = _module_token_basename(item, language)
+        if basename == safe_basename or _safe_basename(basename) == safe_basename:
+            return basename
+    return None
+
+
 def _identity_matches_wanted(identity: tuple[str, str], wanted: set[str]) -> bool:
-    basename, language = identity
+    safe_basename, language = identity
     return (
-        basename in wanted
-        or f"{basename}_{language}" in wanted
-        or f"{basename}_{language}.prompt" in wanted
+        safe_basename in wanted
+        or f"{safe_basename}_{language}" in wanted
+        or f"{safe_basename}_{language}.prompt" in wanted
+        or _requested_basename_for_identity(identity, wanted) is not None
     )
+
+
+def _prompt_path_for_basename(prompt_root: Path, basename: str, language: str) -> Path:
+    parts = Path(basename).parts
+    if len(parts) <= 1:
+        return prompt_root / f"{basename}_{language}.prompt"
+    return prompt_root.joinpath(*parts[:-1], f"{parts[-1]}_{language}.prompt")
+
+
+def _slash_candidates(safe_basename: str) -> List[str]:
+    parts = safe_basename.split("_")
+    if len(parts) <= 1:
+        return []
+
+    candidates: List[str] = []
+    separators = range(1, len(parts))
+    for count in range(1, len(parts)):
+        for slash_positions in combinations(separators, count):
+            chunks: List[str] = [parts[0]]
+            for index, part in enumerate(parts[1:], start=1):
+                if index in slash_positions:
+                    chunks.append("/")
+                else:
+                    chunks.append("_")
+                chunks.append(part)
+            candidates.append("".join(chunks))
+    return candidates
+
+
+def _existing_artifact_score(
+    basename: str,
+    language: str,
+    prompt_root: Path,
+) -> int:
+    try:
+        paths = get_pdd_file_paths(basename, language, prompts_dir=str(prompt_root))
+    except Exception:
+        return 0
+    score = 0
+    for artifact in ("code", "example", "test"):
+        path = paths.get(artifact)
+        if path is not None and path.exists():
+            score += 1
+    return score
+
+
+def _infer_basename_from_artifacts(
+    safe_basename: str,
+    language: str,
+    prompt_root: Path,
+) -> str:
+    best = safe_basename
+    best_score = _existing_artifact_score(best, language, prompt_root)
+    for candidate in _slash_candidates(safe_basename):
+        score = _existing_artifact_score(candidate, language, prompt_root)
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best
 
 
 def _unit_from_metadata_identity(
     identity: tuple[str, str],
     prompt_root: Path,
     prompt_index: Dict[tuple[str, str], SyncUnit],
+    requested_basename: Optional[str] = None,
 ) -> SyncUnit:
     safe_basename, language = identity
     prompt_unit = prompt_index.get((safe_basename, language))
     if prompt_unit is not None:
         return prompt_unit
 
-    prompt_path = prompt_root / f"{safe_basename}_{language}.prompt"
+    basename = requested_basename or _infer_basename_from_artifacts(
+        safe_basename,
+        language,
+        prompt_root,
+    )
+    prompt_path = _prompt_path_for_basename(prompt_root, basename, language)
     return SyncUnit(
-        basename=safe_basename,
+        basename=basename,
         language=language,
         prompt_path=prompt_path,
         prompts_dir=prompt_root,
@@ -172,7 +260,12 @@ def discover_units(
         for identity in metadata_identities:
             if not _identity_matches_wanted(identity, wanted):
                 continue
-            unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
+            unit = _unit_from_metadata_identity(
+                identity,
+                prompt_root,
+                prompt_index,
+                requested_basename=_requested_basename_for_identity(identity, wanted),
+            )
             dedupe_key = (unit.basename, unit.language, unit.prompt_path)
             if dedupe_key in seen:
                 continue
@@ -280,6 +373,67 @@ def _missing_fingerprinted_artifacts(
         if getattr(fingerprint, field) and (path is None or not path.exists()):
             missing.append(artifact)
     return missing
+
+
+def _artifact_search_name(
+    artifact: str,
+    basename: str,
+    expected_path: Path,
+) -> Optional[str]:
+    suffix = expected_path.suffix
+    leaf = Path(basename).name
+    if artifact == "code":
+        return f"{leaf}{suffix}"
+    if artifact == "example":
+        return f"{leaf}_example{suffix}"
+    if artifact == "test":
+        return f"test_{leaf}{suffix}"
+    return None
+
+
+def _find_matching_artifact(
+    root: Path,
+    filename: str,
+    expected_hash: str,
+) -> Optional[Path]:
+    matches: List[Path] = []
+    for candidate in root.rglob(filename):
+        if any(part in {".git", ".pdd", "__pycache__"} for part in candidate.parts):
+            continue
+        if candidate.is_file() and calculate_sha256(candidate) == expected_hash:
+            matches.append(candidate)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _repair_missing_fingerprinted_paths(
+    paths: Dict[str, Path],
+    fingerprint: Fingerprint,
+    basename: str,
+    root: Path,
+) -> Dict[str, Path]:
+    repaired = dict(paths)
+    field_by_artifact = {
+        "code": "code_hash",
+        "example": "example_hash",
+        "test": "test_hash",
+    }
+    for artifact, field in field_by_artifact.items():
+        path = repaired.get(artifact)
+        expected_hash = getattr(fingerprint, field)
+        if path is None or path.exists() or not expected_hash:
+            continue
+        filename = _artifact_search_name(artifact, basename, path)
+        if not filename:
+            continue
+        match = _find_matching_artifact(root, filename, expected_hash)
+        if match is None:
+            continue
+        repaired[artifact] = match
+        if artifact == "test":
+            repaired["test_files"] = [match]
+    return repaired
 
 
 def _missing_required_hashes(fingerprint: Fingerprint, paths: Dict[str, Path]) -> List[str]:
@@ -392,6 +546,13 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "fingerprint_path": str(fp_path),
             "paths": _paths_as_json(paths, base),
         }
+
+    paths = _repair_missing_fingerprinted_paths(
+        paths,
+        fingerprint,
+        unit.basename,
+        base,
+    )
 
     missing_hashes = _missing_required_hashes(fingerprint, paths)
     if missing_hashes:
