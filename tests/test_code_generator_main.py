@@ -1023,7 +1023,195 @@ def test_incremental_gen_with_git_committed_prompt(
             add_called_for_prompt = True
             break
     assert add_called_for_prompt
-    mock_subprocess_run_fixture.side_effect = None 
+    mock_subprocess_run_fixture.side_effect = None
+
+
+# --- Tests for #1938/#1940 base-branch original fallback (test_repo#4232) ---
+# In the cloud sync-after-change flow the prompt edit is already committed on the
+# branch (on-disk == HEAD) and the pre-change version is not reliably found in local
+# history, so surgical/incremental generation used to silently fall back to full
+# regeneration and re-drop declared symbols. The base-branch fallback resolves the
+# "original" prompt from PDD_SYNC_BASE_REF (default origin/main) as a last resort.
+
+def _fake_run_git_no_local_history(command, cwd=None):
+    """Force the local-history search to find nothing.
+
+    Making `git rev-parse --show-toplevel` fail leaves git_root_path_obj None so
+    the prior-different-version search is skipped; every other git call is a
+    successful no-op (staging status/diff/add during incremental rollback setup).
+    """
+    if command[:2] == ["git", "rev-parse"] and "--show-toplevel" in command:
+        return (128, "", "not a git repository")
+    return (0, "", "")
+
+
+def test_incremental_base_ref_fallback_used_when_no_local_history(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_env_vars, monkeypatch
+):
+    """on-disk == HEAD, no distinct prior version in history, but base-ref returns a
+    different prompt -> can_attempt_incremental becomes True using base content."""
+    monkeypatch.delenv("PDD_SYNC_BASE_REF", raising=False)
+    on_disk_prompt = "New prompt content committed on this branch"
+    base_prompt = "Original prompt content on base branch"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "base_ref_prompt.prompt"
+    create_file(prompt_file_path, on_disk_prompt)
+    output_file_path = temp_dir_setup["output_dir"] / "base_ref_output.py"
+    create_file(output_file_path, "Existing mature code")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": on_disk_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_incremental_generator_fixture.return_value = ("Base-ref updated code", True, 0.004, "base_inc_model")
+
+    def fake_get_content(file_path, git_ref="HEAD"):
+        if git_ref == "HEAD":
+            return on_disk_prompt  # on-disk matches HEAD
+        if git_ref == "origin/main":
+            return base_prompt
+        return None
+
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", side_effect=fake_get_content), \
+         patch("pdd.code_generator_main._run_git_command", side_effect=_fake_run_git_no_local_history):
+        code, incremental, cost, model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False
+        )
+
+    assert incremental
+    assert code == "Base-ref updated code"
+    call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
+    assert call_kwargs["original_prompt"] == base_prompt
+    assert call_kwargs["new_prompt"] == on_disk_prompt
+
+
+def test_incremental_base_ref_fallback_missing_ref_falls_back_to_full(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture,
+    mock_incremental_generator_fixture, mock_env_vars, mock_rich_console_fixture, monkeypatch
+):
+    """base-ref returns None (no such ref) -> no incremental attempt, honest full
+    generation, loud degradation notice, and no crash."""
+    monkeypatch.delenv("PDD_SYNC_BASE_REF", raising=False)
+    mock_ctx.obj['local'] = True
+    on_disk_prompt = "New prompt content committed on this branch"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "base_ref_missing.prompt"
+    create_file(prompt_file_path, on_disk_prompt)
+    output_file_path = temp_dir_setup["output_dir"] / "base_ref_missing_output.py"
+    create_file(output_file_path, "Existing mature code")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": on_disk_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    def fake_get_content(file_path, git_ref="HEAD"):
+        if git_ref == "HEAD":
+            return on_disk_prompt
+        return None  # base-ref does not exist
+
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", side_effect=fake_get_content), \
+         patch("pdd.code_generator_main._run_git_command", side_effect=_fake_run_git_no_local_history):
+        code, incremental, cost, model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False
+        )
+
+    assert not incremental
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+    printed = " ".join(str(c.args[0]) for c in mock_rich_console_fixture.call_args_list if c.args)
+    assert "Surgical/incremental generation unavailable" in printed
+
+
+def test_incremental_base_ref_fallback_identical_to_current_not_used(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture,
+    mock_incremental_generator_fixture, mock_env_vars, monkeypatch
+):
+    """base-ref content equals the current prompt -> not used, no spurious
+    incremental; honest full generation runs instead."""
+    monkeypatch.delenv("PDD_SYNC_BASE_REF", raising=False)
+    mock_ctx.obj['local'] = True
+    on_disk_prompt = "Identical prompt content on both branches"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "base_ref_identical.prompt"
+    create_file(prompt_file_path, on_disk_prompt)
+    output_file_path = temp_dir_setup["output_dir"] / "base_ref_identical_output.py"
+    create_file(output_file_path, "Existing mature code")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": on_disk_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    def fake_get_content(file_path, git_ref="HEAD"):
+        # Both HEAD and base-ref match the current on-disk prompt.
+        return on_disk_prompt
+
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", side_effect=fake_get_content), \
+         patch("pdd.code_generator_main._run_git_command", side_effect=_fake_run_git_no_local_history):
+        code, incremental, cost, model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False
+        )
+
+    assert not incremental
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+
+
+def test_incremental_base_ref_env_override_is_honored(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_env_vars, monkeypatch
+):
+    """PDD_SYNC_BASE_REF overrides the default origin/main base ref."""
+    monkeypatch.setenv("PDD_SYNC_BASE_REF", "origin/release-1.x")
+    on_disk_prompt = "New prompt content committed on this branch"
+    base_prompt = "Original prompt content on release-1.x"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "base_ref_override.prompt"
+    create_file(prompt_file_path, on_disk_prompt)
+    output_file_path = temp_dir_setup["output_dir"] / "base_ref_override_output.py"
+    create_file(output_file_path, "Existing mature code")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": on_disk_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_incremental_generator_fixture.return_value = ("Override updated code", True, 0.004, "override_model")
+
+    seen_refs = []
+
+    def fake_get_content(file_path, git_ref="HEAD"):
+        seen_refs.append(git_ref)
+        if git_ref == "HEAD":
+            return on_disk_prompt
+        if git_ref == "origin/release-1.x":
+            return base_prompt
+        return None  # default origin/main must NOT be consulted
+
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", side_effect=fake_get_content), \
+         patch("pdd.code_generator_main._run_git_command", side_effect=_fake_run_git_no_local_history):
+        code, incremental, cost, model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False
+        )
+
+    assert incremental
+    assert "origin/release-1.x" in seen_refs
+    assert "origin/main" not in seen_refs
+    call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
+    assert call_kwargs["original_prompt"] == base_prompt
 
 
 def test_incremental_gen_fallback_to_full_on_generator_suggestion(
