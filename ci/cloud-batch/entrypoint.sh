@@ -3,10 +3,24 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 # Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by the STANDARD group for slow tasks). SKIP_INDEX causes the SPOT
-# group to skip one index so effective indices stay contiguous.
+# (used by dedicated STANDARD groups), TASK_INDEX_OFFSET maps a serial group
+# onto a contiguous task range, and SKIP_INDEXES lets the main group skip
+# dedicated task indexes while preserving the global task numbering.
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
+elif [ -n "${TASK_INDEX_OFFSET:-}" ]; then
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX=$((_RAW + TASK_INDEX_OFFSET))
+elif [ -n "${SKIP_INDEXES:-}" ]; then
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX="${_RAW}"
+    IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
+    for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
+        [ -n "${_SKIP_INDEX}" ] || continue
+        if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+            TASK_INDEX=$((TASK_INDEX + 1))
+        fi
+    done
 elif [ -n "${SKIP_INDEX:-}" ]; then
     _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
     if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
