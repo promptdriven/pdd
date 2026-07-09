@@ -5,7 +5,7 @@ from pdd.commands.generate import test
 
 
 PDD_STORY_ID = "pdd_test"
-PDD_STORY_HASH = "254412e41b69ae19"
+PDD_STORY_HASH = "8d7c10cc1b2ca908"
 
 
 @pytest.mark.story(story_id=PDD_STORY_ID)

@@ -16,6 +16,35 @@ import pytest
 SCHEMA_VERSION = 1
 STORY_MARKER = "story"
 
+_SCHEMA_PATH = Path(__file__).with_name("schemas") / "story_coverage.schema.json"
+
+
+def _load_schema() -> Optional[dict]:
+    """Load the packaged coverage schema, or ``None`` when unavailable."""
+    try:
+        return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _validate_against_schema(body: dict) -> None:
+    """Validate an artifact body against the packaged schema.
+
+    ``jsonschema`` is a declared dependency but the check is imported defensively
+    so a stripped-down runtime that lacks it degrades to writing an unvalidated
+    artifact rather than hard-crashing. When the library and schema are both
+    present, an out-of-range or otherwise invalid body raises before it is
+    persisted, so a structurally-impossible coverage result can never be written.
+    """
+    try:
+        import jsonschema  # noqa: PLC0415  (defensive, optional at runtime)
+    except ImportError:
+        return
+    schema = _load_schema()
+    if schema is None:
+        return
+    jsonschema.validate(instance=body, schema=schema)
+
 
 @dataclass(frozen=True)
 class StoryCoverage:
@@ -182,6 +211,10 @@ def write_story_coverage(
     if run_id is not None:
         body["run_id"] = run_id
     effective_run_id = str(body["run_id"])
+
+    # Reject a structurally-impossible artifact before writing anything, so the
+    # durable .pdd/evidence contract can never carry out-of-range values.
+    _validate_against_schema(body)
 
     evidence_dir = Path(project_root) / ".pdd" / "evidence" / "stories"
     runs_dir = evidence_dir / "runs"

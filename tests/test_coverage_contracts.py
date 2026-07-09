@@ -1223,9 +1223,9 @@ class TestStoryRegressionDimension:
             {
                 "story_id": "foo_flow",
                 "has_regression_test": True,
-                "status": "story-regression-passing",
+                "status": "story-regression-present",
                 "tests": ["test_foo.py::test_foo_flow"],
-                "story_hash": "8ca87cfe7267abcb",
+                "story_hash": "95d7a1ca9e45f480",
             }
         ]
         assert "regression_warnings" in d
@@ -1247,6 +1247,44 @@ class TestStoryRegressionDimension:
         assert any("ghost_flow" in w for w in result.regression_warnings)
         # ...and the no-test gap is the *other* direction, kept distinct:
         assert all("ghost_flow" not in s.story_id for s in result.stories)
+
+    def test_nested_story_is_supported_not_self_contradicted(self, tmp_path: Path):
+        """G-F5 (pdd#1889): a nested ``user_stories/<sub>/story__baz.md`` is
+        linked+evaluated by the coverage path (rglob), so the orphan check must
+        also see it (recursive) — otherwise the SAME run both evaluates ``baz``
+        AND warns it "references a story with no story__baz.md on disk"."""
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        # A metadata-less nested story that applies to the prompt set, plus a
+        # marker test that claims it.
+        (stories / "nested").mkdir(exist_ok=True)
+        _make_story(
+            stories / "nested",
+            """\
+            ## Covers
+            - R1: nested rule
+
+            ## Acceptance Criteria
+            - It works nested.
+            """,
+            name="story__baz.md",
+        )
+        _make_test_file(
+            tests_dir,
+            (
+                "import pytest\n"
+                '@pytest.mark.story(story_id="baz")\n'
+                "def test_baz():\n"
+                "    assert True\n"
+            ),
+            name="test_baz.py",
+        )
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        # baz is evaluated as a real story...
+        assert "baz" in {s.story_id for s in result.stories}
+        # ...so it must NOT be reported as a nonexistent-story orphan.
+        assert not any("baz" in w for w in result.regression_warnings), (
+            f"nested story evaluated AND warned as missing: {result.regression_warnings}"
+        )
 
     def test_directory_mode_shares_one_story_map(self, tmp_path: Path):
         prompts = tmp_path / "prompts"
