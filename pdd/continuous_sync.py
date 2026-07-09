@@ -25,6 +25,7 @@ UNBASELINED (missing / structurally invalid fingerprint) or FAILURE (resolution
 error). Machine-readable verdicts additionally carry the issue #884 shape
 (``status`` / ``reasons`` / ``affected_artifacts`` / ``remediation``).
 """
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import contextlib
@@ -395,6 +396,27 @@ def _unit_wanted(basename: str, prompt: Path, wanted: set) -> bool:
     )
 
 
+def resolve_units(
+    root: Path, modules: Optional[Iterable[str]] = None
+) -> List[Unit]:
+    """Public: resolve every python unit under ``root`` (stamper-parity paths)."""
+    layout = _layout_for(Path(root))
+    arch_maps = _load_architecture(layout.architecture_file)
+    return enumerate_units(layout, arch_maps, modules=modules)
+
+
+def resolve_unit(basename: str, root: Path, prompt: Optional[Path] = None) -> Unit:
+    """Public: resolve one unit's artifact paths against ``root``.
+
+    ``prompt`` defaults to ``<prompts_root>/<basename>_python.prompt``.
+    """
+    layout = _layout_for(Path(root))
+    arch_maps = _load_architecture(layout.architecture_file)
+    if prompt is None:
+        prompt = layout.prompts_root / f"{basename}{PROMPT_SUFFIX}"
+    return _build_unit(basename, Path(prompt), layout, arch_maps)
+
+
 # --- .pddignore & waivers ----------------------------------------------------
 
 
@@ -494,11 +516,19 @@ def compute_current_hashes(
     """Recompute all fingerprint hash fields for ``unit`` via pdd's real hasher.
 
     Must run under ``_chdir(root)`` so <include> resolution matches the committed
-    fingerprints.
+    fingerprints (see the public ``hashes_for`` for a self-contained variant).
     """
     return calculate_current_hashes(
         _paths_for_hashing(unit), stored_include_deps=stored_deps
     )
+
+
+def hashes_for(
+    unit: Unit, root: Path, stored_deps: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Public: recompute ``unit``'s hashes with cwd anchored at ``root``."""
+    with _chdir(Path(root)):
+        return compute_current_hashes(unit, stored_deps)
 
 
 def _read_fingerprint_obj(unit: Unit) -> Optional[Fingerprint]:
@@ -757,6 +787,19 @@ def stamp_unit(unit: Unit) -> bool:
         command = stored.command
     save_fingerprint(unit.basename, unit.language, command, paths=_paths_for_hashing(unit))
     return True
+
+
+def stamp_units(units: Iterable[Unit], root: Path) -> List[str]:
+    """Public: idempotently stamp each unit with cwd anchored at ``root``.
+
+    Returns the basenames actually written (unchanged units are skipped).
+    """
+    written: List[str] = []
+    with _chdir(Path(root)):
+        for unit in units:
+            if stamp_unit(unit):
+                written.append(unit.basename)
+    return written
 
 
 # --- Reporting ---------------------------------------------------------------

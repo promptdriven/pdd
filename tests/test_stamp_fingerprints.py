@@ -47,18 +47,26 @@ _SAMPLE_UNITS = [
 ]
 
 
-def test_stamper_is_stdlib_only():
-    """The stamper must not import pdd (it runs offline in CI / the nightly runner)."""
+def test_stamper_delegates_to_continuous_sync():
+    """Issue #1927: the stamper shares pdd.continuous_sync's hashing/resolution.
+
+    It previously vendored a stdlib-only copy of pdd's hash functions so it could
+    run without importing pdd; #1927 removed that second implementation, so the
+    script now imports the shared core (CI installs the package before the gate).
+    Guard that the delegation stays in place and no vendored hashing creeps back.
+    """
     import ast
 
     tree = ast.parse(STAMPER_PATH.read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
+            imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
-    assert "pdd" not in imported
+            imported.add(node.module)
+    assert any(m == "pdd" or m.startswith("pdd.") for m in imported), imported
+    # Single implementation: the script must not re-vendor hashlib-based hashing.
+    assert "hashlib" not in imported
 
 
 def test_write_meta_byte_format(tmp_path):
