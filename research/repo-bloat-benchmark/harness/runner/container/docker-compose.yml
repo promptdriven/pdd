@@ -103,8 +103,14 @@ services:
     # via the recording proxy on the runner, and reaches nothing else.
     environment:
       NO_PROXY: 127.0.0.1,localhost
-    # Keep Docker service-name DNS for `runner`, but give Docker's embedded
-    # resolver a dead upstream so 127.0.0.11 cannot forward external names.
+    # Docker always runs its embedded resolver at 127.0.0.11 inside a container
+    # on an internal user-defined network — it cannot be removed without giving
+    # the agent NET_ADMIN, which would defeat the kernel isolation. Pinning its
+    # upstream to a dead loopback keeps `runner` service-name resolution working
+    # while making any *external*-name lookup SERVFAIL, so nothing exfiltrates
+    # via DNS. `egress_check --role agent` verifies this empirically: it asserts
+    # 127.0.0.11 does not RESOLVE an external name (not merely that it is
+    # silent, which Docker's embedded resolver never is).
     dns:
       - 127.0.0.1
     volumes:

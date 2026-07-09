@@ -113,8 +113,7 @@ def test_runner_checks_allow_docker_service_dns(monkeypatch):
     assert ("127.0.0.11", 53) not in calls
 
 
-def test_agent_checks_include_docker_embedded_dns_probe(monkeypatch):
-    """Agent role treats Docker external-name forwarding as a lockdown failure."""
+def _patch_agent_common(monkeypatch):
     monkeypatch.setattr(egress_check, "GATEWAY", "gateway:8888")
     monkeypatch.setattr(egress_check, "_http_healthcheck_ok", lambda base_url: True)
     monkeypatch.setattr(egress_check, "OUTSIDE_TCP_PROBES", (("192.0.2.1", 443),))
@@ -124,17 +123,40 @@ def test_agent_checks_include_docker_embedded_dns_probe(monkeypatch):
         (("8.8.8.8", 53), ("127.0.0.11", 53)),
     )
     monkeypatch.setattr(egress_check, "OUTSIDE_IPV6_PROBES", (("2001:db8::1", 443),))
-    monkeypatch.setattr(
-        egress_check,
-        "_udp_dns_reachable",
-        lambda host, port=53: host == "127.0.0.11",
-    )
+    # Public UDP resolvers are unreachable on the agent's internal net.
+    monkeypatch.setattr(egress_check, "_udp_dns_reachable", lambda host, port=53: False)
     monkeypatch.setattr(egress_check, "_tcp_connect", lambda *args, **kwargs: False)
     monkeypatch.setattr(egress_check, "_loopback_check", lambda: True)
     monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
+
+
+def test_agent_checks_flag_docker_dns_when_external_name_resolves(monkeypatch):
+    """Agent role: a resolved external name via 127.0.0.11 is a lockdown failure."""
+    _patch_agent_common(monkeypatch)
+    monkeypatch.setattr(
+        egress_check,
+        "_dns_external_name_resolves",
+        lambda host, port=53: host == "127.0.0.11",
+    )
     checks = egress_check.agent_checks(proxy_url="http://runner:8080")
     assert checks["no_public_udp_dns_egress"] is True
     assert checks["no_docker_embedded_dns_egress"] is False
+
+
+def test_agent_checks_pass_docker_dns_when_forwarding_fails(monkeypatch):
+    """A responding-but-non-resolving embedded resolver (dead upstream) passes.
+
+    Docker always answers on 127.0.0.11; with a black-holed upstream the
+    external lookup SERVFAILs, so nothing escapes and the check must pass.
+    """
+    _patch_agent_common(monkeypatch)
+    monkeypatch.setattr(
+        egress_check, "_dns_external_name_resolves", lambda host, port=53: False
+    )
+    checks = egress_check.agent_checks(proxy_url="http://runner:8080")
+    assert checks["no_public_udp_dns_egress"] is True
+    assert checks["no_docker_embedded_dns_egress"] is True
+    assert all(checks.values())
 
 
 def test_agent_checks_flag_reachable_gateway_as_failure(monkeypatch):
@@ -155,6 +177,96 @@ def test_agent_checks_flag_reachable_gateway_as_failure(monkeypatch):
         assert checks["loopback_works"] is True
     finally:
         gateway.close()
+
+
+class _FakeUDPResolver:
+    """A minimal UDP DNS server that replies with a fixed 12-byte header.
+
+    ``reply`` is the raw bytes to send back, or ``None`` to stay silent (so the
+    probe times out). Lets us exercise ``_dns_external_name_resolves`` against a
+    real socket without any Docker/embedded-DNS dependency.
+    """
+
+    def __init__(self, reply: bytes | None) -> None:
+        self._reply = reply
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self.port = self._sock.getsockname()[1]
+        threading.Thread(target=self._serve, daemon=True).start()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                _, addr = self._sock.recvfrom(512)
+            except OSError:
+                return
+            if self._reply is not None:
+                self._sock.sendto(self._reply, addr)
+
+    def close(self) -> None:
+        self._sock.close()
+
+
+def _dns_header(id_bytes: bytes, flags: int, ancount: int) -> bytes:
+    """A bare 12-byte DNS message header (qdcount=1, nscount=arcount=0)."""
+    return (
+        id_bytes
+        + bytes([(flags >> 8) & 0xFF, flags & 0xFF])
+        + b"\x00\x01"  # qdcount
+        + bytes([(ancount >> 8) & 0xFF, ancount & 0xFF])
+        + b"\x00\x00"  # nscount
+        + b"\x00\x00"  # arcount
+    )
+
+
+def test_dns_external_name_resolves_true_only_on_successful_answer(monkeypatch):
+    monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
+    query_id = egress_check._DNS_QUERY[:2]
+    # QR set, RCODE NOERROR (0), one answer record → the name resolved.
+    resolver = _FakeUDPResolver(_dns_header(query_id, 0x8180, ancount=1))
+    try:
+        assert (
+            egress_check._dns_external_name_resolves("127.0.0.1", resolver.port)
+            is True
+        )
+    finally:
+        resolver.close()
+
+
+def test_dns_external_name_resolves_false_on_servfail_nodata_and_id_mismatch(
+    monkeypatch,
+):
+    monkeypatch.setattr(egress_check, "TIMEOUT", 1.0)
+    query_id = egress_check._DNS_QUERY[:2]
+    cases = {
+        # SERVFAIL (RCODE 2) — a black-holed upstream returns this; not resolved.
+        "servfail": _dns_header(query_id, 0x8182, ancount=0),
+        # NOERROR but zero answers (NODATA) — still not a resolution.
+        "nodata": _dns_header(query_id, 0x8180, ancount=0),
+        # A valid-looking answer but for a DIFFERENT query id — not our reply.
+        "id_mismatch": _dns_header(b"\xff\xff", 0x8180, ancount=1),
+    }
+    for name, reply in cases.items():
+        resolver = _FakeUDPResolver(reply)
+        try:
+            assert (
+                egress_check._dns_external_name_resolves("127.0.0.1", resolver.port)
+                is False
+            ), name
+        finally:
+            resolver.close()
+
+
+def test_dns_external_name_resolves_false_on_no_response(monkeypatch):
+    monkeypatch.setattr(egress_check, "TIMEOUT", 0.5)
+    resolver = _FakeUDPResolver(reply=None)  # silent → probe times out
+    try:
+        assert (
+            egress_check._dns_external_name_resolves("127.0.0.1", resolver.port)
+            is False
+        )
+    finally:
+        resolver.close()
 
 
 def test_gateway_connect_none_when_gateway_down(monkeypatch):

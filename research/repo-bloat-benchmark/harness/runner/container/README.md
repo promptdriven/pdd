@@ -29,9 +29,15 @@ agent is a **separate container** whose only network has no gateway on it.
   `rb-proxy-egress`, so it kernel-cannot address the gateway; its single
   reachable peer is the runner's recording proxy
   (`OPENAI_BASE_URL=runner:<port>`). Every provider request is recorded
-  before it can leave. The service also pins Docker's embedded resolver to a
-  dead loopback upstream, preserving service-name resolution for `runner` while
-  making external-name forwarding via `127.0.0.11` a failing egress check.
+  before it can leave. Docker unavoidably runs its embedded resolver at
+  `127.0.0.11` inside any container on an internal user-defined network — it
+  cannot be removed without granting the agent `NET_ADMIN`, which would defeat
+  the kernel isolation. The service therefore pins that resolver's upstream to
+  a dead loopback (`dns: 127.0.0.1`): `runner` service-name resolution still
+  works, but any **external**-name lookup SERVFAILs, so no name can be
+  exfiltrated via DNS. The agent egress check enforces exactly that invariant —
+  it fails only if `127.0.0.11` actually *resolves* an external name, not
+  because the always-present resolver answers at all.
 - The **runner** joins `rb-sandbox` (to receive agent traffic) and
   `rb-proxy-egress` (to forward it). Only the *runner* env carries
   `HTTPS_PROXY=gateway:8888`; the frozen agent env black-holes proxy vars and

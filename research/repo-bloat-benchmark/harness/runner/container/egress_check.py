@@ -10,9 +10,14 @@ Asserts, from inside the agent's network namespace:
    and IPv6 — connects/sends to well-known outside addresses fail (the agent's
    only network is `internal: true` with no gateway; netns/routing
    enforcement, not env convention). The agent role also probes Docker's
-   embedded resolver (127.0.0.11) for external-name forwarding; the runner role
-   intentionally allows Docker service DNS because it must resolve `gateway`
-   and be resolvable as `runner` by the agent;
+   embedded resolver (127.0.0.11) for external-name *forwarding*: on an
+   internal user-defined network Docker always runs that resolver in the
+   namespace (it cannot be removed without giving the agent NET_ADMIN, which
+   would defeat the kernel isolation), so the enforced invariant is that it
+   must not resolve an external name — with a black-holed upstream the lookup
+   returns SERVFAIL and nothing escapes. The runner role intentionally allows
+   Docker service DNS because it must resolve `gateway` and be resolvable as
+   `runner` by the agent;
 2. the **gateway is NOT reachable from the agent** — the agent has no
    interface on the proxy-egress network, so it cannot bypass the recording
    proxy by talking to the gateway directly (this is the property the
@@ -47,10 +52,13 @@ PROVIDER_HOST = os.environ.get("RB_PROVIDER_HOST", "api.openai.com")
 PROXY_URL = os.environ.get("RB_PROXY_URL")
 PROXY_ENDPOINT_JSON = os.environ.get("RB_PROXY_ENDPOINT_JSON")
 OUTSIDE_TCP_PROBES = (("1.1.1.1", 443), ("8.8.8.8", 53))
-# UDP exfil / DNS-tunnel channels: a public resolver and Docker's embedded
-# resolver (which forwards external lookups via the daemon even on an
-# internal network).
+# Public UDP DNS resolvers: on the agent's internal network these are
+# unreachable, so ANY response means a packet escaped the namespace. Docker's
+# embedded resolver (127.0.0.11) is handled separately — it is always present
+# in the namespace and answers by design, so it is judged on whether it
+# *resolves* an external name, not on whether it responds at all.
 OUTSIDE_UDP_PROBES = (("8.8.8.8", 53), ("1.1.1.1", 53), ("127.0.0.11", 53))
+DOCKER_EMBEDDED_DNS = ("127.0.0.11", 53)
 # A public IPv6 literal (Cloudflare DNS) — v6 default routes bypass a
 # v4-only lockdown.
 OUTSIDE_IPV6_PROBES = (("2606:4700:4700::1111", 443),)
@@ -81,6 +89,35 @@ def _udp_dns_reachable(host: str, port: int = 53) -> bool:
             return True
     except OSError:
         return False
+
+
+def _dns_external_name_resolves(host: str, port: int = 53) -> bool:
+    """True iff ``host`` actually *resolves* an external name.
+
+    Sends the ``example.com`` A-query and parses the reply: a real resolution
+    means the DNS response has the QR bit set, ``RCODE == NOERROR`` and at
+    least one answer record. This is the exfil invariant for Docker's embedded
+    resolver at 127.0.0.11 — it always listens in an internal-network
+    namespace and cannot be removed without granting the agent NET_ADMIN, but
+    with a black-holed upstream (``dns: 127.0.0.1``) it must not forward
+    external names. SERVFAIL / REFUSED / NXDOMAIN / NODATA / no-response / a
+    mismatched id all mean the name did NOT resolve and nothing escaped.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(TIMEOUT)
+            sock.sendto(_DNS_QUERY, (host, port))
+            data, _ = sock.recvfrom(512)
+    except OSError:
+        return False
+    # Need a full 12-byte header and the reply must answer *our* query id.
+    if len(data) < 12 or data[:2] != _DNS_QUERY[:2]:
+        return False
+    flags = (data[2] << 8) | data[3]
+    is_response = (flags >> 15) & 0x1
+    rcode = flags & 0x0F
+    answer_count = (data[6] << 8) | data[7]
+    return bool(is_response) and rcode == 0 and answer_count > 0
 
 
 def _gateway_connect(target_host: str, target_port: int) -> int | None:
@@ -145,8 +182,10 @@ def _no_egress_checks(*, include_docker_dns: bool) -> dict[str, bool]:
         ),
     }
     if include_docker_dns:
-        checks["no_docker_embedded_dns_egress"] = not _udp_dns_reachable(
-            "127.0.0.11", 53
+        # Docker's embedded resolver is present in the namespace by design and
+        # WILL answer; egress means it actually *resolves* an external name.
+        checks["no_docker_embedded_dns_egress"] = not _dns_external_name_resolves(
+            *DOCKER_EMBEDDED_DNS
         )
     return checks
 
