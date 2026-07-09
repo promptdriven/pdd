@@ -662,3 +662,108 @@ def test_metadata_only_relink_does_not_flip_bundle_hash(tmp_path: Path):
         evaluate_story_regression(story, tests_dir=tests, story_map=smap).status
         == STATUS_PASSING
     )
+
+
+# --------------------------------------------------------------------------- #
+# pdd#1889 P2 robustness — gate discovery / exit safety
+# --------------------------------------------------------------------------- #
+
+def test_discover_skips_non_utf8_file_without_crashing(tmp_path: Path):
+    """G-F3: a test file that is not valid UTF-8 must be skipped, not crash the
+    whole scan with a UnicodeDecodeError (a ValueError, not OSError)."""
+    # A latin-1 byte (0xe9 = 'é') that is invalid UTF-8.
+    (tmp_path / "test_latin1.py").write_bytes(
+        b"# caf\xe9 latin-1\ndef test_x():\n    pass\n"
+    )
+    _write(tmp_path / "test_ok.py", _test_module(_marked("alpha", "abc123", "test_alpha")))
+    # Must not raise; the readable marker is still discovered.
+    markers = discover_story_markers(tmp_path)
+    assert set(markers) == {"alpha"}
+    all_markers = discover_all_story_markers(tmp_path)
+    assert set(all_markers) == {"alpha"}
+
+
+def test_evaluate_survives_non_utf8_test_file(tmp_path: Path):
+    """G-F3 end-to-end: evaluate_stories must return a verdict even when an
+    undecodable test file lives in the tests dir."""
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    _write(stories / "story__refund.md", FRESH_STORY)
+    tests.mkdir(parents=True, exist_ok=True)
+    (tests / "test_latin1.py").write_bytes(
+        b"# caf\xe9 latin-1\ndef test_x():\n    pass\n"
+    )
+    fresh = _story_content_hash(FRESH_STORY)
+    _write(tests / "test_ok.py", _test_module(_marked("refund", fresh, "test_refund")))
+    results = evaluate_stories(stories_dir=str(stories), tests_dir=str(tests))
+    by_id = {r.story_id: r.status for r in results}
+    assert by_id["refund"] == STATUS_STORY_REGRESSION_OK
+
+
+def test_discover_finds_class_level_story_marker(tmp_path: Path):
+    """G-F4: a @pytest.mark.story on a test CLASS (propagates to its methods)
+    must be discovered, not reported missing."""
+    src = (
+        "import pytest\n\n"
+        '@pytest.mark.story(story_id="clsflow", story_hash="clshash00")\n'
+        "class TestClsFlow:\n"
+        "    def test_one(self):\n"
+        "        assert True\n"
+    )
+    _write(tmp_path / "test_cls.py", src)
+    markers = discover_story_markers(tmp_path)
+    assert "clsflow" in markers
+    assert markers["clsflow"].story_hash == "clshash00"
+
+
+def test_discover_finds_module_level_pytestmark_story(tmp_path: Path):
+    """G-F4: a module-level ``pytestmark = pytest.mark.story(...)`` claims every
+    test in the module and must be discovered."""
+    src = (
+        "import pytest\n\n"
+        'pytestmark = pytest.mark.story(story_id="modflow", story_hash="modhash00")\n\n'
+        "def test_one():\n    assert True\n"
+    )
+    _write(tmp_path / "test_mod.py", src)
+    markers = discover_story_markers(tmp_path)
+    assert "modflow" in markers
+    assert markers["modflow"].story_hash == "modhash00"
+
+
+def test_evaluate_discovers_nested_story(tmp_path: Path):
+    """G-F5 (gate side): a story in a nested subdir must be discovered by the
+    gate the same way the coverage path (rglob) already sees it."""
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    _write(stories / "nested" / "story__baz.md", FRESH_STORY)
+    fresh = _story_content_hash(FRESH_STORY)
+    _write(tests / "test_baz.py", _test_module(_marked("baz", fresh, "test_baz")))
+    results = evaluate_stories(stories_dir=str(stories), tests_dir=str(tests))
+    by_id = {r.story_id: r.status for r in results}
+    assert "baz" in by_id, "nested story must be discovered by the gate"
+    assert by_id["baz"] == STATUS_STORY_REGRESSION_OK
+
+
+def test_gate_honors_stories_dir_env_var_when_root_differs(tmp_path, monkeypatch):
+    """G-F7: when stories_dir is None and project_root != cwd, the gate must
+    still honor PDD_USER_STORIES_DIR instead of hardcoding root/user_stories —
+    otherwise strict mode passes vacuously over zero stories."""
+    root = tmp_path / "project"
+    alt = root / "stories_alt"
+    tests = root / "tests"
+    _write(alt / "story__refund.md", FRESH_STORY)
+    _write(tests / "test_noop.py", "def test_noop():\n    assert True\n")
+
+    # cwd must differ from root to trigger the buggy hardcoded branch.
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    monkeypatch.setenv("PDD_USER_STORIES_DIR", "stories_alt")
+
+    result = run_story_regression_gate(
+        project_root=root, mode="strict", scope_to_diff=False
+    )
+    # The story has no marker -> missing -> strict must FAIL (exit 2), not pass.
+    assert result.results, "gate must evaluate the env-var stories dir, not zero stories"
+    assert result.ok is False
+    assert result.exit_code == 2

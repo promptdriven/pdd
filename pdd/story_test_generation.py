@@ -275,7 +275,13 @@ def generate_story_regression_test(
     # ## Negative Cases as Python expressions over `result` (delegating to
     # story_test_generator). Contracts without an Entry Point fall through to
     # the text-pinning generator below, which pins the story/contract clauses.
-    if md_sections.get("entry point"):
+    # Route on heading PRESENCE, not truthiness: a declared but empty/partial
+    # ## Entry Point must surface the behavioral generator's validation error
+    # (missing `- module:`/`- callable:`) instead of silently degrading to a
+    # text-pin that the user would mistake for a real behavioral oracle
+    # (pdd#1889 C-F7). A contract with no ## Entry Point at all still falls
+    # through to the text-pinning generator below.
+    if "entry point" in md_sections:
         return _generate_behavioral_test(story_path, output)
 
     oracle_text = _section(md_sections, "Oracle", "Acceptance Criteria", "Story")

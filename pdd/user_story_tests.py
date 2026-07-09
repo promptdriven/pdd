@@ -83,11 +83,19 @@ def _resolve_prompts_dir(prompts_dir: Optional[str] = None) -> Path:
 
 
 def discover_story_files(stories_dir: Optional[str] = None) -> List[Path]:
-    """Discover user story files matching story__*.md in the stories directory."""
+    """Discover user story files matching story__*.md in the stories directory.
+
+    Recursive (``rglob``) so nested layouts (``user_stories/<sub>/story__*.md``)
+    are supported. This is the single shared discovery helper for the gate,
+    ``discover_story_ids`` (orphan detection), and — matching the coverage path's
+    own ``rglob`` lookups — keeps a nested story either fully supported or
+    rejected everywhere, never evaluated by one path yet flagged nonexistent by
+    another (pdd#1889 G-F5). The flat default layout is unaffected.
+    """
     base_dir = _resolve_stories_dir(stories_dir)
     if not base_dir.exists() or not base_dir.is_dir():
         return []
-    return sorted(p for p in base_dir.glob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file())
+    return sorted(p for p in base_dir.rglob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file())
 
 
 def discover_prompt_files(
