@@ -2013,6 +2013,35 @@ def _changed_artifacts_from_hashes(
     return changes
 
 
+def _conflict_command_suffix(language: str) -> str:
+    """CLI suffix that disambiguates non-Python units in resolution commands."""
+    return "" if language.lower() == "python" else f" --language {language}"
+
+
+def _describe_conflict_artifacts(changes: List[str]) -> str:
+    """Human phrase for the co-edited artifacts, prompt first ('prompt and code')."""
+    order = ("prompt", "code", "example", "test")
+    ordered = [item for item in order if item in changes]
+    ordered += [item for item in changes if item not in ordered]
+    if not ordered:
+        return "prompt and derived artifacts"
+    if len(ordered) == 1:
+        return ordered[0]
+    if len(ordered) == 2:
+        return f"{ordered[0]} and {ordered[1]}"
+    return ", ".join(ordered[:-1]) + f", and {ordered[-1]}"
+
+
+def _conflict_resolution_commands(basename: str, language: str) -> Dict[str, str]:
+    """Exact `pdd resolve` commands offered for a CONFLICT unit."""
+    suffix = _conflict_command_suffix(language)
+    return {
+        "accept_current": f"pdd resolve {basename}{suffix} --accept-current",
+        "prompt_wins": f"pdd resolve {basename}{suffix} --prompt-wins",
+        "code_wins": f"pdd resolve {basename}{suffix} --code-wins",
+    }
+
+
 def _prompt_derived_conflict_decision(
     *,
     basename: str,
@@ -2022,21 +2051,45 @@ def _prompt_derived_conflict_decision(
     fingerprint: Optional[Fingerprint],
     read_only: bool,
 ) -> SyncDecision:
-    """Return the explicit conflict decision for prompt+derived co-edits."""
+    """Return the explicit, non-destructive CONFLICT decision for prompt+derived co-edits.
+
+    The prompt AND one or more derived artifacts both changed since the last
+    synced fingerprint. pdd must not auto-pick a winner here (regenerating would
+    discard the manual code edits; `pdd update` would discard the prompt edits),
+    so this returns the terminal ``fail_and_request_manual_merge`` operation with
+    an explicit ``CONFLICT`` classification. The fingerprint and run report are
+    preserved (never deleted) as the record of the last-synced ancestor so that
+    ``pdd resolve`` can finalize an informed choice. The ``reason`` is written to
+    be actionable on its own: it names the unit, what moved, and the exact
+    resolution commands.
+    """
     meta_dir = get_meta_dir(paths=paths)
     safe_bn = _safe_basename(basename)
     fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
     rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
+    resolution_commands = _conflict_resolution_commands(basename, language)
+    moved = _describe_conflict_artifacts(changes)
+    reason = (
+        f"CONFLICT: '{basename}' — {moved} changed since the last sync, so pdd "
+        f"will not auto-pick a winner (that would discard your edits). Resolve with "
+        f"`{resolution_commands['accept_current']}` (keep the current files as the new "
+        f"baseline), `{resolution_commands['prompt_wins']}` (regenerate code from the "
+        f"prompt), or `{resolution_commands['code_wins']}` (back-propagate the code "
+        f"into the prompt)."
+    )
     return SyncDecision(
         operation='fail_and_request_manual_merge',
-        reason='Prompt and derived artifacts changed since the last fingerprint; manual conflict resolution required',
+        reason=reason,
         confidence=1.0,
         estimated_cost=estimate_operation_cost('fail_and_request_manual_merge'),
         details={
             'decision_type': 'heuristic',
             'classification': 'CONFLICT',
+            'basename': basename,
+            'language': language,
             'changed_files': changes,
             'read_only': read_only,
+            'resolution_commands': resolution_commands,
             'metadata_preserved': [
                 str(path) for path in (fp_path, rr_path) if path.exists()
             ],
@@ -3323,14 +3376,22 @@ def analyze_conflict_with_llm(
 ) -> SyncDecision:
     """
     Resolve complex sync conflicts using an LLM.
-    
+
+    NOTE (#1929): this helper is NOT part of the deterministic decision path.
+    The both-changed (prompt+derived) case is classified explicitly as CONFLICT
+    by ``_prompt_derived_conflict_decision`` and surfaced to the user via
+    ``pdd resolve`` — the decision tree never auto-picks a winner. This function
+    is retained only as the LLM backend reserved for a future
+    ``pdd resolve``-driven agentic 3-way merge; it must not be wired back into
+    ``sync_determine_operation`` as an automatic conflict resolver.
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
         fingerprint: The last known good state
         changed_files: List of files that have changed
         prompts_dir: Directory containing prompt files
-    
+
     Returns:
         SyncDecision object with LLM-recommended operation
     """
