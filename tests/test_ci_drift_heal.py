@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1578,7 +1579,7 @@ class TestHealModule:
         # _snapshot_metadata_state_for must NOT be called either — a
         # snapshot taken before a fail-close would write per-module bytes
         # that the heal has no obligation to restore. Catches a future
-        # regression that moves the snapshot tobacco the existence gate.
+        # regression that moves the snapshot above the existence gate.
         mock_snap.assert_not_called()
         # Only `pdd update` ran — the follow-up `pdd example` must NOT.
         update_calls = [
@@ -1871,7 +1872,7 @@ class TestMain:
         )
 
     def _assert_commit_call(
-        self, 
+        self,
         mock_commit,
         basenames,
         skip_ci,
@@ -4308,22 +4309,6 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
         )
 
 
-# ---------------------------------------------------------------------------
-# Additional tests appended for coverage gaps
-# ---------------------------------------------------------------------------
-
-
-import sys
-from pathlib import Path
-
-# Add project root to sys.path to ensure local code is prioritized
-# This allows testing local changes without installing the package
-project_root = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(project_root))
-
-import json as _json_std
-
-
 class TestMainDryRunJson:
     def test_dry_run_json_outputs_report(self, capsys):
         """--dry-run with --json prints the report as JSON and exits based on ok."""
@@ -4340,7 +4325,7 @@ class TestMainDryRunJson:
             result = main(dry_run=True, as_json=True)
         assert result == 0
         out = capsys.readouterr().out
-        parsed = _json_std.loads(out)
+        parsed = json.loads(out)
         assert parsed == report
 
     def test_dry_run_json_returns_one_when_not_ok(self, capsys):
