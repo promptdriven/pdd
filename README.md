@@ -755,7 +755,7 @@ Commands:
 - `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--from-changed-files` to link currently changed `.prompt` files, `--dry-run` for a no-write preview, `--update` to merge prompt links into an existing story, and `--generate-regression` to print the follow-up `pdd test --from-story` command.
 - `pdd story list [--with-regression-status]` lists all stories in `user_stories/` with their slug, file path, linked prompts, and (when the traceability API is available) `missing` / `passing` / `stale` regression status.
 - `pdd story link <story-file> --prompt <path>` adds a prompt link to an existing story file without regenerating the story body. Validates that the story file is inside `user_stories/`.
-- `pdd test --from-story user_stories/story__*.md --output tests/story_regression/test_story_*.py` generates deterministic pytest regression tests from the story contract. When the contract declares a machine-readable `## Entry Point`, the generated test is behavioral (preferred): it imports and calls the entry point and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result`. Without an `## Entry Point`, it falls back to a text-pin test that pins the story/contract hash and clauses. Either way, generated tests are tagged with `@pytest.mark.story(...)`. See [docs/generating_user_stories.md](docs/generating_user_stories.md) Step 3.
+- `pdd test --from-story user_stories/story__*.md --output tests/story_regression/test_story_*.py` generates deterministic pytest regression tests from a story contract that declares a machine-readable `## Entry Point`: it imports and calls the entry point and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result`. Contracts without an entry point or assertion expressions fail clearly instead of emitting an empty or false-green test. Generated tests are tagged with `@pytest.mark.story(...)`. See [docs/generating_user_stories.md](docs/generating_user_stories.md) Step 8.
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
@@ -789,6 +789,8 @@ Executable regression suite:
   (i.e. `pytest -m story`) in the public-safe, no-secrets lane.
 - Generate a test for a story with
   `pdd test --from-story user_stories/story__<slug>.md`.
+  The story contract must include `## Entry Point` and assertion-expression
+  bullets under `## Oracle` or `## Negative Cases`.
 - Seed coverage ships for the top flows (`generate`, `sync`, `fix`, `change`,
   `update`) plus a batch of previously-fixed-bug regressions. See
   [docs/generating_user_stories.md](docs/generating_user_stories.md#story-regression-suite-executable-oracles).

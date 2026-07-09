@@ -125,42 +125,6 @@ Pass `--update` to merge prompt links into an existing story file rather than er
 
 `pdd story add` calls the same library as `pdd test --issue` internally. You may still use `pdd test --issue` directly when you need to select specific prompt files manually.
 
-## Step 3 — Generate executable regression tests
-
-After the human story and generated contract are reviewed, compile the contract into deterministic pytest tests:
-
-```bash
-pdd test --from-story user_stories/story__checkout_total.md \
-  --output tests/story_regression/test_story_checkout_total.py
-```
-
-`pdd test --from-story` generates in one of two modes, chosen from the contract:
-
-**Behavioral (preferred).** If the contract declares a machine-readable `## Entry Point`, the generated test imports the callable, invokes it, and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result` — a true executable oracle that goes red when the *behavior* regresses.
-
-```markdown
-## Entry Point
-
-- module: checkout_app
-- callable: checkout_total
-- args: [1, 2]
-- kwargs: {}
-```
-
-Optional `## Seams` bullets patch runtime boundaries before the entry point is called:
-
-```markdown
-## Seams
-
-- checkout_app.TAX_RATE = 0
-```
-
-`## Oracle` and `## Negative Cases` bullets are then Python assertion expressions over `result`, the return value from the entry point.
-
-**Text-pin (fallback).** If the contract has no `## Entry Point`, the generated test pins the story+contract bundle instead: it asserts a content hash and the presence of each `## Oracle` / `## Negative Cases` clause. This still gives deterministic **staleness** detection — the test goes red when the story or contract text drifts — but it does not exercise runtime behavior. Prefer adding an `## Entry Point` when you want outcome-level (behavioral) coverage.
-
-Either way, generated tests are tagged with `@pytest.mark.story(story_id=..., story_hash=...)`, so `make regression-stories`, story coverage, and the stale/missing gate can trace them back to the source story.
-
 Run `pdd test` with `--issue` and one or more `.prompt` files. The prompt files
 are the **validation targets** the story will be linked to — they are *not* shown
 to the story author, which is what keeps the story an independent oracle.
@@ -326,6 +290,49 @@ pdd fix user_stories/story__<slug>.md
 This treats the Story + contract as the spec and updates the linked prompts to
 satisfy it. Re-run `pdd detect --stories` to confirm.
 
+## Step 8 — Generate executable regression tests
+
+After the Story and generated contract are reviewed and prompt validation is
+green, compile the contract into deterministic pytest tests:
+
+```bash
+pdd test --from-story user_stories/story__checkout_total.md \
+  --output tests/story_regression/test_story_checkout_total.py
+```
+
+`pdd test --from-story` requires a machine-readable `## Entry Point` in the
+contract. The generated test imports the callable, invokes it, and asserts the
+`## Oracle` / `## Negative Cases` bullets as Python expressions over `result` —
+a true executable oracle that goes red when the behavior regresses.
+
+```markdown
+## Entry Point
+
+- module: checkout_app
+- callable: checkout_total
+- args: [1, 2]
+- kwargs: {}
+```
+
+Optional `## Seams` bullets patch runtime boundaries before the entry point is
+called:
+
+```markdown
+## Seams
+
+- checkout_app.TAX_RATE = 0
+```
+
+`## Oracle` and `## Negative Cases` bullets must be Python assertion
+expressions over `result`, the return value from the entry point. If the contract
+lacks an entry point or assertion expressions, generation fails clearly instead
+of emitting an empty or false-green test.
+
+Generated tests are tagged with
+`@pytest.mark.story(story_id=..., story_hash=...)`, so the
+`make regression-stories` lane, story coverage, and the stale/missing gate can
+trace them back to the source story.
+
 ## Anatomy of the generated files
 
 **Human Story** — `user_stories/story__pdd_test.md`:
@@ -460,6 +467,8 @@ no secrets and no LLM/cloud credentials.
 
 - **Generate** a regression test from a story with
   `pdd test --from-story user_stories/story__<slug>.md`.
+  The story contract must include `## Entry Point` and assertion-expression
+  bullets under `## Oracle` or `## Negative Cases`.
 - **Run** the suite with `make regression-stories` (equivalent to `pytest -m story`).
   It runs inside the no-secrets `regression-public` lane, so it is safe on forks/CI.
 - **Backfill from fixed bugs.** To make a previously-fixed bug permanently guarded,
