@@ -12,88 +12,120 @@ lets the user finalize the resolution explicitly:
   strategies (regenerate code from the prompt / back-propagate code into the
   prompt). These are not yet automated; they print what WOULD run and exit
   non-zero.
+
+Deliberately self-contained: classification reuses ``sync_determine_operation``'s
+own changed-artifact primitive (so the CONFLICT definition — prompt-side AND
+derived-side both moved vs the stored fingerprint — matches the sync decision
+path exactly), and stamping uses the shared runtime ``save_fingerprint`` writer.
+It does NOT depend on ``continuous_sync``/``reconcile`` (owned by the sibling
+#1927 effort); any overlap with ``reconcile --accept-current`` is consolidated at
+merge.
 """
 from __future__ import annotations
 
 import json
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import click
 
-from ..continuous_sync import SyncUnit, classify_unit, discover_units, project_root
-from ..operation_log import save_fingerprint
-from ..sync_determine_operation import get_pdd_file_paths, read_fingerprint
+from ..operation_log import get_fingerprint_path, save_fingerprint
+from ..sync_determine_operation import (
+    Fingerprint,
+    _changed_artifacts_from_hashes,
+    calculate_current_hashes,
+    get_pdd_file_paths,
+    read_fingerprint,
+)
 
 # Fingerprint commands treated as "settled" workflow states. Preserving one of
 # these (rather than resetting to a running op) keeps a stamped baseline from
-# re-triggering verify/test on the next sync — mirrors continuous_sync._heal_units.
+# re-triggering verify/test on the next sync.
 _SETTLED_COMMANDS = {"verify", "test", "fix", "update"}
 
 
-def _find_unit(basename: str, language: str) -> Optional[SyncUnit]:
-    """Locate the discovered sync unit for ``basename``/``language`` (or None)."""
-    base = project_root()
-    for unit in discover_units(base, modules=[basename]):
-        if unit.language == language and unit.basename == basename:
-            return unit
-    # Fall back to a language-only match (basename may be path-qualified/aliased).
-    for unit in discover_units(base, modules=[basename]):
-        if unit.language == language:
-            return unit
-    return None
+def _resolve_paths(basename: str, language: str) -> Optional[Dict[str, Path]]:
+    """Resolve the unit's artifact paths (or None if resolution fails)."""
+    try:
+        return get_pdd_file_paths(basename, language, prompts_dir="prompts")
+    except Exception:  # pylint: disable=broad-except
+        return None
 
 
-def _baseline_command(basename: str, language: str, paths: Dict) -> str:
-    """Command to record on the accepted baseline fingerprint."""
+def _classify(
+    basename: str,
+    language: str,
+    paths: Dict[str, Path],
+) -> Tuple[Optional[Fingerprint], List[str], str]:
+    """Classify the unit against its stored fingerprint without mutating anything.
+
+    Returns ``(fingerprint, changed_artifacts, classification)``. CONFLICT means
+    the prompt AND at least one derived artifact both moved vs the fingerprint —
+    identical to the both-changed trigger in ``_prompt_derived_conflict_decision``.
+    """
     fingerprint = read_fingerprint(basename, language, paths=paths)
-    if fingerprint and fingerprint.command in _SETTLED_COMMANDS:
-        return fingerprint.command
-    return "fix"
+    if fingerprint is None:
+        return None, [], "UNBASELINED"
+    current = calculate_current_hashes(paths, stored_include_deps=fingerprint.include_deps)
+    changes = _changed_artifacts_from_hashes(fingerprint, paths, current)
+    derived = [item for item in changes if item != "prompt"]
+    if not changes:
+        classification = "IN_SYNC"
+    elif "prompt" in changes and derived:
+        classification = "CONFLICT"
+    else:
+        classification = "DRIFT"
+    return fingerprint, changes, classification
 
 
-def _accept_current(unit: SyncUnit, as_json: bool, quiet: bool) -> int:
-    """Stamp the current tree as the agreed baseline for ``unit``.
+def _accept_current(
+    basename: str,
+    language: str,
+    paths: Dict[str, Path],
+    as_json: bool,
+    quiet: bool,
+) -> int:
+    """Stamp the current tree as the agreed baseline for the unit.
 
-    Transactional at the command level: it re-fingerprints, then re-classifies
-    and only reports success when the unit lands IN_SYNC. Any other post-state is
+    Transactional at the command level: it re-fingerprints, then re-classifies and
+    only reports success when the unit lands IN_SYNC. Any other post-state is
     surfaced as a failure rather than a silent partial stamp.
     """
-    base = project_root()
-    before = classify_unit(unit, base)
-    paths = get_pdd_file_paths(
-        unit.basename, unit.language, prompts_dir=str(unit.prompts_dir)
+    before_fp, before_changes, before_class = _classify(basename, language, paths)
+    command = (
+        before_fp.command
+        if before_fp is not None and before_fp.command in _SETTLED_COMMANDS
+        else "fix"
     )
-    command = _baseline_command(unit.basename, unit.language, paths)
-    save_fingerprint(unit.basename, unit.language, command, paths, 0.0, "resolve")
-    after = classify_unit(unit, base)
+    save_fingerprint(basename, language, command, paths, 0.0, "resolve")
+    _after_fp, _after_changes, after_class = _classify(basename, language, paths)
 
-    resolved = after["classification"] == "IN_SYNC"
+    resolved = after_class == "IN_SYNC"
     result = {
-        "basename": unit.basename,
-        "language": unit.language,
+        "basename": basename,
+        "language": language,
         "strategy": "accept-current",
-        "before": before["classification"],
-        "after": after["classification"],
-        "changed_files": before.get("changed_files", []),
-        "fingerprint_path": after.get("fingerprint_path"),
+        "before": before_class,
+        "after": after_class,
+        "changed_files": before_changes,
+        "fingerprint_path": str(get_fingerprint_path(basename, language, paths=paths)),
         "resolved": resolved,
     }
     if as_json:
         click.echo(json.dumps(result, indent=2, sort_keys=True))
     elif not quiet:
         if resolved:
-            moved = ", ".join(before.get("changed_files", [])) or "no tracked"
+            moved = ", ".join(before_changes) or "no tracked"
             click.echo(
-                f"Resolved '{unit.basename}' ({unit.language}) with --accept-current: "
+                f"Resolved '{basename}' ({language}) with --accept-current: "
                 f"stamped the current tree as the new baseline "
-                f"(was {before['classification']}: {moved} changed)."
+                f"(was {before_class}: {moved} changed)."
             )
         else:
             click.echo(
-                f"Could not fully resolve '{unit.basename}' ({unit.language}): "
-                f"after stamping it is {after['classification']}, not IN_SYNC. "
-                f"Ensure the prompt and its derived artifacts all exist on disk, "
-                f"then retry."
+                f"Could not fully resolve '{basename}' ({language}): after stamping "
+                f"it is {after_class}, not IN_SYNC. Ensure the prompt and its derived "
+                f"artifacts all exist on disk, then retry."
             )
     return 0 if resolved else 1
 
@@ -200,10 +232,15 @@ def resolve(
             _preview_llm_strategy(basename, language, "code-wins")
         )
 
-    unit = _find_unit(basename, language)
-    if unit is None:
+    paths = _resolve_paths(basename, language)
+    if paths is None or (
+        read_fingerprint(basename, language, paths=paths) is None
+        and not paths["prompt"].exists()
+    ):
         raise click.ClickException(
             f"No PDD unit '{basename}' ({language}) found to resolve. "
-            f"Run `pdd sync` or `pdd reconcile` to see tracked units."
+            f"Run `pdd sync` to see tracked units."
         )
-    raise click.exceptions.Exit(_accept_current(unit, as_json, quiet))
+    raise click.exceptions.Exit(
+        _accept_current(basename, language, paths, as_json, quiet)
+    )
