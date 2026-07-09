@@ -3,6 +3,11 @@ from pdd.context_generator import context_generator
 from rich import print
 
 
+@pytest.fixture(autouse=True)
+def force_local_llm(monkeypatch):
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+
+
 def _skip_if_no_credits(example_code, total_cost):
     """Skip test if context_generator returned None due to insufficient credits."""
     if example_code is None and total_cost == 0.0:
