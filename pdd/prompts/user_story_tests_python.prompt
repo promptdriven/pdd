@@ -265,6 +265,7 @@ multiple dev-unit lanes.
    - Respect `quiet` for console output.
    - If no stories are found, return success with zero cost.
    - If no prompt files are found, return failure with a clear message and zero cost.
+   - **Fail closed on validation errors (issue #1923):** wrap the per-story `detect_change(...)` call so that if it raises for any reason (auth/model/credential/network failure — e.g. a refused non-interactive device-flow), the exception does NOT abort the whole run or bubble up as a crash. Catch it, mark the run failed (`all_passed = False`), and append a failed result for that story (`passed=False`, empty `changes`) whose `error` message states that non-interactive CI/agent runs must provide model API credentials, set `PDD_JWT_TOKEN` for PDD Cloud, or run `pdd auth login` before validation so no browser/device login is required. When not `quiet`, print `FAIL <story>` followed by the error. Honor `fail_fast` (break) and otherwise continue to the next story. This guarantees `pdd detect --stories` reports the failure and exits non-zero rather than hanging on device auth or crashing with a stack trace, without regressing the non-zero exit behavior of issue #1872.
 
 3. **Story generation (#820, #1356)**
    - `generate_user_story` requires an `issue` argument (GitHub issue/PR URL, issue
