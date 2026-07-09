@@ -808,6 +808,7 @@ def evaluate_story_regression(
         )
 
     recorded: dict[str, str] = {}
+    all_recorded: set = set()
     for nodeid in tests:
         test_path = _test_file_for_nodeid(nodeid, tests_dir)
         if test_path is None:
@@ -815,6 +816,10 @@ def evaluate_story_regression(
         found = _recorded_story_hashes(test_path, sid)
         if found:
             recorded[nodeid] = found[0]
+            # Freshness is decided over EVERY recorded hash, not just the first,
+            # so a stale marker listed before a fresh one in the same file cannot
+            # shadow it -- matching the full gate's any-fresh-wins rule (#1889).
+            all_recorded.update(found)
 
     if not recorded:
         # Coverage uses this lightweight evaluator to preserve #1699
@@ -832,7 +837,7 @@ def evaluate_story_regression(
     # Same acceptance as the full gate: content hash UNION bundle hash. A
     # recorded hash matching either form is fresh; otherwise the story changed.
     acceptable = _acceptable_story_hashes(story_path)
-    if set(recorded.values()) & acceptable:
+    if all_recorded & acceptable:
         return StoryRegressionEvaluation(
             story_id=sid,
             status=STATUS_PASSING,
