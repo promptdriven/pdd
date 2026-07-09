@@ -1539,14 +1539,36 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     break
                 continue
 
-        changes_list, cost, model = detect_change(
-            [str(p) for p in story_prompt_files],
-            oracle_content,
-            strength,
-            temperature,
-            time,
-            verbose=verbose,
-        )
+        try:
+            changes_list, cost, model = detect_change(
+                [str(p) for p in story_prompt_files],
+                oracle_content,
+                strength,
+                temperature,
+                time,
+                verbose=verbose,
+            )
+        except Exception as exc:  # noqa: BLE001 - story validation must fail closed
+            all_passed = False
+            error_message = (
+                "Fatal story validation error: "
+                f"{exc}. In non-interactive CI/agent runs, provide model API "
+                "credentials, set PDD_JWT_TOKEN for PDD Cloud, or run "
+                "`pdd auth login` before validation so no browser/device login "
+                "is required."
+            )
+            results.append({
+                "story": str(story_path),
+                "passed": False,
+                "changes": [],
+                "error": error_message,
+            })
+            if not quiet:
+                rprint(f"[bold]FAIL[/bold] {story_path}")
+                rprint(f"[red]{error_message}[/red]")
+            if fail_fast:
+                break
+            continue
         total_cost += cost
         model_name = model or model_name
         passed = len(changes_list) == 0

@@ -94,6 +94,24 @@ def test_detect_stories_options(runner, mock_context_obj):
         assert kwargs["cache_story_prompt_links"] is True
 
 
+def test_detect_stories_non_tty_disables_interactive_auth(runner, mock_context_obj, monkeypatch):
+    """Non-TTY story validation must not allow browser/device auth to start."""
+    monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+    observed = {}
+
+    def fake_runner(**_kwargs):
+        observed["pdd_no_interactive"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return True, [], 0.0, "gpt-4"
+
+    with patch("pdd.commands.analysis.run_user_story_tests", side_effect=fake_runner):
+        result = runner.invoke(detect_change, ["--stories"], obj=mock_context_obj)
+
+    assert result.exit_code == 0
+    assert observed["pdd_no_interactive"] == "1"
+    assert os.environ.get("PDD_NO_INTERACTIVE") is None
+
+
 def test_detect_stories_rejects_files(runner, mock_context_obj):
     """Test '--stories' mode rejects prompt/change positional arguments."""
     with runner.isolated_filesystem():

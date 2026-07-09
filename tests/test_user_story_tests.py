@@ -121,6 +121,33 @@ def test_user_story_tests_detect_fail(tmp_path):
     assert model == "gpt-test"
 
 
+def test_user_story_tests_auth_failure_fails_closed(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    (prompts_dir / "foo_python.prompt").write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__auth.md"
+    story.write_text("As a user...", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.side_effect = RuntimeError("Refusing interactive device-flow auth")
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+        )
+
+    assert passed is False
+    assert results[0]["passed"] is False
+    assert "Fatal story validation error" in results[0]["error"]
+    assert "PDD_JWT_TOKEN" in results[0]["error"]
+    assert "device login" in results[0]["error"]
+    assert cost == 0.0
+    assert model == ""
+
+
 def test_discover_prompt_files_excludes_llm_by_default(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()

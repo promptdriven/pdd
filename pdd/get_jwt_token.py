@@ -53,14 +53,18 @@ def _is_noninteractive() -> bool:
     """Return True when the process cannot safely prompt a human.
 
     Used to refuse GitHub device-flow OAuth in CI/Cloud Build/Docker contexts
-    where no one can enter the verification code. Driven by explicit env vars
-    only: device flow writes to stdout, so a non-TTY stdin alone is not a
-    reliable signal.
+    where no one can enter the verification code. A non-TTY stdin is also
+    treated as non-interactive unless the caller explicitly opts in with
+    PDD_ALLOW_INTERACTIVE.
     """
     truthy = ("1", "true", "yes")
     if os.environ.get("PDD_NO_INTERACTIVE", "").lower() in truthy:
         return True
     if os.environ.get("CI", "").lower() in truthy:
+        return True
+    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").lower() in truthy:
+        return False
+    if not sys.stdin.isatty():
         return True
     return False
 
