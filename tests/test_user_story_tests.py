@@ -1908,6 +1908,10 @@ def test_failure_diagnostic_metadata_resolution_failure(tmp_path, capsys, monkey
     )
 
     assert passed is False
+    assert (
+        results[0]["error"]
+        == "No prompts from pdd-story-prompts metadata could be resolved."
+    )
     captured = capsys.readouterr()
     # Normalize output: rprint may wrap long paths across lines.
     out = captured.out.replace("\n", "")

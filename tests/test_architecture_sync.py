@@ -93,6 +93,39 @@ def test_include_query_extractor_prompt_metadata_tags_parse():
     ]
 
 
+def test_user_story_tests_architecture_metadata_matches_prompt():
+    """Architecture metadata must not keep stale duplicate user_story_tests entries."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt_path = repo_root / "pdd" / "prompts" / "user_story_tests_python.prompt"
+    architecture_path = repo_root / "architecture.json"
+
+    prompt_tags = parse_prompt_tags(prompt_path.read_text(encoding="utf-8"))
+    prompt_functions = {
+        fn["name"]: fn
+        for fn in prompt_tags["interface"]["module"]["functions"]
+        if fn["name"] in {
+            "generate_user_story",
+            "run_user_story_tests",
+            "run_user_story_fix",
+        }
+    }
+    architecture = json.loads(architecture_path.read_text(encoding="utf-8"))
+    entries = [
+        entry
+        for entry in architecture
+        if entry.get("filename") == "user_story_tests_python.prompt"
+        and entry.get("filepath") == "pdd/user_story_tests.py"
+    ]
+
+    assert len(entries) == 1
+    arch_functions = {
+        fn["name"]: fn
+        for fn in entries[0]["interface"]["module"]["functions"]
+        if fn["name"] in prompt_functions
+    }
+    assert arch_functions == prompt_functions
+
+
 def test_parse_tags_lenient_missing_fields():
     """Test lenient parsing with missing tags (only reason present)."""
     content = """

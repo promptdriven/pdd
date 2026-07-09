@@ -9388,6 +9388,11 @@
             "returns": "None"
           },
           {
+            "name": "_result_tuple_reports_failure",
+            "signature": "(result: Any)",
+            "returns": "bool"
+          },
+          {
             "name": "_derive_success_from_normalized_results",
             "signature": "(normalized_results: List[Any])",
             "returns": "bool"
