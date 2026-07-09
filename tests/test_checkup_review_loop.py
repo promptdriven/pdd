@@ -7941,6 +7941,39 @@ class TestPromptSourceOffenders2047:
             prompt.parent.mkdir(parents=True, exist_ok=True)
             prompt.write_text("prompt body\n", encoding="utf-8")
 
+    def _seed_backend_prompt_root(
+        self, tmp_path: Path, *, code_exists: bool, prompt_exists: bool
+    ) -> None:
+        _commit_arch_to_head(
+            tmp_path,
+            [
+                _prompt_module(
+                    "backend/emulator_Python.prompt",
+                    "backend/tests/endpoint_tests/emulator.py",
+                )
+            ],
+        )
+        (tmp_path / ".pddrc").write_text(
+            "\n".join(
+                [
+                    "contexts:",
+                    "  backend:",
+                    "    defaults:",
+                    "      prompts_dir: prompts/backend",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        if code_exists:
+            code = tmp_path / "backend/tests/endpoint_tests/emulator.py"
+            code.parent.mkdir(parents=True, exist_ok=True)
+            code.write_text("# generated\n", encoding="utf-8")
+        if prompt_exists:
+            prompt = tmp_path / "prompts/backend/emulator_Python.prompt"
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text("prompt body\n", encoding="utf-8")
+
     def test_drift_offender_kind(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders
 
@@ -7981,6 +8014,42 @@ class TestPromptSourceOffenders2047:
             ],
         )
         assert offenders == []
+
+    def test_pddrc_backend_prompt_root_co_edit_is_not_offender(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_backend_prompt_root(
+            tmp_path, code_exists=True, prompt_exists=True
+        )
+        offenders = _prompt_source_offenders(
+            tmp_path,
+            [
+                "backend/tests/endpoint_tests/emulator.py",
+                "prompts/backend/emulator_Python.prompt",
+            ],
+        )
+        assert offenders == []
+
+    def test_pddrc_backend_prompt_root_missing_prompt_path(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_backend_prompt_root(
+            tmp_path, code_exists=True, prompt_exists=False
+        )
+        offenders = _prompt_source_offenders(
+            tmp_path, ["backend/tests/endpoint_tests/emulator.py"]
+        )
+        assert offenders == [
+            {
+                "code_path": "backend/tests/endpoint_tests/emulator.py",
+                "prompt_path": "prompts/backend/emulator_Python.prompt",
+                "kind": "missing_prompt",
+            }
+        ]
 
     def test_unregistered_change_is_not_offender(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders

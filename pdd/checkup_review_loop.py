@@ -6530,6 +6530,127 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
+def _repo_relative_path(path: str) -> Path:
+    """Return a normalized repository-relative path from config/registry text."""
+    parts = [
+        part
+        for part in path.replace("\\", "/").split("/")
+        if part and part != "."
+    ]
+    return Path(*parts) if parts else Path("")
+
+
+def _configured_prompt_roots(worktree: Optional[Path]) -> List[Path]:
+    """Return prompt roots declared in the worktree's `.pddrc`, if present."""
+    if worktree is None:
+        return []
+    pddrc = worktree / ".pddrc"
+    if not pddrc.is_file():
+        return []
+    try:
+        from .construct_paths import _load_pddrc_config
+
+        config = _load_pddrc_config(pddrc)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open on config trouble
+        logger.warning(
+            "prompt-source guard: could not read .pddrc in %s (%s); "
+            "falling back to legacy prompt path resolution.",
+            worktree,
+            exc,
+        )
+        return []
+
+    roots: List[Path] = []
+    seen: Set[str] = set()
+    contexts = config.get("contexts")
+    if not isinstance(contexts, dict):
+        return roots
+    for context_config in contexts.values():
+        if not isinstance(context_config, dict):
+            continue
+        defaults = context_config.get("defaults")
+        if not isinstance(defaults, dict):
+            continue
+        prompts_dir = defaults.get("prompts_dir")
+        if not isinstance(prompts_dir, str) or not prompts_dir.strip():
+            continue
+        root = _repo_relative_path(prompts_dir.strip())
+        root_posix = root.as_posix()
+        if root_posix == "." or root_posix in seen:
+            continue
+        seen.add(root_posix)
+        roots.append(root)
+    return roots
+
+
+def _prompt_path_under_root(root: Path, filename: str) -> Path:
+    """Resolve an architecture filename under a configured prompt root."""
+    filename_path = _repo_relative_path(filename)
+    rel_parts = filename_path.parts
+    try:
+        from .construct_paths import _extract_prefix_from_prompts_dir
+
+        prefix = _extract_prefix_from_prompts_dir(root.as_posix())
+    except Exception:  # noqa: BLE001 - use the filename unchanged
+        prefix = ""
+    prefix_parts = _repo_relative_path(prefix).parts if prefix else ()
+    if prefix_parts and rel_parts[: len(prefix_parts)] == prefix_parts:
+        rel_parts = rel_parts[len(prefix_parts) :]
+    return root.joinpath(*rel_parts) if rel_parts else root
+
+
+def _architecture_prompt_path(worktree: Optional[Path], filename: str) -> str:
+    """Resolve an architecture ``filename`` to the repository prompt path.
+
+    PDD itself stores prompts under ``pdd/prompts``. Some target repos
+    configure prompt roots in `.pddrc`, such as ``prompts/backend``. The
+    final-gate guards must use the target repo's prompt root when deciding
+    whether the owning prompt was co-edited; otherwise a valid edit to
+    ``prompts/backend/foo.prompt`` is misreported as a missing
+    ``pdd/prompts/backend/foo.prompt`` source.
+    """
+    filename_path = _repo_relative_path(filename)
+    filename_posix = filename_path.as_posix()
+    if (
+        filename_posix == "prompts"
+        or filename_posix.startswith("prompts/")
+        or filename_posix == "pdd/prompts"
+        or filename_posix.startswith("pdd/prompts/")
+    ):
+        return filename_posix
+
+    legacy = Path("pdd") / "prompts" / filename_path
+    conventional = Path("prompts") / filename_path
+    configured_roots = _configured_prompt_roots(worktree)
+
+    candidates: List[Path] = []
+    seen: Set[str] = set()
+
+    def add_candidate(path: Path) -> None:
+        path_posix = path.as_posix()
+        if path_posix not in seen:
+            seen.add(path_posix)
+            candidates.append(path)
+
+    add_candidate(legacy)
+    add_candidate(conventional)
+    for root in configured_roots:
+        add_candidate(_prompt_path_under_root(root, filename_posix))
+
+    if worktree is not None:
+        for candidate in candidates:
+            if (worktree / candidate).is_file():
+                return candidate.as_posix()
+        if configured_roots:
+            return _prompt_path_under_root(
+                configured_roots[0], filename_posix
+            ).as_posix()
+        if (worktree / "prompts").exists():
+            return conventional.as_posix()
+
+    return legacy.as_posix()
+
+
 def _load_prompt_source_map(
     worktree: Path, head_ref: str = "HEAD"
 ) -> Optional[Dict[str, str]]:
@@ -6597,9 +6718,9 @@ def _load_prompt_source_map(
             continue
         if not filepath or not filename:
             continue
-        mapping[Path(filepath).as_posix()] = (
-            Path("pdd") / "prompts" / filename
-        ).as_posix()
+        mapping[Path(filepath).as_posix()] = _architecture_prompt_path(
+            worktree, filename
+        )
 
     if not mapping:
         logger.warning(
@@ -7073,7 +7194,9 @@ def _source_of_truth_stop_reason(
     )
 
 
-def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+def _extract_arch_pairs(
+    data: Any, worktree: Optional[Path] = None
+) -> Set[Tuple[str, str]]:
     """Build the canonical ``(code_path, prompt_path)`` pair set from an
     ``architecture.json`` payload.
 
@@ -7093,7 +7216,7 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
         pairs.add(
             (
                 Path(filepath).as_posix(),
-                (Path("pdd") / "prompts" / filename).as_posix(),
+                _architecture_prompt_path(worktree, filename),
             )
         )
     return pairs
@@ -7244,7 +7367,7 @@ def _check_architecture_registry_edit_guard(
         )
         return None
 
-    head_pairs = _extract_arch_pairs(head_data)
+    head_pairs = _extract_arch_pairs(head_data, worktree)
     if not head_pairs:
         logger.warning(
             "architecture-registry guard: architecture.json at HEAD in "
@@ -7298,7 +7421,7 @@ def _check_architecture_registry_edit_guard(
                 exc,
             )
         else:
-            worktree_pairs = _extract_arch_pairs(worktree_data)
+            worktree_pairs = _extract_arch_pairs(worktree_data, worktree)
 
     added = worktree_pairs - head_pairs
     removed = head_pairs - worktree_pairs
