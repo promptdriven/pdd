@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.091132+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.362001+00:00",
   "command": "fix",
-  "prompt_hash": "d4329af7e4dd671fae0033c60e9feb6ae0470cc12c320c5072b153a31eee39ba",
+  "prompt_hash": "dcc9cc2e0d8295bc6a5adef6b61a11d56c25b1937677142e10c6bc9206b0943b",
   "code_hash": "9d0f70da4a91baf636335b69168fff3806b48d8fa6bc6bf0ca8c910bf1f11559",
   "example_hash": "fb7389c0ec837b8b6ee481e2eda04800f565fe247643f5bb9922dd1dfdab984a",
   "test_hash": "077383807291f4ba2f3b070b264441a322e6429ef6d3c2ac64d0b88694602c31",
@@ -10,7 +10,7 @@
     "test_utility.py": "077383807291f4ba2f3b070b264441a322e6429ef6d3c2ac64d0b88694602c31"
   },
   "include_deps": {
-    "README.md": "f7b48adad9a0c7d7e92f11cb206b7c41a149a4d8b563455373b09be05090f006",
+    "README.md": "4ffb80692de7472dea9b2d600852e08eab2e15b76a461fc83712eab10c0973af",
     "context/fix_verification_main_example.py": "6490f398aca6df47b1a95e46a4ecfc0aabe299b5022de5c31ebc436e1bc3e459",
     "context/install_completion_example.py": "999be17c0ce476845d7048a1a909ad425e60c298dbc7c74f51b596ef134a8aec",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

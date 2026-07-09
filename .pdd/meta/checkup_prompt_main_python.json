@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.027976+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.280957+00:00",
   "command": "fix",
-  "prompt_hash": "a7e1a43ec7e38aecd73d9b4acaf142413c48d6df461d524c122f22bac10df8ef",
+  "prompt_hash": "e7423a67b6bfc98b14bd442622701daf3a9d875eafa9912a70d6b167fbf3f81a",
   "code_hash": "538367ba6b7fa74d9f86ba6d1235219598f7a124c58cf00ad0abf6cf027526dc",
   "example_hash": "04845b3c70203df3ce51d3c3a1aaac61bcb0089d2af3f7d92af73b7f923ab32c",
   "test_hash": "81f5c4befae10e8f4f1078f2e772db1646dd43c1bd24c541e8687a4659e760af",
@@ -19,6 +19,6 @@
     "pdd/gate_main.py": "8281d282d9ad62dc01c92c4f520ea0be70e5fba50281d18fd4111445ebfd613a",
     "pdd/prompt_lint.py": "df85f363082925c714e23be8d7b2e941d62a8542a3370a2581d16780cef1474e",
     "pdd/source_set_model.py": "72465c576d85e606d557e602ea78c8dc58646455a429a8dfa4e7b66da22210fa",
-    "pdd/user_story_tests.py": "2acfe057044707b6f7ea547eb6009bf1a5c498fa66209f999c1030a0aeaea7bc"
+    "pdd/user_story_tests.py": "48a1597e9b7cd409ab62e9ef6b005f5fdb29699207c24f640b149f7e79adf79b"
   }
 }

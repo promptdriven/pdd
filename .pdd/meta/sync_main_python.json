@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.283115+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.589611+00:00",
   "command": "fix",
-  "prompt_hash": "0d0a2ef9c0bddd8af0017bac0d520cb05905d63177f145b4a052ed1f7af4ac58",
+  "prompt_hash": "a5e0e301f67e24c03c0a425524f597cecf622a2269fe08b5e19c8067fd75185c",
   "code_hash": "cca0497f63c1f43f3e8c9359f6a6fa7d0e8b3e9a5082aa911294907b7515b602",
   "example_hash": "9a7961a4044a54c46ce6c43c8adbbb83da46f233d9c6a9eaa28302440c0052c0",
   "test_hash": "30f5651c0868812dacc7141629dc7ba11afb6a4417e695e98c2f74c1dfa4d1d1",
@@ -10,7 +10,7 @@
     "test_sync_main.py": "30f5651c0868812dacc7141629dc7ba11afb6a4417e695e98c2f74c1dfa4d1d1"
   },
   "include_deps": {
-    "README.md": "f7b48adad9a0c7d7e92f11cb206b7c41a149a4d8b563455373b09be05090f006",
+    "README.md": "4ffb80692de7472dea9b2d600852e08eab2e15b76a461fc83712eab10c0973af",
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
     "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",

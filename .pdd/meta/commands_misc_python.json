@@ -1,14 +1,14 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.079806+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.344840+00:00",
   "command": "fix",
-  "prompt_hash": "b975c6437984acbd35a0e88ea1eb17ef2a2477c3b5a18d600c8c0800c93584f7",
+  "prompt_hash": "ab60c3d04716f93c78052e90fc834a8eb56e6d7651438560ae7ff8d16b07b7ae",
   "code_hash": "e49fff5cb806fc88e2ba5e54f445f2b2f855d6902946319c47a264ab6f13885c",
   "example_hash": "7d7985d21dd7b962257856cb92d13e26c016bc09ce14aaac4c68baaead97dc4b",
   "test_hash": null,
   "test_files": {},
   "include_deps": {
-    "README.md": "f7b48adad9a0c7d7e92f11cb206b7c41a149a4d8b563455373b09be05090f006",
+    "README.md": "4ffb80692de7472dea9b2d600852e08eab2e15b76a461fc83712eab10c0973af",
     "context/preprocess_main_example.py": "dc4cf0483361ef94467d8936ceef30b54b62e61d658c916663407a8f142ec851",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }

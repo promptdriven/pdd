@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.074689+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.334575+00:00",
   "command": "fix",
-  "prompt_hash": "8192f9b9659b22fbfab38d99fa9d7d7316b582c0a365e28405e0d09c5d2c872c",
-  "code_hash": "fc493964a405a7bc8444b131d27f98ca6af7cd08d569b99f09eb865a1eeae0b8",
+  "prompt_hash": "f538c52d5e7a071976cae837c14d570f8aeccf2ca9383c4fed48271dd21f3c4d",
+  "code_hash": "7751e368d656f940760d38cbe617011ae5f9dffcaed0ac3fd85ec1fd6b1567b5",
   "example_hash": "ecfaafca740d69b46d569368cb5a289410cf6fde5ef45c880bde396c797052c2",
-  "test_hash": "48a327fef36aee1f20360177bf65e862b57587d7977acc1d862352df8391eb97",
+  "test_hash": "f7603f270d2fbcd0a7623ddbd6bb63e1e3f33ae51868d163b9a3a5e3f58483a2",
   "test_files": {
-    "test_generate.py": "48a327fef36aee1f20360177bf65e862b57587d7977acc1d862352df8391eb97"
+    "test_generate.py": "f7603f270d2fbcd0a7623ddbd6bb63e1e3f33ae51868d163b9a3a5e3f58483a2"
   },
   "include_deps": {
     "context/agentic_architecture_example.py": "f82ea3f16297c0cd0f7993549054bc9213953ebe03144aa5abc7bd74ba707e13",
@@ -19,6 +19,6 @@
     "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/track_cost_example.py": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6",
-    "pdd/user_story_tests.py": "2acfe057044707b6f7ea547eb6009bf1a5c498fa66209f999c1030a0aeaea7bc"
+    "pdd/user_story_tests.py": "48a1597e9b7cd409ab62e9ef6b005f5fdb29699207c24f640b149f7e79adf79b"
   }
 }

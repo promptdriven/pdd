@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.166189+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.449349+00:00",
   "command": "fix",
-  "prompt_hash": "1e95a6b815495f5ffadd61e9bc5b36db6b47cb5d89f1c7a7b25ee89a7a13a751",
+  "prompt_hash": "97f15d5fd1d32cc1f484afa2bb32f3542e4b0aaa28ab523699d76097f884dd4b",
   "code_hash": "13890fe1983e3554b58f67404ce3848b3e9e329c03cf661446ad9ef62a71b43e",
   "example_hash": "0f8a6384ebfe9dc3ea448a4df7b4f5ebf9aa9b714f67a4322437638700a4307f",
   "test_hash": "c0ed9c8db22f119f3849ee3e00d8bac35b8d67fc78dfcccc5d6fefc78d1f081a",
@@ -11,7 +11,7 @@
     "test_generate_output_paths_regression.py": "3763968e8dc0e661e6516520f9282776ae81f82d5207633926ccee6fd60d50ba"
   },
   "include_deps": {
-    "README.md": "f7b48adad9a0c7d7e92f11cb206b7c41a149a4d8b563455373b09be05090f006",
+    "README.md": "4ffb80692de7472dea9b2d600852e08eab2e15b76a461fc83712eab10c0973af",
     "context/auto_deps_main_example.py": "9b9c36c18d39494b6e31b46f6e4758c25135b6fa3d1672fbb7365844f7d2de04",
     "context/change/15/initial_cli.py": "b607c3e67702ad3bc5e61cc40ce85571e4ff09015de96016c8d7d56eb78b8c74"
   }
