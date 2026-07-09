@@ -24,6 +24,7 @@ from .which import which
 from .firecrawl import firecrawl_cache
 from .story import story_cli
 from .reconcile import install_hooks, reconcile
+from .resolve import resolve
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -55,6 +56,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(which)
     cli.add_command(reconcile)
     cli.add_command(install_hooks)
+    cli.add_command(resolve)
 
     # Register templates group directly to commands dict to handle nesting if needed,
     # or just add_command works for groups too.
