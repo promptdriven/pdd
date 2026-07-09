@@ -1889,6 +1889,50 @@ def _create_mock_context(**kwargs) -> click.Context:
     return ctx
 
 
+def _display_dry_run_decision(
+    basename: str,
+    language: str,
+    target_coverage: float,
+    prompts_dir: str,
+    skip_tests: bool,
+    skip_verify: bool,
+    context_override: Optional[str],
+    quiet: bool,
+) -> Optional[SyncDecision]:
+    """Print the current read-only sync decision for a ``--dry-run`` (#1929).
+
+    A dry-run otherwise only replays the operation log, so a freshly-created
+    CONFLICT (prompt AND a derived artifact both changed since the fingerprint)
+    is invisible until a real sync runs. This computes the current decision in
+    ``read_only``/``log_mode`` — no lock, no fingerprint or metadata mutation —
+    and surfaces it, giving a pending CONFLICT its actionable resolution message
+    without any side effects. Best-effort: any analysis error is swallowed so the
+    log replay below still runs.
+    """
+    try:
+        decision = sync_determine_operation(
+            basename,
+            language,
+            target_coverage,
+            prompts_dir=prompts_dir,
+            skip_tests=skip_tests,
+            skip_verify=skip_verify,
+            context_override=context_override,
+            log_mode=True,
+            read_only=True,
+        )
+    except Exception:  # pylint: disable=broad-except
+        return None
+    if decision is None or quiet:
+        return decision
+    classification = (decision.details or {}).get('classification')
+    if classification == 'CONFLICT':
+        print(f"Current analysis: CONFLICT — {decision.reason}")
+    else:
+        print(f"Current analysis: {decision.operation} — {decision.reason}")
+    return decision
+
+
 def _display_sync_log(
     basename: str,
     language: str,
@@ -2046,6 +2090,19 @@ def sync_orchestration(
             raise
         except Exception:
             _dry_paths = None
+        # #1929: surface the CURRENT decision (especially a pending CONFLICT) so a
+        # dry-run reports what sync WOULD do, not just past log entries. Read-only:
+        # no lock, fingerprint, or metadata mutation.
+        _display_dry_run_decision(
+            basename,
+            language,
+            target_coverage,
+            prompts_dir,
+            skip_tests,
+            skip_verify,
+            context_override,
+            quiet,
+        )
         if _dry_paths:
             return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
