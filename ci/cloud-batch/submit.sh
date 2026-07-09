@@ -177,13 +177,16 @@ _render_template() {
 
 _render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-spot.json
 _render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
+_render_template "${SCRIPT_DIR}/job-template-cloud-regression.json" /tmp/pdd-batch-job-cloud.json
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
-# Main job (76 tasks — everything except the slow sync_regression case_1).
+# Main job (68 tasks — everything except the slow sync_regression case_1 and
+# the cloud-regression shards, which run serially to avoid Firebase refresh
+# token exchange quota spikes).
 # It defaults to SPOT for normal cloud-test runs, but release gates can opt into
 # STANDARD with PDD_CLOUD_BATCH_SPOT_PROVISIONING_MODEL=STANDARD.
 JOB_NAME_SPOT="${JOB_NAME}"
-echo "=== Submitting ${SPOT_PROVISIONING_MODEL} job: ${JOB_NAME_SPOT} (76 tasks) ==="
+echo "=== Submitting ${SPOT_PROVISIONING_MODEL} job: ${JOB_NAME_SPOT} (68 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_SPOT}" \
     --project="${PROJECT_ID}" \
     --location="${REGION}" \
@@ -197,15 +200,24 @@ gcloud batch jobs submit "${JOB_NAME_STD}" \
     --location="${REGION}" \
     --config=/tmp/pdd-batch-job-std.json
 
-rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
+# STANDARD serial job for cloud_regression cases. These all exchange the same
+# Firebase refresh token; parallel exchange hits quota even with jitter.
+JOB_NAME_CLOUD="${JOB_NAME}-cloud"
+echo "=== Submitting STANDARD serial cloud-regression job: ${JOB_NAME_CLOUD} (8 tasks) ==="
+gcloud batch jobs submit "${JOB_NAME_CLOUD}" \
+    --project="${PROJECT_ID}" \
+    --location="${REGION}" \
+    --config=/tmp/pdd-batch-job-cloud.json
 
-# ── Poll for completion (both jobs) ───────────────────────────────────────
+rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json /tmp/pdd-batch-job-cloud.json
+
+# ── Poll for completion (all jobs) ────────────────────────────────────────
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
 trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
-TOTAL=77  # 76 (spot) + 1 (standard)
+TOTAL=77  # 68 (main) + 1 (standard slow sync) + 8 (serial cloud regression)
 STREAM_FAILURES=0
 
 _job_status() {
@@ -218,6 +230,7 @@ _job_status() {
 while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
     STATUS_SPOT=$(_job_status "${JOB_NAME_SPOT}")
     STATUS_STD=$(_job_status "${JOB_NAME_STD}")
+    STATUS_CLOUD=$(_job_status "${JOB_NAME_CLOUD}")
 
     # ── Stream completed task results ─────────────────────────────────
     _with_timeout 15 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
@@ -266,31 +279,31 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
 
     # ── Progress line ─────────────────────────────────────────────────
     if [ "${STREAM_FAILURES}" -gt 0 ]; then
-        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${TOTAL} complete (${STREAM_FAILURES} failed) (${ELAPSED}s elapsed)"
     else
-        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
+        echo "[$(date +%H:%M:%S)] SPOT: ${STATUS_SPOT} | STD: ${STATUS_STD} | CLOUD: ${STATUS_CLOUD} | ${COMPLETED}/${TOTAL} complete (${ELAPSED}s elapsed)"
     fi
 
     # ── Check terminal states ─────────────────────────────────────────
-    # Both jobs must reach a terminal state before we exit
+    # All jobs must reach a terminal state before we exit
     _is_terminal() { [[ "$1" == "SUCCEEDED" || "$1" == "FAILED" ]]; }
 
-    if _is_terminal "${STATUS_SPOT}" && _is_terminal "${STATUS_STD}"; then
-        if [ "${STATUS_SPOT}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ]; then
-            echo "=== Both jobs completed successfully ==="
+    if _is_terminal "${STATUS_SPOT}" && _is_terminal "${STATUS_STD}" && _is_terminal "${STATUS_CLOUD}"; then
+        if [ "${STATUS_SPOT}" = "SUCCEEDED" ] && [ "${STATUS_STD}" = "SUCCEEDED" ] && [ "${STATUS_CLOUD}" = "SUCCEEDED" ]; then
+            echo "=== All jobs completed successfully ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 0
         else
-            echo "=== Job(s) FAILED (spot=${STATUS_SPOT}, std=${STATUS_STD}) ==="
+            echo "=== Job(s) FAILED (spot=${STATUS_SPOT}, std=${STATUS_STD}, cloud=${STATUS_CLOUD}) ==="
             bash "${SCRIPT_DIR}/collect-results.sh" \
-                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}"
+                "${PROJECT_ID}" "${BUCKET}" "${JOB_RUN_ID}" "${JOB_NAME_SPOT}" "${JOB_NAME_STD}" "${JOB_NAME_CLOUD}"
             exit 1
         fi
     fi
 
     # Bail on unexpected states
-    for _s in "${STATUS_SPOT}" "${STATUS_STD}"; do
+    for _s in "${STATUS_SPOT}" "${STATUS_STD}" "${STATUS_CLOUD}"; do
         case "${_s}" in
             DELETION_IN_PROGRESS|STATE_UNSPECIFIED)
                 echo "=== Job in unexpected state: ${_s} ==="
@@ -307,4 +320,5 @@ echo "=== TIMEOUT after ${POLL_TIMEOUT}s ==="
 echo "Jobs still running. Check manually:"
 echo "  gcloud batch jobs describe ${JOB_NAME_SPOT} --project=${PROJECT_ID} --location=${REGION}"
 echo "  gcloud batch jobs describe ${JOB_NAME_STD} --project=${PROJECT_ID} --location=${REGION}"
+echo "  gcloud batch jobs describe ${JOB_NAME_CLOUD} --project=${PROJECT_ID} --location=${REGION}"
 exit 1

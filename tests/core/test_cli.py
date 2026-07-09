@@ -213,8 +213,9 @@ def test_cli_command_help(runner):
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
-def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
+def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     """Test default global options are passed in context."""
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
     files = create_dummy_files("test.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
     

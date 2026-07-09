@@ -4,7 +4,7 @@ The public repository runs three default GitHub Actions jobs on pull requests:
 
 - `unit-tests`: pytest coverage that excludes tests marked or known to require real LLMs, cloud resources, or private prompts.
 - `public-cli-regression`: deterministic CLI regression coverage through `make regression-public`.
-- `story-regression`: the user-story regression lane, `make regression-stories`, which runs `pytest -m story` with the deterministic/offline config and reports a per-story pass/fail summary (number of stories, number of story regression tests, per-story result). Like `public-cli-regression` it is fork-safe and runs with no API keys; it is non-blocking (reports only) — the merge-blocking coverage gate is tracked separately.
+- `story-regression`: the user-story regression lane, `make regression-stories`, which runs `pytest -m story` with the deterministic/offline config and reports a per-story pass/fail summary (number of stories, number of story regression tests, per-story result) via the `pytest_terminal_summary` hook in `tests/conftest.py`. Like `public-cli-regression` it is fork-safe and runs with no API keys. It is **blocking**: a failing or stale story test fails the job (the generated tests hard-assert the story hash, and the lane has no `continue-on-error`). An empty suite (no `@pytest.mark.story` tests collected) is treated as a green no-op.
 
 Both `make regression-public` and `make regression-stories` must remain safe for public forks. They must not require API keys, cloud authentication, Infisical, GCP, private repositories, or live LLM calls. Put live model and cloud checks in separate secret-gated workflows or in `pdd_cloud`, not in the default public PR path.
 
@@ -27,23 +27,33 @@ The command exits non-zero when active nondeterministic tags are declared but `.
 
 ## Story Regression Coverage
 
-The story regression lane (`make regression-stories`) reports the executable
-`@pytest.mark.story` suite's coverage deterministically (no LLM calls). It
-prints a one-line summary to stdout and appends the same line to
-`$GITHUB_STEP_SUMMARY`, while writing the durable machine-readable contract to
-`.pdd/evidence/stories/coverage.latest.json` (schema:
-`pdd/schemas/story_coverage.schema.json`) for upload as a build artifact.
+What the `story-regression` job does **today** is run the executable
+`@pytest.mark.story` suite (`make regression-stories` → `pytest -m story`) and
+fail on any failing or stale story. This is a pass/fail gate — it does not yet
+emit a machine-readable coverage artifact.
+
+The deterministic (no-LLM) coverage emitter is a **library capability that CI
+does not yet invoke.** `pdd/story_coverage.py` can compute a `StoryCoverage`
+result, print a one-line summary, append it to `$GITHUB_STEP_SUMMARY`, and write
+the durable contract to `.pdd/evidence/stories/coverage.latest.json` (schema:
+`pdd/schemas/story_coverage.schema.json`) plus a per-run snapshot under
+`.pdd/evidence/stories/runs/`. Its shape is:
 
 ```text
 story regression: 142 tests across 96/110 stories (87% covered), 142 passing
 ```
 
-The percentage is guarded against zero total stories (reported as
-`not_applicable`, never `0%`). The JSON emitter does not infer pass-rate from
-collected markers: until pass/fail and freshness verdicts are available to the
-artifact writer, it emits `status: "not_applicable"`, `pass_rate: null`, and
-`passing_test_count: 0`. Trend is computed downstream in `pdd_cloud` from the
-stateless per-run snapshots under `.pdd/evidence/stories/runs/`; this lane emits
-snapshots only and does no trend math itself. See
-[docs/evidence_manifest.md](evidence_manifest.md) for the artifact schema and
-field definitions.
+But nothing in the CI path calls it: `make regression-stories` /
+`tests/story_regression.sh` only run `pytest -m story`, and the `story-regression`
+job writes no summary line, no JSON, and uploads no artifact. The only in-tree
+caller is the demonstration script `context/story_coverage_example.py`. Wiring
+the emitter into the lane (the summary line, the `coverage.latest.json` upload,
+and the pass/fail + freshness verdicts that let it emit `status: "ok"` or an
+honest failure instead of the current `status: "not_applicable"`,
+`pass_rate: null`, `passing_test_count: 0`) is tracked in issue #1909.
+
+Until then, treat the coverage artifact the way
+[docs/evidence_manifest.md](evidence_manifest.md) describes it — a schema-versioned
+contract with a `not_applicable` degraded mode — and read that document for the
+field definitions. Trend is computed downstream in `pdd_cloud` from the stateless
+per-run snapshots once the lane emits them; the emitter itself does no trend math.

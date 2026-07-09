@@ -15,7 +15,7 @@ def _help(command: str):
     )
 
 
-@pytest.mark.story(story_id="pdd_generate", story_hash="3660bcd6d6d7e8a8")
+@pytest.mark.story(story_id="pdd_generate", story_hash="e23eb1e50140fe63")
 def test_story_pdd_generate_help_is_public_safe():
     result = _help("generate")
     assert result.exit_code == 0, result.output
@@ -48,7 +48,7 @@ def test_story_pdd_change_help_is_public_safe():
     assert "pdd change ISSUE_URL" in result.output
 
 
-@pytest.mark.story(story_id="pdd_update", story_hash="cf0bc4a2189f81bd")
+@pytest.mark.story(story_id="pdd_update", story_hash="af77d101cb8515bd")
 def test_story_pdd_update_help_is_public_safe():
     result = _help("update")
     assert result.exit_code == 0, result.output
