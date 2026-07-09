@@ -689,6 +689,7 @@ def test_evaluate_survives_non_utf8_test_file(tmp_path: Path):
     stories = tmp_path / "user_stories"
     tests = tmp_path / "tests"
     _write(stories / "story__refund.md", FRESH_STORY)
+    tests.mkdir(parents=True, exist_ok=True)
     (tests / "test_latin1.py").write_bytes(
         b"# caf\xe9 latin-1\ndef test_x():\n    pass\n"
     )

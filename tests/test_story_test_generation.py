@@ -105,8 +105,10 @@ def test_empty_entry_point_errors_instead_of_silent_text_pin(tmp_path: Path) -> 
     )
     with pytest.raises(ValueError, match="Entry Point"):
         generate_story_regression_test(stories / "story__checkout_total.md")
-    # And it must NOT have silently emitted a text-pin test.
-    assert not (tmp_path / "tests" / "story_regression").exists()
+    # And it must NOT have silently emitted a text-pin (or any) test file.
+    regression_dir = tmp_path / "tests" / "story_regression"
+    written = list(regression_dir.glob("*.py")) if regression_dir.exists() else []
+    assert written == [], f"empty Entry Point must not emit a test, wrote: {written}"
 
 
 def test_generate_story_regression_test_rejects_malformed_story(tmp_path: Path) -> None:

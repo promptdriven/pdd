@@ -46,9 +46,9 @@ from .path_resolution import find_project_root_from_path
 from .story_regression import StoryTestMap, build_story_map
 from .story_test_generation import story_bundle_hash
 from .user_story_tests import (
-    DEFAULT_STORIES_DIR,
     STORY_PREFIX,
     STORY_SUFFIX,
+    _resolve_stories_dir,
     _story_content_hash,
     discover_story_files,
     story_id,
@@ -238,8 +238,59 @@ def _marker_from_decorator(
     )
 
 
+def _pytestmark_markers(
+    body: Sequence[ast.AST],
+    *,
+    test_name: str,
+    test_file: str,
+    constants: Dict[str, str],
+) -> List[StoryMarker]:
+    """Collect story markers declared via a ``pytestmark = pytest.mark.story(...)``
+    assignment in *body* (a module or class body).
+
+    ``pytestmark`` may be a single mark or a list/tuple of marks; a story mark in
+    either form claims every test under the enclosing scope, exactly as pytest
+    applies it at collection time.
+    """
+    found: List[StoryMarker] = []
+    for node in body:
+        if isinstance(node, ast.Assign):
+            targets: Sequence[ast.AST] = node.targets
+            value: Optional[ast.AST] = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if value is None:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
+        ):
+            continue
+        elts = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+        for elt in elts:
+            marker = _marker_from_decorator(
+                elt,
+                test_name=test_name,
+                test_file=test_file,
+                lineno=getattr(elt, "lineno", getattr(node, "lineno", 1)),
+                constants=constants,
+            )
+            if marker is not None:
+                found.append(marker)
+    return found
+
+
 def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
-    """Parse *source* and return every story marker it declares."""
+    """Parse *source* and return every story marker it declares.
+
+    Covers ``@pytest.mark.story`` decorators on a test function OR class (a class
+    marker propagates to its methods in pytest), plus module-level and
+    class-level ``pytestmark = pytest.mark.story(...)`` assignments. Missing any
+    of these would make the gate report a story ``missing`` while pytest
+    collection (and the coverage path) still see it — an evaluator divergence.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -247,19 +298,37 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
         return []
     constants = _module_string_constants(tree)
     found: List[StoryMarker] = []
+    # Module-level pytestmark claims every test in the module.
+    found.extend(
+        _pytestmark_markers(
+            getattr(tree, "body", []),
+            test_name="<module>",
+            test_file=test_file,
+            constants=constants,
+        )
+    )
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for deco in node.decorator_list:
-            marker = _marker_from_decorator(
-                deco,
-                test_name=node.name,
-                test_file=test_file,
-                lineno=getattr(deco, "lineno", node.lineno),
-                constants=constants,
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for deco in node.decorator_list:
+                marker = _marker_from_decorator(
+                    deco,
+                    test_name=node.name,
+                    test_file=test_file,
+                    lineno=getattr(deco, "lineno", node.lineno),
+                    constants=constants,
+                )
+                if marker is not None:
+                    found.append(marker)
+        if isinstance(node, ast.ClassDef):
+            # Class-level pytestmark claims every method of the class.
+            found.extend(
+                _pytestmark_markers(
+                    node.body,
+                    test_name=node.name,
+                    test_file=test_file,
+                    constants=constants,
+                )
             )
-            if marker is not None:
-                found.append(marker)
     return found
 
 
@@ -277,7 +346,10 @@ def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
     for py in sorted(base.rglob("*.py")):
         try:
             source = py.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # An unreadable / non-UTF8 test file is skipped like a syntax error,
+            # matching the sibling scanner in ``pdd.story_regression`` — a single
+            # bad file must never crash the whole gate (pdd#1889 G-F3).
             continue
         for marker in sorted(
             _markers_in_source(source, str(py)), key=lambda m: m.lineno
@@ -302,7 +374,10 @@ def discover_all_story_markers(tests_dir) -> Dict[str, List[StoryMarker]]:
     for py in sorted(base.rglob("*.py")):
         try:
             source = py.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # An unreadable / non-UTF8 test file is skipped like a syntax error,
+            # matching the sibling scanner in ``pdd.story_regression`` — a single
+            # bad file must never crash the whole gate (pdd#1889 G-F3).
             continue
         for marker in sorted(
             _markers_in_source(source, str(py)), key=lambda m: m.lineno
@@ -689,10 +764,12 @@ def run_story_regression_gate(
 
     cwd = Path.cwd()
     stories_arg = stories_dir
-    if stories_arg is None:
-        candidate = root / DEFAULT_STORIES_DIR
-        if root.resolve() != cwd.resolve():
-            stories_arg = str(candidate)
+    if stories_arg is None and root.resolve() != cwd.resolve():
+        # Anchor to *root* (not cwd) but still honor PDD_USER_STORIES_DIR, so a
+        # custom stories dir is not silently ignored — which would make strict
+        # mode pass vacuously over zero stories (pdd#1889 G-F7). When root == cwd
+        # we leave it None so evaluate_stories resolves relative to cwd itself.
+        stories_arg = str(_resolve_stories_dir(None, root=root))
     tests_arg = tests_dir
     if tests_arg is None:
         tests_arg = str(root / _DEFAULT_TESTS_DIR)
