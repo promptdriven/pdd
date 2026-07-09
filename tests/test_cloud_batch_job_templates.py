@@ -96,3 +96,13 @@ def test_cloud_batch_uploaded_pyproject_registers_story_marker():
     markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
 
     assert any(marker.startswith("story(") for marker in markers)
+
+
+def test_cloud_batch_uploaded_source_includes_story_artifacts():
+    submit_text = (REPO_ROOT / "ci" / "cloud-batch" / "submit.sh").read_text(
+        encoding="utf-8"
+    )
+    source_paths = re.search(r"SOURCE_PATHS=\((.*?)\)", submit_text, re.DOTALL)
+    assert source_paths, "submit.sh must define SOURCE_PATHS"
+
+    assert re.search(r"^\s*user_stories\s*$", source_paths.group(1), re.MULTILINE)
