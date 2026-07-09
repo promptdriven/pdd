@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
+from rich.markup import escape as rich_escape
 
 from .detect_change import detect_change
 from .get_extension import get_extension
@@ -1584,7 +1585,8 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
             if unresolved_prompt_refs and not quiet:
                 rprint(
                     "[yellow]Warning:[/yellow] Unresolved prompts in "
-                    f"{story_path}: {', '.join(unresolved_prompt_refs)}"
+                    f"{rich_escape(str(story_path))}: "
+                    f"{rich_escape(', '.join(unresolved_prompt_refs))}"
                 )
             if resolved_story_prompts:
                 story_prompt_files = _dedupe_prompt_paths(resolved_story_prompts)
@@ -1599,15 +1601,18 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     }
                 )
                 if not quiet:
-                    rprint(f"[bold]FAIL[/bold] {story_path}")
+                    rprint(f"[bold]FAIL[/bold] {rich_escape(str(story_path))}")
                     rprint("")
                     rprint("  Linked prompts:")
                     rprint("  - none resolved from pdd-story-prompts metadata")
                     for _ref in unresolved_prompt_refs:
-                        rprint(f"  - unresolved: {_ref}")
+                        rprint(f"  - unresolved: {rich_escape(_ref)}")
                     rprint("  Missing or stale behavior:")
-                    rprint(f"  - {results[-1]['error']}")
-                    rprint(f"  Next step:  pdd fix {_story_fix_target(story_path)}")
+                    rprint(f"  - {rich_escape(str(results[-1]['error']))}")
+                    rprint(
+                        "  Next step:  pdd fix "
+                        f"{rich_escape(_story_fix_target(story_path))}"
+                    )
                 if fail_fast:
                     break
                 continue
@@ -1649,16 +1654,25 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
 
         if not quiet:
             status = "PASS" if passed else "FAIL"
-            rprint(f"[bold]{status}[/bold] {story_path}")
+            rprint(f"[bold]{status}[/bold] {rich_escape(str(story_path))}")
             if not passed:
                 rprint("")
                 rprint("  Linked prompts:")
                 for _p in story_prompt_files:
-                    rprint(f"  - {_p}")
+                    rprint(f"  - {rich_escape(str(_p))}")
                 rprint("  Missing or stale behavior:")
                 for _change in changes_list:
-                    rprint(f"  - {_format_story_change(_change, story_prompt_files, prompts_root)}")
-                rprint(f"  Next step:  pdd fix {_story_fix_target(story_path)}")
+                    formatted_change = _format_story_change(
+                        _change, story_prompt_files, prompts_root
+                    )
+                    rprint(
+                        "  - "
+                        f"{rich_escape(formatted_change)}"
+                    )
+                rprint(
+                    "  Next step:  pdd fix "
+                    f"{rich_escape(_story_fix_target(story_path))}"
+                )
 
         if fail_fast and not passed:
             break

@@ -1920,6 +1920,49 @@ def test_failure_diagnostic_metadata_resolution_failure(tmp_path, capsys, monkey
     assert "pdd fix user_stories/story__noprompts.md" in out
 
 
+def test_failure_diagnostic_output_preserves_rich_markup_characters(
+    tmp_path, capsys, monkeypatch
+):
+    """Diagnostic paths and instructions must not be parsed as Rich markup."""
+    monkeypatch.chdir(tmp_path)
+    prompt_dir = tmp_path / "prompts" / "frontend" / "app" / "[tenant]" / "queues"
+    stories_dir = tmp_path / "user_stories"
+    prompt_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+
+    prompt_path = prompt_dir / "page_TypeScriptReact.prompt"
+    prompt_path.write_text("Render tenant queue page.", encoding="utf-8")
+    story = stories_dir / "story__tenant_queue.md"
+    story.write_text(
+        "As an operator, I can inspect tenant queue state.\n"
+        "<!-- pdd-story-prompts: prompts/frontend/app/[tenant]/queues/page_TypeScriptReact.prompt -->\n",
+        encoding="utf-8",
+    )
+
+    changes = [
+        {
+            "prompt_name": "page_TypeScriptReact.prompt",
+            "change_instructions": "Guarantee app/[tenant]/queues shows slot state.",
+        }
+    ]
+
+    with patch(
+        "pdd.user_story_tests.detect_change",
+        return_value=(changes, 0.5, "gpt-test"),
+    ):
+        passed, _results, _cost, _model = run_user_story_tests(
+            prompts_dir="prompts",
+            stories_dir="user_stories",
+            quiet=False,
+        )
+
+    assert passed is False
+    out = capsys.readouterr().out.replace("\n", "")
+    assert "prompts/frontend/app/[tenant]/queues/page_TypeScriptReact.prompt" in out
+    assert "app/[tenant]/queues shows slot state" in out
+    assert "pdd fix user_stories/story__tenant_queue.md" in out
+
+
 def test_cache_story_prompt_links_honors_explicit_prompts(tmp_path, monkeypatch):
     """Explicit --prompt inputs must all be linked, without an LLM call.
 
