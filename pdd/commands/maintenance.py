@@ -569,6 +569,7 @@ def _run_agentic_sync_dispatch(
             temperature=temperature,
             context_override=context_override,
             compressed_context=compressed_context,
+            local=ctx.obj.get("local", False),
         )
 
         if not quiet:
