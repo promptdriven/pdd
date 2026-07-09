@@ -271,6 +271,11 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
    - Prompt directory defaults to `prompts` and supports `PDD_PROMPTS_DIR`.
    - Discover story files using `story__*.md`.
    - Discover prompt files recursively and support `include_llm=False` default; when false, exclude `*_llm.prompt`.
+   - Resolve `pdd-story-prompts` metadata refs robustly by accepting prompt basenames,
+     absolute prompt paths, paths relative to `prompts_dir`, cwd-relative prompt paths,
+     and `{prompts_dir.name}/{relative_prompt_path}`. In particular, when `--prompts-dir`
+     is absolute, a metadata ref like `prompts/foo_python.prompt` must still resolve
+     to that prompt under the supplied prompts directory.
    - Expose a **public, documented `story_id` helper** that returns the `<slug>`
      of a `story__<slug>.md` path (accepting a `str` or `Path`), so the
      `@pytest.mark.story` marker mechanism and the story files share one identity
@@ -279,8 +284,9 @@ R2 (MUST NOT): Print the diagnostic block when `quiet` is true.
      slug extraction. This is purely additive — no existing signature changes.
 
 2. **Story validation**
-   - For each story file, read content and call:
-     `detect_change([prompt_paths], story_content, strength, temperature, time, verbose=verbose)`.
+   - For each story file, read content, compose the story oracle from the human story
+     plus its contract when present, and call:
+     `detect_change([prompt_paths], oracle_content, strength, temperature, time, verbose=verbose)`.
    - A story passes when `changes_list` is empty.
    - Support `fail_fast=True` to stop after first failure.
    - Respect `quiet` for console output.

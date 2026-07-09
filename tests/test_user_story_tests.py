@@ -219,6 +219,43 @@ def test_user_story_tests_uses_story_prompt_metadata_subset(tmp_path):
     assert captured_prompt_inputs == [[str(prompt_one)]]
 
 
+def test_user_story_tests_resolves_cwd_relative_metadata_with_absolute_prompts_dir(
+    tmp_path, monkeypatch
+):
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    story = stories_dir / "story__cwd_relative_metadata.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: prompts/foo_python.prompt -->\n\nAs a user...",
+        encoding="utf-8",
+    )
+
+    captured_prompt_inputs = []
+
+    def fake_detect(prompt_paths, *_args, **_kwargs):
+        captured_prompt_inputs.append(prompt_paths)
+        return ([], 0.1, "gpt-test")
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir.resolve()),
+            stories_dir=str(stories_dir),
+            quiet=True,
+        )
+
+    assert passed is True
+    assert results[0]["passed"] is True
+    assert cost == 0.1
+    assert model == "gpt-test"
+    assert captured_prompt_inputs == [[str(prompt_path)]]
+
+
 def test_user_story_tests_unresolved_story_metadata_fails(tmp_path):
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"

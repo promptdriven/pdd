@@ -124,22 +124,33 @@ def _build_prompt_name_map(
 ) -> Dict[str, Path]:
     """Build case-sensitive and case-insensitive lookup keys for prompt paths."""
     name_map: Dict[str, Path] = {}
+
+    def add_key(key: str, prompt_path: Path) -> None:
+        if not key:
+            return
+        name_map[key] = prompt_path
+        name_map[key.lower()] = prompt_path
+
     for prompt_path in prompt_files:
-        name_map[prompt_path.name] = prompt_path
-        name_map[str(prompt_path)] = prompt_path
-        name_map[prompt_path.name.lower()] = prompt_path
-        name_map[str(prompt_path).lower()] = prompt_path
+        add_key(prompt_path.name, prompt_path)
+        add_key(str(prompt_path), prompt_path)
         if prompts_dir:
             try:
                 rel = prompt_path.relative_to(prompts_dir)
                 rel_str = str(rel)
                 rel_posix = rel.as_posix()
-                name_map[rel_str] = prompt_path
-                name_map[rel_str.lower()] = prompt_path
-                name_map[rel_posix] = prompt_path
-                name_map[rel_posix.lower()] = prompt_path
+                add_key(rel_str, prompt_path)
+                add_key(rel_posix, prompt_path)
+                add_key(str(Path(prompts_dir.name) / rel), prompt_path)
+                add_key(f"{prompts_dir.name}/{rel_posix}", prompt_path)
             except ValueError:
-                continue
+                pass
+        try:
+            cwd_rel = prompt_path.resolve().relative_to(Path.cwd().resolve())
+            add_key(str(cwd_rel), prompt_path)
+            add_key(cwd_rel.as_posix(), prompt_path)
+        except (OSError, ValueError):
+            pass
     return name_map
 
 
@@ -160,6 +171,34 @@ def _resolve_prompt_path(
         if prompt_path.name == prompt_name or prompt_path.name.lower() == lower:
             return prompt_path
     return None
+
+
+def _story_fix_target(story_path: Path) -> str:
+    """Return the story path to display in the suggested ``pdd fix`` command."""
+    if not story_path.is_absolute():
+        return str(story_path)
+    try:
+        return str(story_path.resolve().relative_to(Path.cwd().resolve()))
+    except (OSError, ValueError):
+        return str(story_path)
+
+
+def _format_story_change(
+    change: Dict[str, object],
+    story_prompt_files: Iterable[Path],
+    prompts_root: Path,
+) -> str:
+    """Format a detect_change result with prompt attribution for CLI output."""
+    prompt_name = str(change.get("prompt_name") or "").strip()
+    instructions = str(change.get("change_instructions") or "").strip()
+    if not instructions:
+        instructions = "(no change instructions provided)"
+    if not prompt_name:
+        return instructions
+
+    resolved = _resolve_prompt_path(prompt_name, story_prompt_files, prompts_root)
+    prompt_label = str(resolved) if resolved else prompt_name
+    return f"{prompt_label}: {instructions}"
 
 
 def _parse_story_prompt_metadata(story_content: str) -> List[str]:
@@ -1562,9 +1601,13 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 if not quiet:
                     rprint(f"[bold]FAIL[/bold] {story_path}")
                     rprint("")
+                    rprint("  Linked prompts:")
+                    rprint("  - none resolved from pdd-story-prompts metadata")
+                    for _ref in unresolved_prompt_refs:
+                        rprint(f"  - unresolved: {_ref}")
                     rprint("  Missing or stale behavior:")
                     rprint(f"  - {results[-1]['error']}")
-                    rprint(f"  Next step:  pdd fix {story_path}")
+                    rprint(f"  Next step:  pdd fix {_story_fix_target(story_path)}")
                 if fail_fast:
                     break
                 continue
@@ -1614,8 +1657,8 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                     rprint(f"  - {_p}")
                 rprint("  Missing or stale behavior:")
                 for _change in changes_list:
-                    rprint(f"  - {_change['change_instructions']}")
-                rprint(f"  Next step:  pdd fix {story_path}")
+                    rprint(f"  - {_format_story_change(_change, story_prompt_files, prompts_root)}")
+                rprint(f"  Next step:  pdd fix {_story_fix_target(story_path)}")
 
         if fail_fast and not passed:
             break

@@ -765,7 +765,7 @@ Commands:
 
 Failure output:
 - When a story fails, `pdd detect --stories` prints the linked prompt paths,
-  a concise description of the missing or stale behavior, and a
+  per-prompt descriptions of the missing or stale behavior, and a
   `pdd fix user_stories/story__<slug>.md` next-step command.
 
 Story prompt linkage:

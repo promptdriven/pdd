@@ -227,6 +227,91 @@ def test_detect_stories_failed_result_top_level_exits_nonzero():
     assert result.exit_code == 1
 
 
+def test_detect_stories_cli_failure_output_e2e_with_mocked_llm():
+    """CLI-level regression for issue #1873 with real story/prompt discovery."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        with open("prompts/queue_page_python.prompt", "w", encoding="utf-8") as handle:
+            handle.write("Render the provider queue page.")
+        with open("prompts/queue_panel_python.prompt", "w", encoding="utf-8") as handle:
+            handle.write("Render provider queue rows.")
+        with open("user_stories/story__provider_queue.md", "w", encoding="utf-8") as handle:
+            handle.write(
+                "## Story\n"
+                "As an operator, I can see provider queue slot state changes.\n"
+                "<!-- pdd-story-prompts: prompts/queue_page_python.prompt, prompts/queue_panel_python.prompt -->\n"
+            )
+
+        changes = [
+            {
+                "prompt_name": "queue_panel_python.prompt",
+                "change_instructions": "Show available, in-use, and rate-limited slot states.",
+            }
+        ]
+        with patch("pdd.user_story_tests.detect_change", return_value=(changes, 0.12, "gpt-test")) as mock_detect:
+            result = runner.invoke(
+                pdd_cli,
+                ["--no-core-dump", "detect", "--stories", "--no-fail-fast"],
+            )
+
+    assert result.exit_code == 1
+    assert mock_detect.call_count == 1
+    output = result.output.replace("\n", "")
+    assert "FAIL user_stories/story__provider_queue.md" in output
+    assert "Linked prompts:" in output
+    assert "prompts/queue_page_python.prompt" in output
+    assert "prompts/queue_panel_python.prompt" in output
+    assert "Missing or stale behavior:" in output
+    assert (
+        "prompts/queue_panel_python.prompt: Show available, in-use, and rate-limited slot states."
+        in output
+    )
+    assert "Next step:" in output
+    assert "pdd fix user_stories/story__provider_queue.md" in output
+    assert "Failed. Cost: $0.120000, Model: gpt-test" in output
+    assert "): Cost: $0.120000, Model: gpt-test" not in output
+
+
+def test_detect_stories_quiet_failure_suppresses_diagnostic_and_onboarding():
+    """Quiet story failures should not print diagnostics or onboarding reminders."""
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        os.makedirs("user_stories")
+        with open("prompts/queue_panel_python.prompt", "w", encoding="utf-8") as handle:
+            handle.write("Render provider queue rows.")
+        with open("user_stories/story__provider_queue.md", "w", encoding="utf-8") as handle:
+            handle.write(
+                "## Story\n"
+                "As an operator, I can see provider queue slot state changes.\n"
+                "<!-- pdd-story-prompts: prompts/queue_panel_python.prompt -->\n"
+            )
+
+        changes = [
+            {
+                "prompt_name": "queue_panel_python.prompt",
+                "change_instructions": "Show slot states.",
+            }
+        ]
+        with patch("pdd.core.cli._should_show_onboarding_reminder", return_value=True), patch(
+            "pdd.user_story_tests.detect_change",
+            return_value=(changes, 0.12, "gpt-test"),
+        ) as mock_detect:
+            result = runner.invoke(
+                pdd_cli,
+                ["--no-core-dump", "--quiet", "detect", "--stories", "--no-fail-fast"],
+            )
+
+    assert result.exit_code == 1
+    assert mock_detect.call_count == 1
+    assert "Complete onboarding with `pdd setup`" not in result.output
+    assert "Linked prompts:" not in result.output
+    assert "Missing or stale behavior:" not in result.output
+    assert "Next step:" not in result.output
+
+
 def test_detect_stories_passing_result_top_level_exits_zero():
     """Passing story mode remains successful through the registered CLI."""
     runner = CliRunner()
