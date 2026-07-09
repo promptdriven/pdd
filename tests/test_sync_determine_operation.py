@@ -3493,6 +3493,13 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
     prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
     new_prompt_hash = create_file(prompt_path, "NEW PROMPT CONTENT - changed!")
 
+    # Create code/example/test files first so the fingerprint represents a
+    # prompt-only change rather than a prompt+derived conflict.
+    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+    code_hash = create_file(paths['code'], "def add(a, b): return a + b")
+    example_hash = create_file(paths['example'], "print(add(1, 2))")
+    test_hash = create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
+
     # Create fingerprint with OLD prompt hash and command='crash'
     old_prompt_hash = "old_hash_that_differs_from_current"
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -3501,9 +3508,9 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         "timestamp": "2025-01-01T00:00:00Z",
         "command": "crash",  # Previous command was crash
         "prompt_hash": old_prompt_hash,  # Different from current!
-        "code_hash": "c_hash",
-        "example_hash": "e_hash",
-        "test_hash": "t_hash"
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
     })
 
     # Create run report showing crash fix succeeded
@@ -3515,12 +3522,6 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         "tests_failed": 0,
         "coverage": 95.0
     })
-
-    # Create code/example/test files so they exist
-    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
-    create_file(paths['code'], "def add(a, b): return a + b")
-    create_file(paths['example'], "print(add(1, 2))")
-    create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
 

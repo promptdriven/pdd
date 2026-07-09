@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from .operation_log import get_fingerprint_path, infer_module_identity, save_fingerprint
+from .operation_log import (
+    _safe_basename,
+    get_fingerprint_path,
+    infer_module_identity,
+    save_fingerprint,
+)
 from .sync_determine_operation import (
     Fingerprint,
     calculate_current_hashes,
@@ -68,6 +73,41 @@ def _prompts_dir_for(prompt_path: Path) -> Path:
     return prompt_path.parent
 
 
+def _prompt_units(prompt_root: Path) -> List[SyncUnit]:
+    units: List[SyncUnit] = []
+    for prompt_path in sorted(prompt_root.rglob("*_*.prompt")):
+        basename, language = infer_module_identity(prompt_path)
+        if basename is None or language is None:
+            continue
+        units.append(
+            SyncUnit(
+                basename=basename,
+                language=language,
+                prompt_path=prompt_path,
+                prompts_dir=_prompts_dir_for(prompt_path),
+            )
+        )
+    return units
+
+
+def _matches_module(unit: SyncUnit, wanted: set[str]) -> bool:
+    return (
+        unit.basename in wanted
+        or _safe_basename(unit.basename) in wanted
+        or unit.prompt_path.stem in wanted
+    )
+
+
+def _metadata_identity(path: Path) -> Optional[tuple[str, str]]:
+    stem = path.stem
+    if stem.endswith("_run") or "_" not in stem:
+        return None
+    basename, language = stem.rsplit("_", 1)
+    if not basename or not language:
+        return None
+    return basename, language
+
+
 def discover_units(
     root: Optional[Path] = None,
     modules: Optional[Iterable[str]] = None,
@@ -79,21 +119,31 @@ def discover_units(
     if not prompt_root.exists():
         return []
 
+    prompt_units = _prompt_units(prompt_root)
+    if wanted:
+        return [unit for unit in prompt_units if _matches_module(unit, wanted)]
+
+    meta_root = base / ".pdd" / "meta"
+    metadata_identities: set[tuple[str, str]] = set()
+    if meta_root.exists():
+        for path in sorted(meta_root.glob("*_*.json")):
+            identity = _metadata_identity(path)
+            if identity is not None:
+                metadata_identities.add(identity)
+    if not metadata_identities:
+        return prompt_units
+
     units: List[SyncUnit] = []
-    for prompt_path in sorted(prompt_root.rglob("*_*.prompt")):
-        basename, language = infer_module_identity(prompt_path)
-        if basename is None or language is None:
+    seen: set[tuple[str, str, Path]] = set()
+    for unit in prompt_units:
+        key = (_safe_basename(unit.basename), unit.language)
+        if key not in metadata_identities:
             continue
-        if wanted and basename not in wanted and prompt_path.stem not in wanted:
+        dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+        if dedupe_key in seen:
             continue
-        units.append(
-            SyncUnit(
-                basename=basename,
-                language=language,
-                prompt_path=prompt_path,
-                prompts_dir=_prompts_dir_for(prompt_path),
-            )
-        )
+        seen.add(dedupe_key)
+        units.append(unit)
     return units
 
 

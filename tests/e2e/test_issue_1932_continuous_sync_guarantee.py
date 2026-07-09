@@ -107,6 +107,14 @@ def pdd_project(tmp_path: Path) -> Path:
         "Build a deterministic widget.\n<include>../docs/widget.md</include>\n",
         encoding="utf-8",
     )
+    (repo / "prompts/runtime_template_LLM.prompt").write_text(
+        "Summarize the runtime context.\n",
+        encoding="utf-8",
+    )
+    (repo / "prompts/unbaselined_helper_python.prompt").write_text(
+        "Build an unbaselined helper.\n",
+        encoding="utf-8",
+    )
     (repo / "docs/widget.md").write_text("Widget docs v1\n", encoding="utf-8")
     (repo / "src/widget.py").write_text(
         "def value():\n    return 1\n",
@@ -186,6 +194,8 @@ def test_issue_1932_clean_baseline_reports_no_drift(pdd_project: Path) -> None:
         assert report["metadata_stale"] == 0
         assert report["summary"]["conflicts"] == 0
         assert report["summary"]["unbaselined"] == 0
+        assert report["summary"]["total"] == 1
+        assert report["units"][0]["basename"] == "widget"
 
 
 @pytest.mark.parametrize(
@@ -266,6 +276,8 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "--json",
         "--strict",
         "--heal",
+        "--module",
+        "widget",
         check=False,
     )
     assert missing["ok"] is False
@@ -279,6 +291,8 @@ def test_issue_1932_unbaselined_fingerprints_are_not_stamped(pdd_project: Path) 
         "--json",
         "--strict",
         "--heal",
+        "--module",
+        "widget",
         check=False,
     )
     assert invalid["ok"] is False
