@@ -85,6 +85,30 @@ def test_generate_text_pins_when_no_entry_point(tmp_path: Path) -> None:
     assert "result = story_result" not in text
 
 
+def test_empty_entry_point_errors_instead_of_silent_text_pin(tmp_path: Path) -> None:
+    """C-F7 (pdd#1889): a contract that declares ``## Entry Point`` but has an
+    EMPTY body must surface the existing validation error, not silently degrade
+    to a text-pin (which would give the user a false behavioral oracle)."""
+    stories = tmp_path / "user_stories"
+    contracts = stories / "contracts"
+    contracts.mkdir(parents=True)
+    (stories / "story__checkout_total.md").write_text(
+        "# User Story: checkout_total\n\n## Story\n\nAs a shopper, I can see my total.\n",
+        encoding="utf-8",
+    )
+    # ## Entry Point present but with NO `- module:`/`- callable:` body yet.
+    (contracts / "checkout_total.contract.md").write_text(
+        "# Contract\n\n## Covers\n- R1: total\n\n"
+        "## Entry Point\n\n"
+        '## Oracle\n- result["total"] == 3\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="Entry Point"):
+        generate_story_regression_test(stories / "story__checkout_total.md")
+    # And it must NOT have silently emitted a text-pin test.
+    assert not (tmp_path / "tests" / "story_regression").exists()
+
+
 def test_generate_story_regression_test_rejects_malformed_story(tmp_path: Path) -> None:
     """A story with no ## Oracle / ## Acceptance Criteria / ## Story clauses must
     raise rather than emit a tautological (self-satisfying) test."""
