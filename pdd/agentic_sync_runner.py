@@ -645,9 +645,59 @@ def build_conformance_hard_failure_from_error(
     return "\n".join(block_lines)
 
 
+def _parse_signature_detail_lines(combined: str) -> List[Tuple[str, str, str, str]]:
+    """Parse ``signature_detail:`` lines into ``(symbol, expected, actual, source)``.
+
+    A ``signature_detail:`` line carries the full expected-vs-actual contract for
+    one declared signature mismatch (issue #1900). The subprocess path rebuilds
+    the repair directive from stdout, so it must recover these lines to keep the
+    DECLARED expected signature — the stable repair target — in the directive and
+    the hard-failure block. Emitted by ``PublicSurfaceRegressionError`` and
+    ``_build_public_surface_hard_failure`` as a JSON object:
+      ``signature_detail: {"symbol": ..., "expected": ..., "actual": ..., "source": ...}``
+
+    JSON is bulletproof against signatures/defaults that contain the old ` | ` /
+    ``| actual: `` / ``| source: `` field delimiters (PEP-604 unions, string
+    defaults) — a class of corruption that recurred across several review passes
+    (codex round-8 finding 2). A line whose payload is not a well-formed JSON
+    object with the four string fields is SKIPPED (never raises). De-duplicated,
+    preserving first-seen order.
+    """
+    details: List[Tuple[str, str, str, str]] = []
+    seen: set = set()
+    for raw_line in combined.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("signature_detail:"):
+            continue
+        payload = line[len("signature_detail:"):].strip()
+        try:
+            obj = json.loads(payload)
+            detail = (
+                str(obj["symbol"]),
+                str(obj["expected"]),
+                str(obj["actual"]),
+                str(obj["source"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            # Not a well-formed JSON detail object -> malformed line, skip it.
+            continue
+        if detail in seen:
+            continue
+        seen.add(detail)
+        details.append(detail)
+    return details
+
+
 def _parse_public_surface_failure_fields(
     stdout: str, stderr: str
-) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+) -> Optional[
+    Tuple[
+        str,
+        Tuple[str, ...],
+        Tuple[str, ...],
+        Tuple[Tuple[str, str, str, str], ...],
+    ]
+]:
     """Detect a public-surface regression and keep removals/signatures separate."""
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
@@ -681,6 +731,9 @@ def _parse_public_surface_failure_fields(
             }
         )
     )
+    # Preserve declaration source order (de-duped) so the directive lists the
+    # declared repair targets deterministically.
+    details_tuple = tuple(_parse_signature_detail_lines(combined))
     if not removed and not changed:
         return None
     lines = ["Public surface regression repair required."]
@@ -688,16 +741,42 @@ def _parse_public_surface_failure_fields(
         lines.append("Restore these public symbols from the existing module:")
         for sym in removed:
             lines.append(f"- {sym}")
-    if changed:
+    # Prefer the DECLARED signature as the repair target: it is a stable target,
+    # unlike "restore compatible signatures" (compatible with the code being
+    # regenerated), which dead-ended the change->sync loop (issue #1900).
+    declared_details = [d for d in details_tuple if d[3] == "pdd-interface"]
+    if declared_details:
+        lines.append(
+            "Restore these public symbols to their declared "
+            "<pdd-interface> signatures:"
+        )
+        for symbol, expected_entry, actual_entry, _ in declared_details:
+            lines.append(
+                f"- Restore `{symbol}` to its declared signature "
+                f"`{expected_entry}` (found `{actual_entry}`)."
+            )
+        lines.append(
+            "If a declared parameter change is intended, edit the prompt's "
+            "<pdd-interface> declaration to the intended signature (the "
+            "declaration is the contract for declared symbols)."
+        )
+    declared_changed = {d[0] for d in declared_details}
+    remaining_changed = [sym for sym in changed if sym not in declared_changed]
+    if remaining_changed:
         lines.append("Restore compatible signatures for these public symbols:")
-        for sym in changed:
+        for sym in remaining_changed:
             lines.append(f"- {sym}")
-    lines.append(
-        "Preserve backward-compatible public helpers unless the prompt lists "
-        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
-        "or BREAKING-CHANGE: change signature <symbol> markers."
-    )
-    return "\n".join(lines), removed, changed
+    # Keep the BREAKING-CHANGE guidance only for UNDECLARED / removed violations:
+    # for a declared symbol it relaxes only binding-kind/async, not the declared
+    # params, so advising it on a pure declared-param violation loops the user
+    # back into the dead-end #1900 removes (codex round-7 finding 3).
+    if removed or remaining_changed or not declared_details:
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+            "or BREAKING-CHANGE: change signature <symbol> markers."
+        )
+    return "\n".join(lines), removed, changed, details_tuple
 
 
 def _parse_public_surface_failure(
@@ -707,7 +786,7 @@ def _parse_public_surface_failure(
     parsed = _parse_public_surface_failure_fields(stdout, stderr)
     if parsed is None:
         return None
-    directive, removed, changed = parsed
+    directive, removed, changed, _details = parsed
     signature = tuple(
         [f"removed:{symbol}" for symbol in removed]
         + [f"signature_changed:{symbol}" for symbol in changed]
@@ -753,6 +832,36 @@ def _parse_test_churn_failure(
     return directive, signature
 
 
+def _public_surface_repair_advice(
+    has_declared: bool,
+    has_non_declared: bool,
+) -> List[str]:
+    """Repair-advice lines for a public-surface hard-failure block.
+
+    A declared ``<pdd-interface>`` violation is fixed by editing the declaration —
+    ``BREAKING-CHANGE: change signature`` relaxes only the un-declarable
+    binding-kind/async for declared symbols, NOT their parameters, so advising the
+    marker for a declared-param mismatch loops the user back into the dead-end
+    #1900 removes (codex round-7 finding 3). Undeclared / removed violations keep
+    the BREAKING-CHANGE guidance.
+    """
+    lines: List[str] = []
+    if has_declared:
+        lines += [
+            "For a declared `<pdd-interface>` symbol, update the prompt's",
+            "`<pdd-interface>` declaration to the intended signature (the",
+            "declaration is the contract), or restore the declared signature",
+            "shown above.",
+        ]
+    if has_non_declared or not has_declared:
+        lines += [
+            "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
+            "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
+            "`rename`, `change signature`).",
+        ]
+    return lines
+
+
 def build_public_surface_hard_failure_from_error(
     exc: Any,
     basename: str,
@@ -760,6 +869,10 @@ def build_public_surface_hard_failure_from_error(
     """Format a structured public-surface hard-failure block."""
     removed = list(getattr(exc, "removed_symbols", []) or [])
     changed = list(getattr(exc, "changed_signatures", []) or [])
+    details = list(getattr(exc, "signature_details", []) or [])
+    declared_changed = {d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"}
+    has_declared = bool(declared_changed)
+    has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
     block_lines = [
         str(exc),
         "",
@@ -771,9 +884,7 @@ def build_public_surface_hard_failure_from_error(
         f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
         f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
         "",
-        "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-        "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-        "`rename`, `change signature`).",
+        *_public_surface_repair_advice(has_declared, has_non_declared),
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -2623,6 +2734,7 @@ class AsyncSyncRunner:
         parsed = _parse_public_surface_failure_fields(stdout, stderr)
         removed = parsed[1] if parsed else tuple()
         changed = parsed[2] if parsed else tuple()
+        details = parsed[3] if parsed else tuple()
         combined = (stdout or "") + "\n" + (stderr or "")
 
         prompt_field = "<unknown>"
@@ -2660,28 +2772,52 @@ class AsyncSyncRunner:
                 return default
             return match.group(1).strip().rstrip(".").strip() or default
 
-        return "\n".join(
+        block_lines = [
+            failure_summary or "Public surface regression",
+            "",
+            "=== public surface regression ===",
+            f"prompt: {prompt_field}",
+            f"output: {_extract_field('Output')}",
+            "removed: " + (", ".join(removed) if removed else "<none>"),
+            "signature_changed: "
+            + (", ".join(changed) if changed else "<none>"),
+            f"pre surface size: {_extract_field('Pre surface size')}",
+            f"post surface size: {_extract_field('Post surface size')}",
+        ]
+        # Carry the full expected-vs-actual contract for each declared signature
+        # mismatch so criterion 4 (no truncation) holds on the agentic path too
+        # (issue #1900). Byte-identical JSON to the ``signature_detail:`` message
+        # line emitted by ``PublicSurfaceRegressionError`` (codex round-8 #2).
+        for symbol, expected_entry, actual_entry, source in details:
+            block_lines.append(
+                "signature_detail: "
+                + json.dumps(
+                    {
+                        "symbol": symbol,
+                        "expected": expected_entry,
+                        "actual": actual_entry,
+                        "source": source,
+                    }
+                )
+            )
+        declared_changed = {
+            d[0] for d in details if len(d) >= 4 and d[3] == "pdd-interface"
+        }
+        has_declared = bool(declared_changed)
+        has_non_declared = bool(removed) or bool(set(changed) - declared_changed)
+        block_lines.append("")
+        block_lines.extend(
+            _public_surface_repair_advice(has_declared, has_non_declared)
+        )
+        block_lines.extend(
             [
-                failure_summary or "Public surface regression",
-                "",
-                "=== public surface regression ===",
-                f"prompt: {prompt_field}",
-                f"output: {_extract_field('Output')}",
-                "removed: " + (", ".join(removed) if removed else "<none>"),
-                "signature_changed: "
-                + (", ".join(changed) if changed else "<none>"),
-                f"pre surface size: {_extract_field('Pre surface size')}",
-                f"post surface size: {_extract_field('Post surface size')}",
-                "",
-                "To allow this surface change, add a `BREAKING-CHANGE:` directive to",
-                "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
-                "`rename`, `change signature`).",
                 "",
                 f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
         )
+        return "\n".join(block_lines)
 
     def _build_test_churn_hard_failure(
         self,
