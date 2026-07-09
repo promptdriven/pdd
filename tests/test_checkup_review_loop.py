@@ -7264,7 +7264,12 @@ class TestPromptSourceGuardHelper:
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
-        # Code present, prompt absent.
+        # Code present, prompt absent. pdd's own checkout always keeps a
+        # populated ``pdd/prompts/`` dir (only THIS module's prompt is gone), so
+        # seed it here for a realistic pdd layout — the #1957 resolver reads it
+        # to keep this repo's owning prompts under ``pdd/prompts`` rather than
+        # the external-repo default ``prompts``.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
         self._seed_code(tmp_path, "pdd/agentic_update.py")
 
         reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
@@ -7377,8 +7382,11 @@ class TestPromptSourceGuardHelper:
         # Code persists on disk (modified, not deleted).
         (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
         (tmp_path / "pdd" / "foo.py").write_text("modified code\n", encoding="utf-8")
-        # Prompt was deleted in this change set - intentionally NOT
-        # creating it on disk.
+        # pdd's own checkout always keeps a populated ``pdd/prompts/`` dir, so
+        # seed it for a realistic pdd layout (the #1957 resolver reads it to keep
+        # owning prompts under ``pdd/prompts``). Only THIS module's prompt was
+        # deleted in this change set - intentionally NOT creating it on disk.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True, exist_ok=True)
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -14136,4 +14144,193 @@ class TestReviewLoopFailureCategory2047:
         assert (
             _review_loop_failure_category(ReviewLoopState(), True, [sot])
             == FINAL_GATE_CATEGORY_PASSED
+        )
+
+
+class TestTargetPromptsRootResolution1957:
+    """Checkup repair must resolve owning prompts against the TARGET repo's
+    prompt layout, not pdd's self-hosted ``pdd/prompts`` tree (issue #1957).
+
+    pdd is self-hosted, so before this fix the repair loop only ever worked on
+    pdd's own checkout: it string-joined a hardcoded ``pdd/prompts/`` prefix and
+    on every OTHER repo probed a nonexistent path, then declared the owning
+    prompt "deleted" and refused to repair.
+    """
+
+    @staticmethod
+    def _git_init(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+        )
+
+    def _seed_external_repo(
+        self,
+        worktree: Path,
+        *,
+        prompts_dir: str = "prompts",
+        pddrc: bool = False,
+        code_path: str = "src/foo.py",
+        prompt_filename: str = "foo_python.prompt",
+        prompt_exists: bool = True,
+    ) -> None:
+        """Seed a NON-pdd repo whose prompts live under ``prompts_dir`` (not
+        ``pdd/prompts``), commit ``architecture.json`` to HEAD, and drop the
+        code (+ optional owning prompt) into the worktree."""
+        self._git_init(worktree)
+        if pddrc:
+            (worktree / ".pddrc").write_text(
+                "version: '1.0'\n"
+                "contexts:\n"
+                "  default:\n"
+                "    paths: ['**']\n"
+                "    defaults:\n"
+                f"      prompts_dir: '{prompts_dir}'\n",
+                encoding="utf-8",
+            )
+        (worktree / "architecture.json").write_text(
+            json.dumps(
+                [{"filename": prompt_filename, "filepath": code_path}], indent=2
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True
+        )
+        code = worktree / code_path
+        code.parent.mkdir(parents=True, exist_ok=True)
+        code.write_text("# generated\n", encoding="utf-8")
+        if prompt_exists:
+            prompt = worktree / prompts_dir / prompt_filename
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text("prompt body\n", encoding="utf-8")
+
+    def test_resolve_external_prompts_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        (tmp_path / "prompts").mkdir()
+        assert _resolve_target_prompts_root(tmp_path) == Path("prompts")
+
+    def test_resolve_pdd_self_hosted_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        # pdd's own checkout has no top-level ``prompts/`` dir (only the
+        # in-package one) — the resolver must still find it.
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        assert _resolve_target_prompts_root(tmp_path) == Path("pdd/prompts")
+
+    def test_resolve_follows_prompts_symlink_to_real_tracked_path(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        # Real pdd keeps ``prompts -> pdd/prompts``; git tracks the real
+        # ``pdd/prompts/...`` paths, so the resolver must return the symlink
+        # TARGET (else co-edit detection misses the git-reported path).
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to(tmp_path / "pdd" / "prompts")
+        assert _resolve_target_prompts_root(tmp_path) == Path("pdd/prompts")
+
+    def test_resolve_honours_pddrc_prompts_dir(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _resolve_target_prompts_root
+
+        (tmp_path / ".pddrc").write_text(
+            "version: '1.0'\n"
+            "contexts:\n"
+            "  default:\n"
+            "    paths: ['**']\n"
+            "    defaults:\n"
+            "      prompts_dir: 'contracts/prompts'\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "contracts" / "prompts").mkdir(parents=True)
+        assert _resolve_target_prompts_root(tmp_path) == Path("contracts/prompts")
+
+    def test_load_prompt_source_map_uses_target_layout(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _load_prompt_source_map
+
+        self._seed_external_repo(tmp_path)
+        mapping = _load_prompt_source_map(tmp_path)
+        # Must map to the TARGET repo's ``prompts/`` file — NOT ``pdd/prompts``.
+        assert mapping == {"src/foo.py": "prompts/foo_python.prompt"}, mapping
+
+    def test_repair_engages_on_external_layout(self, tmp_path: Path) -> None:
+        """The #1957 reproduction: a code-only change to a registered module in
+        a non-pdd repo must classify as repairable ``drift`` (owning prompt
+        found under the target's ``prompts/``), NOT ``missing_prompt``."""
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(tmp_path)
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert offenders == [
+            {
+                "code_path": "src/foo.py",
+                "prompt_path": "prompts/foo_python.prompt",
+                "kind": "drift",
+            }
+        ], offenders
+
+    def test_repair_engages_on_external_layout_via_pddrc(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(
+            tmp_path, prompts_dir="contracts/prompts", pddrc=True
+        )
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert [o["kind"] for o in offenders] == ["drift"], offenders
+        assert offenders[0]["prompt_path"] == "contracts/prompts/foo_python.prompt"
+
+    def test_genuinely_deleted_prompt_still_detected_external_layout(
+        self, tmp_path: Path
+    ) -> None:
+        """A prompt that is genuinely absent from the target's resolved prompt
+        root is still reported ``missing_prompt`` — the fix narrows the
+        false-positive, it must not blind the guard to real deletions."""
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed_external_repo(tmp_path, prompt_exists=False)
+        # Keep a real ``prompts/`` dir so resolution locks to the target root.
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        offenders = _prompt_source_offenders(tmp_path, ["src/foo.py"])
+        assert [o["kind"] for o in offenders] == ["missing_prompt"], offenders
+
+    def test_extract_arch_pairs_uses_target_layout(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _extract_arch_pairs,
+            _resolve_target_prompts_root,
+        )
+
+        (tmp_path / "prompts").mkdir()
+        data = [{"filename": "foo_python.prompt", "filepath": "src/foo.py"}]
+        pairs = _extract_arch_pairs(data, _resolve_target_prompts_root(tmp_path))
+        assert pairs == {("src/foo.py", "prompts/foo_python.prompt")}, pairs
+
+    def test_registry_guard_no_false_implicit_retirement_external_layout(
+        self, tmp_path: Path
+    ) -> None:
+        """The registry-edit guard's implicit-retirement trigger probes each
+        registered prompt on disk. Under the old hardcoded ``pdd/prompts``
+        prefix every external-repo prompt looked missing, firing the guard
+        spuriously. With the target-layout fix, an untouched external repo
+        short-circuits to ``None``."""
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        self._seed_external_repo(tmp_path)
+        # No architecture.json edit and every registered pair present on disk
+        # under the target layout → nothing to enforce.
+        assert (
+            _check_architecture_registry_edit_guard(tmp_path, ["src/foo.py"])
+            is None
         )
