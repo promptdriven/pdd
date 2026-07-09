@@ -39,10 +39,10 @@
 #   docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
 #   docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
 # The integration check launches the real command arm inside the AGENT's
-# namespace, verifies it reaches the live advertised recording-proxy endpoint,
-# cannot reach the gateway directly, and can see the shared frozen-home/report
-# artifacts. Pilot cells then run in `runner` with agent_command dispatched
-# into the `agent` service (see README.md).
+# namespace, runs the agent-role egress check against the live advertised
+# recording-proxy endpoint, verifies the gateway remains unreachable, and can
+# see the shared frozen-home/report artifacts. Pilot cells then run in `runner`
+# with agent_command dispatched into the `agent` service (see README.md).
 
 networks:
   rb-sandbox:
@@ -103,6 +103,10 @@ services:
     # via the recording proxy on the runner, and reaches nothing else.
     environment:
       NO_PROXY: 127.0.0.1,localhost
+    # Keep Docker service-name DNS for `runner`, but give Docker's embedded
+    # resolver a dead upstream so 127.0.0.11 cannot forward external names.
+    dns:
+      - 127.0.0.1
     volumes:
       - ../../..:/bench
       - rb-reports:/bench/reports

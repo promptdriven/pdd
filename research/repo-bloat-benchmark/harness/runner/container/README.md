@@ -29,7 +29,9 @@ agent is a **separate container** whose only network has no gateway on it.
   `rb-proxy-egress`, so it kernel-cannot address the gateway; its single
   reachable peer is the runner's recording proxy
   (`OPENAI_BASE_URL=runner:<port>`). Every provider request is recorded
-  before it can leave.
+  before it can leave. The service also pins Docker's embedded resolver to a
+  dead loopback upstream, preserving service-name resolution for `runner` while
+  making external-name forwarding via `127.0.0.11` a failing egress check.
 - The **runner** joins `rb-sandbox` (to receive agent traffic) and
   `rb-proxy-egress` (to forward it). Only the *runner* env carries
   `HTTPS_PROXY=gateway:8888`; the frozen agent env black-holes proxy vars and
@@ -60,18 +62,20 @@ docker compose up -d agent
 # the isolated agent resolves it by the stable `runner` service alias.
 docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
 # Zero-billing end-to-end smoke: launch the real command arm inside `agent`,
-# reach the live recording proxy at its advertised `runner:<port>` endpoint,
-# prove the frozen CODEX_HOME is shared, and confirm the gateway stays unreachable:
+# run the agent-role egress check against the live `runner:<port>` recording
+# proxy endpoint, prove the frozen CODEX_HOME is shared, and confirm the
+# gateway stays unreachable:
 docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
 ```
 
 The **runner** role asserts the gateway grants the pinned provider and
 refuses every other host. The integration check then exercises the actual
 isolated-agent launch path end-to-end with no billing: the agent container
-must reach the live recording proxy at its advertised endpoint, must not
-reach the gateway directly, and must see the shared frozen-home/report
-artifacts. **Run both before every pilot session** — the container-tier
-analogue of the §6.6 calibration gate.
+must pass the same `egress_check --role agent` assertions against the live
+recording proxy at its advertised endpoint, must not reach the gateway
+directly, must not forward external DNS through Docker's embedded resolver,
+and must see the shared frozen-home/report artifacts. **Run both before every
+pilot session** — the container-tier analogue of the §6.6 calibration gate.
 
 For the real command path, run:
 
@@ -82,9 +86,9 @@ docker compose run --rm --use-aliases runner python3 -m harness.runner.container
 
 That check stays zero-billing: it uses the same `container_worker` launch path
 the pilot uses, verifies the agent can see the frozen `CODEX_HOME`/report
-artifacts on the shared volumes, confirms the advertised proxy endpoint is
-live from inside the isolated agent namespace, and proves the agent cannot
-reach the gateway directly.
+artifacts on the shared volumes, runs the agent-role egress checker from
+inside the isolated agent namespace, confirms the advertised proxy endpoint is
+live, and proves the agent cannot reach the gateway directly.
 
 ## Status / provenance
 

@@ -189,5 +189,7 @@ def test_documented_runner_commands_use_compose_aliases():
     compose = root.joinpath("docker-compose.yml").read_text(encoding="utf-8")
     assert "docker compose run --rm --use-aliases runner" in readme
     assert "docker compose run --rm --use-aliases runner" in compose
+    assert "egress_check --role agent" in readme
     agent_block = compose.split("  agent:", 1)[1]
     assert "depends_on:\n      - runner" not in agent_block
+    assert "dns:\n      - 127.0.0.1" in agent_block

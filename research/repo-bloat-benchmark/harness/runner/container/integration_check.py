@@ -17,9 +17,12 @@ REPORTS_ROOT = Path("/bench/reports/container-integration")
 REQUEST_ROOT = Path("/bench/agent-requests")
 
 AGENT_SCRIPT = r"""
-import json, os, socket, urllib.request
+import json, os, socket, sys, urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
+
+sys.path.insert(0, "/bench")
+from harness.runner.container import egress_check
 
 home = Path(os.environ["CODEX_HOME"])
 assert home.joinpath("config.toml").is_file(), "frozen CODEX_HOME missing"
@@ -27,6 +30,12 @@ assert os.environ["HOME"] == os.environ["CODEX_HOME"], "HOME not redirected"
 base = os.environ["OPENAI_BASE_URL"]
 parsed = urlparse(base)
 assert parsed.hostname == "runner", f"unexpected proxy host: {parsed.hostname}"
+agent_checks = egress_check.agent_checks(proxy_url=base)
+(home / "agent_egress_check.json").write_text(
+    json.dumps({"role": "agent", "checks": agent_checks}, indent=2) + "\n",
+    encoding="utf-8",
+)
+assert all(agent_checks.values()), agent_checks
 try:
     socket.create_connection(("gateway", 8888), timeout=1)
     raise AssertionError("gateway should be unreachable from agent")
@@ -96,9 +105,14 @@ def main(argv: list[str] | None = None) -> int:
     process = json.loads(
         (result.report_dir / "agent_process.json").read_text(encoding="utf-8")
     )
+    agent_egress_path = (
+        result.report_dir / "codex_home_artifacts" / "agent_egress_check.json"
+    )
+    agent_egress = json.loads(agent_egress_path.read_text(encoding="utf-8"))
     ok = (
         process["launcher"] == "container_worker"
         and process["returncode"] == 0
+        and all(agent_egress["checks"].values())
         and result.record["iterations_total"] == 1
         and (
             result.report_dir
@@ -107,7 +121,16 @@ def main(argv: list[str] | None = None) -> int:
             / "integration.jsonl"
         ).is_file()
     )
-    print(json.dumps({"run_id": result.record["run_id"], "ok": ok}, indent=2))
+    print(
+        json.dumps(
+            {
+                "run_id": result.record["run_id"],
+                "agent_egress": agent_egress,
+                "ok": ok,
+            },
+            indent=2,
+        )
+    )
     return 0 if ok else 1
 
 
