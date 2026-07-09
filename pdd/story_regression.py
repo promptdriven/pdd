@@ -98,15 +98,48 @@ def _relative_nodeid(item: pytest.Item, root: Path) -> str:
         return item.nodeid.lstrip("/")
 
 
-def _literal_story_id(node: ast.AST) -> Optional[str]:
-    """Return a story id from a literal decorator argument, if present."""
+def _module_string_constants(tree: ast.AST) -> Dict[str, str]:
+    """Return top-level ``NAME = "literal"`` string constants in a module.
+
+    Mirrors the gate's own AST constant resolver so the static fallback can
+    resolve ``story_id=STORY_ID`` / ``story_id=PDD_STORY_ID`` module constants
+    that generated tests emit (pdd#1889 Bug 3), not only bare string literals.
+    """
+    constants: Dict[str, str] = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                constants[target.id] = value.value
+    return constants
+
+
+def _literal_story_id(
+    node: ast.AST, constants: Optional[Dict[str, str]] = None
+) -> Optional[str]:
+    """Return a story id from a decorator argument (literal or module constant)."""
     if isinstance(node, ast.Constant) and node.value is not None:
         return _normalize_story_ref(node.value)
+    if constants is not None and isinstance(node, ast.Name):
+        resolved = constants.get(node.id)
+        if resolved is not None:
+            return _normalize_story_ref(resolved)
     return None
 
 
-def _story_id_from_decorator(decorator: ast.AST) -> Optional[str]:
-    """Resolve ``@pytest.mark.story`` decorator literals without executing code."""
+def _story_id_from_decorator(
+    decorator: ast.AST, constants: Optional[Dict[str, str]] = None
+) -> Optional[str]:
+    """Resolve a ``@pytest.mark.story`` decorator's story id without executing code."""
     if not isinstance(decorator, ast.Call):
         return None
 
@@ -124,16 +157,19 @@ def _story_id_from_decorator(decorator: ast.AST) -> Optional[str]:
 
     for keyword in decorator.keywords:
         if keyword.arg == "story_id":
-            return _literal_story_id(keyword.value)
+            return _literal_story_id(keyword.value, constants)
 
     if decorator.args:
-        return _literal_story_id(decorator.args[0])
+        return _literal_story_id(decorator.args[0], constants)
 
     return None
 
 
 def _scan_story_markers_static(tests_dir: Path) -> StoryTestMap:
-    """Best-effort static fallback for literal ``@pytest.mark.story`` decorators."""
+    """Best-effort static fallback for ``@pytest.mark.story`` decorators.
+
+    Resolves both string-literal and module-constant ``story_id`` forms.
+    """
     story_to_tests: Dict[str, Set[str]] = {}
     test_to_stories: Dict[str, Set[str]] = {}
     root = tests_dir.resolve()
@@ -149,6 +185,7 @@ def _scan_story_markers_static(tests_dir: Path) -> StoryTestMap:
         except (ValueError, OSError):
             rel_path = path.name
 
+        constants = _module_string_constants(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -157,7 +194,7 @@ def _scan_story_markers_static(tests_dir: Path) -> StoryTestMap:
             story_ids = {
                 sid
                 for decorator in node.decorator_list
-                for sid in [_story_id_from_decorator(decorator)]
+                for sid in [_story_id_from_decorator(decorator, constants)]
                 if sid
             }
             if not story_ids:

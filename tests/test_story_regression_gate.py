@@ -531,3 +531,134 @@ def test_evaluate_story_regression_status_never_says_passing(tmp_path: Path):
     ev = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
     assert ev.status == STATUS_PASSING
     assert "pass" not in ev.status
+
+
+# --------------------------------------------------------------------------- #
+# pdd#1889 Bug 1: the wired evaluator must share the full gate's acceptance
+# logic -- accept marker ``story_hash=`` kwargs AND module constants, over the
+# content-hash UNION bundle-hash set -- so it is not wrong in BOTH directions.
+# --------------------------------------------------------------------------- #
+
+
+def test_evaluate_story_regression_accepts_recorded_content_hash(tmp_path: Path):
+    """Direction A (false STALE): a test that records the *content* hash (the
+    form the behavioral generator emits, and the form documented in the module
+    docstring) must be accepted by the wired evaluator even when a contract
+    makes the bundle hash differ -- exactly as the full gate accepts it."""
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import STATUS_PASSING, evaluate_story_regression
+
+    stories = tmp_path / "user_stories"
+    contracts = stories / "contracts"
+    tests = tmp_path / "tests"
+    story = _write(stories / "story__refund.md", FRESH_STORY)
+    # A contract makes story_bundle_hash != _story_content_hash.
+    _write(contracts / "refund.contract.md", "## Oracle\n\n- Refunds are accepted.\n")
+    content_hash = _story_content_hash(FRESH_STORY)
+    _write(
+        tests / "test_refund.py",
+        _test_module(
+            f'STORY_HASH = "{content_hash}"',
+            '@pytest.mark.story(story_id="refund", story_hash=STORY_HASH)\n'
+            "def test_refund():\n    assert True",
+        ),
+    )
+    smap = build_story_map(tests)
+    ev = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
+    assert ev.status == STATUS_PASSING
+
+
+def test_evaluate_story_regression_fresh_wins_over_earlier_stale_in_same_file(
+    tmp_path: Path,
+):
+    """A file with two markers for the same story -- a STALE one listed first,
+    a FRESH one second -- must be reported 'present' (any-fresh-wins), matching
+    the full gate. Regression guard for collapsing the recorded-hash list to
+    ``found[0]``, which would re-introduce exactly the evaluator divergence this
+    change eliminates (pdd#1889)."""
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import STATUS_PASSING, evaluate_story_regression
+
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    story = _write(stories / "story__refund.md", FRESH_STORY)
+    content_hash = _story_content_hash(FRESH_STORY)
+    # Stale marker FIRST (source order drives AST scan order), fresh SECOND.
+    _write(
+        tests / "test_refund.py",
+        _test_module(
+            _marked("refund", "0000000000000000", "test_refund_stale"),
+            _marked("refund", content_hash, "test_refund_fresh"),
+        ),
+    )
+    smap = build_story_map(tests)
+    ev = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
+    assert ev.status == STATUS_PASSING
+
+
+def test_evaluate_story_regression_stale_on_bogus_marker_kwarg_hash(tmp_path: Path):
+    """Direction B (false PASS): a test recording only a bogus ``story_hash=``
+    marker kwarg (no module constant) is genuinely stale and must be reported
+    stale -- the wired evaluator must not ignore marker kwargs and fall through
+    to the legacy hashless 'present' verdict."""
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import STATUS_STALE, evaluate_story_regression
+
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    story = _write(stories / "story__refund.md", FRESH_STORY)
+    _write(
+        tests / "test_refund.py",
+        _test_module(_marked("refund", "0000000000000000", "test_refund")),
+    )
+    smap = build_story_map(tests)
+    ev = evaluate_story_regression(story, tests_dir=tests, story_map=smap)
+    assert ev.status == STATUS_STALE
+
+
+# --------------------------------------------------------------------------- #
+# pdd#1889 Bug 2: a metadata-only prompt relink must not flip the bundle hash,
+# so the gate cannot falsely stale a bundle-recording test after `pdd story link`.
+# --------------------------------------------------------------------------- #
+
+
+def test_metadata_only_relink_does_not_flip_bundle_hash(tmp_path: Path):
+    from pdd.story_regression import build_story_map
+    from pdd.story_regression_gate import STATUS_PASSING, evaluate_story_regression
+    from pdd.story_test_generation import story_bundle_hash
+
+    stories = tmp_path / "user_stories"
+    contracts = stories / "contracts"
+    tests = tmp_path / "tests"
+    story = _write(
+        stories / "story__refund.md",
+        FRESH_STORY + "\n<!-- pdd-story-prompts: pdd/foo.prompt -->\n",
+    )
+    _write(contracts / "refund.contract.md", "## Oracle\n\n- Refunds are accepted.\n")
+
+    before = story_bundle_hash(story)
+    _write(
+        tests / "test_refund.py",
+        _test_module(
+            f'PDD_STORY_HASH = "{before}"',
+            '@pytest.mark.story(story_id="refund")\n'
+            "def test_refund():\n    assert True",
+        ),
+    )
+    smap = build_story_map(tests)
+    assert (
+        evaluate_story_regression(story, tests_dir=tests, story_map=smap).status
+        == STATUS_PASSING
+    )
+
+    # Metadata-only relink: rewrite ONLY the pdd-story-prompts comment.
+    story.write_text(
+        FRESH_STORY + "\n<!-- pdd-story-prompts: pdd/bar.prompt, pdd/baz.prompt -->\n",
+        encoding="utf-8",
+    )
+    after = story_bundle_hash(story)
+    assert after == before, "metadata-only relink must not change the bundle hash"
+    assert (
+        evaluate_story_regression(story, tests_dir=tests, story_map=smap).status
+        == STATUS_PASSING
+    )

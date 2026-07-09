@@ -1225,7 +1225,7 @@ class TestStoryRegressionDimension:
                 "has_regression_test": True,
                 "status": "story-regression-present",
                 "tests": ["test_foo.py::test_foo_flow"],
-                "story_hash": "8ca87cfe7267abcb",
+                "story_hash": "95d7a1ca9e45f480",
             }
         ]
         assert "regression_warnings" in d
