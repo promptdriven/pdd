@@ -1,5 +1,6 @@
 import json
 import re
+import tomllib
 from pathlib import Path
 
 
@@ -86,3 +87,12 @@ def test_cloud_batch_image_installs_and_verifies_github_cli():
     assert re.search(r"^\s*gh\s*\\$", dockerfile_text, re.MULTILINE)
     assert '"gh"' in cloudbuild_text
     assert "gh --version" in cloudbuild_text or '["gh", "--version"]' in cloudbuild_text
+
+
+def test_cloud_batch_uploaded_pyproject_registers_story_marker():
+    pyproject = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+
+    assert any(marker.startswith("story(") for marker in markers)
