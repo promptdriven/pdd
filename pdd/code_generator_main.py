@@ -4044,14 +4044,30 @@ def code_generator_main(
                             elif verbose:
                                 console.print(f"[yellow]Git (log) failed for {prompt_file_rel_to_root_str} or no history found: {log_stderr}[/yellow]")
                         
+                        # Last resort: resolve the "original" prompt from the base branch.
+                        # In the cloud sync-after-change flow the prompt edit is already
+                        # committed on this branch (on-disk == HEAD) and no distinct prior
+                        # version is found in local history, so without this we silently
+                        # fall back to full regeneration and re-drop declared symbols
+                        # (#1938/#1940, test_repo#4232). Configurable via PDD_SYNC_BASE_REF
+                        # (defaults to origin/main). Only used when it differs from the
+                        # current prompt; otherwise leave can_attempt_incremental False so an
+                        # honest full regeneration runs (surfaced loudly below).
                         if not found_different_prior:
-                            original_prompt_content_for_incremental = new_prompt_candidate 
-                            can_attempt_incremental = True 
-                            if verbose:
+                            base_ref = os.environ.get("PDD_SYNC_BASE_REF", "origin/main")
+                            base_content = get_git_content_at_ref(prompt_file, git_ref=base_ref)
+                            if base_content is not None and base_content.strip() != prompt_content.strip():
+                                original_prompt_content_for_incremental = base_content
+                                can_attempt_incremental = True
+                                found_different_prior = True
+                                if verbose:
+                                    console.print(f"[cyan]Using base-branch ({base_ref}) prompt as incremental original.[/cyan]")
+                            elif verbose:
                                 console.print(
                                     f"[yellow]Warning: Could not find a prior *different* version of {prompt_file} "
-                                    f"within the last {MAX_COMMITS_TO_SEARCH if git_root_path_obj else 'N/A'} relevant commits. "
-                                    f"Using current HEAD version as original (prompts will be identical).[/yellow]"
+                                    f"within the last {MAX_COMMITS_TO_SEARCH if git_root_path_obj else 'N/A'} relevant commits, "
+                                    f"and base-branch ({base_ref}) did not provide a distinct original. "
+                                    f"Performing full regeneration.[/yellow]"
                                 )
                 else:
                     # File not in HEAD, cannot determine git-based original prompt.
@@ -4092,6 +4108,22 @@ def code_generator_main(
                 "and performing full generation with the repair directive.[/blue]"
             )
         can_attempt_incremental = False
+
+    # Loud (non-verbose) degradation notice: a mature module (existing non-empty
+    # code on disk) is about to be fully regenerated because no "original" prompt
+    # could be resolved for surgical/incremental generation. This is the silent
+    # failure mode that re-drops declared symbols on sync (#1938/#1940,
+    # test_repo#4232) — surface it once so operators aren't blind. New/empty
+    # modules doing a legitimate first generation and repair-directive full
+    # regenerations are intentionally excluded.
+    if (llm_enabled
+            and existing_code_content is not None
+            and not can_attempt_incremental
+            and not repair_directive_active):
+        console.print(
+            "[yellow]Surgical/incremental generation unavailable (no original prompt "
+            "resolved) — performing full regeneration.[/yellow]"
+        )
 
     try:
         # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
