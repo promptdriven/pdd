@@ -5,7 +5,6 @@ Analysis commands (detect-change, conflicts, bug, crash, trace).
 """
 import os
 import re
-import sys
 import click
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -40,19 +39,6 @@ def _mark_command_failed(ctx: click.Context) -> None:
     """Mark handled command exceptions so the result callback exits non-zero."""
     if isinstance(ctx.obj, dict):
         ctx.obj["_command_failed"] = True
-
-
-def _story_detection_noninteractive() -> bool:
-    """Return True when story validation must not start browser/device auth."""
-    truthy = ("1", "true", "yes", "on")
-    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").strip().lower() in truthy:
-        return False
-    if os.environ.get("PDD_NO_INTERACTIVE", "").strip().lower() in truthy:
-        return True
-    try:
-        return not sys.stdin.isatty()
-    except Exception:
-        return True
 
 
 @click.command("detect")
@@ -126,29 +112,21 @@ def detect_change(
                 raise click.UsageError("--output is not supported with --stories.")
 
             obj = get_context_obj(ctx)
-            previous_no_interactive = os.environ.get("PDD_NO_INTERACTIVE")
-            set_no_interactive = (
-                _story_detection_noninteractive()
-                and previous_no_interactive is None
+            # Non-interactive story validation (issue #1923) is enforced inside
+            # run_user_story_tests, so every caller of that choke point (detect
+            # --stories, change, agentic change, drift) is protected uniformly.
+            passed, results, total_cost, model_name = run_user_story_tests(
+                prompts_dir=prompts_dir,
+                stories_dir=stories_dir,
+                strength=obj.get("strength", 0.2),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time", 0.25),
+                verbose=obj.get("verbose", False),
+                quiet=obj.get("quiet", False),
+                fail_fast=fail_fast,
+                include_llm_prompts=include_llm,
+                cache_story_prompt_links=True,
             )
-            if set_no_interactive:
-                os.environ["PDD_NO_INTERACTIVE"] = "1"
-            try:
-                passed, results, total_cost, model_name = run_user_story_tests(
-                    prompts_dir=prompts_dir,
-                    stories_dir=stories_dir,
-                    strength=obj.get("strength", 0.2),
-                    temperature=obj.get("temperature", 0.0),
-                    time=obj.get("time", 0.25),
-                    verbose=obj.get("verbose", False),
-                    quiet=obj.get("quiet", False),
-                    fail_fast=fail_fast,
-                    include_llm_prompts=include_llm,
-                    cache_story_prompt_links=True,
-                )
-            finally:
-                if set_no_interactive:
-                    os.environ.pop("PDD_NO_INTERACTIVE", None)
             if evidence:
                 write_evidence_manifest(
                     command="pdd detect --stories",

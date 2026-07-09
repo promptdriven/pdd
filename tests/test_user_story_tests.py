@@ -141,9 +141,14 @@ def test_user_story_tests_auth_failure_fails_closed(tmp_path):
 
     assert passed is False
     assert results[0]["passed"] is False
-    assert "Fatal story validation error" in results[0]["error"]
-    assert "PDD_JWT_TOKEN" in results[0]["error"]
-    assert "device login" in results[0]["error"]
+    # Assert on the prompt-mandated content only (path, underlying error, and
+    # conditional credential guidance), not on an exact prefix the prompt does
+    # not require.
+    error = results[0]["error"]
+    assert "Refusing interactive device-flow auth" in error  # underlying exc surfaced
+    assert "PDD_JWT_TOKEN" in error
+    assert "pdd auth login" in error
+    assert "device login" in error
     assert cost == 0.0
     assert model == ""
 

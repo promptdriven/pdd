@@ -1,34 +1,35 @@
 """Regression tests for issue #1923.
 
-`pdd detect --stories` must not block on an interactive GitHub device-login
-prompt when run from an agent/CI-style non-interactive shell. Historically the
-story-validation LLM path reached cloud authentication and printed a GitHub
-device URL/code, then waited forever for a human to complete the browser flow.
+`pdd detect --stories` (and `pdd change` / agentic change / drift, which share
+the same ``run_user_story_tests`` choke point) must not block on an interactive
+GitHub device-login prompt when run from an agent/CI-style non-interactive
+shell. Historically story validation reached cloud authentication and printed a
+GitHub device URL/code, then waited forever for a human to complete the browser
+flow.
 
-These tests reproduce the exact auth/device-login decision point:
+The fix scopes ``PDD_NO_INTERACTIVE`` around each auth-sensitive
+``detect_change`` call *inside* ``run_user_story_tests`` so every caller is
+protected uniformly, and forces the value to ``"1"`` (rather than skipping when
+a falsy value is already present) so a stray ``PDD_NO_INTERACTIVE=""``/``"0"``
+cannot reopen the hang.
 
-    detect --stories  ->  _story_detection_noninteractive() scopes
-    PDD_NO_INTERACTIVE  ->  run_user_story_tests -> (real) cloud auth
-    CloudConfig.get_jwt_token -> get_jwt_token._is_noninteractive() guard
-    -> DeviceFlow is NEVER instantiated.
-
-The story/LLM machinery is stubbed (out of scope for the auth bug and to avoid
-real model cost), but the env-scoping in the command and the REAL device-flow
-guard are exercised end to end. ``DeviceFlow`` is trapped so any attempt to
-start device authentication fails the test loudly.
-
-Red/green: on ``main`` the command does not scope PDD_NO_INTERACTIVE, so the
-real guard reaches the device-flow branch and the trap fires (fails). With the
-fix the guard refuses device flow, cloud auth returns ``None``, story
-validation fails closed, and the command exits non-zero.
+These tests exercise:
+  * the scoping decision (`_story_validation_noninteractive`) and that the env
+    is actually forced to "1" at the moment ``detect_change`` runs, then
+    restored (deterministic, covers all callers);
+  * the M1 falsy/empty-preset hole and the ``on`` truthy value;
+  * the interactive opt-in (`PDD_ALLOW_INTERACTIVE`) and real-TTY cases; and
+  * the REAL device-flow guard end to end: with cloud enabled and no cached
+    credentials, ``run_user_story_tests`` must never instantiate ``DeviceFlow``
+    (red on main, green after fix).
 """
 from __future__ import annotations
 
 import os
 
 import pytest
-from click.testing import CliRunner
 
+import pdd.user_story_tests as ust
 from pdd import get_jwt_token as gjt_module
 from pdd.core import cloud
 from pdd.core.cloud import (
@@ -37,7 +38,17 @@ from pdd.core.cloud import (
     GITHUB_CLIENT_ID_ENV,
     PDD_JWT_TOKEN_ENV,
 )
-from pdd.commands.analysis import detect_change
+
+
+PROVIDER_KEY_ENVS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "PDD_MODEL_DEFAULT",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -58,138 +69,191 @@ def _isolate_auth_env(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
-def _trap_device_flow(monkeypatch):
-    """Make the credential caches miss and trap DeviceFlow instantiation.
+def _make_story_repo(tmp_path):
+    """Create a minimal prompts dir + one story so validation reaches detect_change."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    (prompts_dir / "foo_python.prompt").write_text("Do the thing.", encoding="utf-8")
+    (stories_dir / "story__example.md").write_text(
+        "As a user, I want the thing to work.", encoding="utf-8"
+    )
+    return str(prompts_dir), str(stories_dir)
 
-    Returns a mutable dict whose ``started`` flag flips True (and raises) the
-    moment anything tries to begin GitHub device authentication.
+
+# -----------------------------------------------------------------------------
+# Scoping decision + env forcing (deterministic; covers ALL callers)
+# -----------------------------------------------------------------------------
+
+def test_story_validation_forces_no_interactive_when_non_tty(tmp_path, monkeypatch):
+    """Under a non-TTY stdin with no env set, run_user_story_tests forces
+    PDD_NO_INTERACTIVE=1 exactly while detect_change runs, then unsets it."""
+    prompts_dir, stories_dir = _make_story_repo(tmp_path)
+    monkeypatch.setattr(ust, "_story_validation_noninteractive", lambda: True)
+
+    captured = {}
+
+    def spy_detect_change(*_args, **_kwargs):
+        captured["during"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return [], 0.0, "gpt-test"
+
+    monkeypatch.setattr(ust, "detect_change", spy_detect_change)
+
+    passed, _results, _cost, _model = ust.run_user_story_tests(
+        prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True
+    )
+
+    assert passed is True
+    assert captured["during"] == "1"          # forced while auth-sensitive work runs
+    assert os.environ.get("PDD_NO_INTERACTIVE") is None  # restored (was unset)
+
+
+@pytest.mark.parametrize("preset", ["", "0", "false", "on", "1"])
+def test_story_validation_forces_no_interactive_over_presets(tmp_path, monkeypatch, preset):
+    """M1/M2: a pre-existing PDD_NO_INTERACTIVE value — including the falsy
+    ""/"0"/"false" that previously reopened the hang — must be forced to a
+    guard-honored "1" during validation and restored to the caller's value."""
+    prompts_dir, stories_dir = _make_story_repo(tmp_path)
+    monkeypatch.setenv("PDD_NO_INTERACTIVE", preset)
+    # Non-interactive because either the preset is truthy or stdin is non-TTY.
+    monkeypatch.setattr(ust, "_story_validation_noninteractive", lambda: True)
+
+    captured = {}
+
+    def spy_detect_change(*_args, **_kwargs):
+        captured["during"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return [], 0.0, "gpt-test"
+
+    monkeypatch.setattr(ust, "detect_change", spy_detect_change)
+
+    ust.run_user_story_tests(prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True)
+
+    assert captured["during"] == "1"                       # forced regardless of preset
+    assert os.environ.get("PDD_NO_INTERACTIVE") == preset  # caller's value restored
+
+
+def test_story_validation_noninteractive_decision_matrix(monkeypatch):
+    """The decision helper: opt-in wins; truthy PDD_NO_INTERACTIVE wins; else
+    non-TTY => True. Uses the shared 1/true/yes/on truthy set."""
+    monkeypatch.setattr(ust.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+    assert ust._story_validation_noninteractive() is True  # non-TTY default
+
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+    assert ust._story_validation_noninteractive() is False  # explicit opt-in
+    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+
+    for truthy in ("1", "true", "yes", "on", "ON", " Yes "):
+        monkeypatch.setenv("PDD_NO_INTERACTIVE", truthy)
+        assert ust._story_validation_noninteractive() is True
+
+    # Falsy presets fall through to the non-TTY signal (still True here).
+    for falsy in ("", "0", "false", "no"):
+        monkeypatch.setenv("PDD_NO_INTERACTIVE", falsy)
+        assert ust._story_validation_noninteractive() is True
+
+
+def test_story_validation_opt_in_allows_interactive(tmp_path, monkeypatch):
+    """PDD_ALLOW_INTERACTIVE opts back in: no forcing, env untouched."""
+    prompts_dir, stories_dir = _make_story_repo(tmp_path)
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+
+    captured = {}
+
+    def spy_detect_change(*_args, **_kwargs):
+        captured["during"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return [], 0.0, "gpt-test"
+
+    monkeypatch.setattr(ust, "detect_change", spy_detect_change)
+
+    ust.run_user_story_tests(prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True)
+
+    assert captured["during"] is None  # device flow remains allowed for the human
+
+
+def test_story_validation_respects_real_tty(tmp_path, monkeypatch):
+    """A real TTY (interactive terminal) must NOT be forced non-interactive."""
+    prompts_dir, stories_dir = _make_story_repo(tmp_path)
+    monkeypatch.setattr(ust.sys.stdin, "isatty", lambda: True, raising=False)
+
+    captured = {}
+
+    def spy_detect_change(*_args, **_kwargs):
+        captured["during"] = os.environ.get("PDD_NO_INTERACTIVE")
+        return [], 0.0, "gpt-test"
+
+    monkeypatch.setattr(ust, "detect_change", spy_detect_change)
+
+    ust.run_user_story_tests(prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True)
+
+    assert captured["during"] is None  # interactive terminal unaffected
+
+
+# -----------------------------------------------------------------------------
+# Real device-flow guard, end to end (the exact #1923 decision point)
+# -----------------------------------------------------------------------------
+
+def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch):
+    """End-to-end: real run_user_story_tests -> real detect_change/llm_invoke
+    cloud auth -> real get_jwt_token guard. With cloud enabled and no cached
+    credentials in a non-TTY run, GitHub device authentication must never start.
+
+    Red on main (env-only guard reaches the trapped DeviceFlow); green after the
+    fix (scoped PDD_NO_INTERACTIVE makes the guard refuse device flow, cloud auth
+    returns None, and validation fails closed).
     """
-    started = {"value": False}
+    prompts_dir, stories_dir = _make_story_repo(tmp_path)
+
+    # Enable cloud auth (device-flow credentials present) but no cached JWT.
+    monkeypatch.setenv(FIREBASE_API_KEY_ENV, "fake_firebase_key")
+    monkeypatch.setenv(GITHUB_CLIENT_ID_ENV, "fake_github_client_id")
+    # No usable provider keys, so the local fallback fails fast without network.
+    for key in PROVIDER_KEY_ENVS:
+        monkeypatch.delenv(key, raising=False)
+
+    # Force non-interactive decision deterministically (don't depend on runner TTY).
+    monkeypatch.setattr(ust, "_story_validation_noninteractive", lambda: True)
 
     # Both JWT caches miss and there is no stored refresh token, so the real
     # get_jwt_token reaches the device-flow branch unless the guard stops it.
     monkeypatch.setattr(cloud, "_get_cached_jwt", lambda verbose=False: None)
     monkeypatch.setattr(gjt_module, "_get_cached_jwt", lambda: None)
     monkeypatch.setattr(
-        gjt_module.FirebaseAuthenticator,
-        "_get_stored_refresh_token",
-        lambda self: None,
+        gjt_module.FirebaseAuthenticator, "_get_stored_refresh_token", lambda self: None
     )
+
+    device_flow_started = {"value": False}
 
     class _TrapDeviceFlow:
         def __init__(self, *_args, **_kwargs):
-            started["value"] = True
+            device_flow_started["value"] = True
             raise AssertionError(
-                "device-flow authentication must not start for "
-                "`pdd detect --stories` in a non-interactive shell"
+                "device-flow authentication must not start for non-interactive "
+                "story validation"
             )
 
     monkeypatch.setattr(gjt_module, "DeviceFlow", _TrapDeviceFlow)
-    return started
 
+    # Defensive: ensure the local fallback can never make a real model call.
+    import pdd.llm_invoke as llm_invoke_module
 
-def test_detect_stories_non_tty_never_starts_device_flow(monkeypatch):
-    """Exact #1923 decision point: no device auth in a non-TTY story run.
-
-    CliRunner drives the command with a non-TTY stdin. Cloud is enabled (real
-    FIREBASE_API_KEY + GITHUB_CLIENT_ID) with no cached/keyring credentials, so
-    only the PDD_NO_INTERACTIVE scoping set by the command keeps the real auth
-    path from starting device flow.
-    """
-    monkeypatch.setenv(FIREBASE_API_KEY_ENV, "fake_firebase_key")
-    monkeypatch.setenv(GITHUB_CLIENT_ID_ENV, "fake_github_client_id")
-    started = _trap_device_flow(monkeypatch)
-
-    captured = {}
-
-    def fake_story_runner(**_kwargs):
-        # Runs INSIDE the command's PDD_NO_INTERACTIVE scope. Exercise the REAL
-        # cloud-auth path the story LLM call would trigger.
-        captured["no_interactive"] = os.environ.get("PDD_NO_INTERACTIVE")
-        token = CloudConfig.get_jwt_token(verbose=False)
-        captured["token"] = token
-        if token is None:
-            # Mirror user_story_tests' fail-closed behavior on missing creds.
-            return (
-                False,
-                [{
-                    "story": "story__example.md",
-                    "passed": False,
-                    "changes": [],
-                    "error": (
-                        "Fatal story validation error: cloud auth unavailable. "
-                        "Set PDD_JWT_TOKEN or run `pdd auth login`; no device "
-                        "login is started in non-interactive runs."
-                    ),
-                }],
-                0.0,
-                "",
-            )
-        return True, [], 0.0, "gpt-test"
+    def _no_completion(*_args, **_kwargs):
+        raise RuntimeError("no network in tests")
 
     monkeypatch.setattr(
-        "pdd.commands.analysis.run_user_story_tests", fake_story_runner
+        llm_invoke_module.litellm, "completion", _no_completion, raising=False
     )
 
-    runner = CliRunner()
-    result = runner.invoke(
-        detect_change, ["--stories"], obj={"verbose": False, "quiet": True}
+    passed, results, _cost, _model = ust.run_user_story_tests(
+        prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True
     )
 
-    # The core assertion: device authentication was never started.
-    assert started["value"] is False
-    # The command scoped non-interactivity around story validation...
-    assert captured["no_interactive"] == "1"
-    # ...so the real guard refused device flow and cloud auth returned None...
-    assert captured["token"] is None
-    # ...and the command failed closed with a non-zero exit (issue #1872 too).
-    assert result.exit_code != 0
-    # The scoped env var is restored after the command completes.
+    # Core assertion: no device authentication was started.
+    assert device_flow_started["value"] is False
+    # And validation failed closed (missing creds) rather than passing/hanging.
+    assert passed is False
+    assert results and results[0]["passed"] is False
+    # The scoped env is restored after the run.
     assert os.environ.get("PDD_NO_INTERACTIVE") is None
-
-
-def test_detect_stories_explicit_interactive_opt_in_allows_auth(monkeypatch):
-    """PDD_ALLOW_INTERACTIVE opts back in: the command must NOT scope
-    PDD_NO_INTERACTIVE, so an interactive user can still authenticate."""
-    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
-
-    captured = {}
-
-    def fake_story_runner(**_kwargs):
-        captured["no_interactive"] = os.environ.get("PDD_NO_INTERACTIVE")
-        return True, [], 0.0, "gpt-test"
-
-    monkeypatch.setattr(
-        "pdd.commands.analysis.run_user_story_tests", fake_story_runner
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        detect_change, ["--stories"], obj={"verbose": False, "quiet": True}
-    )
-
-    assert result.exit_code == 0
-    # Explicit opt-in => command did not force non-interactive mode.
-    assert captured["no_interactive"] is None
-
-
-def test_detect_stories_preserves_preexisting_no_interactive(monkeypatch):
-    """A caller-provided PDD_NO_INTERACTIVE must be preserved (not popped) by
-    the command's scoping so outer non-interactive contexts stay intact."""
-    monkeypatch.setenv("PDD_NO_INTERACTIVE", "1")
-
-    def fake_story_runner(**_kwargs):
-        return True, [], 0.0, "gpt-test"
-
-    monkeypatch.setattr(
-        "pdd.commands.analysis.run_user_story_tests", fake_story_runner
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        detect_change, ["--stories"], obj={"verbose": False, "quiet": True}
-    )
-
-    assert result.exit_code == 0
-    # The command must not clobber a pre-existing value on exit.
-    assert os.environ.get("PDD_NO_INTERACTIVE") == "1"

@@ -311,13 +311,17 @@ Story mode prints PASS/FAIL for each story and exits non-zero if any story
 fails. `--output` is not supported with `--stories`; use `--evidence` when CI
 needs a machine-readable run manifest.
 
-In CI or agent workflows, `pdd detect --stories` runs in non-interactive mode
-when stdin is not a TTY. It will not launch GitHub browser/device
-authentication. Provide credentials before running it: set the model provider
-API key environment variables used by your `llm_model.csv`, set `PDD_JWT_TOKEN`
-for PDD Cloud, or run `pdd auth login` once in an interactive shell so the JWT is
-cached. If credentials are missing, story validation fails non-zero with a
-fatal error instead of waiting for a device-login code.
+In CI or agent workflows, story validation runs in non-interactive mode by
+default when stdin is not a TTY, so it does not launch GitHub browser/device
+authentication. This applies to every command that runs story validation
+(`pdd detect --stories`, `pdd change`, agentic change, and drift fixing).
+Provide credentials before running it: set the model provider API key
+environment variables used by your `llm_model.csv`, set `PDD_JWT_TOKEN` for PDD
+Cloud, or run `pdd auth login` once in an interactive shell so the JWT is
+cached. If credentials are missing, story validation fails non-zero with a clear
+error instead of waiting for a device-login code. To deliberately allow the
+interactive GitHub device-login flow during story validation (for example, to
+authenticate from a piped-but-attended shell), set `PDD_ALLOW_INTERACTIVE=1`.
 
 `pdd change` also runs story validation after a prompt modification, so stories
 act as a regression gate during normal development.
