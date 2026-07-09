@@ -6,11 +6,13 @@
   "module": {
     "functions": [
       {"name": "count_tokens", "signature": "(text: str, model: str = \"gpt-4o\") -> int", "returns": "int"},
+      {"name": "count_tokens_for_messages", "signature": "(messages: Any, model: str = \"gpt-4o\") -> int", "returns": "int"},
       {"name": "get_context_limit", "signature": "(model: str) -> Optional[int]", "returns": "Optional[int]"},
-      {"name": "estimate_cost", "signature": "(token_count, model, pricing_csv) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
-      {"name": "estimate_completion_cost", "signature": "(input_tokens, predicted_output_tokens, model, pricing_csv) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
+      {"name": "get_max_output_tokens", "signature": "(model: str) -> Optional[int]", "returns": "Optional[int]"},
+      {"name": "estimate_cost", "signature": "(token_count: int, model: str, pricing_csv: Optional[Union[str, Path]] = None) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
+      {"name": "estimate_completion_cost", "signature": "(input_tokens: int, predicted_output_tokens: int, model: str, pricing_csv: Optional[Union[str, Path]] = None) -> Optional[CostEstimate]", "returns": "Optional[CostEstimate]"},
       {"name": "default_pricing_csv", "signature": "() -> Optional[Path]", "returns": "Optional[Path]"},
-      {"name": "get_token_metrics", "signature": "(text, model, pricing_csv) -> TokenMetrics", "returns": "TokenMetrics"}
+      {"name": "get_token_metrics", "signature": "(text: str, model: str = \"claude-sonnet-4-20250514\", pricing_csv: Optional[Path] = None) -> TokenMetrics", "returns": "TokenMetrics"}
     ]
   }
 }
@@ -19,62 +21,80 @@
 % You are an expert Python engineer. Create a `token_counter` module for token counting and cost estimation.
 
 % Role & Scope
-A utility module that counts tokens and looks up model context windows using litellm, and estimates costs from pricing CSV data. Used by the PDD server for prompt/context analysis.
+A utility module that counts tokens, looks up model limits via litellm, and estimates costs from pricing CSV data. Used by the PDD server for prompt/context analysis.
 
 <include>context/python_preamble.prompt</include>
 
 % Requirements
 1. Function: `count_tokens(text: str, model: str = "gpt-4o") -> int`
    - Use `litellm.token_counter(model=model, messages=[{"role": "user", "content": text}])`
-   - Fall back to tiktoken cl100k_base encoding if litellm raises any exception
-   - Return 0 for empty text
+   - Protect all litellm calls with a daemon-thread timeout (default 5.0s, configured via package-internal `_LITELLM_CALL_TIMEOUT_SEC` to prevent blocking OAuth provider-detection hangs).
+   - Fall back to tiktoken cl100k_base encoding if litellm raises any exception or times out.
+   - Return 0 for empty or None text.
+
+1a. Function: `count_tokens_for_messages(messages: Any, model: str = "gpt-4o") -> int`
+   - Use `litellm.token_counter` with the provided messages list.
+   - Protect with the daemon-thread timeout, falling back to tiktoken cl100k_base on error/timeout.
+   - Best-effort flattening of messages to a single string on fallback.
+
 2. Function: `get_context_limit(model: str) -> Optional[int]`
-   - Use `litellm.get_model_info(model)["max_input_tokens"]` to look up the input context window
-   - Return `None` if litellm raises any exception (unknown model — caller should skip validation)
-   - Do NOT use a hardcoded MODEL_CONTEXT_LIMITS dict
+   - Use `litellm.get_model_info(model)["max_input_tokens"]`.
+   - Protect with the daemon-thread timeout.
+   - Return `None` if litellm raises any exception or times out (caller should skip context-window validation).
+   - Do NOT use a hardcoded MODEL_CONTEXT_LIMITS dict.
+
+2a. Function: `get_max_output_tokens(model: str) -> Optional[int]`
+   - Get the max completion token budget via `litellm.get_model_info(model)["max_output_tokens"]`.
+   - Protect with the daemon-thread timeout; return None if unknown, times out, raises, or if limit <= 0.
+
 3. Function: `estimate_cost(token_count, model, pricing_csv) -> Optional[CostEstimate]`
-   - Preserve this existing input-only API for current callers
-   - Treat `token_count` as input tokens and do not require callers to provide output tokens
-   - Accept `pricing_csv` as either a `pathlib.Path` or a string path
-   - Use rows with a valid input rate even when an older CSV lacks an output rate
+   - Preserve this input-only API for current callers (treating `token_count` as input tokens).
+   - Accept `pricing_csv` as either a `pathlib.Path` or a string path.
+   - Use rows with a valid input rate even when an older CSV lacks an output rate.
+
 4. Function: `estimate_completion_cost(input_tokens, predicted_output_tokens, model, pricing_csv) -> Optional[CostEstimate]`
-   - Use `(input_tokens / 1_000_000) * input_rate + (predicted_output_tokens / 1_000_000) * output_rate`
-   - Return input cost, output cost, and total cost for deterministic pre-flight previews
-   - Accept `pricing_csv` as either a `pathlib.Path` or a string path
-   - When `pricing_csv` is None, resolve the canonical CSV via `default_pricing_csv()` so previews work without an explicit path; an explicitly supplied path is used as-is and never silently replaced by the default
-   - Require both valid input and valid output rates; return None when output pricing is absent
+   - Use `(input_tokens / 1_000_000) * input_rate + (predicted_output_tokens / 1_000_000) * output_rate`.
+   - Require both valid input and valid output rates; return None when output pricing is absent or None.
+   - Accept `pricing_csv` as either a `pathlib.Path` or a string path.
+   - When `pricing_csv` is None, resolve the canonical CSV via `default_pricing_csv()`; an explicitly supplied path is used as-is and never replaced by the default.
+
 4a. Function: `default_pricing_csv() -> Optional[pathlib.Path]`
-   - Return the first existing pricing CSV in order: `$HOME/.pdd/llm_model.csv`, then `<cwd>/.pdd/llm_model.csv`, then the bundled `pdd/data/llm_model.csv` (resolve the bundled path relative to this module: `pdd/server/` -> `pdd/data/`)
-   - Return None when none exist, preserving the "cost is explicitly unknown" contract
-   - Only `estimate_completion_cost` falls back to this default; `estimate_cost` and `get_token_metrics` keep treating a None `pricing_csv` as "no pricing"
-5. Function: `get_token_metrics(text, model, pricing_csv) -> TokenMetrics` combining all metrics
-6. Dataclass `CostEstimate`: input_cost, output_cost, total_cost, model, matched_model, tokens, input_tokens, output_tokens, cost_per_million, input_cost_per_million, output_cost_per_million, currency (default USD)
-   - Preserve existing caller expectations for `input_cost`, `tokens`, and `cost_per_million`
-   - For input-only estimates, `tokens` remains the input token count and `cost_per_million` remains the input rate
-7. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate
-8. Both dataclasses have `to_dict()` methods for serialization
-9. `CostEstimate.to_dict()` includes all new input/output/total fields and preserves legacy keys so existing API models and tests remain compatible
-   - Also expose `input_rate_per_million` and `output_rate_per_million` keys (aliases of `input_cost_per_million`/`output_cost_per_million`) so estimate-mode consumers that read per-million rates work against the single canonical `CostEstimate`
-10. Pricing loaded from CSV with columns: model, input, output
-   - `input` and `output` are USD costs per million tokens
-   - Missing, blank, or invalid input pricing makes that row unavailable for cost estimation
-   - Missing, blank, or invalid output pricing makes that row unavailable for output-inclusive completion estimates, but must not break the legacy input-only `estimate_cost` API
-   - Explicit zero input or output pricing is valid known pricing, not unknown pricing
-   - Do not infer prices from another row when a row is malformed
-11. Model matching for cost: exact match first, then conservative partial/substring match against valid priced rows only
-12. Unknown model pricing returns None; do NOT fall back to default model prices because that invents a cost
-13. Unknown models, missing pricing CSVs, and unavailable pricing rows still allow token counts and context metrics through `get_token_metrics`, but `cost_estimate` is explicitly None
-14. Cache pricing data with lru_cache; do NOT cache litellm calls (litellm has its own cache)
+   - Return the first existing pricing CSV in order: `$HOME/.pdd/llm_model.csv`, then `<cwd>/.pdd/llm_model.csv`, then the bundled `pdd/data/llm_model.csv` (resolved relative to this module: `pdd/server/` -> `pdd/data/`).
+   - Return None when none exist.
+   - Only `estimate_completion_cost` falls back to this default; `estimate_cost` and `get_token_metrics` keep treating a None `pricing_csv` as "no pricing".
+
+5. Function: `get_token_metrics(text, model, pricing_csv) -> TokenMetrics` combining all metrics.
+
+6. Dataclass `CostEstimate`: input_cost, output_cost, total_cost, model, matched_model, tokens, input_tokens, output_tokens, cost_per_million, input_cost_per_million, output_cost_per_million, currency (default USD).
+   - Populate compatibility/default fields during initialization if not provided (e.g. `total_cost = input_cost + output_cost`, `matched_model = model`, `input_tokens = tokens`, `output_tokens = 0`, `input_cost_per_million = cost_per_million`).
+
+7. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate.
+
+8. Both dataclasses have `to_dict()` methods for serialization.
+   - Round floats in dictionary serialization (`input_cost`, `output_cost`, `total_cost` to 6 decimal places, `context_usage_percent` to 2 decimal places).
+   - `CostEstimate.to_dict()` includes legacy keys and exposes `input_rate_per_million` and `output_rate_per_million` (aliases of `input_cost_per_million`/`output_cost_per_million`).
+
+9. Pricing loaded from CSV with columns: provider, model, input, output, interactive_only.
+   - `input` and `output` are USD costs per million tokens.
+   - Missing, blank, or invalid input pricing makes that row unavailable for cost estimation.
+   - Missing, blank, or invalid output pricing makes that row unavailable for output-inclusive completion estimates, but must not break the legacy input-only `estimate_cost` API.
+   - Genuinely free/local rows (e.g. `lm_studio`, `ollama`, `local` providers/prefixes, or model containing "local"/"free") with zero rates are valid known free prices.
+   - Subscription-backed zero rates (e.g. `Github Copilot`, `OpenAI ChatGPT`, `Z.AI Coding Plan` providers/prefixes, or `interactive_only=True` rows with zero prices) are treated as unknown (return None cost estimate).
+   - Genuinely paid rows take precedence over zero-rate rows for the same model ID (first non-zero entry wins).
+   - Do not infer prices from another row when a row is malformed.
+
+10. Model matching for cost:
+    - Exact match first (case-insensitive).
+    - Conservative matching: allows matching a provider-qualified requested model (e.g. `openai/gpt-4o`) to an unqualified CSV model (e.g. `gpt-4o`), or base name with a numeric suffix (e.g. matching `gpt-4-0613` to `gpt-4`).
+    - MUST NOT allow a bare requested model name to borrow/match a provider-scoped CSV model (e.g. requested `gpt-4o` must NOT match `openai/gpt-4o` or `azure/gpt-4o`).
+    - Unknown model pricing returns None; do NOT fall back to default model prices.
+
+11. Unknown models, missing pricing CSVs, and unavailable pricing rows still allow token counts and context metrics through `get_token_metrics`, but `cost_estimate` is explicitly None.
+
+12. Cache pricing data loading with `lru_cache(maxsize=1)`. Do NOT cache litellm calls.
 
 % Dependencies
-- litellm: for token counting and context window lookup (primary)
+- litellm: for token counting, message token counting, and context window lookup (primary)
 - tiktoken: fallback for token counting only
-- CSV file at .pdd/llm_model.csv for pricing data using the PDD llm_model.csv shape with at least model,input,output
+- CSV file at .pdd/llm_model.csv for pricing data
 - Tests should use deterministic fixture CSV rows rather than relying on live user pricing files
-
-% Instructions
-- `get_context_limit` returning None means the model is unknown — callers must skip context validation, not raise an error
-- Context usage percent is None when context_limit is None
-- Input-only cost calculation: (token_count / 1_000_000) * input_cost_per_million
-- Completion cost calculation: input cost plus output cost using separate input and output rates
-- Context usage is percentage: (tokens / limit) * 100
