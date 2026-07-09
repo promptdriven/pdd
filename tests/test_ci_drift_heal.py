@@ -1302,6 +1302,18 @@ class TestHealModule:
             pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
             assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
 
+    @pytest.mark.parametrize("op", ["conflict", "fail_and_request_manual_merge"])
+    def test_manual_resolution_ops_are_skipped(self, op, capsys):
+        """Manual terminal sync states are not auto-healable CI failures."""
+        drift = DriftInfo("agentic_common", "python", op, "manual review required")
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is None
+        mock_run.assert_not_called()
+        assert f"manual resolution required for agentic_common: {op}" in capsys.readouterr().out
+
     @pytest.mark.parametrize("op", ["verify", "generate", "test", "crash"])
     def test_pr_scope_guard_env_reaches_broad_sync_fallback_ops(self, op):
         """#1403: the broad `pdd sync` fallback must receive the test_extend guard
@@ -1787,8 +1799,6 @@ class TestCommitAndPush:
 
     def test_commit_failure(self):
         """Returns False when git commit fails."""
-        call_count = [0]
-
         def mock_run(cmd, **kwargs):
             r = MagicMock()
             if cmd == ["git", "diff", "--cached", "--quiet"]:
@@ -2056,6 +2066,35 @@ class TestMain:
             result = main()
 
         assert result == 1
+
+    def test_pr_mode_manual_resolution_only_skips_without_failure_or_commit(self, capsys):
+        """PR CI can pass when every drift is a non-auto-healable manual state."""
+        drifts = (
+            [],
+            [
+                DriftInfo("agentic_checkup", "python", "conflict", "manual conflict"),
+                DriftInfo(
+                    "agentic_split_orchestrator",
+                    "python",
+                    "fail_and_request_manual_merge",
+                    "manual merge required",
+                ),
+            ],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(diff_base="origin/main...HEAD")
+
+        assert result == 0
+        mock_commit.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Auto-heal summary: healed=0 failed=0 skipped=2" in out
+        assert "unknown operation" not in out
 
     def test_commit_failure_returns_one(self):
         """Failed commit returns 1."""
@@ -3966,7 +4005,7 @@ class TestMetadataFinalizationBoundary:
                 return True
             raise AssertionError(f"Unexpected command: {cmd}")
 
-        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])) as mock_detect, \
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
              patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False):
             result = main(skip_ci=True)
@@ -4344,8 +4383,8 @@ class TestMainDryRunJson:
 
 
 class TestHealModuleConflict:
-    def test_conflict_operation_returns_false(self):
-        """conflict is not a healable operation; heal_module must refuse."""
+    def test_conflict_operation_returns_none(self):
+        """conflict is a manual terminal state, not an auto-heal failure."""
         drift = DriftInfo(
             "auth", "python", "conflict",
             "Code and prompt changed together; manual conflict resolution required",
@@ -4354,7 +4393,7 @@ class TestHealModuleConflict:
         )
         with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             result = heal_module(drift, {"PDD_FORCE": "1"})
-        assert result is False
+        assert result is None
         mock_run.assert_not_called()
 
 

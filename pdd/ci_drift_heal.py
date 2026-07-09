@@ -55,6 +55,7 @@ _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
 _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
+_MANUAL_RESOLUTION_OPERATIONS = {"conflict", "fail_and_request_manual_merge"}
 
 
 # ---------------------------------------------------------------------------
@@ -1593,6 +1594,11 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             label=f"pdd sync {drift.basename}",
         )
         return ok if ok else False
+    if op in _MANUAL_RESOLUTION_OPERATIONS:
+        console.print(
+            f"[yellow]manual resolution required for {drift.basename}: {op}[/yellow]"
+        )
+        return None
 
     console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
     return False
