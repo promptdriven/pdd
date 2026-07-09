@@ -2460,7 +2460,9 @@ class TestRunDryRunValidation:
         assert len(errors) == 1
         assert "bad: prompt contract preflight failed" in errors[0]
         assert "missing_from_context" in errors[0]
-        mock_dry_run.assert_called_once_with("bad", tmp_path, quiet=True)
+        mock_dry_run.assert_called_once_with(
+            "bad", tmp_path, quiet=True, local=False
+        )
         mock_llm.assert_not_called()
 
     def test_dry_run_success_allows_legacy_no_self_include_prompt_contract(

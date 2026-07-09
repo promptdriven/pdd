@@ -86,10 +86,21 @@ def is_context_json_invocation(arguments: List[str]) -> bool:
     return False
 
 
+def is_continuous_sync_json_invocation(arguments: List[str]) -> bool:
+    """Return True for continuous-sync JSON report commands."""
+    if "--json" not in arguments:
+        return False
+    pairs = set(zip(arguments, arguments[1:]))
+    if any(command in arguments for command in ("reconcile", "sync", "update")):
+        return True
+    return ("change", "--preflight") in pairs or ("--preflight", "change") in pairs
+
+
 def is_machine_json_invocation(arguments: List[str]) -> bool:
     """Return whether stdout must remain machine-parseable JSON only."""
     return (
         is_checkup_subcommand_json_invocation(arguments)
         or is_checkup_source_set_json_invocation(arguments)
         or is_context_json_invocation(arguments)
+        or is_continuous_sync_json_invocation(arguments)
     )

@@ -72,6 +72,7 @@ SOURCE_PATHS=(
     data
     prompts
     context
+    user_stories
     examples
     demos
     research

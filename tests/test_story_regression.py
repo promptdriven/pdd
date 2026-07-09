@@ -16,11 +16,12 @@ R7  ``has_regression_test`` predicate True/False -> TestHasRegressionTest.
 R8  MUST NOT execute test bodies / no e2e side effects -> TestNoExecution.
 R9  Graceful degradation (absent tests dir, unparseable module) -> TestGracefulDegradation.
 Marker registration: ``pytest -m story`` selects exactly story-backed tests
-    -> TestMarkerSelection; pytest.ini registers the marker -> TestMarkerRegistration.
+    -> TestMarkerSelection; pyproject.toml registers the marker -> TestMarkerRegistration.
 Default-map plumbing (set/reset + bare module-level resolvers) -> TestDefaultMap.
 """
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -349,10 +350,15 @@ class TestGracefulDegradation:
 # --- marker registration / selection -------------------------------------------
 
 class TestMarkerRegistration:
-    def test_pytest_ini_registers_story_marker(self):
-        ini = Path(__file__).resolve().parents[1] / "pytest.ini"
-        text = ini.read_text(encoding="utf-8")
-        assert "story(story_id, story_hash):" in text
+    def test_pyproject_registers_story_marker(self):
+        pyproject = tomllib.loads(
+            (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        markers = pyproject["tool"]["pytest"]["ini_options"]["markers"]
+
+        assert any(marker.startswith("story(") for marker in markers)
 
 
 class TestMarkerSelection:
