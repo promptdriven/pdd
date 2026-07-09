@@ -35,6 +35,17 @@ _GITHUB_ISSUE_RE = re.compile(
 )
 
 
+def _mark_command_failed(ctx: click.Context) -> None:
+    """Mark handled command exceptions so the cli result-callback exits nonzero.
+
+    Mirrors ``pdd.commands.analysis._mark_command_failed`` (#1895): a command
+    that returns ``None`` on a handled error is otherwise treated as "no
+    results" by ``process_commands`` and the process exits 0.
+    """
+    if isinstance(getattr(ctx, "obj", None), dict):
+        ctx.obj["_command_failed"] = True
+
+
 def _estimate_mode_active(ctx: click.Context) -> bool:
     """Return whether the global dry-run cost estimate mode is active."""
     return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
@@ -795,7 +806,15 @@ def test(
                 raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..story_test_generation import generate_story_regression_test
 
-            generated = generate_story_regression_test(from_story, output=output)
+            try:
+                generated = generate_story_regression_test(from_story, output=output)
+            except (ValueError, FileNotFoundError) as exc:
+                # #1889: surface malformed-story / missing-contract failures as a
+                # clean, nonzero-exit ClickException instead of swallowing them
+                # via handle_error + return None (which exits 0 and hides the
+                # failure from CI). No traceback is shown; the message is
+                # preserved verbatim.
+                raise click.ClickException(str(exc)) from exc
             obj = ctx.obj or {}
             if not obj.get("quiet", False):
                 action = "generated" if generated.changed else "already current"
@@ -1016,5 +1035,11 @@ def test(
         if _is_estimate_only_result(e):
             return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        # #1889: mark the command failed so the cli result-callback exits
+        # nonzero. A bare `return None` is treated as "no results" (results is
+        # None -> normalized_results == []) by process_commands, so the None
+        # never triggers the nonzero-exit path and CI silently sees exit 0.
+        # This mirrors the #1895 convention for `detect --stories`.
+        _mark_command_failed(ctx)
         handle_error(e, "test", quiet)
         return None

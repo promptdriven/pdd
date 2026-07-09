@@ -7,6 +7,7 @@ import jsonschema
 import pytest
 
 from pdd.story_coverage import (
+    StoryCoverage,
     compute_story_coverage,
     emit_story_coverage,
     format_summary_line,
@@ -179,3 +180,51 @@ def test_emit_story_coverage_prints_and_appends_step_summary(tmp_path: Path, cap
     assert coverage.run_id == "run-456"
     assert capsys.readouterr().out == line + "\n"
     assert line in summary.read_text(encoding="utf-8")
+
+
+def _invalid_coverage() -> StoryCoverage:
+    """A structurally-impossible coverage payload the schema must reject."""
+    return StoryCoverage(
+        schema_version=1,
+        status="ok",
+        run_id="run-bad",
+        generated_at="2026-07-08T00:00:00Z",
+        story_count=1,
+        story_backed_test_count=1,
+        stories_covered=1,
+        story_coverage_pct=250.0,  # > 100, forbidden by the schema
+        pass_rate=5.0,  # > 1.0, forbidden by the schema
+        passing_test_count=1,
+    )
+
+
+def test_write_story_coverage_rejects_out_of_range_values(tmp_path: Path):
+    """write_story_coverage validates against the packaged schema (pdd#1889 V-F5)."""
+    with pytest.raises(jsonschema.ValidationError):
+        write_story_coverage(_invalid_coverage(), tmp_path, run_id="run-bad")
+
+    # Nothing is persisted when validation fails.
+    assert not (tmp_path / ".pdd" / "evidence" / "stories" / "coverage.latest.json").exists()
+
+
+def test_write_story_coverage_accepts_honest_not_applicable(tmp_path: Path):
+    """The steady-state honest artifact still validates and is written."""
+    stories = tmp_path / "user_stories"
+    tests = tmp_path / "tests"
+    stories.mkdir()
+    tests.mkdir()
+    _write_story(stories, "checkout_flow")
+    _write_story_test(tests, "checkout_flow")
+    coverage = compute_story_coverage(tmp_path, stories_dir=stories, tests_dir=tests)
+
+    latest = write_story_coverage(coverage, tmp_path, run_id="run-ok")
+
+    assert latest.exists()
+
+
+def test_schema_status_enum_can_express_failure():
+    """The schema must be able to record an honest failure verdict (pdd#1889 V-F5)."""
+    enum = _story_coverage_schema()["properties"]["status"]["enum"]
+    assert "not_applicable" in enum
+    assert "ok" in enum
+    assert "failing" in enum

@@ -178,6 +178,15 @@ def _write_core_dump(
     if not ctx.obj.get("core_dump"):
         return
 
+    # Skip the auto-snapshot when the run's only error(s) are deliberate,
+    # user-facing click errors (usage mistakes). Framing a usage mistake as a
+    # reportable "bug" snapshot — and littering .pdd/core_dumps for it — is
+    # noise; genuinely unexpected faults (no ``deliberate`` tag) still snapshot
+    # so real bugs stay debuggable (pdd#1889 C-F8).
+    recorded_errors = get_core_dump_errors()
+    if recorded_errors and all(e.get("deliberate") for e in recorded_errors):
+        return
+
     try:
         core_dump_dir = Path.cwd() / ".pdd" / "core_dumps"
         core_dump_dir.mkdir(parents=True, exist_ok=True)

@@ -7,11 +7,18 @@ from typing import Optional
 
 import click
 
-from ..story_regression import has_regression_test
+from ..story_regression import build_story_map
+from ..story_regression_gate import (
+    STATUS_MISSING,
+    STATUS_PASSING,
+    STATUS_STALE,
+    evaluate_story_regression,
+)
 from ..user_story_tests import (
     STORY_PREFIX,
     STORY_SUFFIX,
     _parse_story_prompt_metadata,
+    _resolve_stories_dir,
     _slugify_story_name,
     cache_story_prompt_links,
     discover_story_files,
@@ -192,7 +199,7 @@ def story() -> None:
 @click.option("--generate-regression", is_flag=True, help="Print the pdd test --from-story handoff command.")
 @click.option("--cross-devunit", is_flag=True, help="Document that multiple linked dev units are intentional.")
 @click.option("--from-changed-files", is_flag=True, help="Use currently changed .prompt files from git status.")
-def add_story(
+def add_story(  # pylint: disable=too-many-branches
     source: Optional[str],
     inline_text: Optional[str],
     title: Optional[str],
@@ -255,6 +262,16 @@ def add_story(
             )
         return
 
+    # #1889: `--update` must target an existing story. If we reach here with
+    # --update set, the update branch above did not fire (no story file for this
+    # slug), so fail fast with a clean error BEFORE any LLM-backed generation
+    # (fresh authoring otherwise hangs on interactive device-auth offline).
+    if update:
+        raise click.ClickException(
+            f"No existing story to update at {proposed_path}; "
+            "omit --update to create it."
+        )
+
     issue_source = source or _inline_source_path(inline_text or "", title)
     success, message, _cost, _model, _story_path, _linked_refs = generate_user_story(
         prompt_files=prompt_files,
@@ -280,6 +297,35 @@ def add_story(
 story_cli = story
 
 
+# Presence/freshness-honest labels for ``--with-regression-status``. This
+# surface is static (no test execution), so it must never print "passing":
+# pass/fail is verified separately by the story lane (``pytest -m story``).
+_REGRESSION_STATUS_LABELS = {
+    STATUS_MISSING: "missing",
+    STATUS_STALE: "stale",
+    STATUS_PASSING: "has-test",
+}
+
+
+def _project_tests_dir(stories_dir: str) -> Path:
+    """Resolve the *project's* tests dir from the resolved ``--stories-dir``.
+
+    The ``tests/`` sibling of the stories-dir *root* (parent of ``--stories-dir``
+    / the resolved ``PDD_USER_STORIES_DIR``), i.e. under the project root.
+
+    Anchoring on the stories-dir root -- not each story file's immediate parent,
+    not ``Path.cwd()`` and not ``pdd``'s install dir -- means pip-installed users
+    (and users passing a custom ``--stories-dir`` or running from a subdirectory)
+    scan their own suite. Crucially, a *nested* story
+    (``user_stories/<sub>/story__*.md``) still maps back to the project ``tests/``
+    dir rather than a spurious ``user_stories/<sub>/tests`` (pdd#1889/#1951).
+    Falls back to ``cwd`` only for a bare stories dir with no parent directory.
+    """
+    stories_root = _resolve_stories_dir(stories_dir)
+    root = stories_root.parent if stories_root != Path("") else Path.cwd()
+    return root / "tests"
+
+
 @story.command("list")
 @click.option("--stories-dir", default="user_stories", type=click.Path(file_okay=False))
 @click.option("--with-regression-status", is_flag=True)
@@ -295,17 +341,51 @@ def list_stories(stories_dir: str, with_regression_status: bool) -> None:
         headers.append("Regression")
     click.echo(" | ".join(headers))
 
+    # Resolve the project tests dir once from the stories-dir root, so every
+    # story (including nested ``user_stories/<sub>/story__*.md``) is classified
+    # against the real project suite rather than a per-story-parent ``tests`` dir
+    # (pdd#1951). Cache the collected story<->test map so a many-story listing
+    # does not re-run pytest collection once per story.
+    project_tests_dir = _project_tests_dir(stories_dir) if with_regression_status else None
+    story_maps: dict[Path, object] = {}
+
     for story_path in story_paths:
+        story_path = Path(story_path)
         try:
-            story_text = Path(story_path).read_text(encoding="utf-8")
+            story_text = story_path.read_text(encoding="utf-8")
         except OSError:
             story_text = ""
         prompt_refs = _parse_story_prompt_metadata(story_text)
-        cells = [Path(story_path).stem, ", ".join(prompt_refs) if prompt_refs else "-"]
+        cells = [story_path.stem, ", ".join(prompt_refs) if prompt_refs else "-"]
         if with_regression_status:
-            status = "passing" if has_regression_test(story_id(story_path)) else "missing"
-            cells.append(status)
+            cells.append(
+                _regression_status_label(story_path, project_tests_dir, story_maps)
+            )
         click.echo(" | ".join(cells))
+
+
+def _regression_status_label(
+    story_path: Path, tests_dir: Path, story_maps: dict
+) -> str:
+    """Presence/freshness-honest regression label (missing/has-test/stale).
+
+    Reuses the gate's classification so hash-freshness is honored ("stale" is
+    reachable) and never claims a test passed — the gate does not execute it.
+    ``tests_dir`` is the project tests dir resolved once from the stories-dir
+    root (see :func:`_project_tests_dir`), shared across all stories in a listing
+    so nested stories anchor back to the real project suite.
+    """
+    smap = story_maps.get(tests_dir)
+    if smap is None:
+        smap = build_story_map(tests_dir)
+        story_maps[tests_dir] = smap
+    try:
+        evaluation = evaluate_story_regression(
+            story_path, tests_dir=tests_dir, story_map=smap
+        )
+    except OSError:
+        return _REGRESSION_STATUS_LABELS[STATUS_MISSING]
+    return _REGRESSION_STATUS_LABELS.get(evaluation.status, evaluation.status)
 
 
 @story.command("link")
@@ -318,6 +398,16 @@ def link_story(story_file: str, prompts: tuple[str, ...], prompts_dir: Optional[
     if not story_path.is_file():
         raise click.ClickException(f"Story file not found: {story_file}")
     _validate_story_inside_user_stories(story_path)
+
+    # #1889: validate explicit --prompt paths BEFORE touching the story. A
+    # nonexistent prompt was previously written into the metadata as a dangling
+    # basename while dropping the story's existing valid links -- and still
+    # exited 0. Fail loudly and leave the story file untouched.
+    missing_prompts = [prompt for prompt in prompts if not Path(prompt).is_file()]
+    if missing_prompts:
+        raise click.ClickException(
+            "Prompt file(s) not found: " + ", ".join(missing_prompts)
+        )
 
     success, message, _cost, _model, _linked_refs = cache_story_prompt_links(
         story_file=str(story_path),
