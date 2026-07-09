@@ -1,23 +1,24 @@
 {
-  "pdd_version": "0.0.249",
-  "timestamp": "2026-05-25T04:21:57.728100+00:00",
-  "command": "example",
-  "prompt_hash": "dd8b2c15b0b0838f376aab4114efe7fcd943ab2d82489b5d168f93df09a1ae19",
-  "code_hash": "00f98fc9ec2180d5ff77cf6cf800c078281a530ccca249b1d1b8f90306345b40",
+  "pdd_version": "0.0.296.dev0",
+  "timestamp": "2026-07-09T09:08:20.356940+00:00",
+  "command": "fix",
+  "prompt_hash": "09fe741d2541f30d7ece2447ba91fa8cf91bb4c9ef937810abe6e622649b68df",
+  "code_hash": "10fd5c8329d6f953cf45b6ef7b792fcf750a23053fa3e7a1176d1ec3cc1d8b66",
   "example_hash": "550e750fb041fb73dc92462d4f266bc999102ddd8e4efd3b40dbab0bb1d0d879",
-  "test_hash": "7749c5ad23df256dd0ef597a31ea6cec04be766d7e62d9ad9f01dc37d6840b46",
+  "test_hash": "f7d9194cb1dd0aa826d1f9e5a3746b67e3df339b4fcef0c0c729910b2fdda91d",
   "test_files": {
-    "test_ci_drift_heal.py": "7749c5ad23df256dd0ef597a31ea6cec04be766d7e62d9ad9f01dc37d6840b46"
+    "test_ci_drift_heal.py": "f7d9194cb1dd0aa826d1f9e5a3746b67e3df339b4fcef0c0c729910b2fdda91d",
+    "test_ci_drift_heal_e2e.py": "dfcd225cc5a6442ba11e9cd41b79568a57d97b7804ee6ea66f4191aa068478e3"
   },
   "include_deps": {
-    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/agentic_sync_runner_example.py": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-    "context/architecture_sync_example.py": "3dbf29b2f53c4ad341c5722e2778ce1c3ffde318e1b2c0161c343e28505c32fa",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
     "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad"
+    "context/sync_determine_operation_example.py": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5"
   }
 }
