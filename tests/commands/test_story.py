@@ -967,6 +967,51 @@ class TestStoryLink:
         assert "calc_python.prompt" in content
         assert "adder_python.prompt" in content
 
+    def test_link_with_prompts_dir_preserves_basename_ref(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """pdd#1951: relinking with ``--prompts-dir`` must not drop an existing
+        link stored as a *basename* relative to that prompts root.
+
+        Metadata written under ``--prompts-dir prompts`` stores refs like
+        ``calc_python.prompt`` (not ``prompts/calc_python.prompt``). The
+        preservation fallback previously only kept refs that were files relative
+        to the run CWD, so a bare basename resolved to nothing and the valid link
+        was silently destroyed on relink -- the exact data loss this PR hardens.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            (root / "prompts").mkdir(parents=True, exist_ok=True)
+            (root / "prompts" / "calc_python.prompt").write_text("% calc\n", encoding="utf-8")
+            (root / "prompts" / "adder_python.prompt").write_text("% adder\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            # Basename ref, as written when metadata was created with --prompts-dir.
+            story_file.write_text(
+                "## Story\n\n<!-- pdd-story-prompts: calc_python.prompt -->\n",
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompts-dir", "prompts",
+                    "--prompt", "prompts/adder_python.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+            assert result.exit_code == 0, result.output
+            content = story_file.read_text(encoding="utf-8")
+            # The pre-existing basename link survives alongside the new one.
+            assert "calc_python.prompt" in content, (
+                f"existing --prompts-dir link dropped on relink: {content!r}"
+            )
+            assert "adder_python.prompt" in content, content
+
 
 # ---------------------------------------------------------------------------
 # Scenario 8b: --with-regression-status honesty + project-root resolution (#1889)
@@ -1077,3 +1122,37 @@ class TestStoryListRegressionHonesty:
             f"custom stories-dir test not found -> resolved to cwd, not project root: {result.output!r}"
         )
         assert "has-test" in result.output.lower(), result.output
+
+    def test_nested_story_resolves_project_tests_dir(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A *nested* story (``user_stories/<sub>/story__*.md``) must anchor back
+        to the project ``tests/`` dir, not the story's own parent (which would
+        scan a spurious ``user_stories/<sub>/tests`` and report a false
+        'missing'). Regression for pdd#1951.
+        """
+        story_path = tmp_path / "user_stories" / "nested" / "story__baz.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: baz\n\n## Story\n\nBaz works.\n", encoding="utf-8"
+        )
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_baz.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="baz")\n'
+            "def test_baz():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        out = result.output.lower()
+        assert "baz" in out
+        assert "missing" not in out, (
+            f"nested story resolved to per-parent tests dir, not project root: {result.output!r}"
+        )
+        assert "has-test" in out, f"expected 'has-test' for nested story, got: {result.output!r}"

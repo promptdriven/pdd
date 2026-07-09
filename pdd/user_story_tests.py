@@ -454,16 +454,27 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     # all (merged with still-resolvable existing refs) without spending an LLM
     # call second-guessing the caller.
     if explicit_prompt_files and force_relink:
+        # #1889/#1951: when explicit --prompt inputs are passed, `prompt_files` is
+        # the explicit-only pool, so an already-linked ref that isn't part of this
+        # operation would fail to resolve against it and be silently dropped --
+        # destroying a valid prior link. Resolve existing refs against the FULL
+        # discovered project prompt pool (from prompts_dir), then fall back to the
+        # ref as a path (relative to CWD) and to prompts_root/ref. The prompts_root
+        # fallback is load-bearing for refs stored relative to --prompts-dir (a
+        # bare basename like `calc_python.prompt` for `prompts/calc_python.prompt`),
+        # which is neither in the explicit pool nor a file relative to CWD.
+        resolution_pool = discover_prompt_files(
+            prompts_dir, include_llm=include_llm_prompts
+        )
         existing_paths: List[Path] = []
         for ref in _parse_story_prompt_metadata(story_content):
-            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
-            # #1889: when explicit --prompt inputs are passed, `prompt_files` is
-            # the explicit-only pool, so an already-linked ref that isn't part of
-            # this operation would fail to resolve and be silently dropped. Keep
-            # any existing ref that still points to a real file on disk (relative
-            # to the run CWD) so a relink never destroys valid prior links.
-            if resolved is None and ref and Path(ref).is_file():
-                resolved = Path(ref)
+            resolved = _resolve_prompt_path(ref, resolution_pool, prompts_root)
+            if resolved is None and ref:
+                candidate = Path(ref)
+                if candidate.is_file():
+                    resolved = candidate
+                elif prompts_root is not None and (prompts_root / ref).is_file():
+                    resolved = prompts_root / ref
             if resolved:
                 existing_paths.append(resolved)
         linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)

@@ -18,6 +18,7 @@ from ..user_story_tests import (
     STORY_PREFIX,
     STORY_SUFFIX,
     _parse_story_prompt_metadata,
+    _resolve_stories_dir,
     _slugify_story_name,
     cache_story_prompt_links,
     discover_story_files,
@@ -306,19 +307,22 @@ _REGRESSION_STATUS_LABELS = {
 }
 
 
-def _project_tests_dir(story_path: Path) -> Path:
-    """Resolve the *project's* tests dir from a story path (mirrors
-    ``story_test_generation._default_output_for``): the ``tests/`` sibling of the
-    directory that holds the story (its stories-dir), i.e. under the project root.
+def _project_tests_dir(stories_dir: str) -> Path:
+    """Resolve the *project's* tests dir from the resolved ``--stories-dir``.
 
-    Anchoring on the story's own parent dir (not ``Path.cwd()`` and not ``pdd``'s
-    install dir) means pip-installed users -- and users passing a custom
-    ``--stories-dir`` or running from a subdirectory -- scan their own suite, so
-    linked tests are actually found. Falls back to ``cwd`` only for a story that
-    has no parent directory at all (a bare filename).
+    The ``tests/`` sibling of the stories-dir *root* (parent of ``--stories-dir``
+    / the resolved ``PDD_USER_STORIES_DIR``), i.e. under the project root.
+
+    Anchoring on the stories-dir root -- not each story file's immediate parent,
+    not ``Path.cwd()`` and not ``pdd``'s install dir -- means pip-installed users
+    (and users passing a custom ``--stories-dir`` or running from a subdirectory)
+    scan their own suite. Crucially, a *nested* story
+    (``user_stories/<sub>/story__*.md``) still maps back to the project ``tests/``
+    dir rather than a spurious ``user_stories/<sub>/tests`` (pdd#1889/#1951).
+    Falls back to ``cwd`` only for a bare stories dir with no parent directory.
     """
-    stories_dir = story_path.parent
-    root = stories_dir.parent if stories_dir != Path("") else Path.cwd()
+    stories_root = _resolve_stories_dir(stories_dir)
+    root = stories_root.parent if stories_root != Path("") else Path.cwd()
     return root / "tests"
 
 
@@ -337,8 +341,12 @@ def list_stories(stories_dir: str, with_regression_status: bool) -> None:
         headers.append("Regression")
     click.echo(" | ".join(headers))
 
-    # Cache the collected story<->test map per resolved tests dir so a many-story
-    # listing does not re-run pytest collection once per story.
+    # Resolve the project tests dir once from the stories-dir root, so every
+    # story (including nested ``user_stories/<sub>/story__*.md``) is classified
+    # against the real project suite rather than a per-story-parent ``tests`` dir
+    # (pdd#1951). Cache the collected story<->test map so a many-story listing
+    # does not re-run pytest collection once per story.
+    project_tests_dir = _project_tests_dir(stories_dir) if with_regression_status else None
     story_maps: dict[Path, object] = {}
 
     for story_path in story_paths:
@@ -350,17 +358,23 @@ def list_stories(stories_dir: str, with_regression_status: bool) -> None:
         prompt_refs = _parse_story_prompt_metadata(story_text)
         cells = [story_path.stem, ", ".join(prompt_refs) if prompt_refs else "-"]
         if with_regression_status:
-            cells.append(_regression_status_label(story_path, story_maps))
+            cells.append(
+                _regression_status_label(story_path, project_tests_dir, story_maps)
+            )
         click.echo(" | ".join(cells))
 
 
-def _regression_status_label(story_path: Path, story_maps: dict) -> str:
+def _regression_status_label(
+    story_path: Path, tests_dir: Path, story_maps: dict
+) -> str:
     """Presence/freshness-honest regression label (missing/has-test/stale).
 
     Reuses the gate's classification so hash-freshness is honored ("stale" is
     reachable) and never claims a test passed — the gate does not execute it.
+    ``tests_dir`` is the project tests dir resolved once from the stories-dir
+    root (see :func:`_project_tests_dir`), shared across all stories in a listing
+    so nested stories anchor back to the real project suite.
     """
-    tests_dir = _project_tests_dir(story_path)
     smap = story_maps.get(tests_dir)
     if smap is None:
         smap = build_story_map(tests_dir)
