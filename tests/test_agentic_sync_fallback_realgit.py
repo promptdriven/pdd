@@ -236,7 +236,14 @@ def test_workflow_fallback_only_module_reaches_sync_plan(tmp_path, monkeypatch):
         "comments_url": "",
     })
 
-    def fake_dry_run(modules, project_root, quiet=False, verbose=False, reasoning_time=None):
+    def fake_dry_run(
+        modules,
+        project_root,
+        quiet=False,
+        verbose=False,
+        reasoning_time=None,
+        local=False,
+    ):
         # The real dry-run shells out to `pdd` and needs the module's files on disk;
         # new_module exists only as an architecture entry, so stub a passing validation.
         return True, {m: project_root for m in modules}, {m: m for m in modules}, [], 0.0
