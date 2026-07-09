@@ -14,6 +14,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import re
@@ -1789,6 +1790,94 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+# ---------------------------------------------------------------------------
+# Issue #1936: run-scoped permanent-provider-failure registry
+# ---------------------------------------------------------------------------
+# When a provider fails with a *permanent* error (auth / quota / billing /
+# credential-limit etc.), retrying it later in the same run is futile — the
+# credential will not heal before the process exits. `run_agentic_task` already
+# falls through to the next provider *within a single call*, but each call
+# rebuilds its candidate list from scratch, so:
+#   * a multi-step workflow (e.g. the 12-step change orchestrator) re-attempted a
+#     dead provider on every step, paying its auth-failure timeout each time; and
+#   * a call whose only feasible candidate was the dead provider (e.g. cloud
+#     one-session sync where staged Codex auth is present but expired) had
+#     nowhere to fall through to and failed the whole task.
+# This registry records permanently-failed providers for the remainder of the
+# run so every later candidate list drops them. It is mirrored into the
+# `PDD_AGENTIC_DISABLED_PROVIDERS` env var (comma-separated `provider:class`
+# tokens) so re-entrant `pdd` subprocesses spawned after the failure — the
+# one-session sync agent shells out to `pdd generate` / `pdd test` — inherit the
+# same skip-list. `PDD_AGENTIC_PROVIDER` stays the hard preference filter; this
+# registry only ever *removes* a provider that already proved dead this run, it
+# never adds one, so a staged-auth hint (`_has_codex_auth_file` /
+# `PDD_CODEX_AUTH_AVAILABLE`) cannot re-pin a provider once its auth is known bad.
+PDD_AGENTIC_DISABLED_PROVIDERS_ENV: str = "PDD_AGENTIC_DISABLED_PROVIDERS"
+_disabled_providers_lock = threading.Lock()
+_disabled_providers: Dict[str, str] = {}
+
+
+def _parse_disabled_providers_env() -> Dict[str, str]:
+    """Parse `PDD_AGENTIC_DISABLED_PROVIDERS` into {provider: classification}."""
+    parsed: Dict[str, str] = {}
+    raw = os.environ.get(PDD_AGENTIC_DISABLED_PROVIDERS_ENV, "") or ""
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        provider, _, classification = token.partition(":")
+        provider = provider.strip()
+        if provider:
+            parsed.setdefault(provider, classification.strip() or "permanent")
+    return parsed
+
+
+def get_disabled_providers() -> Dict[str, str]:
+    """Return providers disabled for this run as {provider: classification}.
+
+    Unions the in-process registry with the inherited
+    `PDD_AGENTIC_DISABLED_PROVIDERS` env var so both a parent `pdd` process and
+    any re-entrant `pdd` subprocess honor the same permanent-failure skip-list.
+    """
+    with _disabled_providers_lock:
+        merged = dict(_parse_disabled_providers_env())
+        for provider, classification in _disabled_providers.items():
+            merged.setdefault(provider, classification)
+    return merged
+
+
+def mark_provider_permanently_failed(
+    provider: str, classification: Optional[str]
+) -> None:
+    """Record *provider* as permanently failed for the remainder of the run.
+
+    Idempotent: the first classification recorded for a provider wins. Writes
+    through to `PDD_AGENTIC_DISABLED_PROVIDERS` so `pdd` subprocesses spawned
+    afterward inherit the skip-list.
+    """
+    if not provider:
+        return
+    token = (classification or "permanent").strip() or "permanent"
+    with _disabled_providers_lock:
+        _disabled_providers.setdefault(provider, token)
+        current = _parse_disabled_providers_env()
+        current.setdefault(provider, token)
+        os.environ[PDD_AGENTIC_DISABLED_PROVIDERS_ENV] = ",".join(
+            f"{name}:{cls}" for name, cls in current.items()
+        )
+
+
+def reset_disabled_providers() -> None:
+    """Clear the run-scoped permanent-failure registry (env var + memory).
+
+    Provided for test isolation and for callers that deliberately start a fresh
+    provider-health epoch within one process.
+    """
+    with _disabled_providers_lock:
+        _disabled_providers.clear()
+    os.environ.pop(PDD_AGENTIC_DISABLED_PROVIDERS_ENV, None)
 
 
 TASK_CLASS_SINGLE_FILE: str = "single_file"
@@ -4997,6 +5086,49 @@ def run_agentic_task(
                     f"selected_harness_unavailable:{routing_config.harness}"
                 )
 
+    # Issue #1936: drop providers that already failed permanently earlier in this
+    # run so a dead provider is not re-burned per step, and the
+    # single_provider_attempt / cloud one-session paths fall through to a still
+    # healthy provider. Applied AFTER the PDD_AGENTIC_PROVIDER preference filter
+    # (candidates already reflect the hard filter) and BEFORE the
+    # single_provider_attempt truncation so the one feasible provider that
+    # survives is a healthy one, not a known-dead first entry.
+    disabled_providers = get_disabled_providers()
+    if disabled_providers:
+        healthy = [p for p in candidates if p not in disabled_providers]
+        if healthy != candidates:
+            dropped = [p for p in candidates if p in disabled_providers]
+            if not healthy:
+                # Every feasible provider has already failed permanently this
+                # run. Fail fast with an aggregated, per-provider reason instead
+                # of re-attempting a dead provider (or surfacing the generic
+                # "no agent providers are available" message, which would hide
+                # that the providers exist but are auth-dead).
+                detail = "; ".join(
+                    f"{p}: {disabled_providers[p]}" for p in dropped
+                )
+                msg = (
+                    "All agent providers failed permanently earlier this run: "
+                    f"{detail}"
+                )
+                if not quiet:
+                    console.print(f"[bold red]{msg}[/bold red]")
+                _emit_routing_outcome(
+                    routing_record,
+                    cwd=cwd,
+                    success=False,
+                    cost_usd=0.0,
+                    latency_seconds=0.0,
+                )
+                _restore_routing_model_env(routing_model_env_originals)
+                return AgenticTaskResult(False, msg, 0.0, "", None)
+            if verbose:
+                console.print(
+                    "[dim]Skipping providers that failed permanently earlier "
+                    f"this run: {', '.join(dropped)}[/dim]"
+                )
+            candidates = healthy
+
     if single_provider_attempt:
         candidates = candidates[:1]
         max_retries = 1
@@ -5387,6 +5519,13 @@ def run_agentic_task(
                     _classify_permanent_error(output) if not success else None
                 )
                 if permanent_class is not None:
+                    # Issue #1936: remember this provider as permanently dead for
+                    # the remainder of the run so later agentic calls (and
+                    # re-entrant `pdd` subprocesses) skip it instead of re-paying
+                    # its auth-failure timeout on every step. Within THIS call the
+                    # provider cascade below still falls through to the next
+                    # candidate; the registry only changes future candidate lists.
+                    mark_provider_permanently_failed(provider, permanent_class)
                     # Issue #814: emit a default-mode (non-verbose) diagnostic so
                     # the user sees which provider was skipped and why, instead
                     # of the workflow silently advancing to the next provider.
