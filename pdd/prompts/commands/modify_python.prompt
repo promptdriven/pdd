@@ -43,33 +43,41 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 3. **change**:
    - Doc: "Modify an input prompt file based on a change prompt or issue."
-   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`, `--clean-restart`, `--prompt-checkup {warn,strict}`, `--no-prompt-checkup`, `--interactive`.
-   - Store the prompt-checkup options in `ctx.obj` using keys compatible with workflow prompt gates (`prompt_checkup`, `no_prompt_checkup`, `interactive`) before calling agentic or manual change logic.
+   - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`, `--clean-restart`, `--prompt-checkup {warn,strict}`, `--no-prompt-checkup`, `--interactive`, `--apply`, `--preflight`, `--json` (param as_json), `--evidence` (flag, default False).
+   - Store the prompt-checkup options (`prompt_checkup`, `no_prompt_checkup`, `interactive`, `apply`) in `ctx.obj` before calling change logic.
+   - **`--preflight` / `--json`**: When `--preflight` is set, call `build_report(consumer="change-preflight")` from `..continuous_sync`. If `as_json` is True, set `ctx.obj["_suppress_result_summary"] = True` and print JSON formatted report with `indent=2, sort_keys=True`. Otherwise, print formatted summary string with fields: `metadata_stale`, `conflicts`, `unbaselined`, `failures`. Returns `None`.
    - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. When `--no-github-state` is set, temporarily set environment variable `PDD_NO_GITHUB_STATE=1` for the duration of the agentic change call and restore the previous value afterward; this disables both hidden GitHub state persistence and visible orchestrator step comments. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
-   - After a successful agentic or manual change that writes prompt files, call `maybe_run_workflow_prompt_gate(...)` with the changed prompt paths, the resolved project root, `prompt_checkup`, `no_prompt_checkup`, and `interactive`. If the gate returns a blocking result, print its message and raise `click.exceptions.Exit(exit_code)` so code generation/modification does not continue after unresolved strict prompt findings.
+   - After a successful agentic or manual change that writes prompt files, call `maybe_run_workflow_prompt_gate(...)` with the changed prompt paths, the resolved project root, `prompt_checkup`, `no_prompt_checkup`, `interactive`, and `apply`. If the gate returns a blocking result, print its message and raise `click.exceptions.Exit(exit_code)` so code generation/modification does not continue after unresolved strict prompt findings.
    - `--interactive` only enables interactive prompt repair when explicitly passed, and must require a TTY through the shared prompt-gate/checkup path. In strict mode, interactive repair must be followed by a deterministic re-check; unresolved findings after skip, preview-only, rejected patch, or no-op repair must fail closed.
    - **`--clean-restart` flag** (agentic mode only): Boolean flag (default `False`). Help text: "Discard any persisted solving state for this issue and start a fresh full pdd-issue flow from the default base branch, ignoring any previously generated change/issue-N branch artifacts. Use when recovering from a stopped or wrong-model run." Validation: MUST raise `click.UsageError` when combined with `--manual` ("--clean-restart is only valid in agentic mode and cannot be used with --manual") or when the single agentic argument is not a GitHub issue URL ("--clean-restart can only be used with an agentic GitHub issue URL."). When set, forwarded to `run_agentic_change` as `clean_restart=True`; otherwise passes `clean_restart=False`.
    - **Manual (`--manual`)**:
-     - `--csv`: 2 args (change_file, input_code: directory).
-     - Standard: 3 args (change_file, input_code: file, input_prompt).
-     - Validation: `input_code` must match expected type (dir for CSV, file otherwise). Check existence for all files.
+     - `--csv`: 2 args (change_file, input_code: directory). Raises `click.UsageError("Cannot use --csv and specify an INPUT_PROMPT_FILE simultaneously.")` if 3 arguments are provided. Raises `click.UsageError("INPUT_CODE must be a directory when using --csv")` if `input_code` is a file. If not 2 args, raises "CSV mode requires 2 arguments: CSV_FILE CODE_DIRECTORY".
+     - Standard: 3 args (change_file, input_code: file, input_prompt). Raises `click.UsageError("INPUT_PROMPT_FILE is required when not using --csv")` if 2 arguments are provided. Raises `click.UsageError("INPUT_CODE must be a file when not using --csv")` if `input_code` is a directory. If other arg count, raises "Manual mode requires 3 arguments: CHANGE_PROMPT INPUT_CODE INPUT_PROMPT".
+     - Validation: Check existence for all files (`change_file`, `input_code`, and `input_prompt` if provided).
      - Calls `change_main` with `ctx`, `use_csv`, `budget`, and relevant files.
+     - Parses gate block exit from result via `parse_prompt_gate_block_exit(result)` if result is a string, and if not None raises `click.exceptions.Exit(gate_exit)`.
+   - **`--evidence`**: When set, call `write_evidence_manifest` after successful run:
+     - In manual mode: with `command="pdd change"`, `prompt_file=input_prompt`, `output_files=[output] if output else ()`, `model=model`, `cost_usd=cost`, and `temperature`.
+     - In agentic mode: with `command="pdd change"`, `output_files=changed_files`, `model=model`, `cost_usd=cost`, `temperature`, and `basename="agentic-change"`.
 
 4. **update**:
    - Doc: "Update the original prompt file based on code changes."
-   - Args: `files` (nargs=-1). Options: `--all` (param `all_`), `--extensions`, `--directory`, `--git`, `--output`, `--simple`, `--base-branch` (default `"main"`), `--budget` (float, default `None`), `--dry-run`, `--sync-metadata` (flag, default `False`).
+   - Args: `files` (nargs=-1). Options: `--all` (param `all_`), `--extensions`, `--directory`, `--git`, `--output`, `--simple`, `--base-branch` (default `"main"`), `--budget` (float, default `None`), `--dry-run`, `--json` (param as_json), `--sync-metadata` (flag, default `False`).
    - Decorators (in order): `@click.pass_context`, `@log_operation(operation="update", clears_run_report=True)`, `@track_cost`.
    - **Validation** (UsageError, raised before try/except so they propagate):
      - 2 args requires `--git`; 3 args forbids `--git`; max 3 args.
      - `--all` forbidden with file paths.
      - `--budget`, when set, must be > 0.
      - Repo mode (0 args or `--all`) forbids `--git` and `--output`.
-     - File modes forbid `--extensions`, `--directory`, non-default `--base-branch`, `--dry-run`, and `--budget`.
+     - File modes forbid `--extensions`, `--directory`, non-default `--base-branch`, `--dry-run`, `--json`, and `--budget`.
+     - In repo mode: `--json` is only supported with `--dry-run` (raises `click.UsageError("--json is only supported with update --all --dry-run.")` if `as_json` but not `dry_run`).
+     - In file modes: `--json` is forbidden (raises `click.UsageError("--json is only valid in repository-wide dry-run mode.")` if `as_json`).
    - **Modes**:
      - 0 args or `--all`: `repo=True`, all file params `None`.
      - 1 arg: `modified_code_file=files[0]` (regeneration).
      - 2 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]` (git-based).
      - 3 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]`, `input_code_file=files[2]`.
+   - **Repo Dry-Run JSON**: If repo mode, `dry_run`, and `as_json` are all True: call `build_report(consumer="update-dry-run")` from `..continuous_sync`, set `ctx.obj["_suppress_result_summary"] = True`, print the JSON report with `indent=2, sort_keys=True`, and return `None`.
    - **`--sync-metadata`** (opt-in): When set, `update_main` runs the shared `run_metadata_sync` orchestrator after the prompt update — preserves or seeds prompt PDD tags from the architecture entry, reconciles the architecture.json entry, clears stale run reports, and finalizes the fingerprint last. Compatible with all modes (single-file, regeneration, repo). `failed` in any stage causes the command to exit non-zero (raises `click.exceptions.Exit(1)`); `skipped` is acceptable and passes through (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870 — not implemented here). Help text: "After update, run the shared metadata-sync orchestrator (preserve/seed PDD tags, reconcile architecture.json entry, clear stale run reports, finalize fingerprint last). On any stage failed, exits non-zero. Stages may report skipped for legitimate cases (no architecture.json, unregistered modules). LLM-first refresh of stale-but-present tags is tracked at #870 and is NOT invoked here."
    - Calls `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git=git, repo, extensions, directory, simple, base_branch, budget, dry_run, sync_metadata=sync_metadata)` and returns its result (or `None` if it returns `None`).
 

@@ -21,18 +21,22 @@ Write `pdd/checkup_prompt_apply.py`.
 
 % Requirements
 - Validate approved patch kind and target path before any write.
-- Allow prompt source targets including `pdd/prompts/**/*.prompt`, excluding `*_LLM.prompt`.
-- Continue forbidding tests, generated/context paths, implementation files under `pdd/`, absolute paths, and traversal outside the repository root.
-- In `--dry-run`, record accepted/rejected patches and write the apply log, but do not mutate files or create backups.
-- For real applies, create backups under `.pdd/evidence/checkups/backups/<run_id>/`, write atomically, then run a deterministic postflight checkup.
-- Any rejected approved patch must remain inspectable with `status="rejected"`, include a reason, return a non-zero exit code, and must not report `postflight_status="pass"` unless all approved patches were valid and postflight passed.
+- Supported target paths: `.prompt` files (excluding `*_LLM.prompt`) and `user_stories/story__*.md`.
+- Reject forbidden target paths (e.g., tests, absolute paths, traversal outside the repo root, or files under `pdd/` except `pdd/prompts/**/*.prompt`).
+- Supported patch kinds: `vocab_definition`, `contract_rule`, `coverage_line`, `waiver`, `story_template`, `append_covers`, and `full_rewrite`.
+- Patch application strategies:
+  - `full_rewrite` replaces the whole file content.
+  - `append_covers` appends the replacement to the end of the file.
+  - Other kinds insert at the specified anchor line, or append to the end of file if not found/invalid.
+- For real applies: backup modified files under `.pdd/evidence/checkups/backups/<run_id>/`, write atomically, and run a deterministic postflight checkup.
+- In `--dry-run`: do not mutate files or write backups, but log accepted/rejected findings.
 
 <contract_rules>
 R1 - Rejected approvals fail honestly
-If any approved patch is rejected, `ApplyRunResult.exit_code` MUST be non-zero and `postflight_status` MUST NOT be `pass`.
+If any approved patch is rejected, `ApplyRunResult.exit_code` MUST be non-zero and `postflight_status` MUST be `rejected`.
 
-R2 - Prompt source allowlist
-`pdd/prompts/**/*.prompt` MAY be repaired, while `pdd/**/*.py`, `tests/**`, generated artifacts, absolute paths, and traversal targets MUST be rejected.
+R2 - Target path rules
+`.prompt` files (excluding `*_LLM.prompt`) and `user_stories/story__*.md` MAY be repaired, while other paths MUST be rejected.
 
 R3 - Dry-run is read-only
 When `dry_run=True`, no prompt bytes or backup files may be written.
