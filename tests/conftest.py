@@ -568,7 +568,12 @@ def pytest_runtest_makereport(item: pytest.Item, call):
     outcome = yield
     report = outcome.get_result()
     if report.when == "call" and report.failed and call.excinfo is not None:
-        if call.excinfo.errisinstance(InsufficientCreditsError):
+        exc_type_name = type(call.excinfo.value).__name__
+        exc_text = str(call.excinfo.value)
+        if call.excinfo.errisinstance(InsufficientCreditsError) or (
+            exc_type_name in {"UsageError", "RuntimeError"}
+            and "Insufficient credits" in exc_text
+        ):
             report.outcome = "skipped"
             report.wasxfail = ""
             report.longrepr = f"Skipped: Insufficient credits for cloud LLM call"

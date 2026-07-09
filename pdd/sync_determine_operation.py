@@ -1995,6 +1995,56 @@ def estimate_operation_cost(operation: str, language: str = "python") -> float:
     return cost_map.get(operation, 0.0)
 
 
+def _changed_artifacts_from_hashes(
+    fingerprint: Fingerprint,
+    paths: Dict[str, Path],
+    current_hashes: Dict[str, Any],
+) -> List[str]:
+    """Return artifact names whose current hashes differ from a fingerprint."""
+    changes: List[str] = []
+    if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
+        changes.append('prompt')
+    if paths.get('code') and paths['code'].exists() and current_hashes.get('code_hash') != fingerprint.code_hash:
+        changes.append('code')
+    if paths.get('example') and paths['example'].exists() and current_hashes.get('example_hash') != fingerprint.example_hash:
+        changes.append('example')
+    if paths.get('test') and paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
+        changes.append('test')
+    return changes
+
+
+def _prompt_derived_conflict_decision(
+    *,
+    basename: str,
+    language: str,
+    changes: List[str],
+    paths: Dict[str, Path],
+    fingerprint: Optional[Fingerprint],
+    read_only: bool,
+) -> SyncDecision:
+    """Return the explicit conflict decision for prompt+derived co-edits."""
+    meta_dir = get_meta_dir(paths=paths)
+    safe_bn = _safe_basename(basename)
+    fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
+    rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
+    return SyncDecision(
+        operation='fail_and_request_manual_merge',
+        reason='Prompt and derived artifacts changed since the last fingerprint; manual conflict resolution required',
+        confidence=1.0,
+        estimated_cost=estimate_operation_cost('fail_and_request_manual_merge'),
+        details={
+            'decision_type': 'heuristic',
+            'classification': 'CONFLICT',
+            'changed_files': changes,
+            'read_only': read_only,
+            'metadata_preserved': [
+                str(path) for path in (fp_path, rr_path) if path.exists()
+            ],
+            'fingerprint_found': fingerprint is not None,
+        },
+    )
+
+
 def validate_expected_files(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]:
     """
     Validate that files expected to exist based on fingerprint actually exist.
@@ -2513,6 +2563,21 @@ def _perform_sync_analysis(
             # even when auto-deps has stripped <include> tags from the prompt
             current_prompt_hash = calculate_prompt_hash(paths['prompt'], stored_deps=fingerprint.include_deps)
             if current_prompt_hash and current_prompt_hash != fingerprint.prompt_hash:
+                current_hashes = calculate_current_hashes(
+                    paths,
+                    stored_include_deps=fingerprint.include_deps,
+                )
+                changes = _changed_artifacts_from_hashes(fingerprint, paths, current_hashes)
+                derived_changes = [change for change in changes if change != 'prompt']
+                if derived_changes:
+                    return _prompt_derived_conflict_decision(
+                        basename=basename,
+                        language=language,
+                        changes=changes,
+                        paths=paths,
+                        fingerprint=fingerprint,
+                        read_only=read_only,
+                    )
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore') if paths['prompt'].exists() else ""
                 has_deps = check_for_dependencies(prompt_content)
                 return SyncDecision(
@@ -2867,15 +2932,7 @@ def _perform_sync_analysis(
     # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
     changes = []
     if fingerprint:
-        if current_hashes.get('prompt_hash') != fingerprint.prompt_hash:
-            changes.append('prompt')
-        # Only compare hashes for files that exist
-        if paths['code'].exists() and current_hashes.get('code_hash') != fingerprint.code_hash:
-            changes.append('code')
-        if paths['example'].exists() and current_hashes.get('example_hash') != fingerprint.example_hash:
-            changes.append('example')
-        if paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
-            changes.append('test')
+        changes = _changed_artifacts_from_hashes(fingerprint, paths, current_hashes)
     
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
@@ -3188,61 +3245,12 @@ def _perform_sync_analysis(
         # per PDD doctrine - all are derived from the unchanged prompt
 
         if 'prompt' in changes:
-            # Prompt and derived files both changed — stale fingerprint.
-            # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
-            # Issue #1211: resolve meta dir via paths so we delete from the
-            # subproject's .pdd/meta — not from a parent CWD orphan. Reading
-            # from one location and deleting from another (round-3 bug) would
-            # leave the stale fingerprint in place and recurse into
-            # _perform_sync_analysis with the same state, looping forever.
-            meta_dir = get_meta_dir(paths=paths)
-            safe_bn = _safe_basename(basename)
-            fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
-            rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
-
-            if read_only:
-                if paths['prompt'].exists():
-                    prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
-                    operation = 'auto-deps' if check_for_dependencies(prompt_content) else 'generate'
-                    reason = 'Prompt and derived files changed - fresh sync needed'
-                else:
-                    operation = 'nothing'
-                    reason = 'Prompt and derived files changed, but prompt file is missing'
-
-                return SyncDecision(
-                    operation=operation,
-                    reason=reason,
-                    confidence=0.90,
-                    estimated_cost=estimate_operation_cost(operation),
-                    details={
-                        'decision_type': 'heuristic',
-                        'changed_files': changes,
-                        'read_only': True,
-                        'would_delete_metadata': [
-                            str(path) for path in (fp_path, rr_path) if path.exists()
-                        ],
-                        'fingerprint_found': fingerprint is not None,
-                    }
-                )
-
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "Prompt and derived files both changed — deleting fingerprint and run report "
-                "for fresh sync (basename=%s, language=%s, changes=%s)",
-                basename, language, changes
-            )
-
-            # Delete fingerprint and run report to force fresh sync
-            if fp_path.exists():
-                fp_path.unlink()
-            if rr_path.exists():
-                rr_path.unlink()
-
-            # Re-run analysis — with fingerprint gone, this hits the "no fingerprint" path
-            return _perform_sync_analysis(
-                basename, language, target_coverage, budget,
-                prompts_dir, skip_tests, skip_verify, context_override,
+            return _prompt_derived_conflict_decision(
+                basename=basename,
+                language=language,
+                changes=changes,
+                paths=paths,
+                fingerprint=fingerprint,
                 read_only=read_only,
             )
         else:
