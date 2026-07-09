@@ -30,6 +30,7 @@ from pdd.agentic_checkup_orchestrator import (
     _load_step5_shell_evidence_from_memory,
     _next_step,
     _normalised_failure_signal_text,
+    _extract_step5_failure_paths,
     _parse_changed_files,
     _parse_expansion_items,
     _parse_failure_signal_block,
@@ -6494,6 +6495,18 @@ class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
     those without requiring an EXPANSION_ITEMS marker — the causal
     guard remains the backstop."""
 
+    def test_extracts_named_script_helper_from_step5_failure(self):
+        failure = (
+            "FAILED: backend endpoint harness failed\n"
+            "scripts/ensure_local_functions_params.py raised RuntimeError\n"
+            "backend/tests/endpoint_tests.py --local\n"
+        )
+
+        paths = _extract_step5_failure_paths(failure)
+
+        assert "scripts/ensure_local_functions_params.py" in paths
+        assert "backend/tests/endpoint_tests.py" in paths
+
     def test_scope_guard_accepts_test_file_named_in_step5_failure(self, tmp_path):
         # API metadata lists pdd/main.py as the PR change. The fixer
         # edits tests/test_main.py (NOT in pr_file_set) because Step 5
@@ -6532,6 +6545,87 @@ class TestIssue1215Round8ScopeGuardAcceptsStep5FailurePaths:
         )
         push_mock.assert_called_once()
         assert success is True
+
+    def test_scope_guard_accepts_script_helper_named_in_step5_failure(self, tmp_path):
+        # PR #28 on stg5 hit this shape: the test harness named a repo
+        # helper under scripts/, but the old Step 5 path extractor only
+        # admitted tests/, pdd/, and src/ paths, so the final scope guard
+        # refused a causally named helper edit.
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (
+                    False,
+                    "FAILED: endpoint harness failed\n"
+                    "scripts/ensure_local_functions_params.py\n"
+                    "backend/tests/endpoint_tests.py --local\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: scripts/ensure_local_functions_params.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["scripts/ensure_local_functions_params.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+            commit_push_return=(True, "Pushed named script helper"),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert "scope guard" not in (msg or "").lower(), (
+            f"Step 5 failure-named script helper must be in scope; msg={msg!r}"
+        )
+        push_mock.assert_called_once()
+        assert success is True
+
+    def test_scope_guard_rejects_script_helper_not_named_in_step5_failure(self, tmp_path):
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (
+                    False,
+                    "FAILED: tests/test_main.py::test_x - AssertionError",
+                    0.1,
+                    "model",
+                )
+            if step_num == 6.1:
+                return (
+                    True,
+                    "FILES_MODIFIED: scripts/ensure_local_functions_params.py\n",
+                    0.1,
+                    "model",
+                )
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["scripts/ensure_local_functions_params.py"],
+            pr_metadata=dict(_PR_META_REAL_API),
+        )
+        with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        push_mock.assert_not_called()
+        assert success is False
+        assert "scope guard" in (msg or "").lower()
 
 
 class TestIssue1912Step6TestExpansionItems:

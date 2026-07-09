@@ -2020,6 +2020,24 @@ _EXPANSION_CAUSAL_KEYWORDS = (
 )
 
 
+_STEP5_FAILURE_PATH_RE = re.compile(
+    r"(?:tests?/|pdd/|src/|scripts/|backend/|frontend/|extensions/)[\w/._-]+\.py"
+)
+
+
+def _extract_step5_failure_paths(step5_output: str) -> set:
+    """Return repo-local Python paths named by Step 5 failure evidence.
+
+    The scope guard permits causally named failure files without an
+    ``EXPANSION_ITEMS`` marker, but only for paths surfaced by Step 5 and
+    only under ordinary source/test/tooling roots. This keeps the guard
+    strict while allowing a failing harness to name its own helper script.
+    """
+    if not step5_output.startswith("FAILED:"):
+        return set()
+    return set(_STEP5_FAILURE_PATH_RE.findall(step5_output))
+
+
 def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
     """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
 
@@ -5690,12 +5708,9 @@ def _run_agentic_checkup_orchestrator_inner(
                     # between fixer files and the OK-set), so genuinely
                     # unrelated edits remain blocked.
                     step5_for_scope = step_outputs.get("5", "")
-                    scope_failure_paths: set = set()
-                    if step5_for_scope.startswith("FAILED:"):
-                        scope_failure_paths = set(_re.findall(
-                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
-                            step5_for_scope,
-                        ))
+                    scope_failure_paths = _extract_step5_failure_paths(
+                        step5_for_scope
+                    )
                     # Issue #2047: admit the owning prompt + architecture entry
                     # for any code file already in the PR diff so a source-of-
                     # truth repair (edit the prompt that owns a PR-changed code
@@ -5767,10 +5782,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     # fixed by editing ``pdd/main.py``.
                     step5_out = step_outputs.get("5", "")
                     if step5_out.startswith("FAILED:"):
-                        failure_paths = set(_re.findall(
-                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
-                            step5_out,
-                        ))
+                        failure_paths = _extract_step5_failure_paths(step5_out)
                         # Codex round-5 Finding 3: reuse the per-path
                         # justified expansion set from the scope check;
                         # only paths whose OWN marker carried a causal
