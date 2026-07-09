@@ -18,6 +18,7 @@ sys.path.insert(0, str(pdd_path))
 from sync_determine_operation import (
     sync_determine_operation,
     analyze_conflict_with_llm,
+    _prompt_derived_conflict_decision,
     SyncLock,
     Fingerprint,
     RunReport,
@@ -1121,6 +1122,55 @@ def test_prompt_code_coedit_conflict_with_real_paths_preserves_metadata(pdd_test
     assert set(decision.details["changed_files"]) == {"prompt", "code"}
     assert fp_path.read_text(encoding="utf-8") == before_fp
     assert paths["prompt"].read_text(encoding="utf-8") == "Generate a changed function.\n"
+
+
+def test_conflict_message_is_actionable(pdd_test_environment):
+    """#1929: the CONFLICT reason names the unit, what moved, and the resolve commands."""
+    paths = _write_complete_unit_with_fingerprint(pdd_test_environment)
+    paths["prompt"].write_text("Generate a changed function.\n", encoding="utf-8")
+    paths["code"].write_text("def value():\n    return 2\n", encoding="utf-8")
+
+    decision = sync_determine_operation(
+        BASENAME,
+        LANGUAGE,
+        TARGET_COVERAGE,
+        prompts_dir=str(pdd_test_environment / "prompts"),
+    )
+
+    assert decision.operation == "fail_and_request_manual_merge"
+    assert decision.details["classification"] == "CONFLICT"
+    # The reason is self-actionable: names the unit, what moved, the exact commands.
+    assert BASENAME in decision.reason
+    assert "prompt" in decision.reason and "code" in decision.reason
+    assert f"pdd resolve {BASENAME} --accept-current" in decision.reason
+    assert f"pdd resolve {BASENAME} --prompt-wins" in decision.reason
+    assert f"pdd resolve {BASENAME} --code-wins" in decision.reason
+    # Structured details for machine consumers (CI summaries, drift ledger).
+    assert decision.details["basename"] == BASENAME
+    assert decision.details["language"] == LANGUAGE
+    commands = decision.details["resolution_commands"]
+    assert commands["accept_current"] == f"pdd resolve {BASENAME} --accept-current"
+    assert commands["prompt_wins"] == f"pdd resolve {BASENAME} --prompt-wins"
+    assert commands["code_wins"] == f"pdd resolve {BASENAME} --code-wins"
+
+
+def test_conflict_decision_helper_formats_language_suffix_and_artifacts():
+    """Non-Python units get a --language suffix; 3-way co-edits read naturally."""
+    decision = _prompt_derived_conflict_decision(
+        basename="parser",
+        language="javascript",
+        changes=["prompt", "code", "test"],
+        paths={},
+        fingerprint=None,
+        read_only=True,
+    )
+    commands = decision.details["resolution_commands"]
+    assert commands["accept_current"] == "pdd resolve parser --language javascript --accept-current"
+    assert commands["code_wins"] == "pdd resolve parser --language javascript --code-wins"
+    assert "prompt, code, and test changed" in decision.reason
+    assert decision.details["read_only"] is True
+    # Non-destructive contract holds regardless of language.
+    assert decision.operation == "fail_and_request_manual_merge"
 
 
 # --- Part 3: `analyze_conflict_with_llm` ---

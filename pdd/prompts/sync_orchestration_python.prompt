@@ -254,7 +254,7 @@ For every call to `sync_determine_operation`, compute `isolated_replay_or_repair
 
 ### Dry-Run Mode
 
-When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
+When `dry_run=True`, first surface the CURRENT decision via `_display_dry_run_decision(...)` — it calls `sync_determine_operation(..., log_mode=True, read_only=True)` (no lock, no fingerprint/metadata mutation) and prints a `Current analysis:` line, prefixing a pending `CONFLICT` (prompt+derived both changed) with its actionable resolution message (#1929) so a never-synced conflict is visible before any log entry exists. Then display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
 
 Dry-run must not write snapshot artifacts. If nondeterministic context can be detected without executing dynamic tags, report that a snapshot would be required, but do not execute shell/web/query tags solely for dry-run detection.
 
@@ -391,6 +391,7 @@ entry = create_log_entry(
 
 ### Local helpers (implement in this module)
 
+- `_display_dry_run_decision(basename, language, target_coverage, prompts_dir, skip_tests, skip_verify, context_override, quiet)` - Read-only helper (#1929) that computes the current `sync_determine_operation(..., log_mode=True, read_only=True)` decision and prints a `Current analysis:` line for `--dry-run`, prefixing a `CONFLICT` classification with its actionable reason. Best-effort: swallow any analysis error and return `None` so the log replay still runs; suppress output when `quiet`.
 - `_display_sync_log(basename, language, verbose, paths=None)` - Format and display sync log using `load_operation_log()`; pass `paths=pdd_files` for subproject anchoring (issue #1211). Suppress the `Model:` header if the model name is empty, "unknown", or "N/A" (case-insensitive).
 - `_create_mock_context(**kwargs)` - Create Click context for command execution
 - `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
