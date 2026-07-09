@@ -13,6 +13,7 @@ Thank you for considering contributing to PDD CLI! This guide summarizes how we 
 - Keep spec/README, prompts, code, examples, and tests in sync.
 - Tests accumulate: append tests; don’t regenerate or remove them.
 - Modular prompt graph: prompts compose via includes.
+- Coding agents follow the same rules; see `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. The #1 doctrine anti‑pattern is Prompt Drift (`docs/prompt-driven-development-doctrine.md`, “Anti‑Patterns”).
 
 ## The “Dev Unit”
 Each complete change ideally includes four elements:
@@ -38,7 +39,7 @@ Each complete change ideally includes four elements:
 
 4) Implement
 - Prefer using PDD to regenerate code from prompts.
-- If editing code directly, run `pdd update` to sync changes back into prompts (until all prompts are public, maintainers may help sync).
+- If editing code directly, run `pdd update --sync-metadata` to sync changes back into prompts and re‑stamp the fingerprint / reconcile `architecture.json` before opening the PR (until all prompts are public, maintainers may help sync). Never hand‑edit `.pdd/meta/*.json` or `architecture.json`; use `pdd sync-architecture` or the fingerprint stamper (`scripts/stamp_fingerprints.py`).
 - Keep example interfaces updated to reflect new/changed behavior.
 - Useful prompt tags when needed: `<include>`, `<pdv>`, `<shell>`, `<web>`.
 

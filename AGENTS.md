@@ -1,5 +1,12 @@
 # Repository Guidelines
 
+## Prompt-First Workflow (Read First)
+Prompts are the source of truth; code is regenerated from them. This block enforces the doctrine's #1 anti-pattern, Prompt Drift (`docs/prompt-driven-development-doctrine.md` "Anti-Patterns"; `CONTRIBUTING.md` "Core Philosophy").
+- Behavior change: edit `pdd/prompts/<module>_python.prompt` first, regenerate with `pdd sync <module>` (or `make generate MODULE=<module>`), then adjust tests.
+- Edited `pdd/<module>.py` directly (hotfix): run `pdd update --sync-metadata` to back-propagate the change into the prompt and re-stamp the fingerprint BEFORE opening the PR; name the back-propagated units in the PR body.
+- Never hand-edit `.pdd/meta/*.json` or `architecture.json`; use `pdd sync-architecture` or the fingerprint stamper (`scripts/stamp_fingerprints.py`).
+- Tests accumulate: append tests; never delete passing tests when regenerating.
+
 ## Project Structure & Module Organization
 Core CLI logic lives in `pdd/`, where each module aligns with a prompt template in `prompts/` (for example, `pdd/code_generator.py` pairs with `prompts/code_generator_python.prompt`). Generated examples drop into `context/`, CSV data into `data/`, and packaged artifacts into `dist/`. Public examples live under `examples/`, and central documentation, diagrams, and onboarding notes reside in `docs/`.
 

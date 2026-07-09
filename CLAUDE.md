@@ -2,6 +2,13 @@
 
 This repository contains the public PDD CLI. Keep changes focused on the open-source package and avoid adding private deployment or credential-backed workflow details.
 
+## Prompt-First Workflow (Read First)
+Prompts are the source of truth; code is regenerated from them. This block enforces the doctrine's #1 anti-pattern, Prompt Drift (`docs/prompt-driven-development-doctrine.md` "Anti-Patterns"; `CONTRIBUTING.md` "Core Philosophy").
+- Behavior change: edit `pdd/prompts/<module>_python.prompt` first, regenerate with `pdd sync <module>` (or `make generate MODULE=<module>`), then adjust tests.
+- If you edited `pdd/<module>.py` directly (hotfix): run `pdd update --sync-metadata` to back-propagate the change into the prompt and re-stamp the fingerprint BEFORE opening the PR; list the back-propagated units in the PR body.
+- Never hand-edit `.pdd/meta/*.json` or `architecture.json`; use `pdd sync-architecture` or the fingerprint stamper (`scripts/stamp_fingerprints.py`).
+- Tests accumulate: append tests; never delete passing tests when regenerating.
+
 ## Commands
 - Install dependencies: `pip install -e ".[dev]"` or `pip install -e .`
 - Run all tests: `pytest -vv tests/`
