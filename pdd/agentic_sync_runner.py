@@ -746,14 +746,27 @@ def _parse_public_surface_failure_fields(
     # regenerated), which dead-ended the change->sync loop (issue #1900).
     declared_details = [d for d in details_tuple if d[3] == "pdd-interface"]
     if declared_details:
+        # Inject the DECLARED signature as a VERBATIM hard constraint, not just a
+        # description of the violation (issue #1968): annotation-level drift
+        # (declared `object`, regenerated `Any`; or a broadened param union)
+        # converges only when the retry is told to reproduce the declared
+        # annotation text token-for-token instead of a "compatible" spelling.
         lines.append(
             "Restore these public symbols to their declared "
-            "<pdd-interface> signatures:"
+            "<pdd-interface> signatures — emit each declared signature "
+            "VERBATIM. Reproduce the declared annotation text token-for-token; "
+            "do not substitute an equivalent-but-differently-spelled type (keep "
+            "`object` as `object`; never emit `Any` where the declaration says "
+            "`object`) and do not broaden a declared parameter's type with `|` "
+            "union members the declaration omits:"
         )
         for symbol, expected_entry, actual_entry, _ in declared_details:
             lines.append(
                 f"- Restore `{symbol}` to its declared signature "
-                f"`{expected_entry}` (found `{actual_entry}`)."
+                f"`{expected_entry}` (found `{actual_entry}`). Emit exactly "
+                f"`{expected_entry}` — the prior attempt emitted "
+                f"`{actual_entry}`, which differs only in annotation spelling "
+                f"and was rejected."
             )
         lines.append(
             "If a declared parameter change is intended, edit the prompt's "

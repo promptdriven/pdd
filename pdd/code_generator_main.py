@@ -241,14 +241,28 @@ class PublicSurfaceRegressionError(click.UsageError):
             detail for detail in self.signature_details if detail[3] == "pdd-interface"
         ]
         if declared_details:
+            # Inject the DECLARED signature as a VERBATIM hard constraint, not
+            # just a description of the violation (issue #1968): an annotation-
+            # level drift (declared `object`, regenerated `Any`; or a broadened
+            # param union) converges only when the retry is told to reproduce the
+            # declared annotation text token-for-token instead of a semantically
+            # "equivalent" spelling it keeps re-emitting.
             lines.append(
                 "Restore these public symbols to their declared "
-                "<pdd-interface> signatures:"
+                "<pdd-interface> signatures — emit each declared signature "
+                "VERBATIM. Reproduce the declared annotation text token-for-"
+                "token; do not substitute an equivalent-but-differently-spelled "
+                "type (keep `object` as `object`; never emit `Any` where the "
+                "declaration says `object`) and do not broaden a declared "
+                "parameter's type with `|` union members the declaration omits:"
             )
             for symbol, expected_entry, actual_entry, _ in declared_details:
                 lines.append(
                     f"- Restore `{symbol}` to its declared signature "
-                    f"`{expected_entry}` (found `{actual_entry}`)."
+                    f"`{expected_entry}` (found `{actual_entry}`). Emit exactly "
+                    f"`{expected_entry}` — the prior attempt emitted "
+                    f"`{actual_entry}`, which differs only in annotation "
+                    f"spelling and was rejected."
                 )
             # Declaration-aware guidance (codex round-7 finding 3): a declared
             # PARAM change is authorized by EDITING the declaration, not by a
@@ -2844,6 +2858,272 @@ def _verify_public_surface_regression(
         )
 
 
+def _index_function_defs(tree: ast.Module) -> Dict[str, ast.AST]:
+    """Map dotted qualnames (``foo``, ``Class.method``) to their AST nodes.
+
+    Classes contribute both their own key (so a declared class is locatable) and
+    the recursively-qualified keys of their nested functions/classes, matching the
+    dotted symbol names :func:`_snapshot_public_signatures` produces. First
+    definition wins on a name clash.
+    """
+    index: Dict[str, ast.AST] = {}
+
+    def _walk(prefix: str, body: List[ast.stmt]) -> None:
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                index.setdefault(f"{prefix}{node.name}", node)
+            elif isinstance(node, ast.ClassDef):
+                qual = f"{prefix}{node.name}"
+                index.setdefault(qual, node)
+                _walk(f"{qual}.", node.body)
+
+    _walk("", tree.body)
+    return index
+
+
+def _parse_declared_def(raw_signature: Optional[str]) -> Optional[ast.FunctionDef]:
+    """Parse a declared ``<pdd-interface>`` signature into a ``FunctionDef`` node.
+
+    Mirrors :func:`_declared_signature_to_entry`'s normalization: strip a leading
+    ``async`` / ``def <name>`` prefix down to the bare parameter list, then parse
+    ``def _pdd<sig>: pass``. Returns ``None`` when the declaration is not a
+    parseable paren-list (a presence-only declaration is never reconciled).
+    """
+    if not raw_signature or not isinstance(raw_signature, str):
+        return None
+    sig = raw_signature.strip()
+    if sig.startswith("async "):
+        sig = sig[len("async "):].strip()
+    def_match = re.match(r"^def\s+[A-Za-z_]\w*\s*(.*)$", sig, re.DOTALL)
+    if def_match:
+        sig = def_match.group(1).strip()
+        if sig.startswith("async "):
+            sig = sig[len("async "):].strip()
+    if not sig.startswith("("):
+        return None
+    try:
+        parsed = ast.parse(f"def _pdd{sig}: pass").body[0]
+    except SyntaxError:
+        return None
+    if not isinstance(parsed, ast.FunctionDef):
+        return None
+    return parsed
+
+
+def _signature_slots(
+    func: ast.AST,
+) -> List[Tuple[str, str, bool, Optional[str], Optional[ast.AST]]]:
+    """Ordered ``(name, kind, has_default, default_text, annotation_node)`` slots.
+
+    Mirrors :func:`pdd.interface_semantics._params_from_arguments` so the
+    structural comparison in :func:`_annotation_only_edits` matches exactly what
+    the public-surface gate compares (posonly / positional / vararg /
+    keyword_only / kwarg, defaults normalized by :func:`ast.unparse`).
+    """
+    args = func.args
+    slots: List[Tuple[str, str, bool, Optional[str], Optional[ast.AST]]] = []
+
+    def _add(arg: ast.arg, kind: str, default: Optional[ast.AST]) -> None:
+        has_default = default is not None
+        default_text = ast.unparse(default).strip() if default is not None else None
+        slots.append((arg.arg, kind, has_default, default_text, arg.annotation))
+
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    for arg, default in zip(args.posonlyargs, defaults[: len(args.posonlyargs)]):
+        _add(arg, "posonly", default)
+    for arg, default in zip(args.args, defaults[len(args.posonlyargs):]):
+        _add(arg, "positional", default)
+    if args.vararg is not None:
+        _add(args.vararg, "vararg", None)
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        _add(arg, "keyword_only", default)
+    if args.kwarg is not None:
+        _add(args.kwarg, "kwarg", None)
+    return slots
+
+
+def _line_start_byte_offsets(source: str) -> List[int]:
+    """UTF-8 byte offset at which each 1-indexed source line begins."""
+    data = source.encode("utf-8")
+    offsets = [0]
+    for index, byte in enumerate(data):
+        if byte == 0x0A:  # newline
+            offsets.append(index + 1)
+    return offsets
+
+
+def _node_byte_span(
+    node: ast.AST, line_offsets: List[int]
+) -> Optional[Tuple[int, int]]:
+    """Absolute UTF-8 byte ``(start, end)`` of a node, or ``None`` if unlocatable.
+
+    ``ast`` column offsets are UTF-8 byte offsets into their line, so the caller
+    splices the encoded bytes (see :func:`_apply_byte_edits`).
+    """
+    lineno = getattr(node, "lineno", None)
+    end_lineno = getattr(node, "end_lineno", None)
+    col = getattr(node, "col_offset", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if lineno is None or end_lineno is None or col is None or end_col is None:
+        return None
+    if lineno > len(line_offsets) or end_lineno > len(line_offsets):
+        return None
+    return line_offsets[lineno - 1] + col, line_offsets[end_lineno - 1] + end_col
+
+
+def _apply_byte_edits(source: str, edits: List[Tuple[int, int, str]]) -> str:
+    """Apply non-overlapping ``(start, end, replacement)`` byte edits to *source*."""
+    data = bytearray(source.encode("utf-8"))
+    # Apply right-to-left so earlier offsets stay valid; skip any overlap defensively.
+    ordered = sorted(edits, key=lambda edit: edit[0], reverse=True)
+    last_start: Optional[int] = None
+    for start, end, replacement in ordered:
+        if start < 0 or end > len(data) or start > end:
+            continue
+        if last_start is not None and end > last_start:
+            continue
+        data[start:end] = replacement.encode("utf-8")
+        last_start = start
+    return data.decode("utf-8")
+
+
+def _annotation_only_edits(
+    declared_def: ast.FunctionDef,
+    gen_node: ast.AST,
+    line_offsets: List[int],
+) -> List[Tuple[int, int, str]]:
+    """Byte edits rewriting ``gen_node``'s annotations to the declared text.
+
+    Returns an empty list unless the ONLY drift between the declaration and the
+    generated signature is annotation spelling on one or more parameters or the
+    return type (identical names, order, kinds and defaults). Only annotations the
+    public-surface gate considers INCOMPATIBLE are rewritten, so a compatible
+    alias (``Dict`` vs ``dict``) is never churned. Any structural difference
+    disqualifies the whole symbol (real drift the gate must still fire on).
+    """
+    declared_slots = _signature_slots(declared_def)
+    gen_slots = _signature_slots(gen_node)
+    # A ``<pdd-interface>`` signature cannot express ``self`` / ``cls``; the gate
+    # strips a leading receiver from the generated method before comparing, so
+    # drop it here too when the declaration does not carry one.
+    if (
+        gen_slots
+        and gen_slots[0][0] in {"self", "cls"}
+        and (not declared_slots or declared_slots[0][0] not in {"self", "cls"})
+    ):
+        gen_slots = gen_slots[1:]
+    if len(declared_slots) != len(gen_slots):
+        return []
+    edits: List[Tuple[int, int, str]] = []
+    for declared_slot, gen_slot in zip(declared_slots, gen_slots):
+        d_name, d_kind, d_has_def, d_def, d_ann = declared_slot
+        g_name, g_kind, g_has_def, g_def, g_ann = gen_slot
+        if (
+            d_name != g_name
+            or d_kind != g_kind
+            or d_has_def != g_has_def
+            or d_def != g_def
+        ):
+            return []
+        if d_ann is None or g_ann is None:
+            continue
+        d_text = ast.unparse(d_ann).strip()
+        g_text = ast.unparse(g_ann).strip()
+        if d_text == g_text or annotations_compatible(d_text, g_text):
+            continue
+        span = _node_byte_span(g_ann, line_offsets)
+        if span is None:
+            return []
+        edits.append((span[0], span[1], d_text))
+    d_ret = declared_def.returns
+    g_ret = getattr(gen_node, "returns", None)
+    if d_ret is not None and g_ret is not None:
+        d_ret_text = ast.unparse(d_ret).strip()
+        g_ret_text = ast.unparse(g_ret).strip()
+        if d_ret_text != g_ret_text and not annotations_compatible(
+            d_ret_text, g_ret_text
+        ):
+            span = _node_byte_span(g_ret, line_offsets)
+            if span is None:
+                return []
+            edits.append((span[0], span[1], d_ret_text))
+    return edits
+
+
+def _reconcile_declared_annotation_drift(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    language: Optional[str],
+    prompt_content: Optional[str],
+) -> Optional[str]:
+    """Rewrite annotation-only drift on a declared symbol back to the declared text.
+
+    Issue #1968: when a regeneration drifts a declared ``<pdd-interface>``
+    signature ONLY in annotation spelling — the declaration says ``object`` but
+    the model emitted ``Any``, or it broadened a parameter's declared type with
+    extra ``|`` union members — the public-surface gate correctly rejects it, but
+    the LLM repair retry keeps re-emitting the same "equivalent" spelling and
+    never converges. This deterministic pass runs BEFORE the gate: for every
+    declared symbol whose generated signature differs from the declaration ONLY
+    in annotation text (identical parameter names, order, kinds and defaults), it
+    rewrites the offending annotation(s) in the generated SOURCE to the declared
+    spelling, so the gate passes on the reconciled code with no further
+    generation attempt.
+
+    Returns the rewritten ``generated_code`` when at least one annotation was
+    reconciled, or ``None`` when nothing safe to rewrite was found. It is
+    fail-safe: only annotations the gate considers INCOMPATIBLE are rewritten,
+    structural drift is left untouched, and the whole rewrite is discarded if the
+    result no longer parses. Bypass with ``PDD_SKIP_ANNOTATION_RECONCILE=1``.
+    """
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_ANNOTATION_RECONCILE")
+        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or _is_test_output_path(output_path)
+        or not _is_python_generation(language, output_path)
+    ):
+        return None
+    declared = _collect_declared_surface(prompt_content, prompt_name)
+    if not declared:
+        return None
+    try:
+        tree = ast.parse(generated_code)
+    except SyntaxError:
+        return None
+    func_index = _index_function_defs(tree)
+    line_offsets = _line_start_byte_offsets(generated_code)
+    edits: List[Tuple[int, int, str]] = []
+    try:
+        for name, raw_sig in declared.items():
+            if not raw_sig:
+                continue
+            node = func_index.get(name)
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            declared_def = _parse_declared_def(raw_sig)
+            if declared_def is None:
+                continue
+            edits.extend(_annotation_only_edits(declared_def, node, line_offsets))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    if not edits:
+        return None
+    reconciled = _apply_byte_edits(generated_code, edits)
+    if reconciled == generated_code:
+        return None
+    try:
+        ast.parse(reconciled)
+    except SyntaxError:
+        return None
+    return reconciled
+
+
 def _get_test_churn_threshold() -> float:
     """Return the PDD_TEST_CHURN_THRESHOLD as a clamped 0..1 ratio.
 
@@ -5283,6 +5563,24 @@ def code_generator_main(
                 # existing file to 0 bytes — silent erasure of mature
                 # public APIs and test coverage (external review iter-13
                 # follow-up; reproduced with mocked local generation).
+                #
+                # Deterministic annotation reconciliation (issue #1968): when a
+                # regeneration drifts a declared signature ONLY in annotation
+                # spelling (declared `object` vs emitted `Any`, or a broadened
+                # union), rewrite the emitted annotation back to the declared text
+                # BEFORE the gate re-checks so the sync converges without another
+                # generation attempt. The pass is a no-op unless it finds such
+                # drift, so it never alters an otherwise-passing generation.
+                reconciled_code = _reconcile_declared_annotation_drift(
+                    existing_code=existing_code_content,
+                    generated_code=generated_code_content,
+                    prompt_name=prompt_name,
+                    output_path=output_path,
+                    language=language,
+                    prompt_content=prompt_content,
+                )
+                if reconciled_code is not None:
+                    generated_code_content = reconciled_code
                 try:
                     _verify_public_surface_regression(
                         existing_code=existing_code_content,
