@@ -329,6 +329,7 @@ def _defang_severity_tags(text: str) -> str:
 #   - ``_ISSUE_ALIGNED_RE`` (``issue_aligned: true|false``) → ``_defang_issue_aligned``
 #   - ``_REVIEWER_STATUS_INLINE_RE`` (``reviewer-status:``) → ``_defang_reviewer_status_inline``
 #   - ``_FRESH_FINAL_INLINE_RE`` (``fresh-final-review:``) → ``_defang_fresh_final_inline``
+#   - ``_DEFANG_ROLE_INDEPENDENCE_INLINE_RE`` (``role-independence:``) → ``_defang_role_independence_inline``
 #   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
 #   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
 #     heading scanners) → ``_defang_section_headings``
@@ -377,6 +378,15 @@ _DEFANG_REVIEWER_STATUS_INLINE_RE: re.Pattern[str] = re.compile(
 )
 _DEFANG_FRESH_FINAL_INLINE_RE: re.Pattern[str] = re.compile(
     r"\b(fresh[-_ ]?final(?:[-_ ]?review)?)(\s*[:=])",
+    re.IGNORECASE,
+)
+# Issue #1941: the cloud verdict adapter reads ``role-independence:`` to route
+# a degraded run to ``ship_degraded``. A reviewer stderr tail echoing
+# ``role-independence: independent`` would otherwise let untrusted diagnostics
+# override the authoritative header and downgrade a degraded disclosure back to
+# a plain ship (or vice-versa).
+_DEFANG_ROLE_INDEPENDENCE_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(role[-_ ]?independence)(\s*[:=])",
     re.IGNORECASE,
 )
 
@@ -484,6 +494,13 @@ def _defang_fresh_final_inline(text: str) -> str:
     return _DEFANG_FRESH_FINAL_INLINE_RE.sub(r"\1*\2", text)
 
 
+def _defang_role_independence_inline(text: str) -> str:
+    """Neutralize inline ``role-independence:`` markers (issue #1941)."""
+    if not text:
+        return text
+    return _DEFANG_ROLE_INDEPENDENCE_INLINE_RE.sub(r"\1*\2", text)
+
+
 def _defang_budget_reached(text: str) -> str:
     """Neutralize ``max-*-reached: true`` budget markers."""
     if not text:
@@ -546,6 +563,7 @@ def _defang_adapter_trip_wires(text: str) -> str:
     text = _defang_issue_aligned(text)
     text = _defang_reviewer_status_inline(text)
     text = _defang_fresh_final_inline(text)
+    text = _defang_role_independence_inline(text)
     text = _defang_budget_reached(text)
     text = _defang_section_headings(text)
     text = _defang_pipe_table_lines(text)
