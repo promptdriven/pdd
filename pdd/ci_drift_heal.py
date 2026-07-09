@@ -473,8 +473,11 @@ def detect_drift(
 
             if original_op in ("auto-deps", "generate"):
                 if code_in_changes and prompt_in_changes:
-                    op = "example"
-                    reason = "Code and prompt changed together; only example refresh remains"
+                    op = "conflict"
+                    reason = (
+                        "Code and prompt changed together; manual conflict "
+                        "resolution required"
+                    )
                 elif prompt_in_changes and not code_in_changes:
                     op = "example"
                     reason = "Prompt changed without code changes; only example refresh remains"
@@ -1674,6 +1677,8 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--budget-cap", type=float, default=None)
     parser.add_argument("--skip-ci", action="store_true")
     parser.add_argument("--diff-base", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--json", action="store_true", dest="as_json")
 
     ns = parser.parse_args(argv)
     if ns.modules is not None:
@@ -1691,8 +1696,18 @@ def main(
     budget_cap: Optional[float] = None,
     skip_ci: bool = False,
     diff_base: Optional[str] = None,
+    dry_run: bool = False,
+    as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    if dry_run and as_json:
+        from pdd.continuous_sync import build_report
+        import json as _json
+
+        report = build_report(consumer="ci-heal", modules=modules)
+        print(_json.dumps(report, indent=2, sort_keys=True))
+        return 0 if report["ok"] else 1
+
     # PR auto-heal scope guard (#1403): in PR mode (no --skip-ci), suppress
     # coverage-driven test_extend so a narrow fix PR is never re-bloated with
     # unrelated generated tests. The flag is set on os.environ only for the
@@ -1843,4 +1858,6 @@ if __name__ == "__main__":
         budget_cap=ns.budget_cap,
         skip_ci=ns.skip_ci,
         diff_base=ns.diff_base,
+        dry_run=ns.dry_run,
+        as_json=ns.as_json,
     ))
