@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
+from rich.markup import escape as _rich_escape
 
 from .detect_change import detect_change
 from .get_extension import get_extension
@@ -1531,7 +1532,10 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     # this function (detect --stories, change, agentic change, drift), not just
     # the detect command. Forcing "1" (rather than skipping when a falsy value is
     # already present) closes the gap where PDD_NO_INTERACTIVE="0"/"" would leave
-    # the downstream truthiness guard unset.
+    # the downstream truthiness guard unset. The set/restore mutates process-wide
+    # os.environ; that is safe here because story validation runs a single
+    # command per process (the detect_change worker threads are spawned inside
+    # the forced window, which is the intended behavior).
     scope_noninteractive = _story_validation_noninteractive()
 
     for story_path in story_files:
@@ -1603,8 +1607,12 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
                 "error": error_message,
             })
             if not quiet:
-                rprint(f"[bold]FAIL[/bold] {story_path}")
-                rprint(f"[red]{error_message}[/red]")
+                # Escape the error text: the underlying exception string may
+                # contain rich-markup-like brackets, which must not crash the
+                # fail-closed path (it would turn a clean non-zero exit into a
+                # MarkupError traceback).
+                rprint(f"[bold]FAIL[/bold] {_rich_escape(str(story_path))}")
+                rprint(f"[red]{_rich_escape(error_message)}[/red]")
             if fail_fast:
                 break
             continue

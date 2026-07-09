@@ -60,9 +60,9 @@ def _is_noninteractive() -> bool:
     auth-sensitive work instead of relying on TTY detection here.
     """
     truthy = ("1", "true", "yes", "on")
-    if os.environ.get("PDD_NO_INTERACTIVE", "").lower() in truthy:
+    if os.environ.get("PDD_NO_INTERACTIVE", "").strip().lower() in truthy:
         return True
-    if os.environ.get("CI", "").lower() in truthy:
+    if os.environ.get("CI", "").strip().lower() in truthy:
         return True
     return False
 

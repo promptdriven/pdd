@@ -155,6 +155,18 @@ def test_story_validation_noninteractive_decision_matrix(monkeypatch):
         assert ust._story_validation_noninteractive() is True
 
 
+def test_get_jwt_token_guard_honors_on_truthy_value(monkeypatch):
+    """The downstream device-flow guard shares the 1/true/yes/on truthy set
+    (whitespace-stripped), so a value the story scope may set/forward is honored."""
+    for truthy in ("1", "true", "yes", "on", "ON", " on "):
+        monkeypatch.setenv("PDD_NO_INTERACTIVE", truthy)
+        assert gjt_module._is_noninteractive() is True
+    for falsy in ("", "0", "false", "no"):
+        monkeypatch.setenv("PDD_NO_INTERACTIVE", falsy)
+        monkeypatch.delenv("CI", raising=False)
+        assert gjt_module._is_noninteractive() is False
+
+
 def test_story_validation_opt_in_allows_interactive(tmp_path, monkeypatch):
     """PDD_ALLOW_INTERACTIVE opts back in: no forcing, env untouched."""
     prompts_dir, stories_dir = _make_story_repo(tmp_path)
@@ -200,9 +212,12 @@ def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch
     cloud auth -> real get_jwt_token guard. With cloud enabled and no cached
     credentials in a non-TTY run, GitHub device authentication must never start.
 
-    Red on main (env-only guard reaches the trapped DeviceFlow); green after the
-    fix (scoped PDD_NO_INTERACTIVE makes the guard refuse device flow, cloud auth
-    returns None, and validation fails closed).
+    This is a genuine regression guard: if the forcing of PDD_NO_INTERACTIVE is
+    removed from run_user_story_tests (reintroducing the bug), the env-only
+    device-flow guard is reached and the trapped ``DeviceFlow`` flips
+    ``device_flow_started`` to True, failing the assertion below. With the fix,
+    the guard refuses device flow, cloud auth returns None, the local fallback
+    also stays non-interactive, and validation fails closed.
     """
     prompts_dir, stories_dir = _make_story_repo(tmp_path)
 
