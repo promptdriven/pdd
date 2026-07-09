@@ -9500,3 +9500,58 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1938 (Pillar A): surgical regeneration for mature modules.
+#
+# For a mature module (existing non-empty code) with a small prompt delta,
+# `pdd sync` regeneration must be edit-shaped, not rebirth-shaped, so declared
+# symbols are preserved instead of dropped by a full "big change" regen. The
+# generate operation therefore drives `code_generator_main` with
+# `force_incremental_flag=True` by DEFAULT (surgical/edit-shaped), and only with
+# `force_incremental_flag=False` (today's full-regeneration behavior) when the
+# operator opts in via `pdd sync --fresh`. The `code_generator_main` layer keeps
+# the existing safety nets: a new/empty module or an undeterminable original
+# prompt still falls back to full generation, and a repair directive still
+# forces full regeneration.
+# ---------------------------------------------------------------------------
+def _capture_force_incremental(orchestration_fixture):
+    """Run a single generate op and return the force_incremental_flag kwarg
+    passed to code_generator_main."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Prompt changed'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    captured = {}
+
+    def fake_codegen(*_args, **_kwargs):
+        captured['force_incremental_flag'] = _kwargs.get('force_incremental_flag')
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("class Calculator:\n    pass\n")
+        return ("class Calculator:\n    pass\n", True, 0.10, "model")
+
+    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
+    return captured
+
+
+def test_generate_defaults_to_surgical_force_incremental(orchestration_fixture):
+    """Default sync must request edit-shaped (surgical) generation:
+    code_generator_main receives force_incremental_flag=True."""
+    captured = _capture_force_incremental(orchestration_fixture)
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    assert captured['force_incremental_flag'] is True
+
+
+def test_generate_fresh_flag_forces_full_regeneration(orchestration_fixture):
+    """`pdd sync --fresh` (fresh=True) must restore full-regeneration behavior:
+    code_generator_main receives force_incremental_flag=False."""
+    captured = _capture_force_incremental(orchestration_fixture)
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0, fresh=True)
+
+    assert captured['force_incremental_flag'] is False
