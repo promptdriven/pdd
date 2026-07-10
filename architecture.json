@@ -11234,7 +11234,7 @@
           },
           {
             "name": "_normalize_findings",
-            "signature": "(text: str, reviewer_name: str) -> List[AgenticFinding]",
+            "signature": "(text: str, reviewer_name: str, blocking_severities: Optional[set] = None) -> List[AgenticFinding]",
             "returns": "List[AgenticFinding]"
           },
           {

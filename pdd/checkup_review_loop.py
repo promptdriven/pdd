@@ -963,6 +963,34 @@ class ReviewLoopState:
     # final-state/report consumers from inferring the legacy independent
     # reviewer/fixer loop when one role intentionally handled both steps.
     same_role_review_fix: bool = False
+    # Issue #1788: number of fresh-final-review override sessions actually
+    # launched by ``_maybe_run_fresh_final_review_override``. An explicitly
+    # requested ``--fresh-final-review`` role must ALWAYS spin up a new
+    # reviewer session (even when it names the active reviewer), so this must
+    # be >= 1 whenever an explicit fresh-final role ran against an otherwise
+    # clean primary verdict. Regression tests assert on it to prove a fresh
+    # session really happened rather than silently reusing the prior verdict.
+    fresh_final_review_invocations: int = 0
+    # Issue #1788 (re-review, R5): actual budget consumption carried for the
+    # agentic artifact builder to RECOMPUTE ``budget.max_*_reached`` from
+    # observed values vs configured caps at artifact-build time, instead of
+    # copying the persisted ``max_*_reached`` flags. Those flags are only set at
+    # in-loop budget checks, so work performed after the last check can cross a
+    # cap/deadline without flipping them. ``rounds_completed`` counts loop
+    # rounds actually entered; ``elapsed_minutes`` is stamped from a monotonic
+    # start when the artifact is built; ``started_monotonic`` records that start.
+    rounds_completed: int = 0
+    elapsed_minutes: float = 0.0
+    started_monotonic: Optional[float] = None
+    # Issue #1788 (re-review, additional finding): set by ``_finalize`` when the
+    # render-time remote-head re-fetch proves the reviewed/verified SHA is stale
+    # (advanced, unobservable, or unconfirmable). ``_finalize`` already downgrades
+    # ``verification_status_by_round`` to ``stale`` and reverts ``fixed`` findings
+    # to ``open``, but leaves ``verified_head_sha`` set. Without this flag the
+    # agentic artifact would still emit ``validation_after_fix.status="verified"``
+    # with the now-stale SHA as evidence, contradicting the downgraded verdict.
+    # The builder consumes this to fail the validation evidence closed.
+    validation_stale: bool = False
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1013,7 +1041,9 @@ def run_checkup_review_loop(
         original_reviewer=reviewer,
         same_role_review_fix=same_role_review_fix,
     )
-    deadline = time.monotonic() + (config.max_minutes * 60.0)
+    loop_start_monotonic = time.monotonic()
+    state.started_monotonic = loop_start_monotonic
+    deadline = loop_start_monotonic + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
         cwd,
         context.pr_owner,
@@ -1250,6 +1280,9 @@ def run_checkup_review_loop(
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
             break
+        # Record the round we are actually entering so the agentic artifact can
+        # recompute ``max_rounds_reached`` from real consumption (R5).
+        state.rounds_completed = round_number
 
         if not quiet:
             console.print(
@@ -2080,11 +2113,20 @@ def _maybe_run_fresh_final_review_override(
 
     In ``--agentic-review-loop`` mode ``config.fresh_final_review_role`` names the
     role that performs the fresh final review in a new session, independent of the
-    primary reviewer/fixer. When it resolves to a role distinct from the active
-    reviewer and the loop otherwise reached a clean primary verdict, run one fresh
-    ``mode="review"`` pass with that role and let its outcome own
-    ``state.fresh_final_status`` (fresh eyes can veto an otherwise-clean verdict).
-    Best-effort: never raises, so a provider outage cannot wedge the loop.
+    primary reviewer/fixer. When the loop otherwise reached a clean primary
+    verdict, run one fresh ``mode="review"`` pass with that role and let its
+    outcome own ``state.fresh_final_status`` (fresh eyes can veto an
+    otherwise-clean verdict).
+
+    Issue #1788 new-session guarantee: an explicitly requested fresh-final role
+    ALWAYS launches a new reviewer session, even when it names the active
+    reviewer. A new session with the same provider still re-reviews without the
+    loop's accumulated context, which is the whole point of a fresh final pass;
+    silently reusing the prior clean verdict would let a ``pass`` ship without a
+    fresh review. On any exception the override fails closed to a hard non-clean
+    state (rather than leaving the prior clean status standing) so the artifact
+    and CLI exit non-zero, honoring #1788's nonzero-on-missing/error/ambiguous
+    semantics.
     """
     if not getattr(config, "agentic_mode", False):
         return
@@ -2096,10 +2138,16 @@ def _maybe_run_fresh_final_review_override(
         return
     role = resolved[0]
     # Only run when the primary path is otherwise clean; a non-clean verdict
-    # already blocks and does not need a confirming fresh pass.
-    if state.fresh_final_status != "clean" or role == state.active_reviewer:
+    # already blocks and does not need a confirming fresh pass. Note we do NOT
+    # short-circuit when ``role == state.active_reviewer``: an explicit
+    # fresh-final role must always spin up its own session (see docstring).
+    if state.fresh_final_status != "clean":
         return
     try:
+        # Count the session the moment we commit to launching it: a fresh
+        # review that raises still consumed an invocation and must be visible
+        # to regression tests asserting a fresh session really ran.
+        state.fresh_final_review_invocations += 1
         result = _run_review(
             reviewer=role,
             context=context,
@@ -2130,7 +2178,15 @@ def _maybe_run_fresh_final_review_override(
         else:
             state.reviewer_status[role] = "clean"
             state.fresh_final_status = "clean"
-    except Exception as exc:  # pragma: no cover - defensive: never break the loop
+    except Exception as exc:
+        # Fail closed (#1788): a fresh-final review that could not complete must
+        # not leave the earlier clean verdict standing. Downgrade to a hard
+        # non-clean state so the emitted artifact and CLI exit are non-zero.
+        state.reviewer_status[role] = "failed"
+        state.fresh_final_status = "failed"
+        state.stop_reason = (
+            f"Fresh final reviewer {role} raised and could not complete: {exc}"
+        )
         print(
             f"Warning: fresh final review override ({role}) failed: {exc}",
             file=sys.stderr,
@@ -2154,16 +2210,26 @@ def _maybe_write_agentic_artifact(
     """
     if not getattr(config, "agentic_mode", False):
         return None
+    # Stamp actual elapsed minutes from the loop's monotonic start so the
+    # artifact builder can recompute ``max_minutes_reached`` from real elapsed
+    # time vs the configured cap (R5), catching a deadline crossed by work done
+    # after the loop's last in-loop budget check.
+    started = getattr(state, "started_monotonic", None)
+    if isinstance(started, (int, float)):
+        state.elapsed_minutes = max(0.0, (time.monotonic() - started) / 60.0)
     try:
         from .checkup_agentic_artifact import build_agentic_v1_artifact
 
         final_gate_report: Optional[Dict[str, Any]] = None
+        explicit_canonical = str(
+            getattr(context, "final_gate_canonical_status", "") or ""
+        ).strip()
         raw_evidence = (getattr(context, "layer1_step5_evidence", "") or "").strip()
         if raw_evidence:
             try:
                 parsed = json.loads(raw_evidence)
                 if isinstance(parsed, dict):
-                    status = str(parsed.get("status", "") or "unknown")
+                    handoff_status = str(parsed.get("status", "") or "unknown")
                     # Carry real Layer 1 blockers into the artifact rather than an
                     # empty list. Prefer explicit blockers/findings; otherwise
                     # synthesize one from the failing command evidence.
@@ -2177,19 +2243,74 @@ def _maybe_write_agentic_artifact(
                             )
                             if text:
                                 blockers.append(_scrub_secrets(str(text)))
-                    if not blockers and status in _LAYER1_STEP5_ACTIONABLE_STATUSES:
+                    if (
+                        not blockers
+                        and handoff_status in _LAYER1_STEP5_ACTIONABLE_STATUSES
+                    ):
                         command = str(parsed.get("command") or "").strip() or "unknown"
                         exit_code = parsed.get("exit_code")
                         blockers.append(
                             _scrub_secrets(
-                                f"Layer 1 Step 5 failed (status={status}, "
+                                f"Layer 1 Step 5 failed (status={handoff_status}, "
                                 f"command={command}, exit_code={exit_code})"
                             )
                         )
-                    final_gate_report = {
-                        "layer1_status": status,
-                        "blockers": blockers,
-                    }
+                    # Issue #1788 (re-review): the Layer 1 Step 5 evidence is a
+                    # HISTORICAL handoff — it seeded a fixer-addressable
+                    # ``layer1:step5`` finding that Layer 2 then works on. It is
+                    # NOT the final canonical gate outcome. The final gate
+                    # explicitly permits a failed Step 5 to be handed to Layer 2
+                    # and ship once the finding is fixed
+                    # (tests/test_final_pr_gate.py). So the raw Step 5 failure
+                    # must not be labelled as the canonical final status after
+                    # Layer 2 resolves it, or the mirror would emit
+                    # failed/block/canonical_fail_agentic_not_authoritative while
+                    # the authoritative final gate passed.
+                    #
+                    #   * an explicit ``final_gate_canonical_status`` from the
+                    #     final-gate caller always wins — it is the authoritative
+                    #     verdict entering/leaving Layer 2;
+                    #   * otherwise, once Layer 2 has resolved (``fixed``) the
+                    #     seeded finding, the review-loop mirror is
+                    #     non-authoritative on the canonical verdict
+                    #     (``unknown``); the loop-state findings then drive the
+                    #     fallback pass/block signal in the builder — do NOT force
+                    #     ``fail``;
+                    #   * only while the seeded finding is still OPEN does the raw
+                    #     Step 5 failure remain the reported layer1 status/blocker.
+                    step5_still_open = any(
+                        getattr(f, "reviewer", "") == "layer1:step5"
+                        and str(getattr(f, "status", "open") or "open")
+                        .strip()
+                        .lower()
+                        != "fixed"
+                        for f in getattr(state, "findings", [])
+                    )
+                    if explicit_canonical:
+                        keep = explicit_canonical.strip().lower() in (
+                            "fail",
+                            "failed",
+                            "blocked",
+                            "error",
+                        )
+                        final_gate_report = {
+                            "layer1_status": explicit_canonical,
+                            "blockers": blockers if keep else [],
+                        }
+                    elif (
+                        handoff_status in _LAYER1_STEP5_ACTIONABLE_STATUSES
+                        and not step5_still_open
+                    ):
+                        # Handed-off Step 5 failure was resolved by Layer 2.
+                        final_gate_report = {
+                            "layer1_status": "unknown",
+                            "blockers": [],
+                        }
+                    else:
+                        final_gate_report = {
+                            "layer1_status": handoff_status,
+                            "blockers": blockers,
+                        }
             except json.JSONDecodeError:
                 final_gate_report = None
 
@@ -2199,15 +2320,11 @@ def _maybe_write_agentic_artifact(
         # report so ``_canonical_status_from_gate`` reports the true pass/fail
         # rather than defaulting to ``unknown`` and mislabeling a canonical pass
         # mirror as an unknown-verdict fallback.
-        if final_gate_report is None:
-            canonical_status = str(
-                getattr(context, "final_gate_canonical_status", "") or ""
-            ).strip()
-            if canonical_status:
-                final_gate_report = {
-                    "layer1_status": canonical_status,
-                    "blockers": [],
-                }
+        if final_gate_report is None and explicit_canonical:
+            final_gate_report = {
+                "layer1_status": explicit_canonical,
+                "blockers": [],
+            }
 
         artifact = build_agentic_v1_artifact(
             loop_state=state,
@@ -8184,6 +8301,13 @@ def _finalize(
             for finding in state.findings_by_key.values():
                 if finding.status == "fixed":
                     finding.status = "open"
+            # Issue #1788: the agentic mirror validation evidence keys off
+            # ``verified_head_sha``, which is intentionally left set here (the
+            # rendered report and final-state.json still show which SHA the
+            # verifier examined). Mark the validation stale so the artifact
+            # builder does not report it as ``verified`` against the now-stale
+            # SHA.
+            state.validation_stale = True
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)

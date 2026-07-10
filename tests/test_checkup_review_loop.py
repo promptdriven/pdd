@@ -14192,6 +14192,212 @@ def test_fresh_final_review_override_skips_when_not_agentic(tmp_path):
             quiet=False,
         )
     run_review.assert_not_called()
+    assert state.fresh_final_review_invocations == 0
+
+
+def _fresh_final_ctx(tmp_path):
+    import pdd.checkup_review_loop as crl
+
+    return crl.ReviewLoopContext(
+        issue_url="",
+        issue_content="",
+        repo_owner="o",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
+        pr_url="",
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+    )
+
+
+def test_fresh_final_review_override_runs_new_session_for_same_role(tmp_path):
+    """Issue #1788 new-session guarantee: an explicit ``--fresh-final-review``
+    role that names the already-active reviewer must still launch a fresh
+    review session rather than silently reusing the prior clean verdict."""
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    # Same provider as the active reviewer.
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="codex")
+
+    called = {}
+
+    def fake_run_review(*, reviewer, **kw):
+        called["reviewer"] = reviewer
+        return crl.ReviewResult(
+            reviewer=reviewer, status="clean", issue_aligned=True, findings=[]
+        )
+
+    with (
+        patch.object(crl, "_run_review", side_effect=fake_run_review),
+        patch.object(crl, "_record_review"),
+    ):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    # A fresh session actually ran for the same-provider role.
+    assert called.get("reviewer") == "codex"
+    assert state.fresh_final_review_invocations == 1
+    assert state.fresh_final_status == "clean"
+
+
+def test_fresh_final_review_override_fails_closed_on_exception(tmp_path):
+    """Issue #1788: if the fresh-final review raises, the override must fail
+    closed to a hard non-clean state instead of leaving the prior clean
+    verdict standing (so the artifact/CLI exit non-zero)."""
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="gemini")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("provider exploded mid-review")
+
+    with patch.object(crl, "_run_review", side_effect=boom):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    # The session was attempted, and the outcome fails closed.
+    assert state.fresh_final_review_invocations == 1
+    assert state.fresh_final_status == "failed"
+    assert state.fresh_final_status in crl.HARD_NOT_CLEAN_STATES
+    assert state.reviewer_status["gemini"] == "failed"
+
+    # The emitted artifact must block (non-zero CLI exit), not pass.
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert artifact.status != "passed"
+    assert artifact.verdict.decision == "block"
+
+
+def _step5_failed_evidence():
+    import json as _json
+
+    return _json.dumps(
+        {
+            "schema_version": "pdd.checkup.layer1_step5_evidence.v1",
+            "status": "failed",
+            "command": "pytest tests/test_x.py",
+            "exit_code": 1,
+            "selected_tests": ["tests/test_x.py"],
+            "output": "1 failed",
+        }
+    )
+
+
+def _step5_finding(status):
+    import pdd.checkup_review_loop as crl
+
+    return crl.ReviewFinding(
+        severity="critical",
+        reviewer="layer1:step5",
+        area="test",
+        evidence="status: failed",
+        finding="Layer 1 Step 5 shell-first test execution failed before Layer 2.",
+        required_fix="Fix the code or tests causing this command to fail.",
+        location="tests/test_x.py",
+        status=status,
+        round_number=0,
+    )
+
+
+def test_step5_failure_resolved_by_layer2_does_not_force_canonical_fail(
+    tmp_path, monkeypatch
+):
+    """Issue #1788 re-review: a Layer 1 Step 5 failure handed to Layer 2 and
+    fixed must not label the mirror canonical_fail; the historical handoff is
+    distinct from the final canonical outcome."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        original_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="Primary reviewer is clean.",
+    )
+    # Layer 2 resolved the seeded finding.
+    fixed = _step5_finding("fixed")
+    state.findings_by_key[fixed.key] = fixed
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+    assert data["authority"] != "canonical_fail_agentic_not_authoritative"
+    assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
+    assert data["status"] == "passed"
+    assert data["verdict"]["decision"] == "pass"
+
+
+def test_step5_failure_unresolved_still_blocks(tmp_path, monkeypatch):
+    """An unresolved Layer 1 Step 5 failure must still block the mirror."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        original_reviewer="codex",
+        fresh_final_status="clean",
+        stop_reason="",
+    )
+    # The seeded finding is still open (Layer 2 did not fix it).
+    open_finding = _step5_finding("open")
+    state.findings_by_key[open_finding.key] = open_finding
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+    assert data["status"] != "passed"
+    assert data["verdict"]["decision"] == "block"
 
 
 def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):

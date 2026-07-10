@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.297",
-  "timestamp": "2026-07-07T19:03:07.385464+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T03:17:51.875549+00:00",
   "command": "test",
-  "prompt_hash": "938b7ad8ba87ed04ea070ac0d52a1c02172b30a6c9d53378b96cd2b202ff57c9",
-  "code_hash": "8105a3b1359019f9342a29ac95c370c631207283f598d28d064abb259af2a2e5",
+  "prompt_hash": "6ba111358818707bbf817dbc7ca9882c99550935a56699e054dbee4848520645",
+  "code_hash": "c2b2970e1a7e5f2e38ff177c472d76dad915e4a50af156a8b9226c607a59d68a",
   "example_hash": "a81bbab38887c60541e5223917eadf1f64f6e88791ce59656ba2d1741f5a909d",
-  "test_hash": "de5e294c19f0c94be1b0c08f236807ae459e9470cc4d18683b15abdfed79396c",
+  "test_hash": "c1d0fec7f2b0f422241ab327c3f92f6c22c2814e52baf55b3ad70973c4dbcabc",
   "test_files": {
-    "test_checkup_agentic_artifact.py": "de5e294c19f0c94be1b0c08f236807ae459e9470cc4d18683b15abdfed79396c"
+    "test_checkup_agentic_artifact.py": "c1d0fec7f2b0f422241ab327c3f92f6c22c2814e52baf55b3ad70973c4dbcabc"
   },
   "include_deps": {
     "context/checkup_review_loop_example.py": "118c8edc6b193edb5e154f746dd4ef6a3f8bb23edcf9870f6a7be353c1bc4743",

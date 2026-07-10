@@ -360,6 +360,68 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _num(obj: Any, *names: str) -> Optional[float]:
+    """Return the first numeric attribute among ``names`` on ``obj``, else None.
+
+    Booleans are rejected (``isinstance(True, int)`` is truthy in Python) so a
+    stray flag never masquerades as a numeric cap/consumption value.
+    """
+    for name in names:
+        value = getattr(obj, name, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _recompute_budget_flags(loop_state: Any, config: Any) -> "AgenticBudget":
+    """R5: recompute ``budget.max_*_reached`` from ACTUAL consumption vs caps.
+
+    Issue #1788 re-review: the builder must not copy the persisted
+    ``loop_state.max_*_reached`` flags. Those are only set at the review loop's
+    in-loop budget checks, so work performed after the final check (e.g. the
+    fresh-final review, the final gate, report rendering) can cross a cap or the
+    wall-clock deadline without ever flipping them — yielding a
+    ``max_cost_reached=false`` artifact on a run that actually overran its cost
+    cap. Instead compare the real ``rounds_completed`` / ``elapsed_minutes`` /
+    ``total_cost`` carried on the loop state against the configured caps.
+
+    A flag is only left to the persisted value when neither an actual nor a
+    positive cap is available (minimal/legacy state objects), and even then it is
+    OR-ed with the persisted signal so a real in-loop trip is never lost. This is
+    fail-closed: an unknown value never downgrades a reached cap to ``False``.
+    """
+    max_rounds = _num(config, "max_rounds", "max_review_rounds")
+    max_minutes = _num(config, "max_minutes", "max_review_minutes")
+    max_cost = _num(config, "max_cost", "max_review_cost")
+
+    rounds_used = _num(loop_state, "rounds_completed", "rounds_used")
+    minutes_used = _num(loop_state, "elapsed_minutes")
+    cost_used = _num(loop_state, "total_cost")
+
+    def _reached(used: Optional[float], cap: Optional[float], persisted: bool) -> bool:
+        if used is not None and cap is not None and cap > 0:
+            # Recomputed from actuals; OR with any persisted in-loop trip so a
+            # real cap hit recorded mid-loop is never dropped.
+            return bool(used >= cap) or bool(persisted)
+        return bool(persisted)
+
+    return AgenticBudget(
+        max_rounds_reached=_reached(
+            rounds_used, max_rounds, bool(getattr(loop_state, "max_rounds_reached", False))
+        ),
+        max_minutes_reached=_reached(
+            minutes_used,
+            max_minutes,
+            bool(getattr(loop_state, "max_duration_reached", False)),
+        ),
+        max_cost_reached=_reached(
+            cost_used, max_cost, bool(getattr(loop_state, "max_cost_reached", False))
+        ),
+    )
+
+
 def _canonical_status_from_gate(final_gate_report: Any) -> str:
     """Derive ``pass``/``fail``/``unknown`` from a Layer-1/final-gate report."""
     if not isinstance(final_gate_report, dict):
@@ -606,9 +668,18 @@ def build_agentic_v1_artifact(
 
     # --- validation after fix --------------------------------------------
     verified = _coerce_str(getattr(loop_state, "verified_head_sha", "") or "")
+    # Issue #1788 (re-review): when ``_finalize`` proved the reviewed/verified
+    # head is stale it downgrades the round to ``stale`` and reverts fixed
+    # findings, but leaves ``verified_head_sha`` set for the rendered report.
+    # The mirror must not report that stale SHA as a ``verified`` validation, so
+    # fail the evidence closed to ``unverified`` (which the pass predicate treats
+    # as not-clean) and drop the stale SHA evidence.
+    validation_stale = bool(getattr(loop_state, "validation_stale", False))
     fix_was_attempted = bool(raw_fixes) and not no_fix
     if not fix_was_attempted:
         validation_status = "not_run"
+    elif validation_stale:
+        validation_status = "unverified"
     else:
         validation_status = "verified" if verified else "unverified"
     validation_after_fix = AgenticValidationResult(
@@ -617,11 +688,7 @@ def build_agentic_v1_artifact(
     )
 
     # --- budget (R5: computed fresh from config caps vs actual) -----------
-    budget = AgenticBudget(
-        max_rounds_reached=bool(getattr(loop_state, "max_rounds_reached", False)),
-        max_minutes_reached=bool(getattr(loop_state, "max_duration_reached", False)),
-        max_cost_reached=bool(getattr(loop_state, "max_cost_reached", False)),
-    )
+    budget = _recompute_budget_flags(loop_state, config)
     budget_exhausted = (
         budget.max_rounds_reached
         or budget.max_minutes_reached

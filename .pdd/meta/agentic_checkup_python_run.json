@@ -1,13 +1,14 @@
 {
-  "timestamp": "2026-07-06T22:20:51.399505+00:00",
+  "timestamp": "2026-07-10T02:50:05.009487+00:00",
   "exit_code": 0,
-  "tests_passed": 43,
+  "tests_passed": 50,
   "tests_failed": 0,
   "tests_skipped": 0,
-  "coverage": 55.6,
-  "test_hash": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
+  "coverage": 70.9,
+  "test_hash": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
   "test_files": {
-    "test_agentic_checkup.py": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
-    "test_agentic_checkup_orchestrator.py": "91dab25646ec71bffc6d66d2053bb3c436ef63b6ca8ab961629be45b10aa9a75"
+    "test_agentic_checkup.py": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
+    "test_agentic_checkup_orchestrator.py": "14a4d1db5c8e98e5d544be09d166b2b73f7432b2cd27a5fe20d5245aaa19221f",
+    "test_agentic_checkup_step5_pass_evidence.py": "a9d5ac08e1cbf1326ab352cffdfbb3bc84c280327b70413ef6f982860bf89e44"
   }
 }

@@ -320,8 +320,13 @@ class TestFinalGateLibrary:
         loop_mock.assert_called_once()
 
     def test_layer1_step5_memory_handoff_continues_to_layer2(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch
     ) -> None:
+        artifact_path = tmp_path / "hosted-agentic-artifact.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+        )
         key = _step5_shell_evidence_memory_key(tmp_path, 1)
         _STEP5_SHELL_EVIDENCE_MEMORY[key] = {
             "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
@@ -336,7 +341,47 @@ class TestFinalGateLibrary:
 
         def loop(*_a, **kwargs):
             context = kwargs["context"]
+            config = kwargs["config"]
             assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
+            assert context.final_gate_canonical_status == "pass"
+            assert config.agentic_mode is True
+            assert config.agentic_artifact_path == str(artifact_path)
+
+            # Model the successful Layer 2 resolution and use the production
+            # hosted writer. This exercises the final-gate -> review-loop
+            # canonical-status threading instead of rebuilding an artifact
+            # independently from a synthetic report.
+            from pdd.checkup_review_loop import (
+                ReviewFinding,
+                ReviewLoopState,
+                _maybe_write_agentic_artifact,
+            )
+
+            resolved = ReviewFinding(
+                severity="critical",
+                reviewer="layer1:step5",
+                area="test",
+                evidence="status: failed",
+                finding=(
+                    "Layer 1 Step 5 shell-first test execution failed before "
+                    "Layer 2."
+                ),
+                required_fix="Fix the failing tests.",
+                location="tests/test_widget.py",
+                status="fixed",
+                round_number=0,
+            )
+            state = ReviewLoopState(
+                reviewer_status={"codex": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                stop_reason="Primary reviewer is clean.",
+            )
+            state.findings_by_key[resolved.key] = resolved
+            assert _maybe_write_agentic_artifact(context, config, state) == str(
+                artifact_path
+            )
             _write_final_state(
                 tmp_path,
                 issue_number=2,
@@ -358,6 +403,15 @@ class TestFinalGateLibrary:
         assert success is True
         assert "Layer 1 Step 5 shell-first tests failed" in msg
         loop_mock.assert_called_once()
+
+        # Issue #1788: the hosted-agentic mirror must agree with the shippable
+        # final gate. The handed-off Step 5 failure, once Layer 2 resolves it,
+        # is historical evidence — it must NOT label the mirror canonical_fail.
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["layer1"]["status"] == "pass"
+        assert artifact["authority"] == "canonical_pass_agentic_mirror_clean"
+        assert artifact["status"] == "passed"
+        assert artifact["verdict"]["decision"] == "pass"
 
     def test_layer1_non_actionable_step5_evidence_still_skips_layer2(
         self, tmp_path: Path

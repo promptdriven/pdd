@@ -224,6 +224,77 @@ def test_build_artifact_budget_and_degraded_reviewer_fail_closed_when_clean():
     assert degraded.verdict.decision == "block"
 
 
+def test_build_artifact_budget_recomputed_from_actuals_not_stale_flags():
+    """Issue #1788 R5: budget booleans are recomputed from actual consumption
+    vs configured caps, never copied from stale persisted flags. A run whose
+    cost crossed the cap after the loop's last budget check (stale flag False)
+    must still serialize max_cost_reached True."""
+    art = build_agentic_v1_artifact(
+        loop_state=_state(total_cost=2.0, max_cost_reached=False),
+        config=_config(max_cost=1.0),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.budget.max_cost_reached is True
+    assert art.status == "budget_exhausted"
+    assert art.verdict.decision == "block"
+
+
+def test_build_artifact_budget_recomputes_rounds_and_minutes_from_actuals():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            rounds_completed=5, elapsed_minutes=91.0,
+            max_rounds_reached=False, max_duration_reached=False),
+        config=_config(max_rounds=5, max_minutes=90.0),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.budget.max_rounds_reached is True
+    assert art.budget.max_minutes_reached is True
+
+
+def test_build_artifact_budget_within_caps_reports_not_reached():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            total_cost=0.5, rounds_completed=1, elapsed_minutes=3.0,
+            max_cost_reached=False, max_rounds_reached=False,
+            max_duration_reached=False),
+        config=_config(max_cost=50.0, max_rounds=5, max_minutes=90.0),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.budget.max_cost_reached is False
+    assert art.budget.max_rounds_reached is False
+    assert art.budget.max_minutes_reached is False
+
+
+def test_build_artifact_budget_persisted_flag_never_lost_without_actuals():
+    # Minimal/legacy state without actual-consumption fields still honors a
+    # real in-loop cap trip (fail-closed, never downgrade to False).
+    art = build_agentic_v1_artifact(
+        loop_state=_state(max_cost_reached=True),
+        config=_config(max_cost=50.0),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.budget.max_cost_reached is True
+
+
+def test_build_artifact_stale_head_downgrades_validation_evidence():
+    """Issue #1788 additional finding: when _finalize marked the reviewed head
+    stale it leaves verified_head_sha set for the rendered report; the mirror
+    must NOT report that stale SHA as a verified validation."""
+    fix = SimpleNamespace(fixer="claude", fixer_result="attempted",
+                          push_status="pushed", changed_files=["a.py"],
+                          pushed_head_sha="deadbeef")
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            fixes=[fix], validation_stale=True,
+            verified_head_sha="0123456789abcdef0123456789abcdef01234567"),
+        config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.validation_after_fix.status == "unverified"
+    assert art.validation_after_fix.evidence == []
+    assert art.status != "passed"
+    assert art.verdict.decision == "block"
+
+
 def test_build_artifact_push_failure_dominates_attempted_fix():
     fix = SimpleNamespace(fixer="claude", fixer_result="attempted",
                           push_status="push_failed", changed_files=["a.py"],

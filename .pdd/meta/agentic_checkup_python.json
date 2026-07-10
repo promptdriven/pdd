@@ -1,20 +1,21 @@
 {
-  "pdd_version": "0.0.288.dev0",
-  "timestamp": "2026-07-06T22:20:51.523605+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T16:37:34.834388+00:00",
   "command": "test",
-  "prompt_hash": "df44bbee53f5f16e4c28b496fd218c8714213a460ad811da2085985059df60df",
-  "code_hash": "6e9335e94f15be5f797a3d9ae2e7c556e9973163dd2965684ce39fff834344ef",
+  "prompt_hash": "8ce1612db7df2ea1c8e68f2533afe0653cc408c325b3d91464ccad3a6e7e7016",
+  "code_hash": "342e5ed5ef35fb56a90811ceedaa8ad968aefc762709ccdd67cdeb457d473e1b",
   "example_hash": "57c5e8ae852946da79151ab49e44400f2c093bf6f8add0bf25a01c9872a13101",
   "test_hash": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
   "test_files": {
     "test_agentic_checkup.py": "7701daaecea04d9db90ca6885dad09b1d349cb4b95353ba8b225020f83ad10e5",
-    "test_agentic_checkup_orchestrator.py": "7bfdf5931599356de13b4129f62ad5ed7ae928e10ae391c88a2e16f62ebf8d5c"
+    "test_agentic_checkup_orchestrator.py": "14a4d1db5c8e98e5d544be09d166b2b73f7432b2cd27a5fe20d5245aaa19221f",
+    "test_agentic_checkup_step5_pass_evidence.py": "a9d5ac08e1cbf1326ab352cffdfbb3bc84c280327b70413ef6f982860bf89e44"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
-    "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
+    "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
     "context/checkup_review_loop_example.py": "118c8edc6b193edb5e154f746dd4ef6a3f8bb23edcf9870f6a7be353c1bc4743",
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"

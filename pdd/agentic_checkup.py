@@ -1329,6 +1329,13 @@ def run_agentic_checkup(
                     _run_review_loop_layer(
                         pr_content=final_gate_pr_content,
                         layer1_step5_evidence=layer1_step5_evidence_for_review,
+                        # The Step 5 failure is historical handoff evidence.
+                        # Reaching Layer 2 means the canonical final gate can
+                        # still pass once the seeded finding is fixed; thread
+                        # the same canonical-pass mirror status used by the
+                        # ordinary Layer 1 success path. A non-clean Layer 2
+                        # result still produces the blocking mirror authority.
+                        final_gate_canonical_status="pass",
                     )
                 )
                 ship = _review_loop_ship_verdict(

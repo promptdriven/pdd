@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.288.dev0",
-  "timestamp": "2026-07-06T22:20:51.580832+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T02:58:27.295549+00:00",
   "command": "test",
-  "prompt_hash": "7877bb17caf66acc9d2855f11efe570020472551e41a07c43410105f7d1a0f3f",
-  "code_hash": "215c421ea3347cf55f46689eacc64edc7048a3f43bbd6d8afe9642ec647bfa37",
+  "prompt_hash": "ef96e8febf9d4d95c7cc1a6469c468b162dfc73271a268cd93fb70620a915ea7",
+  "code_hash": "00e9ecb705c6e21a935905e93368598e5881a5d0f97ce5142cfe424db708cba5",
   "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
-  "test_hash": "354a62086518613583bd3389f33ca7b15bddd4d6bd571fbbc9465978a483665c",
+  "test_hash": "8f28e846ece6733b3d72e9a415748f61341ea69a90b0b0c86afedaebd5adc631",
   "test_files": {
-    "test_checkup.py": "354a62086518613583bd3389f33ca7b15bddd4d6bd571fbbc9465978a483665c",
+    "test_checkup.py": "8f28e846ece6733b3d72e9a415748f61341ea69a90b0b0c86afedaebd5adc631",
     "test_checkup_contracts.py": "084bbe8a423e7b2aa151bc5138837ade7f8e77790e8f7222baa4b37ba0dd6279",
     "test_checkup_interactive_demo.py": "77a9127e209175c38189e1cfd6476994493dc428bdf0054412e7476ba782cfb6",
     "test_checkup_simplify.py": "2a80956f21f2873e3eb48a113c6f756019db9e9b74b8a5e91e9052648caf8707"
@@ -15,7 +15,7 @@
   "include_deps": {
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
     "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
-    "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
+    "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
