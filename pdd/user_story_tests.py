@@ -85,11 +85,19 @@ def _resolve_prompts_dir(prompts_dir: Optional[str] = None) -> Path:
 
 
 def discover_story_files(stories_dir: Optional[str] = None) -> List[Path]:
-    """Discover user story files matching story__*.md in the stories directory."""
+    """Discover user story files matching story__*.md in the stories directory.
+
+    Recursive (``rglob``) so nested layouts (``user_stories/<sub>/story__*.md``)
+    are supported. This is the single shared discovery helper for the gate,
+    ``discover_story_ids`` (orphan detection), and — matching the coverage path's
+    own ``rglob`` lookups — keeps a nested story either fully supported or
+    rejected everywhere, never evaluated by one path yet flagged nonexistent by
+    another (pdd#1889 G-F5). The flat default layout is unaffected.
+    """
     base_dir = _resolve_stories_dir(stories_dir)
     if not base_dir.exists() or not base_dir.is_dir():
         return []
-    return sorted(p for p in base_dir.glob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file())
+    return sorted(p for p in base_dir.rglob(f"{STORY_PREFIX}*{STORY_SUFFIX}") if p.is_file())
 
 
 def discover_prompt_files(
@@ -448,9 +456,27 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     # all (merged with still-resolvable existing refs) without spending an LLM
     # call second-guessing the caller.
     if explicit_prompt_files and force_relink:
+        # #1889/#1951: when explicit --prompt inputs are passed, `prompt_files` is
+        # the explicit-only pool, so an already-linked ref that isn't part of this
+        # operation would fail to resolve against it and be silently dropped --
+        # destroying a valid prior link. Resolve existing refs against the FULL
+        # discovered project prompt pool (from prompts_dir), then fall back to the
+        # ref as a path (relative to CWD) and to prompts_root/ref. The prompts_root
+        # fallback is load-bearing for refs stored relative to --prompts-dir (a
+        # bare basename like `calc_python.prompt` for `prompts/calc_python.prompt`),
+        # which is neither in the explicit pool nor a file relative to CWD.
+        resolution_pool = discover_prompt_files(
+            prompts_dir, include_llm=include_llm_prompts
+        )
         existing_paths: List[Path] = []
         for ref in _parse_story_prompt_metadata(story_content):
-            resolved = _resolve_prompt_path(ref, prompt_files, prompts_root)
+            resolved = _resolve_prompt_path(ref, resolution_pool, prompts_root)
+            if resolved is None and ref:
+                candidate = Path(ref)
+                if candidate.is_file():
+                    resolved = candidate
+                elif prompts_root is not None and (prompts_root / ref).is_file():
+                    resolved = prompts_root / ref
             if resolved:
                 existing_paths.append(resolved)
         linked_prompt_paths = _dedupe_prompt_paths(existing_paths + explicit_prompt_files)

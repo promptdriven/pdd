@@ -85,10 +85,14 @@ contract from the edited Story + the issue recorded in the `issue-ref` header
 Story is a no-op.
 
 Validation (`run_user_story_tests` / `detect_change`) uses the human Story AND
-its contract combined as the oracle. `discover_story_files()` only matches
-top-level `story__*.md`, so contract files under `contracts/` are never treated
-as separate stories. Do not emit `## Prompt Scope`; list scoped prompts in the
-contract `## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+its contract combined as the oracle. `discover_story_files()` matches
+`story__*.md` **recursively** (`rglob`), so nested layouts
+(`user_stories/<sub>/story__*.md`) are supported — a nested story is either fully
+supported or rejected everywhere, never evaluated by one path yet flagged
+nonexistent by another. Contract files under `contracts/` do not match the
+`story__*.md` pattern and are never treated as separate stories. Do not emit
+`## Prompt Scope`; list scoped prompts in the contract `## Context` and in
+`<!-- pdd-story-prompts: ... -->` metadata.
 
 **Durability.** The generator must instruct the model to describe behavior by the
 user's stable goal and observable outcome, NEVER by comparison to a specific

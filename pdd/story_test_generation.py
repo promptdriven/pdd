@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from .user_story_tests import story_id
+from .user_story_tests import _normalized_story_for_hash, story_id
 
 
 _HEADING_RE = re.compile(r"^(?P<marks>#{2,6})\s+(?P<title>.+?)\s*$", re.MULTILINE)
@@ -51,9 +51,33 @@ def _read_story_bundle(story_path: Path) -> tuple[str, Optional[Path], str]:
     return story_text, None, story_text
 
 
+def _normalized_bundle(story_text: str, contract_path: Optional[Path]) -> str:
+    """Return the story(+contract) bundle normalized for hashing.
+
+    Both portions run through the canonical ``_normalized_story_for_hash`` so a
+    metadata-only edit (relinking prompts/dev-units, which rewrites the
+    ``<!-- pdd-story-prompts ... -->`` comments) does NOT change the hash
+    (pdd#1889 Bug 2), while any change to the human-facing prose does. The
+    contract stays part of the hash so a contract edit is still a change.
+    """
+    bundle = _normalized_story_for_hash(story_text)
+    if contract_path is not None and contract_path.exists():
+        try:
+            contract_text = contract_path.read_text(encoding="utf-8")
+        except OSError:
+            return bundle
+        bundle = f"{bundle}\n\n{_normalized_story_for_hash(contract_text)}"
+    return bundle
+
+
 def story_bundle_hash(story_path: Path) -> str:
-    """Return the stable hash generated tests record for staleness checks."""
-    _, _, bundle = _read_story_bundle(story_path)
+    """Return the stable hash generated tests record for staleness checks.
+
+    Normalized so a metadata-only prompt/dev-unit relink does not flip it
+    (pdd#1889 Bug 2); see :func:`_normalized_bundle`.
+    """
+    story_text, contract_path, _ = _read_story_bundle(story_path)
+    bundle = _normalized_bundle(story_text, contract_path)
     return hashlib.sha256(bundle.encode("utf-8")).hexdigest()[:16]
 
 
@@ -166,9 +190,12 @@ def _render_test(
             "",
             "",
             "def _bundle_hash() -> str:",
-            "    import hashlib",
+            "    # Reuse the canonical primitive so the recorded PDD_STORY_HASH and",
+            "    # the gate's freshness check can never drift (pdd#1889). A",
+            "    # metadata-only prompt relink does not change this value.",
+            "    from pdd.story_test_generation import story_bundle_hash",
             "",
-            "    return hashlib.sha256(_story_bundle().encode(\"utf-8\")).hexdigest()[:16]",
+            "    return story_bundle_hash(STORY_PATH)",
             "",
             "",
             "@pytest.mark.story(story_id=PDD_STORY_ID)",
@@ -248,7 +275,13 @@ def generate_story_regression_test(
     # ## Negative Cases as Python expressions over `result` (delegating to
     # story_test_generator). Contracts without an Entry Point fall through to
     # the text-pinning generator below, which pins the story/contract clauses.
-    if md_sections.get("entry point"):
+    # Route on heading PRESENCE, not truthiness: a declared but empty/partial
+    # ## Entry Point must surface the behavioral generator's validation error
+    # (missing `- module:`/`- callable:`) instead of silently degrading to a
+    # text-pin that the user would mistake for a real behavioral oracle
+    # (pdd#1889 C-F7). A contract with no ## Entry Point at all still falls
+    # through to the text-pinning generator below.
+    if "entry point" in md_sections:
         return _generate_behavioral_test(story_path, output)
 
     oracle_text = _section(md_sections, "Oracle", "Acceptance Criteria", "Story")
@@ -275,7 +308,9 @@ def generate_story_regression_test(
 
     output_path = _resolve_output(story_path, output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    bundle_hash = hashlib.sha256(bundle.encode("utf-8")).hexdigest()[:16]
+    # Record the canonical (normalized) bundle hash, identical to what the gate
+    # recomputes, so a metadata-only relink never falsely stales this test.
+    bundle_hash = story_bundle_hash(story_path)
     rendered = _render_test(
         slug=slug,
         story_path=story_path,

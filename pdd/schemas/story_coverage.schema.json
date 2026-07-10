@@ -20,7 +20,7 @@
   ],
   "properties": {
     "schema_version": {"type": "integer", "minimum": 1},
-    "status": {"type": "string", "enum": ["ok", "not_applicable"]},
+    "status": {"type": "string", "enum": ["ok", "not_applicable", "failing", "error"]},
     "run_id": {"type": "string", "minLength": 1},
     "generated_at": {"type": "string", "minLength": 1},
     "story_count": {"type": "integer", "minimum": 0},
