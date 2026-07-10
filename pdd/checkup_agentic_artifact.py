@@ -15,7 +15,6 @@ This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
 ``checkup_verdict_engine``) mirror the tuple verbatim and MUST NOT extend it.
 """
 
-import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -267,11 +266,24 @@ def _normalize_findings(
         return []
     try:
         try:
-            payload = json.loads(str(raw))
-        except (json.JSONDecodeError, TypeError):
+            # Use the review loop's canonical extractor so the mirror accepts
+            # exactly the same bare, embedded, and fenced JSON shapes as the
+            # reviewer parser.  In particular, do this before the severity
+            # regex fallback: a clean JSON summary such as "No critical issues
+            # found" is not itself a critical finding.
+            from .checkup_review_loop import _extract_json
+
+            payload = _extract_json(str(raw))
+        except (ImportError, TypeError):
             payload = None
-        if isinstance(payload, dict) and isinstance(payload.get("findings"), list):
-            for item in payload["findings"]:
+        if isinstance(payload, dict):
+            raw_findings = payload.get("findings")
+            # Mirror ``_parse_review_output``: once a JSON reviewer payload has
+            # been recognized, an absent/non-list findings field is an empty
+            # result, not an invitation to mine its summary with regexes.
+            if not isinstance(raw_findings, list):
+                return []
+            for item in raw_findings:
                 if not isinstance(item, dict):
                     continue
                 severity = _coerce_str(item.get("severity"), "info").strip().lower()
@@ -394,8 +406,9 @@ def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
     """Map a ``FixResult`` onto the spec ``fix_attempts[].status`` vocabulary.
 
     Spec values: ``skipped | applied | failed | timeout``. ``FixResult`` carries
-    ``fixer_result`` in ``{attempted, skipped, failed}``; ``"attempted"`` means
-    the fixer ran and produced changes, i.e. ``applied``.
+    ``fixer_result`` in ``{attempted, skipped, failed}``, but that describes the
+    fixer subprocess only.  A fix is ``applied`` exclusively when the separate
+    push trust boundary says ``pushed``.
     """
     result = _coerce_str(fixer_result).strip().lower()
     push = _coerce_str(push_status).strip().lower()
@@ -405,11 +418,11 @@ def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
         return "applied"
     if "timeout" in result:
         return "timeout"
-    if result == "attempted":
-        return "applied"
     if result in ("skipped", "failed"):
         return result
-    # No explicit fixer_result: infer from push outcome.
+    # ``not_attempted``, a missing push status, and unknown push states are all
+    # non-applied.  This includes an otherwise-successful fixer that a
+    # prompt/source guard stopped before commit/push.
     return "skipped"
 
 
@@ -547,9 +560,10 @@ def build_agentic_v1_artifact(
         )
 
     # --- fix attempts (R3: empty in nofix) --------------------------------
+    raw_fixes = list(getattr(loop_state, "fixes", []) or [])
     fix_attempts: List[AgenticFixAttempt] = []
     if not no_fix:
-        for fx in list(getattr(loop_state, "fixes", []) or []):
+        for fx in raw_fixes:
             try:
                 fix_attempts.append(
                     AgenticFixAttempt(
@@ -592,10 +606,14 @@ def build_agentic_v1_artifact(
 
     # --- validation after fix --------------------------------------------
     verified = _coerce_str(getattr(loop_state, "verified_head_sha", "") or "")
-    validation_status = "verified" if verified else ("not_run" if no_fix else "unverified")
+    fix_was_attempted = bool(raw_fixes) and not no_fix
+    if not fix_was_attempted:
+        validation_status = "not_run"
+    else:
+        validation_status = "verified" if verified else "unverified"
     validation_after_fix = AgenticValidationResult(
         status=validation_status,
-        evidence=[verified] if verified else [],
+        evidence=[verified] if validation_status == "verified" else [],
     )
 
     # --- budget (R5: computed fresh from config caps vs actual) -----------
@@ -625,13 +643,58 @@ def build_agentic_v1_artifact(
         if structured
         else all_findings
     )
-    remaining_open = [f for f in verdict_findings if f.blocking]
     stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
-    reviewer_states = {r.status for r in reviewers}
-    hard_reviewer_state = bool(reviewer_states & {
-        "failed", "degraded", "missing", "error", "timeout", "blocked"
-    })
-    validation_clean = no_fix or validation_status == "verified"
+    # A successful reviewer fallback intentionally leaves the failed primary
+    # row in the artifact for diagnostics.  Once the loop has promoted a
+    # different active reviewer, only that active/otherwise-unsuperseded state
+    # is authoritative for the verdict.  Preserve every row and finding in the
+    # artifact, but exclude explicitly superseded reviewer data from gating.
+    active_reviewer = _coerce_str(getattr(loop_state, "active_reviewer", "")).strip()
+    original_reviewer = _coerce_str(
+        getattr(loop_state, "original_reviewer", "")
+    ).strip()
+    superseded_reviewers: set = set()
+    if active_reviewer and original_reviewer and active_reviewer != original_reviewer:
+        superseded_reviewers.add(original_reviewer)
+    reviewer_status_details = dict(
+        getattr(loop_state, "reviewer_status_details", {}) or {}
+    )
+    for name, detail in reviewer_status_details.items():
+        if not isinstance(detail, dict):
+            continue
+        if _coerce_str(detail.get("superseded_by_fallback")).strip().lower() == "true":
+            superseded_reviewers.add(_coerce_str(name))
+
+    hard_reviewer_states = {
+        "failed",
+        "degraded",
+        "missing",
+        "error",
+        "timeout",
+        "blocked",
+    }
+    active_status = _coerce_str(reviewer_status.get(active_reviewer)).strip().lower()
+    if active_reviewer and active_status and active_status not in hard_reviewer_states:
+        # Compatibility with older/minimal loop-state objects that predate
+        # ``original_reviewer``: promotion of a usable active reviewer is enough
+        # to identify other retained hard-failure rows as diagnostics.
+        superseded_reviewers.update(
+            r.name
+            for r in reviewers
+            if r.name != active_reviewer and r.status in hard_reviewer_states
+        )
+
+    verdict_findings = [
+        finding
+        for finding in verdict_findings
+        if finding.reviewer not in superseded_reviewers
+    ]
+    remaining_open = [f for f in verdict_findings if f.blocking]
+    reviewer_states = {
+        r.status for r in reviewers if r.name not in superseded_reviewers
+    }
+    hard_reviewer_state = bool(reviewer_states & hard_reviewer_states)
+    validation_clean = validation_status in {"not_run", "verified"}
     passed = (canonical_status != "fail" and not budget_exhausted
               and not hard_reviewer_state and fresh_status == "clean"
               and validation_clean and not remaining_open)

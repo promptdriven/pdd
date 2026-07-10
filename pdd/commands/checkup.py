@@ -60,10 +60,40 @@ def _forward_subcommand_json(
     return forwarded
 
 
+def _agentic_review_loop_artifact_path(pr_url: Optional[str]) -> Optional[Path]:
+    """Return the standalone agentic artifact path for ``pr_url``."""
+    if pr_url is None:
+        return None
+    parsed = _parse_pr_url(pr_url)
+    if not parsed:
+        return None
+    _owner, _repo, pr_number = parsed
+    return Path.cwd() / f"pdd-checkup-agentic-{pr_number}.json"
+
+
+def _prepare_agentic_review_loop_artifact(
+    pr_url: Optional[str],
+) -> Tuple[Optional[Path], bool]:
+    """Remove any prior artifact before a standalone agentic invocation.
+
+    The boolean is provenance for the later reader.  If an existing artifact
+    cannot be removed, the current invocation may still run and report useful
+    diagnostics, but that path must not be accepted as its output.
+    """
+    artifact_path = _agentic_review_loop_artifact_path(pr_url)
+    if artifact_path is None:
+        return None, False
+    try:
+        artifact_path.unlink(missing_ok=True)
+    except OSError:
+        return artifact_path, False
+    return artifact_path, True
+
+
 def _emit_agentic_review_loop_json(
     *,
-    pr_url: Optional[str],
-    success: bool,
+    artifact_path: Optional[Path],
+    artifact_path_prepared: bool,
     message: str,
     cost: float,
     model: str,
@@ -81,14 +111,11 @@ def _emit_agentic_review_loop_json(
     """
     import json as _json  # pylint: disable=import-outside-toplevel
 
-    artifact_path: Optional[Path] = None
-    if pr_url is not None:
-        parsed = _parse_pr_url(pr_url)
-        if parsed:
-            _owner, _repo, pr_number = parsed
-            artifact_path = Path.cwd() / f"pdd-checkup-agentic-{pr_number}.json"
-
-    if artifact_path is not None and artifact_path.is_file():
+    if (
+        artifact_path_prepared
+        and artifact_path is not None
+        and artifact_path.is_file()
+    ):
         try:
             artifact = _json.loads(artifact_path.read_text(encoding="utf-8"))
             click.echo(_json.dumps(artifact, indent=2))
@@ -1352,6 +1379,17 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if start_step_override.is_integer():
             start_step_override = int(start_step_override)
 
+    agentic_artifact_path: Optional[Path] = None
+    agentic_artifact_path_prepared = False
+    if agentic_review_loop:
+        # Establish per-invocation provenance before the best-effort writer
+        # runs.  A stale pass artifact from an earlier invocation must never
+        # turn a current blocking/missing artifact into exit 0.
+        (
+            agentic_artifact_path,
+            agentic_artifact_path_prepared,
+        ) = _prepare_agentic_review_loop_artifact(pr_url)
+
     try:
         success, message, cost, model = run_agentic_checkup(
             issue_url=effective_issue_url,
@@ -1404,8 +1442,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             # Standalone adversarial PR checkup emits the machine-readable
             # pdd.checkup.agentic.v1 verdict on stdout (implies --json).
             agentic_passed = _emit_agentic_review_loop_json(
-                pr_url=pr_url,
-                success=success,
+                artifact_path=agentic_artifact_path,
+                artifact_path_prepared=agentic_artifact_path_prepared,
                 message=message,
                 cost=cost,
                 model=model,

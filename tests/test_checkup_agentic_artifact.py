@@ -92,6 +92,15 @@ def test_normalize_findings_clean_json_does_not_parse_summary_severity():
     assert _normalize_findings(raw, "codex") == []
 
 
+def test_normalize_findings_clean_fenced_json_does_not_parse_summary_severity():
+    raw = """Reviewer result:
+```json
+{"status":"clean","summary":"No critical issues found","findings":[]}
+```
+"""
+    assert _normalize_findings(raw, "codex") == []
+
+
 def test_normalize_findings_caps_free_text():
     huge = "critical " + ("x" * (FINDING_TEXT_MAX_CHARS + 500))
     findings = _normalize_findings(huge, "codex")
@@ -125,6 +134,8 @@ def _state(**over):
         fixes=[],
         fresh_final_status="clean",
         active_reviewer="codex",
+        original_reviewer="codex",
+        reviewer_status_details={},
         verified_head_sha="0123456789abcdef0123456789abcdef01234567",
         remote_pr_head_sha=None,
         reviewed_head_sha=None,
@@ -312,6 +323,55 @@ def test_build_artifact_passed_true_despite_nonempty_stop_reason():
     assert art.verdict.reason == "Primary reviewer is clean."
 
 
+def test_build_artifact_clean_fix_mode_without_fixer_attempt_passes():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            fixes=[],
+            verified_head_sha="",
+            fresh_final_status="clean",
+            stop_reason="Primary reviewer is clean.",
+        ),
+        config=_config(no_fix=False),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.validation_after_fix.status == "not_run"
+    assert art.status == "passed"
+    assert art.verdict.decision == "pass"
+
+
+@pytest.mark.parametrize("original_reviewer", ["codex", ""])
+def test_build_artifact_clean_fallback_supersedes_failed_primary(original_reviewer):
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "failed", "gemini": "clean", "claude": "fixer"},
+            active_reviewer="gemini",
+            original_reviewer=original_reviewer,
+            raw_outputs=[
+                ("review:codex:round1", "critical provider failure"),
+                (
+                    "review:gemini:round1",
+                    '```json\n{"status":"clean","findings":[]}\n```',
+                ),
+            ],
+            fixes=[],
+            verified_head_sha="",
+            fresh_final_status="clean",
+            stop_reason="Fallback reviewer is clean.",
+        ),
+        config=_config(no_fix=False),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert {reviewer.name: reviewer.status for reviewer in art.reviewers} == {
+        "codex": "failed",
+        "gemini": "clean",
+    }
+    assert any(finding.reviewer == "codex" for finding in art.findings)
+    assert art.status == "passed"
+    assert art.verdict.decision == "pass"
+
+
 def test_build_artifact_fixed_blockers_do_not_fail_clean_final_review():
     # A successful fix cycle leaves historical blocker findings in loop state
     # with status="fixed", and raw_outputs may still contain earlier reviewer
@@ -455,6 +515,29 @@ def test_build_artifact_fix_status_maps_attempted_to_applied():
     assert art.fix_attempts[0].status == "applied"
 
 
+@pytest.mark.parametrize("push_status", ["not_attempted", None])
+def test_build_artifact_attempted_fix_without_push_is_not_applied(push_status):
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            push_status=push_status,
+            changed_files=["a.py"],
+            pushed_head_sha=None,
+        )
+    ]
+    art = build_agentic_v1_artifact(
+        loop_state=_state(fixes=fixes, verified_head_sha=""),
+        config=_config(no_fix=False),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.fix_attempts[0].status == "skipped"
+    assert art.fix_attempts[0].commit_sha is None
+    assert art.validation_after_fix.status == "unverified"
+    assert art.status != "passed"
+
+
 def test_build_artifact_layer1_blockers_passed_through():
     art = build_agentic_v1_artifact(
         loop_state=_state(), config=_config(), context=_context(),
@@ -524,8 +607,17 @@ def test_build_artifact_validation_status_not_run_in_nofix():
 
 
 def test_build_artifact_validation_status_verified_with_sha():
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            push_status="pushed",
+            changed_files=["a.py"],
+            pushed_head_sha="abc123",
+        )
+    ]
     art = build_agentic_v1_artifact(
-        loop_state=_state(verified_head_sha="abc123"),
+        loop_state=_state(verified_head_sha="abc123", fixes=fixes),
         config=_config(), context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
