@@ -1,0 +1,161 @@
+"""Tests for protected base/head verification-profile authority."""
+
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+
+from pdd.sync_core import build_unit_manifest, load_verification_profiles
+from pdd.sync_core.identity import initialize_repository_identity
+
+
+REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def _commit(root: Path, message: str) -> str:
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _profile(requirements=None, obligations=None):
+    return {
+        "profiles": [
+            {
+                "prompt_path": "prompts/widget_python.prompt",
+                "language_id": "python",
+                "required_requirement_ids": (
+                    ["REQ-1"] if requirements is None else requirements
+                ),
+                "obligations": (
+                    [
+                    {
+                        "obligation_id": "pytest",
+                        "kind": "test",
+                        "validator_id": "pytest",
+                        "validator_config_digest": "pytest-v1",
+                        "requirement_ids": ["REQ-1"],
+                        "artifact_paths": ["tests/test_widget.py"],
+                        "required": True,
+                    }
+                    ]
+                    if obligations is None
+                    else obligations
+                ),
+            }
+        ]
+    }
+
+
+def _repository(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "profiles@example.com")
+    _git(root, "config", "user.name", "Profiles Test")
+    initialize_repository_identity(root, REPOSITORY_ID)
+    (root / "prompts").mkdir()
+    (root / "prompts/widget_python.prompt").write_text("REQ-1: Build widget\n")
+    return root
+
+
+def _manifest(root: Path, base: str, head: str):
+    return build_unit_manifest(root, base_ref=base, head_ref=head)
+
+
+def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / ".pdd/verification-profiles.json").write_text(json.dumps(_profile()))
+    commit = _commit(root, "profile")
+    profiles = load_verification_profiles(root, _manifest(root, commit, commit))
+    assert profiles.coverage == 1.0
+    assert profiles.invalid_reasons == ()
+
+
+def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
+    root = _repository(tmp_path)
+    commit = _commit(root, "no profile")
+    profiles = load_verification_profiles(root, _manifest(root, commit, commit))
+    assert profiles.coverage == 0.0
+    assert any("profile is missing" in item for item in profiles.invalid_reasons)
+    assert profiles.profiles[0].complete is False
+
+
+def test_candidate_cannot_delete_protected_obligation(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile()))
+    base = _commit(root, "base profile")
+    profile_path.write_text(json.dumps(_profile(obligations=[])))
+    head = _commit(root, "delete obligation")
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    effective = profiles.profiles[0]
+    assert [item.obligation_id for item in effective.obligations] == ["pytest"]
+    assert any("removed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile()))
+    base = _commit(root, "base profile")
+    changed = _profile()
+    changed["profiles"][0]["obligations"][0]["validator_id"] = "candidate-validator"
+    profile_path.write_text(json.dumps(changed))
+    head = _commit(root, "remap validator")
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.profiles[0].obligations[0].validator_id == "pytest"
+    assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
+
+
+def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile()))
+    base = _commit(root, "base profile")
+    (root / "prompts/widget_python.prompt").write_text(
+        "REQ-1: Build widget\nREQ-2: Reject invalid input\n"
+    )
+    profile_path.write_text(json.dumps(_profile(requirements=["REQ-1", "REQ-2"])))
+    head = _commit(root, "new unmapped requirement")
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.coverage == 0.0
+    assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
+
+
+def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / "prompts/widget_python.prompt").write_text(
+        "REQ-1: Build widget\nREQ-2: Reject invalid input\n"
+    )
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(_profile(requirements=["REQ-1"])))
+    commit = _commit(root, "dishonest profile")
+    profiles = load_verification_profiles(root, _manifest(root, commit, commit))
+    assert any(
+        "do not match immutable prompt requirements" in item
+        for item in profiles.invalid_reasons
+    )
+    assert profiles.coverage == 0.0
+
+
+def test_prompt_without_explicit_ids_uses_full_contract_digest(tmp_path) -> None:
+    root = _repository(tmp_path)
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.write_text("Build a widget with validated input.\n")
+    digest = hashlib.sha256(prompt.read_bytes()).hexdigest()
+    profile = _profile(requirements=[f"CONTRACT-SHA256:{digest}"])
+    profile["profiles"][0]["obligations"][0]["requirement_ids"] = [
+        f"CONTRACT-SHA256:{digest}"
+    ]
+    (root / ".pdd/verification-profiles.json").write_text(json.dumps(profile))
+    commit = _commit(root, "contract digest")
+    profiles = load_verification_profiles(root, _manifest(root, commit, commit))
+    assert profiles.invalid_reasons == ()
+    assert profiles.coverage == 1.0
