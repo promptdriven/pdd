@@ -686,8 +686,17 @@ def _build_agentic_v1_artifact(
     )
 
     reviewers: List[AgenticReviewer] = []
-    reviewer_commands: Dict[str, str] = _runtime_mapping(
-        config, "reviewer_commands"
+    # Hosted fallback/mirror commands are metadata only. They live separately
+    # from ``config.reviewer_commands`` so the canonical prompt path cannot
+    # consume them; prefer that artifact-only mapping when present while
+    # retaining the legacy/manual agentic-loop behavior as a fallback.
+    artifact_reviewer_commands: Dict[str, str] = _runtime_mapping(
+        config, "artifact_reviewer_commands"
+    )
+    reviewer_commands: Dict[str, str] = (
+        artifact_reviewer_commands
+        if artifact_reviewer_commands
+        else _runtime_mapping(config, "reviewer_commands")
     )
     # The loop reports a role as ``fixer`` in reviewer_status purely for
     # traceability; that is not a reviewer verdict, so skip it here.

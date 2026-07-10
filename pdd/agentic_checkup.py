@@ -1246,10 +1246,12 @@ def run_agentic_checkup(
                 else None
             ),
             agentic_artifact_path=hosted_agentic_artifact_path,
-            # Per-role slash commands parsed from ``--reviewers codex:/review,...``
-            # or hosted ``PDD_AGENTIC_CHECKUP_REVIEWERS`` so review prompts and
-            # the agentic artifact carry each reviewer's command.
-            reviewer_commands=parse_reviewer_commands(hosted_reviewers),
+            # Canonical prompts may only consume commands supplied by the
+            # caller. Hosted fallback/mirror commands are artifact metadata;
+            # keeping them in a separate field prevents the non-authoritative
+            # env contract from steering ``_reviewer_command_block``.
+            reviewer_commands=parse_reviewer_commands(reviewers),
+            artifact_reviewer_commands=parse_reviewer_commands(hosted_reviewers),
         )
         return run_checkup_review_loop(
             context=loop_context,

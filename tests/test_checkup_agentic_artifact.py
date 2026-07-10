@@ -666,6 +666,23 @@ def test_build_artifact_reviewer_command_populated():
     assert cmds["claude"] == "/code-review"
 
 
+def test_build_artifact_prefers_artifact_only_reviewer_commands():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status={"codex": "clean", "claude": "clean"}),
+        config=_config(
+            reviewer_commands={"codex": "", "claude": ""},
+            artifact_reviewer_commands={
+                "codex": "/review",
+                "claude": "/code-review",
+            },
+        ),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    cmds = {r.name: r.command for r in art.reviewers}
+    assert cmds == {"codex": "/review", "claude": "/code-review"}
+
+
 def test_build_artifact_fix_status_maps_attempted_to_applied():
     fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
                              push_status="pushed", changed_files=["a.py"],

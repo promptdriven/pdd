@@ -14084,6 +14084,26 @@ def test_review_prompt_omits_reviewer_slash_command_when_unconfigured(tmp_path):
     assert "Provider-native review command requested" not in prompt
 
 
+def test_review_prompt_ignores_artifact_only_reviewer_command(tmp_path):
+    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+
+    prompt = _review_prompt(
+        reviewer="codex",
+        context=_ctx(tmp_path),
+        round_number=1,
+        state=ReviewLoopState(),
+        config=ReviewLoopConfig(
+            reviewer_commands={"codex": ""},
+            artifact_reviewer_commands={"codex": "/review"},
+        ),
+        mode="review",
+        findings_to_verify=[],
+    )
+
+    assert "Provider-native review command requested" not in prompt
+    assert "/review" not in prompt
+
+
 def test_review_loop_config_agentic_fields_default_off():
     from pdd.checkup_review_loop import ReviewLoopConfig
 

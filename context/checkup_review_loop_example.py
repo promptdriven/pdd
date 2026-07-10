@@ -158,6 +158,9 @@ class ReviewLoopConfig:
     agentic_artifact_path: Optional[str] = None
     reviewer_commands: Dict[str, str] = field(default_factory=dict)
     no_fix: bool = False
+    # Hosted fallback/mirror commands serialized as artifact metadata only;
+    # canonical reviewer prompts consume ``reviewer_commands`` above.
+    artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

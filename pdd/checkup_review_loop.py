@@ -756,6 +756,12 @@ class ReviewLoopConfig:
     # that constructs ``ReviewLoopConfig(no_fix=True)`` cannot invoke the fixer,
     # commit, or push.
     no_fix: bool = False
+    # APPENDED — hosted fallback/mirror reviewer commands retained exclusively
+    # for ``pdd.checkup.agentic.v1`` serialization. Unlike
+    # ``reviewer_commands``, this mapping is never read by review prompt
+    # construction, so non-authoritative hosted configuration cannot steer the
+    # canonical review or its shipping verdict.
+    artifact_reviewer_commands: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.no_fix:

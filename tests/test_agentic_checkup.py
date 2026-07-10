@@ -733,6 +733,10 @@ class TestRunAgenticCheckup:
         assert config.adversarial_prompt is None
         assert config.fresh_final_review_role is None
         assert config.reviewer_commands == {
+            "codex": "",
+            "claude": "",
+        }
+        assert config.artifact_reviewer_commands == {
             "gemini": "/review",
             "claude": "/review",
         }
