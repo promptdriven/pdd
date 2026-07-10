@@ -285,6 +285,9 @@ The orchestrator must provide real-time feedback to the user via rich console ou
 
 Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
+% Consecutive Provider Failure Recovery
+Before each `consecutive_failures` increment caused by `"All agent providers failed"`, wait `PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0` seconds. Reset the counter on any successful or non-provider step, and retain the existing abort after three consecutive provider failures.
+
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`,
 `post_step_comment`, `save_workflow_state`, `load_workflow_state`,

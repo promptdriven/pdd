@@ -49,6 +49,8 @@ from .ci_validation import (
 from .pre_checkup_gate import run_pre_checkup_gate
 
 # Constants
+PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0
+
 STEP_NAMES = {
     1: "unit_tests",
     2: "e2e_tests",
@@ -2959,6 +2961,7 @@ def run_agentic_e2e_fix_orchestrator(
 
                     # Track consecutive provider failures for early abort
                     if "All agent providers failed" in step_output:
+                        time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS)
                         consecutive_provider_failures += 1
                         if consecutive_provider_failures >= 3:
                             console.print(f"[bold red]Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable[/bold red]")

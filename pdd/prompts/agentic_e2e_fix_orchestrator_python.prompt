@@ -107,7 +107,7 @@ If a prior cycle applied a direct edit but the current cycle makes no new meanin
 % Step-Specific Retries
 - Step 1: on a single timeout failure, retry once with timeout multiplied by 1.5 before falling through.
 - Step 9: if the run succeeded but emitted no recognizable loop-control token, retry Step 9 once with the same prompt (and persist retry cost/output to state). Tier-4 `CLASSIFICATION_ERROR` is treated as CONTINUE_CYCLE (transient classifier).
-- Provider failures: track `consecutive_provider_failures`; abort the entire workflow after 3 in a row (`"All agent providers failed"` substring). Reset on any successful step.
+- Provider failures: track `consecutive_provider_failures`; wait `PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0` seconds before each provider-failure increment, abort the entire workflow after 3 in a row (`"All agent providers failed"` substring), and reset on any successful or non-provider step.
 
 % Step 8 Timeout (Issue #1366)
 `E2E_FIX_STEP_TIMEOUTS[8]` MUST be `3600.0` (1 hour base). Step 8 fans out to one full recursive `pdd fix --loop` invocation per failing dev unit, and `run_agentic_task` caps the aggregate retry budget at `2 * effective_timeout`, giving Step 8 a 2-hour ceiling under the 4-hour Cloud Run job limit. The earlier 1000s budget was inherited from the original single-LLM-call step shape and silently kills recursive fix mid-iteration on large dev units (for example, 2000+ line files where regenerating the file once can take tens of minutes). All other entries in `E2E_FIX_STEP_TIMEOUTS` keep their existing values.

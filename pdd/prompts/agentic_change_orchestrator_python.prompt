@@ -387,7 +387,7 @@ The orchestrator must detect stop conditions after each stop-capable step. **JSO
 % Consecutive Provider Failure Tracking
 
 Track consecutive steps where output contains "All agent providers failed":
-- Increment counter on provider failure, reset to 0 on any success or non-provider failure
+- Wait `PROVIDER_FAILURE_BACKOFF_SECONDS = 30.0` seconds before each provider-failure increment, then increment the counter; reset to 0 on any success or non-provider failure
 - If 3+ consecutive provider failures: post step comment, save state, return `(False, "Aborting: N consecutive steps failed — agent providers unavailable", ...)`
 
 % Per-Step Success Comments (Trusted Posting)

@@ -1088,43 +1088,43 @@ class TestLayer1FailureCategory2047:
         payload = json.loads(block)
         assert payload["failure_category"] == "github_checks_failed"
 
-    def test_provider_unavailable_abort_classified_as_provider_unavailable(self) -> None:
+    def test_provider_parser_failure_abort_classified_as_provider_parser_failure(self) -> None:
         """The exact abort string from agentic_checkup_orchestrator (ASCII hyphen variant)
-        must classify as 'provider_unavailable', not fall through to 'layer1_failed'.
+        must classify as 'provider_parser_failure', not fall through to 'layer1_failed'.
 
         On the current (buggy) code, this string matches none of the specific branches
         in _classify_layer1_failure_category and returns 'layer1_failed' (the catch-all).
-        After the fix adds a 'provider_unavailable' branch that detects
+        After the fix adds a 'provider_parser_failure' branch that detects
         'agent providers unavailable' / 'consecutive steps failed', the function returns
-        'provider_unavailable' so pdd_cloud can distinguish a transient infrastructure
+        'provider_parser_failure' so pdd_cloud can distinguish a transient infrastructure
         outage from a real PR-level code defect.
         """
         msg = "Aborting: 3 consecutive steps failed - agent providers unavailable"
-        assert _classify_layer1_failure_category(msg) == "provider_unavailable"
+        assert _classify_layer1_failure_category(msg) == "provider_parser_failure"
 
-    def test_provider_unavailable_abort_emdash_classified_as_provider_unavailable(self) -> None:
+    def test_provider_parser_failure_abort_emdash_classified_as_provider_parser_failure(self) -> None:
         """The em-dash variant (—) emitted by the sibling orchestrators must also classify
-        as 'provider_unavailable'.
+        as 'provider_parser_failure'.
 
         agentic_e2e_fix_orchestrator.py, agentic_change_orchestrator.py, and
         agentic_bug_orchestrator.py use an em-dash (U+2014) in their abort string rather
         than the ASCII hyphen (-) used by the checkup orchestrator. Both variants must map
-        to 'provider_unavailable' so the classification is consistent across all four
+        to 'provider_parser_failure' so the classification is consistent across all four
         orchestrators.
         """
         msg = "Aborting: 3 consecutive steps failed \u2014 agent providers unavailable"
-        assert _classify_layer1_failure_category(msg) == "provider_unavailable"
+        assert _classify_layer1_failure_category(msg) == "provider_parser_failure"
 
-    def test_layer1_report_provider_unavailable_category_in_json(self) -> None:
+    def test_layer1_report_provider_parser_failure_category_in_json(self) -> None:
         """The machine-readable JSON payload in the Layer 1 failure report must carry
-        failure_category='provider_unavailable' when the abort was caused by a provider
+        failure_category='provider_parser_failure' when the abort was caused by a provider
         outage — verifying the full _format_layer1_failure_report → _classify_layer1_failure_category
         pipeline.
 
         On the current (buggy) code, _classify_layer1_failure_category falls through to
         'layer1_failed' for provider-outage abort strings, so failure_category in the
-        JSON is 'layer1_failed'. After the fix adds the 'provider_unavailable' branch,
-        the JSON carries failure_category='provider_unavailable', clearly distinguishing
+        JSON is 'layer1_failed'. After the fix adds the 'provider_parser_failure' branch,
+        the JSON carries failure_category='provider_parser_failure', clearly distinguishing
         a retryable infrastructure outage from a code defect in the PR under review.
         """
         report = _format_layer1_failure_report(
@@ -1135,6 +1135,6 @@ class TestLayer1FailureCategory2047:
         )
         block = report.split("```json", 1)[1].split("```", 1)[0]
         payload = json.loads(block)
-        assert payload["failure_category"] == "provider_unavailable"
+        assert payload["failure_category"] == "provider_parser_failure"
         assert payload["stage"] == "layer1"
         assert payload["status"] == "failed"
