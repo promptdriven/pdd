@@ -652,6 +652,7 @@ def _module_filepath_matches_basename(
 def _context_owned_filepath(
     architecture_filepath: Optional[str],
     context_name: Optional[str],
+    pddrc_anchor: Optional[Path] = None,
 ) -> bool:
     """Return True when a borrowed architecture filepath is inside a context's territory.
 
@@ -663,6 +664,12 @@ def _context_owned_filepath(
     foreign module's code. Restrict such borrows to filepaths the resolving
     prompt's context owns — its ``paths`` globs or configured output locations.
 
+    ``pddrc_anchor`` anchors the ``.pddrc`` lookup at the project (the directory of
+    ``architecture.json``), NOT the process CWD. Resolution is frequently invoked
+    from a parent/sibling working directory with an absolute prompts root, and a
+    CWD-based lookup would miss the project's ``.pddrc`` and fail open — re-opening
+    the very cross-context borrow this guard exists to block.
+
     Returns True (permit) whenever no territory can be derived: a bare basename
     with no resolvable context, a missing/invalid ``.pddrc``, or a repo-root output
     path. Non-context projects therefore keep the prior, permissive behavior.
@@ -671,7 +678,7 @@ def _context_owned_filepath(
         return True
     if not context_name:
         return True
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = _find_pddrc_file(pddrc_anchor)
     if not pddrc_path:
         return True
     try:
@@ -759,6 +766,23 @@ def _overlay_configured_output_paths(
     return merged
 
 
+def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
+    """True when ``candidate`` resolves inside ``resolved_root``.
+
+    Recursive prompt discovery follows symlinks, so a same-leaf in-root symlink can
+    point at an external file. Returning such a candidate lets an update operation
+    write through it and overwrite a file outside the repository. Every recursively
+    discovered candidate must therefore pass this containment check before it is
+    returned, mirroring the guarded search in
+    ``_resolve_prompt_path_from_architecture``.
+    """
+    try:
+        candidate.resolve(strict=False).relative_to(resolved_root)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
 def _find_prompt_file(
     basename: str,
     language: str,
@@ -795,6 +819,9 @@ def _find_prompt_file(
         context_name=context_name,
         include_simple_name="/" not in basename,
     )
+    # Containment anchor for recursive discovery: every returned candidate must
+    # resolve inside this root so a same-leaf symlink cannot escape prompts_root.
+    resolved_prompts_root = prompts_root.resolve(strict=False)
 
     # Resolve context prefix from .pddrc for scoping recursive searches.
     # e.g., context 'backend-utils' with prompts_dir='prompts/backend/utils'
@@ -840,14 +867,20 @@ def _find_prompt_file(
             if joined.parent.is_dir():
                 joined_lower = joined.name.lower()
                 for candidate in joined.parent.iterdir():
-                    if candidate.is_file() and candidate.name.lower() == joined_lower:
+                    if (
+                        candidate.is_file()
+                        and candidate.name.lower() == joined_lower
+                        and _prompt_candidate_within_root(candidate, resolved_prompts_root)
+                    ):
                         return candidate
             # 3c: Recursive search for the architecture filename in all subdirectories.
-            # Collect all matches and pick shallowest deterministically.
+            # Collect all matches and pick shallowest deterministically. Every match
+            # must resolve inside prompts_root so a same-leaf symlink cannot escape.
             arch_basename_lower = Path(arch_filename).name.lower()
             arch_matches = [
                 c for c in prompts_root.rglob("*.prompt")
                 if c.is_file() and c.name.lower() == arch_basename_lower
+                and _prompt_candidate_within_root(c, resolved_prompts_root)
             ]
             if arch_matches:
                 if len(arch_matches) > 1:
@@ -874,6 +907,9 @@ def _find_prompt_file(
     matches = []
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
+            continue
+        # Skip a candidate that escapes prompts_root through a symlink.
+        if not _prompt_candidate_within_root(candidate, resolved_prompts_root):
             continue
         candidate_lower = candidate.name.lower()
         for candidate_basename in basename_candidates:
@@ -1098,7 +1134,9 @@ def _get_filepath_from_architecture(
             ).name.lower() == prompt_leaf_lower
             and _aligns(module)
             and _belongs_to_resolved_prompt(module)
-            and _context_owned_filepath(module.get("filepath"), resolved_context_name)
+            and _context_owned_filepath(
+                module.get("filepath"), resolved_context_name, architecture_path.parent
+            )
         ])
         if leaf_match[0]:
             return leaf_match
@@ -1168,7 +1206,9 @@ def _get_filepath_from_architecture(
                 )
                 and _aligns(module)
                 and _belongs_to_resolved_prompt(module)
-                and _context_owned_filepath(module.get("filepath"), resolved_context_name)
+                and _context_owned_filepath(
+                    module.get("filepath"), resolved_context_name, architecture_path.parent
+                )
             ])
             if filepath_match[0]:
                 return filepath_match
