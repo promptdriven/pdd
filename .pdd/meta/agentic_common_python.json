@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.285.dev18",
+  "timestamp": "2026-07-10T18:23:43.978521+00:00",
+  "command": "fix",
+  "prompt_hash": "4aba1e1e35a150593b6798faa0371560a27049d5fada69d0f8180569b669f090",
+  "code_hash": "e3c4d4696bf3ecc6ef3936ab67b111fb1d11e70180c191e4821d48a8e83f88aa",
+  "example_hash": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+  "test_hash": "a50d44bbb9e6202ca53cef2f3e60feb90b38b35f46dd4ac22211b1bd67cde659",
+  "test_files": {
+    "test_agentic_common.py": "a50d44bbb9e6202ca53cef2f3e60feb90b38b35f46dd4ac22211b1bd67cde659",
+    "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "4207732c6fb0e88b5be1fe632acd087f0b992e1ac7498dff036a0b9b9ea72138",
+    "test_agentic_common_worktree.py": "16fb52387d635f1bbccbac20d08ef5b5d878021b70fc1ad79e5d36664df2b9a9"
+  },
+  "include_deps": {
+    "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
+    "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/agentic_common.py": "e3c4d4696bf3ecc6ef3936ab67b111fb1d11e70180c191e4821d48a8e83f88aa",
+    "pdd/llm_invoke.py": "2c423dbe12dd22d1acfca6c658bfef36eaf3b016626ae4a2845576500bfcb54b"
+  }
+}
