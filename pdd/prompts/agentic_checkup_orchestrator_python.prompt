@@ -4,7 +4,12 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_checkup_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"}
+      {"name": "run_agentic_checkup_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "_setup_pr_worktree", "signature": "(cwd: Path, pr_owner: str, pr_repo: str, pr_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]", "returns": "Tuple[Optional[Path], Optional[str]]"},
+      {"name": "_commit_and_push_if_changed", "signature": "(worktree: Path, pr_metadata: Dict[str, str], message: str) -> Tuple[bool, str]", "returns": "Tuple[bool, str]"},
+      {"name": "_check_prompt_source_guard", "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_check_architecture_registry_edit_guard", "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "_format_pr_mode_final_report", "signature": "(step7_output: str, push_message: str, step_telemetry: Optional[List[dict]] = None) -> str", "returns": "str"}
     ]
   }
 }
