@@ -23,6 +23,7 @@ def test_real_fix_command(create_dummy_files, tmp_path, monkeypatch):
             "Real LLM integration tests require network/API access; set "
             "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
         )
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
     import sys
     import click

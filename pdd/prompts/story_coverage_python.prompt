@@ -29,7 +29,7 @@ Define `StoryCoverage` as the structured public result — a Pydantic v2 model
 (per repo convention; a frozen dataclass is acceptable) whose attributes are the
 artifact fields, with this 1:1 mapping to the serialized JSON:
 - `schema_version: int`
-- `status: str` (`"ok"` | `"not_applicable"`)
+- `status: str` — one of `"ok"` | `"not_applicable"` | `"failing"` | `"error"` (the serialized schema permits all four). The deterministic emitter currently only produces `"ok"` and `"not_applicable"`; `"failing"` and `"error"` are reserved for the deferred real pass/fail-verdict wiring (#1909) so the artifact schema can already express failure without a schema bump.
 - `run_id: str`
 - `generated_at: str` (ISO-8601 UTC)
 - `story_count: int`

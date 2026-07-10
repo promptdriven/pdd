@@ -1,106 +1,94 @@
-"""Example for generating and validating PDD user stories."""
+from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
-
 from pdd.user_story_tests import (
-    discover_prompt_files,
-    generate_user_story,
-    run_user_story_tests,
+    story_id,
+    discover_story_files,
+    parse_story_dev_unit_metadata,
+    get_all_dev_units_for_story,
+    story_is_cross_unit,
+    get_cross_unit_stories_for_prompt,
 )
 
-# Check for required API key since user story validation requires LLM calls
-api_key = os.environ.get("OPENAI_API_KEY")
-if not api_key:
-    print("OPENAI_API_KEY not set. Set it to run this example.")
-    sys.exit(0)
-
-
-def main():  # pylint: disable=too-many-locals
-    """
-    Example of using the user_story_tests module to generate and validate user stories.
-    """
-    # Setup output directories
+def main() -> None: 
+    # 1. Setup the output directory for mock artifacts as requested
     output_dir = Path("./output")
-    prompts_dir = output_dir / "prompts"
-    stories_dir = output_dir / "user_stories"
-    src_dir = output_dir / "src"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    for directory in [prompts_dir, stories_dir, src_dir]:
-        directory.mkdir(parents=True, exist_ok=True)
+    # 2. Create mock user story files to demonstrate discovery and parsing
+    # We will create a cross-unit story (references multiple dev units)
+    cross_unit_story_path = output_dir / "story__multi_payment_flow.md"
+    cross_unit_story_content = """<!-- pdd-story-prompts: auth_service.prompt, stripe_billing.prompt -->
+<!-- pdd-story-dev-units: auth_service.prompt, stripe_billing.prompt -->
 
-    # 1. Create a dummy prompt file and the issue text that should author the story.
-    prompt_path = prompts_dir / "hello_python.prompt"
-    prompt_path.write_text(
-        "# Hello World Prompt\n"
-        "## Covers\n"
-        "- R1: The generated code must print hello world.\n\n"
-        "Write a Python function that prints hello world.",
-        encoding="utf-8",
+# User Story: Multi-Payment Checkout Flow
+
+## Story
+As a premium subscriber, I want to authenticate and pay using Stripe so that my subscription is immediately activated.
+"""
+    cross_unit_story_path.write_text(cross_unit_story_content, encoding="utf-8")
+
+    # Create a single-unit story
+    single_unit_story_path = output_dir / "story__simple_login.md"
+    single_unit_story_content = """<!-- pdd-story-prompts: auth_service.prompt -->
+
+# User Story: Simple Login
+
+## Story
+As a registered user, I want to sign in with my password so that I can access my profile.
+"""
+    single_unit_story_path.write_text(single_unit_story_content, encoding="utf-8")
+
+    print("--- [1] Extracting Story IDs (Slugs) ---")
+    # The story_id helper maps a 'story__<slug>.md' file path to its canonical '<slug>' identity
+    slug_1 = story_id(cross_unit_story_path)
+    slug_2 = story_id(single_unit_story_path)
+    print(f"Path: {cross_unit_story_path.name} -> Story ID: {slug_1}")
+    print(f"Path: {single_unit_story_path.name} -> Story ID: {slug_2}\n")
+
+    print("--- [2] Parsing Dev Unit & Story Metadata ---")
+    # Read and parse metadata directly from the story texts
+    for path in [cross_unit_story_path, single_unit_story_path]:
+        text = path.read_text(encoding="utf-8")
+        
+        # Extract explicitly declared dev-units (pdd-story-dev-units)
+        dev_units = parse_story_dev_unit_metadata(text)
+        
+        # Get union of all dev units/prompts associated with the story (order-preserved, deduplicated)
+        all_units = get_all_dev_units_for_story(text)
+        
+        # Check if the story is cross-unit (spans 2 or more dev units/prompts)
+        is_cross = story_is_cross_unit(text)
+        
+        print(f"Story: {path.name}")
+        print(f"  - Extracted Dev Units: {dev_units}")
+        print(f"  - All Associated Units: {all_units}")
+        print(f"  - Is Cross-Unit Story? {is_cross}\n")
+
+    print("--- [3] Discovering Story Files ---")
+    # Discover all matching story__*.md files in our output directory
+    discovered_stories = discover_story_files(stories_dir=str(output_dir))
+    print(f"Found {len(discovered_stories)} story file(s) in {output_dir}:")
+    for story in discovered_stories:
+        print(f"  - {story.relative_to(output_dir.parent)}")
+    print("")
+
+    print("--- [4] Performing Forward Lookup (Prompt -> Cross-Unit Stories) ---")
+    # Find all cross-unit stories in our directory associated with 'stripe_billing.prompt'
+    target_prompt = "stripe_billing.prompt"
+    matching_cross_stories = get_cross_unit_stories_for_prompt(
+        prompt_name=target_prompt, 
+        stories_dir=output_dir
     )
-    issue_path = output_dir / "issue.md"
-    issue_path.write_text(
-        "# Issue: Hello command\n\n"
-        "Users need a small command that prints 'hello world' so they can "
-        "confirm the Python runtime is wired correctly.",
-        encoding="utf-8",
-    )
-
-    # 2. Discover prompt files
-    print("Discovering prompt files...")
-    discovered_prompts = discover_prompt_files(str(prompts_dir))
-    print(f"Found prompts: {[p.name for p in discovered_prompts]}\n")
-
-    # 3. Generate a user story based on the issue.
-    # Prompt content is linked as metadata but is not shown to the story author.
-    print("Generating user story...")
-    success, message, cost, model, story_path, linked_refs = generate_user_story(
-        prompt_files=[str(prompt_path)],
-        issue=str(issue_path),
-        stories_dir=str(stories_dir),
-        prompts_dir=str(prompts_dir),
-        strength=0.0,      # Use low strength for faster/cheaper generation if LLM is used
-        temperature=0.0,
-        time=0.25,
-        verbose=True,
-    )
-
-    print(f"Success: {success}")
-    print(f"Message: {message}")
-    print(f"Cost: ${cost:.6f}")
-    print(f"Model: {model}")
-    print(f"Generated Story Path: {story_path}")
-    print(f"Linked Prompts: {linked_refs}\n")
-
-    if not success:
-        print("Skipping validation because story generation failed.")
-        return
-
-    # 4. Run user story validation tests
-    # This checks if the story requires changes to the prompt files.
-    print("Running user story tests...")
-    all_passed, results, total_cost, test_model = run_user_story_tests(
-        prompts_dir=str(prompts_dir),
-        stories_dir=str(stories_dir),
-        strength=0.0,
-        temperature=0.0,
-        time=0.25,
-        verbose=False,
-        quiet=False,
-        fail_fast=False,
-    )
-
-    print(f"\nAll Passed: {all_passed}")
-    print(f"Total Validation Cost: ${total_cost:.6f}")
-    print(f"Model Used: {test_model}")
-    print("Validation Results:")
-    for res in results:
-        print(
-            f" - Story: {res['story']}, Passed: {res['passed']}, "
-            f"Changes Detected: {len(res['changes'])}"
-        )
-
+    
+    print(f"Cross-unit stories referencing '{target_prompt}':")
+    for match in matching_cross_stories:
+        print(f"  - Story Name: {match['story']}")
+        print(f"    Story ID:   {match['story_id']}")
+        print(f"    Dev Units:  {match['dev_units']}")
+        print(f"    File Path:  {match['path']}")
 
 if __name__ == "__main__":
     main()
