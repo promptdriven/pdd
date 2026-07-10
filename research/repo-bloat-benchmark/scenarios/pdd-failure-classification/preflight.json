@@ -1,0 +1,9 @@
+{
+  "scenario_dir": "scenarios/pdd-failure-classification",
+  "distractors_dir": "distractors/pdd-failure-classification",
+  "reports_dir": "reports/pdd-failure-classification",
+  "work_root": "/tmp/rb-preflight-pdd-failure-classification",
+  "arm": "mock",
+  "sizes": [1, 2, 5, 10, 20, 50],
+  "trials": 1
+}

@@ -1,0 +1,45 @@
+{
+  "budget_met": true,
+  "core_loc": 148,
+  "core_tokens": 1055,
+  "distractor_loc": 132,
+  "distractor_tokens_on_disk": 1072,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g3598de18",
+      "loc": 77,
+      "mode": "regrow",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
+    },
+    {
+      "content_path": "generated/pdd-find-section/2x/src/handler/blocks_handler_6.py",
+      "import_group": "g-template",
+      "loc": 55,
+      "mode": "template",
+      "sha256": "f247743da30de10fa6741dda9264ffb292dbd19431588a3856a612a258553ac9",
+      "source_path": null,
+      "tier": "same-layer",
+      "tokens": 403,
+      "upstream_path": "src/handler/blocks_handler_6.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 1,
+    "template": 1
+  },
+  "realized_total_tokens": 2127,
+  "rejected": [],
+  "scenario_id": "pdd-find-section",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "2x",
+  "size_token_target": 1055,
+  "size_token_tolerance_pct": 2.0,
+  "tokenizer": "chars/4-v1"
+}
