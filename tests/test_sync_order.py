@@ -89,6 +89,20 @@ def test_extract_includes_body_form_no_path_attr_uses_body(tmp_path):
     includes = sync_order.extract_includes_from_file(f)
     assert includes == {"docs/source.md"}
 
+def test_extract_includes_does_not_span_inline_documentation_token(tmp_path):
+    """An inline `<include>` mention must not consume a later real include."""
+    f = tmp_path / "test.prompt"
+    f.write_text(
+        "Use `<include>` tags to expand context.\n"
+        "<pdd.context>\n"
+        "  <include select=\"def:example\">context/example.py</include>\n"
+        "</pdd.context>\n",
+        encoding="utf-8",
+    )
+
+    includes = sync_order.extract_includes_from_file(f)
+    assert includes == {"context/example.py"}
+
 # ==============================================================================
 # Unit Tests: extract_module_from_include
 # ==============================================================================
