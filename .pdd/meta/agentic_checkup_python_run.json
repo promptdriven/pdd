@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-07-10T19:02:50.723629+00:00",
+  "exit_code": 0,
+  "tests_passed": 320,
+  "tests_failed": 0,
+  "coverage": 55.0,
+  "test_hash": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
+  "test_files": {
+    "test_agentic_checkup.py": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
+    "test_agentic_checkup_orchestrator.py": "7bfdf5931599356de13b4129f62ad5ed7ae928e10ae391c88a2e16f62ebf8d5c",
+    "test_agentic_checkup_step5_pass_evidence.py": "a9d5ac08e1cbf1326ab352cffdfbb3bc84c280327b70413ef6f982860bf89e44"
+  }
+}

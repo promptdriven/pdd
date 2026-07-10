@@ -10,12 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock, mock_open
 
-# Add the 'pdd' directory to the Python path to allow imports.
-# This is necessary because the test file is in 'tests/' and the code is in 'pdd/'.
-pdd_path = Path(__file__).parent.parent / 'pdd'
-sys.path.insert(0, str(pdd_path))
-
-from sync_determine_operation import (
+from pdd.sync_determine_operation import (
     sync_determine_operation,
     analyze_conflict_with_llm,
     SyncLock,
@@ -115,7 +110,7 @@ def pdd_test_environment(tmp_path):
     Path("prompts").mkdir(exist_ok=True)
     
     # Now update the constants after changing directory
-    pdd_module = sys.modules['sync_determine_operation']
+    pdd_module = sys.modules['pdd.sync_determine_operation']
     pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
     pdd_module.META_DIR = pdd_module.get_meta_dir()
     pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
@@ -284,13 +279,13 @@ class TestFileUtilities:
 
 # --- Part 2: `sync_determine_operation` Decision Logic ---
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_log_mode_skips_lock(mock_construct, pdd_test_environment):
-    with patch('sync_determine_operation.SyncLock') as mock_lock:
+    with patch('pdd.sync_determine_operation.SyncLock') as mock_lock:
         sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, log_mode=True)
         mock_lock.assert_not_called()
 
-    with patch('sync_determine_operation.SyncLock') as mock_lock:
+    with patch('pdd.sync_determine_operation.SyncLock') as mock_lock:
         sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, log_mode=False)
         mock_lock.assert_called_once_with(BASENAME, LANGUAGE)
 
@@ -360,7 +355,7 @@ def test_context_aware_fix_over_crash_logic(pdd_test_environment):
     assert decision.details['example_success_history'] == True
 
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_crash_on_exit_code_nonzero(mock_construct, pdd_test_environment):
     # Create fingerprint (required for run_report to be processed)
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -376,7 +371,7 @@ def test_decision_crash_on_exit_code_nonzero(mock_construct, pdd_test_environmen
     assert decision.operation == 'crash'
     assert "Runtime error detected" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
     # Last command was 'crash'
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -394,7 +389,7 @@ def test_decision_verify_after_crash_fix(mock_construct, pdd_test_environment):
     assert "Previous crash operation completed" in decision.reason
 
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_crash_retry_when_exit_code_nonzero(mock_construct, pdd_test_environment):
     """When crash operation failed (exit_code != 0), should retry crash, not proceed to verify."""
     # Last command was 'crash'
@@ -412,7 +407,7 @@ def test_decision_crash_retry_when_exit_code_nonzero(mock_construct, pdd_test_en
     assert decision.operation == 'crash', f"Expected 'crash' when exit_code=1, got '{decision.operation}'"
     assert "retry crash fix" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
     # Create prompt file so get_pdd_file_paths can work properly
     prompts_dir = pdd_test_environment / "prompts"
@@ -446,14 +441,9 @@ def test_decision_fix_on_test_failures(mock_construct, pdd_test_environment):
     assert decision.operation == 'fix'
     assert "Test failures detected" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
-@patch('sync_determine_operation.get_pdd_file_paths')
-def test_decision_test_on_low_coverage(
-    mock_get_pdd_paths, mock_construct, pdd_test_environment, monkeypatch
-):
-    # Exercise the normal coverage decision independently of the PR
-    # auto-heal scope guard inherited from the surrounding process.
-    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
+@patch('pdd.sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_pdd_file_paths')
+def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_test_environment):
     tmp_path = pdd_test_environment
 
     # Create test file and code file on disk so existence checks pass
@@ -488,8 +478,8 @@ def test_decision_test_on_low_coverage(
     assert f"coverage 75.0% below target {TARGET_COVERAGE:.1f}%" in decision.reason.lower()
 
 
-@patch('sync_determine_operation.construct_paths')
-@patch('sync_determine_operation.get_pdd_file_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_pdd_file_paths')
 def test_decision_pr_scope_guard_suppresses_python_low_coverage_test_extend(
     mock_get_pdd_paths,
     mock_construct,
@@ -528,8 +518,8 @@ def test_decision_pr_scope_guard_suppresses_python_low_coverage_test_extend(
     assert decision.details['current_coverage'] == 0.0
 
 
-@patch('sync_determine_operation.construct_paths')
-@patch('sync_determine_operation.get_pdd_file_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_pdd_file_paths')
 def test_decision_test_extend_default_still_runs_without_pr_scope_guard(
     mock_get_pdd_paths,
     mock_construct,
@@ -588,28 +578,28 @@ def test_test_extend_disabled_unset_is_false(monkeypatch):
     assert is_test_extend_disabled() is False
 
 # --- No Fingerprint Tests ---
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_generate_for_new_prompt(mock_construct, pdd_test_environment):
     create_file(pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt", "A simple prompt.")
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(pdd_test_environment / "prompts"))
     assert decision.operation == 'generate'
     assert "New prompt ready" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_autodeps_for_new_prompt_with_deps(mock_construct, pdd_test_environment):
     create_file(pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt", "A prompt that needs to <include> another file.")
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(pdd_test_environment / "prompts"))
     assert decision.operation == 'auto-deps'
     assert "New prompt with dependencies detected" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_nothing_for_new_unit_no_prompt(mock_construct, pdd_test_environment):
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
     assert decision.operation == 'nothing'
     assert "No prompt file and no history" in decision.reason
 
 # --- State Change Tests ---
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_nothing_when_synced(mock_construct, pdd_test_environment):
     prompts_dir = pdd_test_environment / "prompts"
     p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt")
@@ -937,7 +927,7 @@ result = add(5, 3)  # Should return 8"""
     assert "prefer fix over crash" in decision.reason.lower()
     assert decision.details['example_success_history'] == True
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_example_when_missing(mock_construct, pdd_test_environment):
     prompts_dir = pdd_test_environment / "prompts"
     p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt")
@@ -963,7 +953,7 @@ def test_decision_example_when_missing(mock_construct, pdd_test_environment):
     assert decision.operation == 'example'
     assert "Code exists but example missing" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_update_on_code_change(mock_construct, pdd_test_environment):
     prompts_dir = pdd_test_environment / "prompts"
     p_hash = create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt")
@@ -989,7 +979,7 @@ def test_decision_update_on_code_change(mock_construct, pdd_test_environment):
     assert decision.operation == 'update'
     assert "Code changed" in decision.reason
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_environment):
     """When prompt and derived files changed, sync must return an explicit conflict."""
     prompts_dir = pdd_test_environment / "prompts"
@@ -1020,7 +1010,7 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
     assert fp_path.exists(), "Conflict classification must not delete metadata"
 
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_log_mode_conflict_analysis_keeps_metadata(mock_construct, pdd_test_environment):
     """Read-only analysis must not delete metadata for prompt+derived conflicts."""
     prompts_dir = pdd_test_environment / "prompts"
@@ -1061,7 +1051,7 @@ def test_log_mode_conflict_analysis_keeps_metadata(mock_construct, pdd_test_envi
     assert rr_path.exists()
 
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_conflict_preserves_fingerprint_and_run_report(mock_construct, pdd_test_environment):
     """Prompt+derived co-edits must not delete metadata or pick a winner."""
     prompts_dir = pdd_test_environment / "prompts"
@@ -1130,10 +1120,10 @@ def test_prompt_code_coedit_conflict_with_real_paths_preserves_metadata(pdd_test
 
 # --- Part 3: `analyze_conflict_with_llm` ---
 
-@patch('sync_determine_operation.get_git_diff', return_value="fake diff")
-@patch('sync_determine_operation.load_prompt_template', return_value="prompt: {prompt_diff}")
-@patch('sync_determine_operation.llm_invoke')
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_git_diff', return_value="fake diff")
+@patch('pdd.sync_determine_operation.load_prompt_template', return_value="prompt: {prompt_diff}")
+@patch('pdd.sync_determine_operation.llm_invoke')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_analyze_conflict_success(mock_construct, mock_llm_invoke, mock_load_template, mock_git_diff, pdd_test_environment):
     mock_llm_invoke.return_value = {
         'result': json.dumps({
@@ -1155,10 +1145,10 @@ def test_analyze_conflict_success(mock_construct, mock_llm_invoke, mock_load_tem
     assert decision.estimated_cost == 0.05
     mock_load_template.assert_called_with("sync_analysis_LLM")
 
-@patch('sync_determine_operation.get_git_diff')
-@patch('sync_determine_operation.load_prompt_template')
-@patch('sync_determine_operation.llm_invoke')
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_git_diff')
+@patch('pdd.sync_determine_operation.load_prompt_template')
+@patch('pdd.sync_determine_operation.llm_invoke')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_analyze_conflict_llm_invalid_json(mock_construct, mock_llm_invoke, mock_load_template, mock_git_diff, pdd_test_environment):
     mock_load_template.return_value = "template"
     mock_llm_invoke.return_value = {'result': 'this is not json', 'cost': 0.01}
@@ -1170,10 +1160,10 @@ def test_analyze_conflict_llm_invalid_json(mock_construct, mock_llm_invoke, mock
     assert "Invalid LLM response" in decision.reason
     assert decision.confidence == 0.0
 
-@patch('sync_determine_operation.get_git_diff')
-@patch('sync_determine_operation.load_prompt_template')
-@patch('sync_determine_operation.llm_invoke')
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.get_git_diff')
+@patch('pdd.sync_determine_operation.load_prompt_template')
+@patch('pdd.sync_determine_operation.llm_invoke')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_analyze_conflict_llm_low_confidence(mock_construct, mock_llm_invoke, mock_load_template, mock_git_diff, pdd_test_environment):
     mock_load_template.return_value = "template"
     mock_llm_invoke.return_value = {
@@ -1188,8 +1178,8 @@ def test_analyze_conflict_llm_low_confidence(mock_construct, mock_llm_invoke, mo
     assert "LLM confidence too low" in decision.reason
     assert decision.confidence == 0.5
 
-@patch('sync_determine_operation.load_prompt_template', return_value=None)
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.load_prompt_template', return_value=None)
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_analyze_conflict_llm_template_missing(mock_construct, mock_load_template, pdd_test_environment):
     fingerprint = Fingerprint("1.0", "t", "generate", "p", "c", None, None)
     decision = analyze_conflict_with_llm(BASENAME, LANGUAGE, fingerprint, ['prompt'])
@@ -1199,7 +1189,7 @@ def test_analyze_conflict_llm_template_missing(mock_construct, mock_load_templat
 
 # --- Part 4: Skip Flag Tests ---
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_skip_tests_prevents_test_operation_on_low_coverage(mock_construct, pdd_test_environment):
     """Test that test operation is not returned when skip_tests=True even with low coverage."""
     # Create fingerprint (required for run_report to be processed)
@@ -1217,7 +1207,7 @@ def test_skip_tests_prevents_test_operation_on_low_coverage(mock_construct, pdd_
     assert decision.operation == 'all_synced'
     assert "tests skipped" in decision.reason.lower()
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_skip_tests_workflow_completion(mock_construct, pdd_test_environment):
     """Test workflow completion when skip_tests=True and test files are missing."""
     prompts_dir = pdd_test_environment / "prompts"
@@ -1254,7 +1244,7 @@ def test_skip_tests_workflow_completion(mock_construct, pdd_test_environment):
     # Check for skip_tests in reason or that it's an all_synced with tests skipped
     assert "skip_tests=True" in decision.reason or "tests skipped" in decision.reason.lower()
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
     """Test that skip flags are correctly used in decision logic."""
     # Test with both flags enabled
@@ -1262,7 +1252,7 @@ def test_skip_flags_parameter_propagation(mock_construct, pdd_test_environment):
     # Should not crash and should handle skip flags properly
     assert isinstance(decision, SyncDecision)
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_sync_determine_operation_respects_skip_flags_before_run_report(mock_construct, pdd_test_environment):
     """Test that skip flags prevent crash/fix recommendations based on cached failing run reports."""
     # Create prompt file so get_pdd_file_paths can work properly
@@ -1711,7 +1701,7 @@ Requirements:
         assert decision.details['has_dependencies'] == True
         assert decision.details['fingerprint_found'] == False
 
-    @patch('sync_determine_operation.construct_paths')
+    @patch('pdd.sync_determine_operation.construct_paths')
     def test_auto_deps_regenerates_when_code_exists_from_previous_run(self, mock_construct, pdd_test_environment):
         """Test that after auto-deps completes, generate runs even when code file exists from previous run.
 
@@ -1781,7 +1771,7 @@ Requirements:
         assert decision.details.get('regenerate_after_autodeps') == True
         assert decision.details.get('code_exists') == True  # Confirms code existed but we still regenerate
 
-    @patch('sync_determine_operation.construct_paths')
+    @patch('pdd.sync_determine_operation.construct_paths')
     def test_no_fingerprint_with_stale_run_report_should_generate(self, mock_construct, pdd_test_environment):
         """Test that when fingerprint is deleted but run_report exists, sync treats it as fresh start.
 
@@ -1838,7 +1828,7 @@ Requirements:
             f"Expected 'auto-deps', got '{decision.operation}'. " \
             f"Bug: stale run_report should be ignored when fingerprint is missing."
 
-    @patch('sync_determine_operation.construct_paths')
+    @patch('pdd.sync_determine_operation.construct_paths')
     def test_auto_deps_ignores_stale_run_report_with_low_coverage(self, mock_construct, pdd_test_environment):
         """Test that after auto-deps completes, stale run_report with low coverage is ignored.
 
@@ -2336,7 +2326,7 @@ contexts:
                     "python"
                 )
             
-            monkeypatch.setattr('sync_determine_operation.construct_paths', mock_construct_paths)
+            monkeypatch.setattr('pdd.sync_determine_operation.construct_paths', mock_construct_paths)
             
             # Test when prompt file doesn't exist - this is the regression scenario
             basename = "test_unit"
@@ -2439,7 +2429,7 @@ contexts:
         finally:
             os.chdir(original_cwd)
     
-    @patch('sync_determine_operation.construct_paths')
+    @patch('pdd.sync_determine_operation.construct_paths')
     def test_sync_operation_with_missing_prompt_respects_test_path(self, mock_construct, tmp_path):
         """Test that sync_determine_operation doesn't fail when test file is in configured directory.
         
@@ -2515,7 +2505,7 @@ contexts:
         original_cwd = os.getcwd()
         
         # Store original module constants to restore them later
-        pdd_module = sys.modules['sync_determine_operation']
+        pdd_module = sys.modules['pdd.sync_determine_operation']
         original_pdd_dir = pdd_module.PDD_DIR
         original_meta_dir = pdd_module.META_DIR
         original_locks_dir = pdd_module.LOCKS_DIR
@@ -2872,7 +2862,7 @@ class TestAllFilesExistWorkflowIncomplete:
             d.mkdir(parents=True, exist_ok=True)
 
         # Update module-level path constants BEFORE calling get_pdd_file_paths
-        pdd_module = sys.modules['sync_determine_operation']
+        pdd_module = sys.modules['pdd.sync_determine_operation']
         pdd_module.PDD_DIR = pdd_module.get_pdd_dir()
         pdd_module.META_DIR = pdd_module.get_meta_dir()
         pdd_module.LOCKS_DIR = pdd_module.get_locks_dir()
@@ -3010,7 +3000,7 @@ class TestAllFilesExistWorkflowIncomplete:
 
 # --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
 
-@patch('sync_determine_operation.construct_paths')
+@patch('pdd.sync_determine_operation.construct_paths')
 def test_no_conflict_when_only_derived_artifacts_change(mock_construct, pdd_test_environment):
     """
     Test that when only derived artifacts (code + example) change but prompt is UNCHANGED,
@@ -3147,8 +3137,8 @@ class TestStaleRunReportRegression:
             'test': test_path,
         }
 
-        with patch('sync_determine_operation.construct_paths') as mock_construct, \
-             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+        with patch('pdd.sync_determine_operation.construct_paths') as mock_construct, \
+             patch('pdd.sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
             mock_construct.return_value = (
                 {'prompt_file': str(prompt_path)},
                 {'output': str(code_path)},
@@ -3282,8 +3272,8 @@ class TestStaleRunReportRegression:
             'test': test_path,
         }
 
-        with patch('sync_determine_operation.construct_paths') as mock_construct, \
-             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+        with patch('pdd.sync_determine_operation.construct_paths') as mock_construct, \
+             patch('pdd.sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
             mock_construct.return_value = (
                 {'prompt_file': str(prompt_path)},
                 {'output': str(code_path)},
@@ -3395,16 +3385,13 @@ class TestFalsePositiveSuccessBugRegression:
             "Expected: False (tests need to run)"
         )
 
-    def test_sync_returns_test_operation_when_tests_not_run(
-        self, pdd_test_environment, monkeypatch
-    ):
+    def test_sync_returns_test_operation_when_tests_not_run(self, pdd_test_environment):
         """
         When skip_verify=True but tests haven't been run, sync should return 'test' or 'crash'
         operation, NOT 'nothing'.
 
         This reproduces the exact scenario from GitHub issue #210.
         """
-        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
 
         Path("src").mkdir(exist_ok=True)
@@ -3451,8 +3438,8 @@ class TestFalsePositiveSuccessBugRegression:
             'test': test_path,
         }
 
-        with patch('sync_determine_operation.construct_paths') as mock_construct, \
-             patch('sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
+        with patch('pdd.sync_determine_operation.construct_paths') as mock_construct, \
+             patch('pdd.sync_determine_operation.get_pdd_file_paths') as mock_get_paths:
             mock_construct.return_value = (
                 {'prompt_file': str(prompt_path)},
                 {'output': str(code_path)},
@@ -4040,16 +4027,13 @@ class TestZeroCoverageBugIssue573:
             "(likely due to sys.modules stub masking broken imports)."
         )
 
-    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(
-        self, pdd_test_environment, monkeypatch
-    ):
+    def test_sync_determine_operation_returns_test_extend_for_zero_coverage(self, pdd_test_environment):
         """
         Bug #573 (Test 5): sync_determine_operation should return 'test_extend'
         when tests pass but coverage is 0.0. This validates that the detection
         side works correctly (it does — the bug is in the orchestration layer
         that overrides this signal).
         """
-        monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
         tmp_path = pdd_test_environment
         prompts_dir = tmp_path / "prompts"
         prompts_dir.mkdir(exist_ok=True)
@@ -4198,69 +4182,6 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
-    def test_legacy_include_hash_uses_prompt_dir_then_process_cwd(
-        self, pdd_test_environment, monkeypatch
-    ):
-        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
-        dependency = pdd_test_environment / "shared.py"
-        create_file(dependency, "VALUE = 1\n")
-        create_file(prompt, "Build it.\n<include>shared.py</include>\n")
-        expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
-        hashes = []
-        for cwd in (pdd_test_environment, pdd_test_environment.parent):
-            monkeypatch.chdir(cwd)
-            hashes.append(calculate_prompt_hash(prompt))
-        assert hashes == [expected, hashlib.sha256(prompt.read_bytes()).hexdigest()]
-
-    def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
-        self, pdd_test_environment
-    ):
-        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
-        first = pdd_test_environment / "a.py"
-        second = pdd_test_environment / "b.py"
-        create_file(first, "A = 1\n")
-        create_file(second, "B = 1\n")
-        create_file(
-            prompt,
-            "Build.\n<include>b.py</include>\n<include>a.py</include>\n"
-            "<include>a.py</include>\n",
-        )
-        expected = hashlib.sha256(
-            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
-        ).hexdigest()
-        assert calculate_prompt_hash(prompt, hash_version=1) == expected
-
-    def test_legacy_v1_preserves_pre_versioned_include_grammar_and_missing_files(
-        self, pdd_test_environment
-    ):
-        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
-        body_dep = prompt.parent / "body.py"
-        attr_dep = prompt.parent / "attribute.py"
-        create_file(body_dep, "BODY = 1\n")
-        create_file(attr_dep, "ATTRIBUTE = 1\n")
-        create_file(
-            prompt,
-            "<include path=\"attribute.py\">body.py</include>\n"
-            "<include path=\"attribute.py\"/>\n"
-            "<include-many>*.py</include-many>\n"
-            "<include>missing.py</include>\n",
-        )
-        expected = hashlib.sha256(prompt.read_bytes() + body_dep.read_bytes()).hexdigest()
-        assert calculate_prompt_hash(prompt, hash_version=1) == expected
-
-    def test_legacy_v1_stored_dependencies_skip_missing_and_keep_key_order(
-        self, pdd_test_environment
-    ):
-        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
-        first = pdd_test_environment / "a.py"
-        second = pdd_test_environment / "b.py"
-        create_file(prompt, "No includes.\n")
-        create_file(first, "A = 1\n")
-        create_file(second, "B = 1\n")
-        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
-        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
-        assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
-
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
@@ -4282,36 +4203,6 @@ class TestFingerprintIncludeDependencies:
             "Composite prompt hash must change when a stored dependency file changes, "
             "even when the prompt itself has no <include> tags"
         )
-
-    def test_calculate_prompt_hash_anchors_relative_stored_deps_to_explicit_root(
-        self, pdd_test_environment, monkeypatch
-    ):
-        """Stored relative dependency keys must not be interpreted from process CWD."""
-        prompts_dir = pdd_test_environment / "prompts"
-        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
-        create_file(prompt_path, "Create a helper using project docs.\n")
-        project_dep = pdd_test_environment / "docs" / "contract.md"
-        create_file(project_dep, "trusted project dependency\n")
-
-        nested = pdd_test_environment / "nested"
-        alternate_dep = nested / "docs" / "contract.md"
-        create_file(alternate_dep, "wrong nested dependency\n")
-        monkeypatch.chdir(nested)
-
-        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
-        anchored_hash = calculate_prompt_hash(
-            prompt_path,
-            stored_deps=stored_deps,
-            dependency_root=pdd_test_environment,
-        )
-        create_file(alternate_dep, "changed wrong nested dependency\n")
-        anchored_hash_after_alternate_change = calculate_prompt_hash(
-            prompt_path,
-            stored_deps=stored_deps,
-            dependency_root=pdd_test_environment,
-        )
-
-        assert anchored_hash == anchored_hash_after_alternate_change
 
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
@@ -4628,7 +4519,10 @@ class TestIssue1048GlobEscapingInDetermineOperation:
         Bug: _safe_basename('frontend/[id]') -> 'frontend_[id]', then
         meta_dir.glob('frontend_[id]_python_run*.json') interprets [id] as char class.
         """
-        from sync_determine_operation import _check_example_success_history, _safe_basename
+        from pdd.sync_determine_operation import (
+            _check_example_success_history,
+            _safe_basename,
+        )
 
         assert _safe_basename("frontend/[id]") == "frontend_[id]"
 
@@ -4638,9 +4532,9 @@ class TestIssue1048GlobEscapingInDetermineOperation:
         report_file = meta_dir / "frontend_[id]_python_run_001.json"
         report_file.write_text('{"exit_code": 0}')
 
-        with patch("sync_determine_operation.get_meta_dir", return_value=meta_dir), \
-             patch("sync_determine_operation.read_fingerprint", return_value=None), \
-             patch("sync_determine_operation.read_run_report", return_value=None):
+        with patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+             patch("pdd.sync_determine_operation.read_fingerprint", return_value=None), \
+             patch("pdd.sync_determine_operation.read_run_report", return_value=None):
 
             result = _check_example_success_history("frontend/[id]", "python")
 
@@ -4670,7 +4564,7 @@ class TestIssue1048GlobEscapingInDetermineOperation:
         test_file_2 = tests_dir / "test_[id]_extra.py"
         test_file_2.write_text("def test_2(): pass")
 
-        with patch("sync_determine_operation.construct_paths") as mock_cp:
+        with patch("pdd.sync_determine_operation.construct_paths") as mock_cp:
             def side_effect(*args, **kwargs):
                 cmd = kwargs.get("command", "sync")
                 if cmd == "test":
@@ -4719,7 +4613,7 @@ class TestIssue1048GlobEscapingInDetermineOperation:
         test_file_2 = tmp_path / "test_[id]_extra.py"
         test_file_2.write_text("def test_2(): pass")
 
-        with patch("sync_determine_operation.construct_paths", side_effect=Exception("force fallback")):
+        with patch("pdd.sync_determine_operation.construct_paths", side_effect=Exception("force fallback")):
             result = get_pdd_file_paths("[id]", "python", prompts_dir=str(tmp_path))
 
         test_files = result.get("test_files", [])
@@ -4744,7 +4638,7 @@ class TestIssue1048GlobEscapingInDetermineOperation:
         test_file_2 = tests_dir / "test_[id]_extra.py"
         test_file_2.write_text("def test_2(): pass")
 
-        with patch("sync_determine_operation.construct_paths") as mock_cp:
+        with patch("pdd.sync_determine_operation.construct_paths") as mock_cp:
             mock_cp.return_value = (
                 {"prompts_dir": str(tmp_path / "prompts"), "tests_dir": str(tests_dir)},
                 {"prompt_file": "content"},
@@ -5610,159 +5504,3 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"FM1: generation writes {written.suffix!r} but sync expects "
             f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )
-
-
-def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
-    prompt_dir = tmp_path / "prompts"
-    cwd = tmp_path / "cwd"
-    prompt_dir.mkdir()
-    cwd.mkdir()
-    dependency = cwd / "shared.bin"
-    dependency.write_bytes(b"dependency\xff")
-    prompt = prompt_dir / "widget.prompt"
-    prompt.write_bytes(b"<include>  shared.bin  </include>\ninvalid:\xff\n")
-    monkeypatch.chdir(cwd)
-    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
-    assert calculate_prompt_hash(prompt, hash_version=1) == expected
-
-
-def test_v1_hash_resolves_stored_relative_keys_from_cwd(tmp_path, monkeypatch):
-    prompt_dir = tmp_path / "prompts"
-    cwd = tmp_path / "cwd"
-    prompt_dir.mkdir()
-    cwd.mkdir()
-    dependency = cwd / "stored.txt"
-    dependency.write_bytes(b"stored")
-    prompt = prompt_dir / "widget.prompt"
-    prompt.write_bytes(b"no includes\n")
-    monkeypatch.chdir(cwd)
-    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
-    assert calculate_prompt_hash(
-        prompt, {"stored.txt": "ignored"}, hash_version=1
-    ) == expected
-
-
-def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
-    prompt = tmp_path / "widget.prompt"
-    prompt.write_text(
-        '<include path="missing.txt"/>\n<include-many>missing.txt</include-many>\n'
-    )
-    assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
-        prompt.read_bytes()
-    ).hexdigest()
-
-
-@pytest.mark.parametrize(
-    "markup",
-    [
-        '<include path="dep.txt"/>',
-        '<include-many>dep.txt</include-many>',
-    ],
-)
-def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
-    tmp_path, monkeypatch, markup
-):
-    monkeypatch.chdir(tmp_path)
-    prompt = tmp_path / "widget.prompt"
-    prompt.write_text(markup, encoding="utf-8")
-    (tmp_path / "dep.txt").write_text("dependency", encoding="utf-8")
-
-    first = calculate_prompt_hash(prompt, hash_version=1)
-    persisted = extract_include_deps(prompt, version=1)
-    reloaded = json.loads(json.dumps(persisted))
-    second = calculate_prompt_hash(prompt, reloaded, hash_version=1)
-
-    assert persisted == {}
-    assert second == first
-
-
-@pytest.mark.parametrize("policy_mutation", [None, "delete", "rename"])
-def test_sync_classifier_preserves_nested_prompt_alias_identity(
-    tmp_path, monkeypatch, policy_mutation
-):
-    """Architecture, include closure, and hashing use the approved logical path."""
-    root = tmp_path / "repo"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "sync@example.com"], cwd=root, check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Sync Test"], cwd=root, check=True
-    )
-    (root / "prompts/nested").mkdir(parents=True)
-    (root / "canonical-prompts").mkdir()
-    (root / ".pdd").mkdir()
-    (root / "src/nested").mkdir(parents=True)
-    canonical_prompt = root / "canonical-prompts/widget_python.prompt"
-    canonical_prompt.write_text("Build widget\n<include>contract.md</include>\n")
-    logical_prompt = root / "prompts/nested/widget_python.prompt"
-    logical_prompt.symlink_to("../../canonical-prompts/widget_python.prompt")
-    contract = root / "prompts/nested/contract.md"
-    contract.write_text("logical contract\n")
-    code = root / "src/nested/widget.py"
-    code.write_text("value = 1\n")
-    wrong_code = root / "wrong/nested/widget.py"
-    wrong_code.parent.mkdir(parents=True)
-    wrong_code.write_text("wrong = True\n")
-    (root / "architecture.json").write_text(
-        json.dumps(
-            [
-                {
-                    "filename": "widget_python.prompt",
-                    "filepath": "wrong/nested/widget.py",
-                },
-                {
-                    "filename": "nested/widget_python.prompt",
-                    "filepath": "src/nested/widget.py",
-                }
-            ]
-        )
-    )
-    (root / ".pdd/repository-id").write_text(
-        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0\n"
-    )
-    (root / ".pdd/sync-policy.json").write_text(
-        json.dumps({"schema_version": 1, "enforcement": "active"})
-    )
-    (root / ".pdd/sync-aliases.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "aliases": [
-                    {
-                        "alias_path": "prompts/nested/widget_python.prompt",
-                        "canonical_path": "canonical-prompts/widget_python.prompt",
-                    }
-                ],
-            }
-        )
-    )
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "nested prompt alias"], cwd=root, check=True
-    )
-    policy = root / ".pdd/sync-policy.json"
-    if policy_mutation == "delete":
-        policy.unlink()
-    elif policy_mutation == "rename":
-        policy.rename(policy.with_suffix(".disabled"))
-    monkeypatch.chdir(root)
-    monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
-
-    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
-    deps = extract_include_deps(paths["prompt"])
-    digest_before = calculate_prompt_hash(paths["prompt"])
-    contract.write_text("changed logical contract\n")
-    digest_after = calculate_prompt_hash(paths["prompt"])
-
-    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
-    assert paths["code"].resolve() == code.resolve()
-    assert deps == {
-        "prompts/nested/contract.md": hashlib.sha256(
-            b"logical contract\n"
-        ).hexdigest()
-    }
-    assert digest_before is not None
-    assert digest_after is not None
-    assert digest_after != digest_before
