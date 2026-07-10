@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.296.dev0",
-  "timestamp": "2026-07-09T09:54:54.515165+00:00",
+  "pdd_version": "0.0.285.dev18",
+  "timestamp": "2026-07-10T18:09:38.010959+00:00",
   "command": "fix",
-  "prompt_hash": "67066038dc835de0304bdf437277088994f8293b858343af8a8c1ba00b7c86a2",
-  "code_hash": "e616ac746674a9f1e8be84bf3093d5e1f45ff0175bc3767b758f2d17b2c54132",
+  "prompt_hash": "375af90f2fd139d9f3430880137d9f058a3a0ec028438a408d93cf2a83d225e4",
+  "code_hash": "abed17986438c278c8bc8b8f6da778631a6b0954c6261230c76a0bdd8832d57a",
   "example_hash": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5",
-  "test_hash": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d",
+  "test_hash": "07914d01c9a9a2c5d7590b91ae3329f4d30a6bc6c179cb34888afdd8826ede5f",
   "test_files": {
-    "test_sync_determine_operation.py": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d"
+    "test_sync_determine_operation.py": "07914d01c9a9a2c5d7590b91ae3329f4d30a6bc6c179cb34888afdd8826ede5f"
   },
   "include_deps": {
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
