@@ -189,3 +189,40 @@ jobs:
           printf '<include>docs/prompting_guide.md</include>\n' > test_include_python.prompt
           "$RUNNER_TEMP/pdd-wheel-smoke/bin/pdd" --quiet preprocess test_include_python.prompt --output preprocessed.txt
           grep -q "PDD Mental Model" preprocessed.txt
+
+  repo-bloat-docker-e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    name: Repo Bloat Docker E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    defaults:
+      run:
+        working-directory: research/repo-bloat-benchmark/harness/runner/container
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Show Docker versions
+        run: |
+          docker version
+          docker compose version
+
+      - name: Build hard-tier containers
+        run: docker compose build
+
+      - name: Start isolated agent
+        run: docker compose up -d agent
+
+      - name: Verify runner egress lockdown
+        run: docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
+
+      - name: Verify isolated-agent integration path
+        run: docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
+
+      - name: Stop hard-tier containers
+        if: always()
+        run: docker compose down -v

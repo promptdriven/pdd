@@ -1,0 +1,9 @@
+# ACL'd egress gateway (design §8.1.1 hard tier) — built from Debian, no
+# third-party image trust required.
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tinyproxy \
+    && rm -rf /var/lib/apt/lists/*
+USER tinyproxy
+EXPOSE 8888
+CMD ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]
