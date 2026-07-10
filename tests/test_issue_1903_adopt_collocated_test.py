@@ -32,6 +32,7 @@ import pytest
 
 from pdd.content_selector import (
     _pins_test_output_location,
+    _validated_project_path,
     configured_test_output_pinned,
     find_collocated_test,
     resolve_test_output_path,
@@ -906,3 +907,28 @@ def test_in_repo_adoption_still_works_after_containment(tmp_path, monkeypatch):
         code, Path("tests") / "test_page.tsx", user_pinned=False
     )
     assert Path(got).resolve() == real.resolve()
+
+
+def test_validated_project_path_sanitizes_before_filesystem_use(tmp_path, monkeypatch):
+    """Only component-sanitized paths under the trusted root are canonicalized."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    module = _write(repo / "src" / "widget.ts", "export const x = 1;\n")
+    outside = _write(tmp_path / "outside.ts", "export const y = 2;\n")
+    monkeypatch.chdir(repo)
+
+    assert _validated_project_path("src/widget.ts") == module.resolve()
+    assert _validated_project_path(module) == module.resolve()
+    assert _validated_project_path(Path("..") / "outside.ts") is None
+    assert _validated_project_path(outside) is None
+
+
+def test_find_collocated_test_rejects_symlink_escape(tmp_path, monkeypatch):
+    """A lexical in-repo candidate whose symlink target escapes is rejected."""
+    repo = tmp_path / "repo"
+    code = _write(repo / "src" / "widget.ts", "export const x = 1;\n")
+    outside_test = _write(tmp_path / "widget.test.ts", "test('x', () => {});\n")
+    (code.parent / "widget.test.ts").symlink_to(outside_test)
+    monkeypatch.chdir(repo)
+
+    assert find_collocated_test(code) is None
