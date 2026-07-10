@@ -3,10 +3,24 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 # Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by the STANDARD group for slow tasks). SKIP_INDEX causes the SPOT
-# group to skip one index so effective indices stay contiguous.
+# (used by dedicated STANDARD groups), TASK_INDEX_OFFSET maps a serial group
+# onto a contiguous task range, and SKIP_INDEXES lets the main group skip
+# dedicated task indexes while preserving the global task numbering.
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
+elif [ -n "${TASK_INDEX_OFFSET:-}" ]; then
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX=$((_RAW + TASK_INDEX_OFFSET))
+elif [ -n "${SKIP_INDEXES:-}" ]; then
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX="${_RAW}"
+    IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
+    for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
+        [ -n "${_SKIP_INDEX}" ] || continue
+        if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+            TASK_INDEX=$((TASK_INDEX + 1))
+        fi
+    done
 elif [ -n "${SKIP_INDEX:-}" ]; then
     _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
     if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
@@ -195,10 +209,22 @@ export PDD_EXTRACTS_STRENGTH="${PDD_EXTRACTS_STRENGTH:-0.5}"
 # Diagnostics on failure: curl transport errors, parser-script crashes, and
 # bad-shape tokens are each distinguishable in the WARNING/ERROR output and
 # in the final RESULT_JSON written for cloud_regression tasks.
-if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
+NEEDS_PDD_JWT=0
+if [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
+    NEEDS_PDD_JWT=1
+elif [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ] && [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" = "1" ]; then
+    NEEDS_PDD_JWT=1
+fi
+
+if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
     JWT_MAX_ATTEMPTS=4
     JWT_ATTEMPT=0
     JWT_LAST_ERROR=""
+    JWT_INITIAL_DELAY=$(( (TASK_INDEX * 7) % 30 + RANDOM % 5 ))
+    if [ "${JWT_INITIAL_DELAY}" -gt 0 ]; then
+        echo "Staggering JWT exchange for ${JWT_INITIAL_DELAY}s (task ${TASK_INDEX})"
+        sleep "${JWT_INITIAL_DELAY}"
+    fi
     while [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; do
         JWT_ATTEMPT=$((JWT_ATTEMPT + 1))
 
@@ -300,6 +326,12 @@ else:
         fi
         echo "Continuing without PDD_JWT_TOKEN (task ${TASK_INDEX} does not require it)."
     fi
+elif [ "${NEEDS_PDD_JWT}" = "0" ]; then
+    echo "Skipping PDD JWT exchange for task ${TASK_INDEX}; this shard does not require PDD Cloud auth."
+elif [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
+    JWT_FAIL_CASE_NUM=$((TASK_INDEX - CLOUD_REGRESSION_START + 1))
+    write_result "error" "${SETUP_SECONDS:-0}" "cloud_regression" "jwt_exchange_unavailable_case_${JWT_FAIL_CASE_NUM}"
+    exit 1
 fi
 
 # ── Claude Code OAuth ──────────────────────────────────────────────────
@@ -357,6 +389,12 @@ run_test() {
 
 if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
     # ── Pytest chunk ──────────────────────────────────────────────────
+    if [ "${PDD_BATCH_ENABLE_PYTEST_CLOUD_E2E:-}" != "1" ]; then
+        export PDD_FORCE_LOCAL=1
+        unset PDD_JWT_TOKEN
+        echo "=== Pytest shard forced local: PDD_FORCE_LOCAL=1, PDD_JWT_TOKEN unset ==="
+    fi
+
     CHUNK_INDEX="${TASK_INDEX}"
     DURATIONS_FILE="${WORK_DIR}/ci/cloud-batch/test-durations.json"
 

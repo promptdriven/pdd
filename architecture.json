@@ -6046,7 +6046,7 @@
   },
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues, with optional clean restart.",
-    "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Hardens JSON/Markdown artifact handling by clearing artifacts before attempts and internal provider retries, persisting only accepted decision JSON, deriving Step 9 manual-review lines exactly from accepted Step 9 JSON, and requiring Step 13 PR success/recovery to validate an OPEN PR in the exact repo/base/head branch with non-empty PR head SHA plus remote/local head SHA alignment even when the provider result is classified as failed; Step 13 clears unaccepted Markdown before posting a trusted success comment after prose synthesis or exact-head recovery. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "description": "Orchestrates the 13-step agentic change workflow. Supports `clean_restart=True` to ignore any persisted solving state for the issue and start a fresh full pdd-issue flow from the target base branch (issue #1149). Hardens JSON/Markdown artifact handling by clearing artifacts before attempts and internal provider retries, persisting only accepted decision JSON, deriving Step 9 manual-review lines exactly from accepted Step 9 JSON, and requiring Step 13 PR success/recovery to validate an OPEN PR in the exact repo/base/head branch with non-empty PR head SHA plus remote/local head SHA alignment even when the provider result is classified as failed; Step 13 clears unaccepted Markdown before posting a trusted success comment after prose synthesis or exact-head recovery. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
@@ -9863,7 +9863,7 @@
     }
   },
   {
-    "reason": "Validates, generates, and fixes user stories linked to PDD prompt files, with cross-unit story traceability.",
+    "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
     "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
     "dependencies": [
       "contract_ir_python.prompt",
@@ -9890,6 +9890,21 @@
           }
         ],
         "functions": [
+          {
+            "name": "story_id",
+            "signature": "(path: str | Path)",
+            "returns": "str"
+          },
+          {
+            "name": "discover_story_files",
+            "signature": "(stories_dir: Optional[str] = None)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "discover_prompt_files",
+            "signature": "(...)",
+            "returns": "List[Path]"
+          },
           {
             "name": "run_user_story_tests",
             "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]",
@@ -9943,7 +9958,8 @@
     "description": "Static deterministic rule-to-evidence matrix builder for PDD prompt files. Classifies each contract rule as checked, story-only, test-only, waived, failed, or unchecked based on linked story and test evidence. Supports cross-unit story attribution and deduplication in directory scans.",
     "dependencies": [
       "contract_ir_python.prompt",
-      "user_story_tests_python.prompt"
+      "user_story_tests_python.prompt",
+      "story_regression_python.prompt"
     ],
     "priority": 241,
     "filename": "coverage_contracts_python.prompt",
@@ -11337,201 +11353,6 @@
     "position": {
       "x": 800,
       "y": 3600
-    }
-  },
-  {
-    "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention.",
-    "description": "User story utilities: discover story/prompt files, validate stories against prompts via detect_change, generate LLM-authored story__*.md from a GitHub issue, and apply prompt fixes for a single story. Exposes the public story_id helper (story__<slug>.md -> <slug>) reused by story_regression.",
-    "dependencies": [],
-    "priority": 6,
-    "filename": "user_story_tests_python.prompt",
-    "filepath": "pdd/user_story_tests.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "story_id",
-            "signature": "(path: str | Path)",
-            "returns": "str"
-          },
-          {
-            "name": "discover_story_files",
-            "signature": "(stories_dir: Optional[str] = None)",
-            "returns": "List[Path]"
-          },
-          {
-            "name": "discover_prompt_files",
-            "signature": "(...)",
-            "returns": "List[Path]"
-          },
-          {
-            "name": "generate_user_story",
-            "signature": "(...)",
-            "returns": "Tuple[bool, str]"
-          },
-          {
-            "name": "run_user_story_tests",
-            "signature": "(...)",
-            "returns": "Tuple[bool, str]"
-          },
-          {
-            "name": "run_user_story_fix",
-            "signature": "(...)",
-            "returns": "Tuple[bool, str]"
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 2600,
-      "y": 3600
-    }
-  },
-  {
-    "reason": "Deterministic static contract-rule coverage matrix for prompts, plus an orthogonal per-story has_regression_test dimension.",
-    "description": "Builds a rule-to-evidence matrix for .prompt files with <contract_rules>, classifying rules as checked/story-only/test-only/unchecked/waived/failed. Adds an orthogonal, story-keyed has_regression_test dimension computed via the story_regression traceability API. Exposed through `pdd checkup coverage`.",
-    "dependencies": [
-      "story_regression_python.prompt"
-    ],
-    "priority": 6,
-    "filename": "coverage_contracts_python.prompt",
-    "filepath": "pdd/coverage_contracts.py",
-    "tags": [
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "build_coverage",
-            "signature": "(path, stories_dir=None, tests_dir=None)",
-            "returns": "CoverageResult"
-          },
-          {
-            "name": "build_coverage_directory",
-            "signature": "(directory, stories_dir=None, tests_dir=None)",
-            "returns": "list[CoverageResult]"
-          }
-        ],
-        "dataclasses": [
-          {
-            "name": "RuleCoverage"
-          },
-          {
-            "name": "CoverageResult"
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 4400,
-      "y": 3600
-    },
-    "contract_summary": {
-      "rules": [
-        "R1",
-        "R2",
-        "R3",
-        "R4",
-        "R5",
-        "R6"
-      ],
-      "critical": [],
-      "stories": [],
-      "capabilities": [],
-      "coverage_status": "partial",
-      "evidence_status": "missing",
-      "waived": [],
-      "unchecked": [],
-      "rules_detail": {
-        "R1": {
-          "rule_id": "R1",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_R1_rejects_zero_refund",
-            "test_R1_rejects_negative_refund",
-            "test_cross_module_known_id_no_issue",
-            "test_r1_is_checked"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        },
-        "R2": {
-          "rule_id": "R2",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_multiple_rules_from_one_function",
-            "test_r2_is_story_only"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        },
-        "R3": {
-          "rule_id": "R3",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_R3_no_provider_call_invalid",
-            "test_cross_module_refs_matching_prompt",
-            "test_cross_module_refs_other_prompt_excluded",
-            "test_comment_heuristic",
-            "test_r3_is_test_only"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        },
-        "R4": {
-          "rule_id": "R4",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_r4_is_story_only"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        },
-        "R5": {
-          "rule_id": "R5",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_r5_is_unchecked"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        },
-        "R6": {
-          "rule_id": "R6",
-          "status": "test-only",
-          "stories": [],
-          "tests": [
-            "test_r6_is_waived"
-          ],
-          "waiver": null,
-          "waiver_status": null,
-          "waiver_expires": null,
-          "failures": []
-        }
-      }
     }
   },
   {

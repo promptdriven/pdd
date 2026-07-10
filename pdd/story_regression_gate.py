@@ -1,9 +1,12 @@
 """Deterministic, public-safe CI gate for story-driven regression tests.
 
 Capstone of EPIC #1698 (issue #1702). Enforces that every user story ships
-with a passing, non-stale executable regression test. A regression test
-declares which story it protects -- and the story content it was generated
-against -- via a marker::
+with a *present*, non-stale executable regression test linked to it. This
+gate is static/AST-based: it verifies test presence and story-hash freshness
+only -- it never executes a test body, so it does not (and cannot) prove that
+a test *passes*. Pass/fail is verified separately by the story lane
+(``pytest -m story``). A regression test declares which story it protects --
+and the story content it was generated against -- via a marker::
 
     @pytest.mark.story(story_id="pdd_sync", story_hash="a1b2c3d4e5f6a7b8")
     def test_sync_round_trips():
@@ -30,7 +33,6 @@ from __future__ import annotations
 
 import ast
 import logging
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -44,9 +46,9 @@ from .path_resolution import find_project_root_from_path
 from .story_regression import StoryTestMap, build_story_map
 from .story_test_generation import story_bundle_hash
 from .user_story_tests import (
-    DEFAULT_STORIES_DIR,
     STORY_PREFIX,
     STORY_SUFFIX,
+    _resolve_stories_dir,
     _story_content_hash,
     discover_story_files,
     story_id,
@@ -61,7 +63,13 @@ logger = logging.getLogger(__name__)
 STATUS_STORY_REGRESSION_OK = "story-regression-ok"
 STATUS_STORY_REGRESSION_MISSING = "story-regression-missing"
 STATUS_STORY_REGRESSION_STALE = "story-regression-stale"
-STATUS_PASSING = "story-regression-passing"
+# Verdict emitted by the lightweight ``evaluate_story_regression`` evaluator for
+# a story that has a fresh (or legacy hashless, traceability-only) linked test.
+# The value is deliberately presence/freshness-neutral: this evaluator does NOT
+# execute tests, so it must never claim a test "passed" (pdd#1889 Bug 2). The
+# constant name is retained for import compatibility; the value carries the
+# honest wording rendered by ``pdd checkup coverage``.
+STATUS_PASSING = "story-regression-present"
 STATUS_MISSING = STATUS_STORY_REGRESSION_MISSING
 STATUS_STALE = STATUS_STORY_REGRESSION_STALE
 
@@ -69,10 +77,6 @@ _GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
 _STRICT_FAIL_EXIT = 2
 _DEFAULT_TESTS_DIR = "tests"
-_HASH_ASSIGN_RE = re.compile(
-    r"^(?:PDD_)?STORY_HASH\s*=\s*(?P<value>['\"].*?['\"])",
-    re.MULTILINE,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +238,59 @@ def _marker_from_decorator(
     )
 
 
+def _pytestmark_markers(
+    body: Sequence[ast.AST],
+    *,
+    test_name: str,
+    test_file: str,
+    constants: Dict[str, str],
+) -> List[StoryMarker]:
+    """Collect story markers declared via a ``pytestmark = pytest.mark.story(...)``
+    assignment in *body* (a module or class body).
+
+    ``pytestmark`` may be a single mark or a list/tuple of marks; a story mark in
+    either form claims every test under the enclosing scope, exactly as pytest
+    applies it at collection time.
+    """
+    found: List[StoryMarker] = []
+    for node in body:
+        if isinstance(node, ast.Assign):
+            targets: Sequence[ast.AST] = node.targets
+            value: Optional[ast.AST] = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if value is None:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
+        ):
+            continue
+        elts = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+        for elt in elts:
+            marker = _marker_from_decorator(
+                elt,
+                test_name=test_name,
+                test_file=test_file,
+                lineno=getattr(elt, "lineno", getattr(node, "lineno", 1)),
+                constants=constants,
+            )
+            if marker is not None:
+                found.append(marker)
+    return found
+
+
 def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
-    """Parse *source* and return every story marker it declares."""
+    """Parse *source* and return every story marker it declares.
+
+    Covers ``@pytest.mark.story`` decorators on a test function OR class (a class
+    marker propagates to its methods in pytest), plus module-level and
+    class-level ``pytestmark = pytest.mark.story(...)`` assignments. Missing any
+    of these would make the gate report a story ``missing`` while pytest
+    collection (and the coverage path) still see it — an evaluator divergence.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -243,19 +298,37 @@ def _markers_in_source(source: str, test_file: str) -> List[StoryMarker]:
         return []
     constants = _module_string_constants(tree)
     found: List[StoryMarker] = []
+    # Module-level pytestmark claims every test in the module.
+    found.extend(
+        _pytestmark_markers(
+            getattr(tree, "body", []),
+            test_name="<module>",
+            test_file=test_file,
+            constants=constants,
+        )
+    )
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for deco in node.decorator_list:
-            marker = _marker_from_decorator(
-                deco,
-                test_name=node.name,
-                test_file=test_file,
-                lineno=getattr(deco, "lineno", node.lineno),
-                constants=constants,
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for deco in node.decorator_list:
+                marker = _marker_from_decorator(
+                    deco,
+                    test_name=node.name,
+                    test_file=test_file,
+                    lineno=getattr(deco, "lineno", node.lineno),
+                    constants=constants,
+                )
+                if marker is not None:
+                    found.append(marker)
+        if isinstance(node, ast.ClassDef):
+            # Class-level pytestmark claims every method of the class.
+            found.extend(
+                _pytestmark_markers(
+                    node.body,
+                    test_name=node.name,
+                    test_file=test_file,
+                    constants=constants,
+                )
             )
-            if marker is not None:
-                found.append(marker)
     return found
 
 
@@ -273,7 +346,10 @@ def discover_story_markers(tests_dir) -> Dict[str, StoryMarker]:
     for py in sorted(base.rglob("*.py")):
         try:
             source = py.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # An unreadable / non-UTF8 test file is skipped like a syntax error,
+            # matching the sibling scanner in ``pdd.story_regression`` — a single
+            # bad file must never crash the whole gate (pdd#1889 G-F3).
             continue
         for marker in sorted(
             _markers_in_source(source, str(py)), key=lambda m: m.lineno
@@ -298,7 +374,10 @@ def discover_all_story_markers(tests_dir) -> Dict[str, List[StoryMarker]]:
     for py in sorted(base.rglob("*.py")):
         try:
             source = py.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # An unreadable / non-UTF8 test file is skipped like a syntax error,
+            # matching the sibling scanner in ``pdd.story_regression`` — a single
+            # bad file must never crash the whole gate (pdd#1889 G-F3).
             continue
         for marker in sorted(
             _markers_in_source(source, str(py)), key=lambda m: m.lineno
@@ -310,6 +389,32 @@ def discover_all_story_markers(tests_dir) -> Dict[str, List[StoryMarker]]:
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
+
+
+def _acceptable_story_hashes(
+    story_path, story_text: Optional[str] = None
+) -> set:
+    """Hashes a fresh linked test may legitimately record for *story_path*.
+
+    The union of the content hash (``_story_content_hash``, story prose only)
+    and the bundle hash (``story_bundle_hash``, story + contract). Shared by the
+    full gate (:func:`_classify_story_from_markers`) and the wired coverage
+    evaluator (:func:`evaluate_story_regression`) so the two can never diverge on
+    what "fresh" means (pdd#1889 Bug 1). Both primitives are metadata-insensitive.
+    """
+    path = Path(story_path)
+    if story_text is None:
+        try:
+            story_text = path.read_text(encoding="utf-8")
+        except OSError:
+            story_text = ""
+    acceptable = {_story_content_hash(story_text)}
+    if path.exists():
+        try:
+            acceptable.add(story_bundle_hash(path))
+        except OSError:
+            pass
+    return acceptable
 
 
 def _classify_story_from_markers(
@@ -330,12 +435,7 @@ def _classify_story_from_markers(
     if story_text is None:
         story_text = path.read_text(encoding="utf-8")
     current_hash = _story_content_hash(story_text)
-    acceptable_hashes = {current_hash}
-    if path.exists():
-        try:
-            acceptable_hashes.add(story_bundle_hash(path))
-        except OSError:
-            pass
+    acceptable_hashes = _acceptable_story_hashes(path, story_text)
 
     if not story_markers:
         return StoryRegressionResult(
@@ -360,7 +460,11 @@ def _classify_story_from_markers(
                 recorded_hash=marker.story_hash,
                 test_file=marker.test_file,
                 test_name=marker.test_name,
-                detail="Story has a fresh regression test.",
+                detail=(
+                    "Story has a fresh, linked regression test "
+                    "(pass/fail is verified separately by the story lane, "
+                    "`pytest -m story`)."
+                ),
             )
 
     # None fresh: prefer a marker that at least records a hash for a precise message.
@@ -660,10 +764,12 @@ def run_story_regression_gate(
 
     cwd = Path.cwd()
     stories_arg = stories_dir
-    if stories_arg is None:
-        candidate = root / DEFAULT_STORIES_DIR
-        if root.resolve() != cwd.resolve():
-            stories_arg = str(candidate)
+    if stories_arg is None and root.resolve() != cwd.resolve():
+        # Anchor to *root* (not cwd) but still honor PDD_USER_STORIES_DIR, so a
+        # custom stories dir is not silently ignored — which would make strict
+        # mode pass vacuously over zero stories (pdd#1889 G-F7). When root == cwd
+        # we leave it None so evaluate_stories resolves relative to cwd itself.
+        stories_arg = str(_resolve_stories_dir(None, root=root))
     tests_arg = tests_dir
     if tests_arg is None:
         tests_arg = str(root / _DEFAULT_TESTS_DIR)
@@ -733,18 +839,25 @@ def _test_file_for_nodeid(nodeid: str, tests_dir: Path) -> Optional[Path]:
     return None
 
 
-def _recorded_hash(test_path: Path) -> Optional[str]:
+def _recorded_story_hashes(test_path: Path, sid: str) -> List[str]:
+    """Every ``story_hash`` *test_path* records for story *sid*.
+
+    Resolves BOTH marker ``story_hash=`` kwargs AND module-level
+    ``PDD_STORY_HASH`` / ``STORY_HASH`` constants (via the gate's own AST scan,
+    :func:`_markers_in_source`), so the wired evaluator accepts the same forms as
+    the full gate (pdd#1889 Bug 1). A legacy hashless marker contributes nothing,
+    preserving the #1699 traceability-only "present" verdict.
+    """
     try:
-        text = test_path.read_text(encoding="utf-8")
+        source = test_path.read_text(encoding="utf-8")
     except OSError:
-        return None
-    match = _HASH_ASSIGN_RE.search(text)
-    if not match:
-        return None
-    try:
-        return str(ast.literal_eval(match.group("value")))
-    except (SyntaxError, ValueError):
-        return None
+        return []
+    target = story_id_from_path(sid)
+    hashes: List[str] = []
+    for marker in _markers_in_source(source, str(test_path)):
+        if marker.story_hash and story_id_from_path(marker.story_id) == target:
+            hashes.append(marker.story_hash)
+    return hashes
 
 
 def evaluate_story_regression(
@@ -753,7 +866,11 @@ def evaluate_story_regression(
     tests_dir: Path,
     story_map: Optional[StoryTestMap] = None,
 ) -> StoryRegressionEvaluation:
-    """Return missing/stale/passing status for a story without executing tests."""
+    """Return missing/stale/present status for a story without executing tests.
+
+    "present" means a fresh (or legacy hashless, traceability-only) linked test
+    exists; it does NOT mean the test passes -- this evaluator never runs it.
+    """
     sid = story_id(story_path)
     current_hash = story_bundle_hash(story_path)
     smap = story_map if story_map is not None else build_story_map(tests_dir)
@@ -768,19 +885,24 @@ def evaluate_story_regression(
         )
 
     recorded: dict[str, str] = {}
+    all_recorded: set = set()
     for nodeid in tests:
         test_path = _test_file_for_nodeid(nodeid, tests_dir)
         if test_path is None:
             continue
-        found = _recorded_hash(test_path)
+        found = _recorded_story_hashes(test_path, sid)
         if found:
-            recorded[nodeid] = found
+            recorded[nodeid] = found[0]
+            # Freshness is decided over EVERY recorded hash, not just the first,
+            # so a stale marker listed before a fresh one in the same file cannot
+            # shadow it -- matching the full gate's any-fresh-wins rule (#1889).
+            all_recorded.update(found)
 
     if not recorded:
         # Coverage uses this lightweight evaluator to preserve #1699
         # compatibility with legacy story markers that prove traceability but
-        # predate story-hash freshness metadata. The stricter full gate path
-        # still reports hashless markers as stale via classify_story().
+        # predate story-hash freshness metadata. A marker with NO hash at all
+        # stays "present"; a marker WITH a non-matching hash is stale (below).
         return StoryRegressionEvaluation(
             story_id=sid,
             status=STATUS_PASSING,
@@ -789,10 +911,13 @@ def evaluate_story_regression(
             recorded_hashes={},
         )
 
-    if current_hash not in set(recorded.values()):
+    # Same acceptance as the full gate: content hash UNION bundle hash. A
+    # recorded hash matching either form is fresh; otherwise the story changed.
+    acceptable = _acceptable_story_hashes(story_path)
+    if all_recorded & acceptable:
         return StoryRegressionEvaluation(
             story_id=sid,
-            status=STATUS_STALE,
+            status=STATUS_PASSING,
             current_hash=current_hash,
             tests=tests,
             recorded_hashes=recorded,
@@ -800,7 +925,7 @@ def evaluate_story_regression(
 
     return StoryRegressionEvaluation(
         story_id=sid,
-        status=STATUS_PASSING,
+        status=STATUS_STALE,
         current_hash=current_hash,
         tests=tests,
         recorded_hashes=recorded,

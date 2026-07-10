@@ -80,9 +80,15 @@ belongs to `pdd test --from-story`.
 R9 - Story list rendering
 `story list` MUST render a formatted table with columns: story-id, file path, and linked prompts.
 When `--with-regression-status` is supplied, an additional regression status column MUST be
-included; that column MUST always show `-` until the #1699 traceability API is available.
-Without `--with-regression-status`, no regression column is shown. When `user_stories/` is empty
-or contains no story files, a friendly "No stories found" message MUST be printed and the command
+included. That column MUST report a **presence/freshness-honest** label derived from the story
+regression gate's classification (never "passing" — the list surface does not execute any test):
+`missing` when no linked regression test exists, `has-test` when a linked test is present, and
+`stale` when a linked test records a mismatched story hash. The tests directory MUST be resolved
+from the *stories-dir root* (the parent of `--stories-dir` / `PDD_USER_STORIES_DIR`), NOT each
+story file's immediate parent, so a nested story (`user_stories/<sub>/story__*.md`) still anchors
+back to the project `tests/` directory rather than a spurious `user_stories/<sub>/tests`. Without
+`--with-regression-status`, no regression column is shown. When `user_stories/` is empty or
+contains no story files, a friendly "No stories found" message MUST be printed and the command
 exits 0.
 
 R10 - Story link subcommand
