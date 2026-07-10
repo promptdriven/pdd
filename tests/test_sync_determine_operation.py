@@ -1560,6 +1560,60 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
+def test_get_pdd_file_paths_architecture_filepath_with_nested_context_prompts_dir(tmp_path, monkeypatch):
+    """Issue #3203: architecture.json filepath must win even when a .pddrc context
+    nests prompts under a subdirectory (``prompts_dir: prompts/backend``).
+
+    architecture.json ``filename`` fields are stored relative to the repo
+    ``prompts/`` root (``backend/credits_Python.prompt``). A nested ``prompts_dir``
+    makes the lookup key relative to ``prompts/backend`` (``credits_Python.prompt``),
+    stripping the ``backend/`` segment, so tier-1 resolution silently missed and
+    fell back to the ``.pddrc`` ``backend/functions/{name}.py`` template — the wrong
+    directory for endpoint-test modules that live under ``backend/tests/``.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "backend" / "functions").mkdir(parents=True)
+    (tmp_path / "backend" / "tests" / "endpoint_tests" / "tests").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    # Prompt lives flat under the context's prompts_dir.
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
+        "% endpoint test mixin for the credits endpoints\n"
+    )
+    # Real deliverable lives under backend/tests, NOT backend/functions.
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n")
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n'
+        '      generate_output_path: "backend/functions/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/{name}.py"\n'
+    )
+    # architecture.json stores the prompt path relative to the repo prompts/ root,
+    # keeping the "backend/" segment that the nested prompts_dir strips.
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "backend/credits_Python.prompt",
+            "filepath": "backend/tests/endpoint_tests/tests/credits.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
+
+    # Must resolve to the architecture.json filepath, not the .pddrc template
+    # (backend/functions/credits.py, which does not exist).
+    assert paths["code"] == real_code
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:

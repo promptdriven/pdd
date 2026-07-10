@@ -1223,6 +1223,32 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 basename=basename,
                 language=language
             )
+            if not arch_filepath:
+                # Issue #3203: architecture.json `filename` fields are stored
+                # relative to the repository `prompts/` root (e.g.
+                # "backend/foo_python.prompt"). A nested .pddrc context whose
+                # `prompts_dir` points at a subdirectory (e.g. "prompts/backend")
+                # makes `prompts_root` strip that leading segment, so the lookup
+                # key becomes "foo_python.prompt" and NEVER matches the stored
+                # filename. Tier-1 resolution then silently misses and falls back
+                # to the .pddrc code template, writing/looking under the wrong
+                # directory. Retry with the key relative to the repo `prompts/`
+                # root so architecture.json's filepath is honored for modules
+                # whose prompt lives in a context subdirectory.
+                try:
+                    prompts_repo_root = (arch_path.parent / "prompts").resolve()
+                    alt_lookup = str(
+                        prompt_path_obj.resolve().relative_to(prompts_repo_root)
+                    ).replace(os.sep, "/")
+                    if alt_lookup != prompt_filename_for_lookup:
+                        arch_filepath, _ = _get_filepath_from_architecture(
+                            arch_path,
+                            alt_lookup,
+                            basename=basename,
+                            language=language
+                        )
+                except ValueError:
+                    pass
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")
                 extension = get_extension(language)
