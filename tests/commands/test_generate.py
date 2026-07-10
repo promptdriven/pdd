@@ -714,6 +714,84 @@ def test_test_story_generation_failure_exits_nonzero(runner):
     mock_generate_story.assert_called_once()
 
 
+def test_test_from_story_generates_deterministic_regression_file(runner):
+    """`pdd test --from-story` writes marked pytest tests with no LLM call."""
+    with runner.isolated_filesystem():
+        os.makedirs("user_stories/contracts")
+        with open("user_stories/story__upload_flow.md", "w", encoding="utf-8") as f:
+            f.write(
+                "# User Story: upload\n\n"
+                "## Story\n\n"
+                "A user uploads a supported file.\n"
+            )
+        with open("user_stories/contracts/upload_flow.contract.md", "w", encoding="utf-8") as f:
+            f.write(
+                "## Oracle\n\n"
+                "- Supported files are accepted.\n\n"
+                "## Negative Cases\n\n"
+                "- Unsupported files are rejected.\n"
+            )
+        result = runner.invoke(
+            generate_module.test,
+            ["--from-story", "user_stories/story__upload_flow.md"],
+        )
+
+        generated = "tests/story_regression/test_story_upload_flow.py"
+        assert result.exit_code == 0, result.output
+        assert os.path.exists(generated)
+        text = open(generated, encoding="utf-8").read()
+        assert 'PDD_STORY_ID = "upload_flow"' in text
+        assert "@pytest.mark.story" in text
+        assert "Supported files are accepted." in text
+
+
+def test_test_from_story_malformed_exits_nonzero(runner):
+    """Bug #1889: a malformed story (no ## Oracle contract) must exit nonzero.
+
+    Regression for the #1863 malformed-story class: ``generate_story_regression_test``
+    raises ValueError, which the ``test`` command previously swallowed via
+    ``handle_error`` + ``return None`` and exited 0, hiding the failure from CI.
+    The error message must stay clean (no traceback).
+    """
+    with runner.isolated_filesystem():
+        os.makedirs("user_stories")
+        # Named story__*.md (passes the name check) but has no Oracle / contract,
+        # so generate_story_regression_test raises ValueError.
+        with open("user_stories/story__broken.md", "w", encoding="utf-8") as f:
+            f.write("# User Story: broken\n\nSome prose but no Oracle section.\n")
+        result = runner.invoke(
+            generate_module.test,
+            ["--from-story", "user_stories/story__broken.md"],
+        )
+
+    assert result.exit_code != 0, result.output
+    assert "Oracle" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_test_from_story_nonexistent_file_exits_nonzero(runner):
+    """A nonexistent --from-story path still exits nonzero (click.Path(exists=True) -> 2)."""
+    with runner.isolated_filesystem():
+        result = runner.invoke(
+            generate_module.test,
+            ["--from-story", "user_stories/story__missing.md"],
+        )
+    assert result.exit_code != 0
+
+
+def test_test_from_story_rejects_positional_args(runner):
+    with runner.isolated_filesystem():
+        with open("story__upload_flow.md", "w", encoding="utf-8") as f:
+            f.write("## Story\n\nA user uploads a supported file.\n")
+        result = runner.invoke(
+            generate_module.test,
+            ["--from-story", "story__upload_flow.md", "extra"],
+        )
+
+    assert result.exit_code != 0
+    assert "does not accept positional arguments" in result.output
+
+
 def test_test_story_mode_links_uses_env_prompts_dir(runner, monkeypatch):
     """Regression for codex finding on pdd/commands/generate.py:469.
 

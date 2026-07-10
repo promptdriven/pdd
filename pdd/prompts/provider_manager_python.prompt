@@ -100,7 +100,7 @@ The reference CSV at pdd/data/llm_model.csv and user CSV at ~/.pdd/llm_model.csv
 share columns:
 provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,
 base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,
-interactive_only
+interactive_only,context_limit
 
 api_key column: single env var name for simple providers, pipe-delimited for
 multi-credential (e.g. "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME"),

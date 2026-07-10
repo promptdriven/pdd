@@ -890,7 +890,7 @@ def test_gate_validates_heal_CREATED_example_when_example_path_unset(monkeypatch
     )
 
     def heal_creates_broken_example(_d, _e):
-        exp = pathlib.Path(ex_path)
+        exp = Path(ex_path)
         exp.parent.mkdir(parents=True, exist_ok=True)
         exp.write_text("def broken(:\n", encoding="utf-8")
         return True
@@ -1064,3 +1064,743 @@ def test_targeted_tests_exclude_integration_marker_and_handle_no_tests(tmp_path)
     )
 
     assert failures == [], failures
+
+
+# ---------------------------------------------------------------------------
+# Issue #1614 — pre_checkup_gate drift-sync targets root architecture.json
+# for prompts outside pdd/prompts
+# ---------------------------------------------------------------------------
+
+def _ext_prompt_repo(tmp_path, root_arch_content="[]"):
+    """Foreign-prompts-dir fixture for issue #1614 tests.
+
+    Creates:
+    - extensions/github_pdd_app/prompts/ext_module_python.prompt  (fresh reason)
+    - extensions/github_pdd_app/architecture.json                 (stale reason)
+    - architecture.json (root, configurable via root_arch_content)
+
+    Returns the Path to the foreign architecture.json.
+    """
+    ext_prompts_dir = tmp_path / "extensions" / "github_pdd_app" / "prompts"
+    ext_prompts_dir.mkdir(parents=True)
+    (ext_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh ext reason</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/github_pdd_app/ext_module.py",
+                    "reason": "Stale ext reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(root_arch_content, encoding="utf-8")
+    return ext_arch
+
+
+def test_drift_sync_foreign_prompt_dir_does_not_corrupt_root_architecture(monkeypatch, tmp_path):
+    """Issue #1614 (failure mode 1): when a changed prompt resolves to a foreign
+    prompts_dir (outside pdd/prompts), sync_all_prompts_to_architecture must be called
+    with that directory's own architecture.json, NOT the repo-root one.
+
+    Buggy behavior: architecture_path=worktree/"architecture.json" is passed for every
+    group regardless of prompts_dir. register_untracked_prompts rglobs the foreign
+    prompts_dir against the root arch, finds ext_module_python.prompt absent there, and
+    registers a new module entry into the root architecture.json — corrupting it.
+
+    This test drives the REAL sync_all_prompts_to_architecture (only run_metadata_sync
+    and detect_drift are stubbed) to observe the actual file mutation.
+    """
+    ext_arch = _ext_prompt_repo(tmp_path, root_arch_content="[]")
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Root arch must stay empty — the foreign prompt must NOT be registered here.
+    root_arch_data = json.loads((tmp_path / "architecture.json").read_text())
+    assert root_arch_data == [], (
+        f"Root architecture.json was corrupted by the foreign-prompt sync: "
+        f"expected [], got {root_arch_data}"
+    )
+    # Foreign arch must be updated with the fresh reason from the prompt file.
+    ext_arch_data = json.loads(ext_arch.read_text())
+    assert len(ext_arch_data) == 1
+    assert ext_arch_data[0]["reason"] == "Fresh ext reason", ext_arch_data
+    assert outcome.ok is True
+
+
+def test_drift_sync_nested_prompt_dir_uses_nearest_ancestor_architecture(monkeypatch, tmp_path):
+    """Issue #1614: the owning architecture.json can be more than one level
+    above the prompts directory.
+
+    Example: extensions/github_pdd_app/src/prompts is owned by
+    extensions/github_pdd_app/architecture.json, not src/architecture.json and
+    not the repo root architecture.json.
+    """
+    nested_prompts_dir = (
+        tmp_path / "extensions" / "github_pdd_app" / "src" / "prompts"
+    )
+    nested_prompts_dir.mkdir(parents=True)
+    (nested_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh nested reason</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/github_pdd_app/src/ext_module.py",
+                    "reason": "Stale nested reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/src/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert json.loads((tmp_path / "architecture.json").read_text()) == []
+    ext_arch_data = json.loads(ext_arch.read_text())
+    assert ext_arch_data[0]["reason"] == "Fresh nested reason", ext_arch_data
+    assert "extensions/github_pdd_app/architecture.json" in outcome.synced_paths
+    assert captured_arch_paths
+    assert all(path.resolve() == ext_arch.resolve() for path in captured_arch_paths)
+    assert outcome.ok is True
+
+
+def test_drift_sync_foreign_prompt_dir_metadata_sync_receives_foreign_arch_path(monkeypatch, tmp_path):
+    """Issue #1614 (failure mode 2): run_metadata_sync must receive the nearest-ancestor
+    architecture.json for a foreign-prompts-dir prompt, not the repo-root one.
+
+    Buggy behavior: architecture_path=worktree/"architecture.json" (root) is passed for
+    every prompt regardless of which prompts_dir was resolved for that group. A metadata-
+    sync step that runs the fingerprint pipeline against the root arch for a prompt it
+    does not own trips spurious failures and blocks a legitimate PR.
+
+    sync_all_prompts_to_architecture is stubbed to isolate the run_metadata_sync call
+    site; the capturing stub records every architecture_path it receives.
+    """
+    _ext_prompt_repo(tmp_path)
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "sync_all_prompts_to_architecture",
+        lambda **_k: {"success": True},
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert captured_arch_paths, "run_metadata_sync was never called for the foreign prompt"
+    expected = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    for arch_path in captured_arch_paths:
+        assert arch_path == expected, (
+            f"run_metadata_sync received the wrong architecture_path: "
+            f"expected {expected}, got {arch_path}"
+        )
+
+
+# Scope addition: covers expansion item "synced_paths tracking at
+# pdd/pre_checkup_gate.py:406-443 tracks only root architecture.json — after
+# per-dir fix foreign arch rewrites are not included in synced_paths and won't
+# be validated by _run_build_smoke" identified by Step 6 but absent from Step
+# 8's plan (Step 8 listed it as Test 3, included below).
+def test_drift_sync_foreign_arch_write_tracked_in_synced_paths(monkeypatch, tmp_path):
+    """Issue #1614 (expansion item): when sync_all_prompts_to_architecture rewrites the
+    FOREIGN architecture.json (because the fix correctly targets it), that rewrite must
+    appear in outcome.synced_paths so _run_build_smoke can validate the produced tree.
+
+    The current arch_path tracking (lines 406-443) only watches worktree/"architecture.json"
+    (root). After the per-dir arch-path fix, the foreign arch is rewritten but the root
+    arch is untouched, so the root-only signature check never fires and the foreign arch
+    write is silently dropped from synced_paths.
+
+    This test drives the REAL sync_all_prompts_to_architecture (the stale-reason fixture
+    ensures the sync WILL rewrite the foreign arch) and asserts the foreign arch's
+    repo-relative path appears in synced_paths.
+    """
+    _ext_prompt_repo(tmp_path, root_arch_content="[]")
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert "extensions/github_pdd_app/architecture.json" in outcome.synced_paths, (
+        f"Foreign architecture.json rewrite was not tracked in synced_paths; "
+        f"got {outcome.synced_paths}"
+    )
+
+
+def test_drift_sync_foreign_prompt_falls_back_to_root_arch_when_no_own_arch(monkeypatch, tmp_path):
+    """Issue #1614 (edge case / regression): when a foreign prompts_dir has no ancestor
+    architecture.json between itself and the repo root, the nearest-ancestor walk-up
+    must fall back to worktree/"architecture.json" and still function correctly.
+
+    This confirms the fix does not break the no-own-arch fallback path.
+    """
+    # Foreign prompt dir without its own architecture.json anywhere up the tree.
+    no_arch_prompts_dir = tmp_path / "extensions" / "no_arch_app" / "prompts"
+    no_arch_prompts_dir.mkdir(parents=True)
+    (no_arch_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh ext reason</pdd-reason>\n", encoding="utf-8"
+    )
+    # Root arch owns the entry (no intermediate arch.json exists).
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/no_arch_app/ext_module.py",
+                    "reason": "Stale ext reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/no_arch_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Root arch must be updated (fallback to root arch worked).
+    root_arch_data = json.loads((tmp_path / "architecture.json").read_text())
+    assert len(root_arch_data) == 1
+    assert root_arch_data[0]["reason"] == "Fresh ext reason", root_arch_data
+    assert outcome.ok is True
+
+
+def test_drift_sync_standard_pdd_prompts_still_uses_root_architecture(monkeypatch, tmp_path):
+    """Issue #1614 (regression): the arch-per-prompts-dir resolution must NOT break the
+    standard case. Prompts under pdd/prompts/ have no pdd/architecture.json, so the
+    nearest-ancestor walk-up must resolve to the repo-root architecture.json for both
+    sync_all_prompts_to_architecture and run_metadata_sync.
+    """
+    prompt_dir = tmp_path / "pdd" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    (prompt_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>Fresh foo</pdd-reason>\n", encoding="utf-8"
+    )
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "foo_python.prompt",
+                    "filepath": "pdd/foo.py",
+                    "reason": "Stale foo",
+                    "description": "Foo desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    # No pdd/architecture.json — walk-up must skip and find root.
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["pdd/prompts/foo_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Real sync must have updated the root arch entry.
+    arch_data = json.loads(arch_path.read_text())
+    assert arch_data[0]["reason"] == "Fresh foo", arch_data
+    # run_metadata_sync must have received the root arch path (not pdd/architecture.json).
+    assert captured_arch_paths, "run_metadata_sync was never called"
+    for ap in captured_arch_paths:
+        assert ap == tmp_path / "architecture.json", (
+            f"Standard pdd/prompts case: expected root arch path, got {ap}"
+        )
+    assert outcome.ok is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #1614 — review follow-ups: prompt discovery must not misroute or
+# collapse by basename, and foreign code-only changes must be visible
+# ---------------------------------------------------------------------------
+
+def test_drift_sync_foreign_prompt_basename_collision_targets_foreign_arch(monkeypatch, tmp_path):
+    """A foreign prompt whose basename ALSO exists under pdd/prompts must still sync
+    against its own foreign architecture.json, never the repo-root one.
+
+    Buggy behavior: the prompt path was re-derived from the basename, and that probe
+    checks pdd/prompts/ and prompts/ FIRST — so the foreign prompt resolved to the
+    same-named ROOT copy and synced the root prompts_dir against the root arch,
+    leaving the foreign arch stale and the foreign prompt change unsynced.
+
+    Drives the REAL sync_all_prompts_to_architecture; only run_metadata_sync and
+    detect_drift are stubbed.
+    """
+    # Root prompt + root arch entry sharing the basename 'shared_python.prompt'.
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "shared.py").write_text("def root():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "prompts" / "shared_python.prompt").write_text(
+        "<pdd-reason>Root shared</pdd-reason>\n", encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "shared_python.prompt", "filepath": "pdd/shared.py",
+                 "reason": "Root shared", "description": "RS", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    root_before = (tmp_path / "architecture.json").read_text()
+    # Foreign app whose prompt shares the basename, with its own STALE arch.
+    (tmp_path / "extensions" / "app" / "prompts").mkdir(parents=True)
+    (tmp_path / "extensions" / "app" / "prompts" / "shared_python.prompt").write_text(
+        "<pdd-reason>Fresh foreign shared</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "shared_python.prompt", "filepath": "extensions/app/shared.py",
+                 "reason": "Stale foreign shared", "description": "FS", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/app/prompts/shared_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Foreign arch was synced from the foreign prompt...
+    assert json.loads(ext_arch.read_text())[0]["reason"] == "Fresh foreign shared", (
+        "foreign prompt change was synced against the wrong architecture.json"
+    )
+    # ...the root arch (and its same-named entry) was left untouched...
+    assert (tmp_path / "architecture.json").read_text() == root_before
+    # ...and metadata-sync ran against the foreign arch, not the root one.
+    assert captured_arch_paths
+    assert all(
+        Path(ap).resolve() == ext_arch.resolve() for ap in captured_arch_paths
+    ), captured_arch_paths
+    assert outcome.ok is True
+
+
+def test_drift_sync_two_foreign_prompts_same_basename_both_synced(monkeypatch, tmp_path):
+    """Two changed prompts that share a basename across different prompts dirs are
+    distinct modules and must BOTH sync.
+
+    Buggy behavior: touched prompts were keyed by basename, so the second
+    auth_python.prompt overwrote the first — only one app's architecture/metadata was
+    synced and the other was silently dropped.
+
+    Drives the REAL sync_all_prompts_to_architecture; only run_metadata_sync and
+    detect_drift are stubbed.
+    """
+    arches = {}
+    for app in ("a", "b"):
+        (tmp_path / "extensions" / app / "prompts").mkdir(parents=True)
+        (tmp_path / "extensions" / app / "prompts" / "auth_python.prompt").write_text(
+            f"<pdd-reason>Fresh {app} auth</pdd-reason>\n", encoding="utf-8"
+        )
+        arch = tmp_path / "extensions" / app / "architecture.json"
+        arch.write_text(
+            json.dumps(
+                [
+                    {"filename": "auth_python.prompt", "filepath": f"extensions/{app}/auth.py",
+                     "reason": f"Stale {app} auth", "description": "A", "dependencies": [],
+                     "priority": 1, "tags": []},
+                ],
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        arches[app] = arch
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(Path(kwargs.get("architecture_path")).resolve())
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/a/prompts/auth_python.prompt",
+         "extensions/b/prompts/auth_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # BOTH foreign arches synced from their OWN prompt...
+    assert json.loads(arches["a"].read_text())[0]["reason"] == "Fresh a auth"
+    assert json.loads(arches["b"].read_text())[0]["reason"] == "Fresh b auth"
+    # ...and metadata-sync ran against BOTH, not just one.
+    assert arches["a"].resolve() in captured_arch_paths, captured_arch_paths
+    assert arches["b"].resolve() in captured_arch_paths, captured_arch_paths
+    assert outcome.ok is True
+
+
+def test_drift_sync_foreign_code_only_change_discovered_via_foreign_arch(monkeypatch, tmp_path):
+    """A changed CODE file owned only by a foreign architecture.json must be mapped
+    back to its prompt and synced against that foreign arch.
+
+    Buggy behavior: _run_drift_sync loaded only the repo-root architecture.json, so a
+    code-only change to a foreign-owned module matched no entry and triggered no sync
+    at all. Uses the real foreign-consumer convention (arch-dir-relative filepath /
+    sub-pathed filename).
+
+    sync_all_prompts_to_architecture is stubbed to isolate the discovery + the
+    run_metadata_sync call site.
+    """
+    ext = tmp_path / "extensions" / "github_pdd_app"
+    (ext / "prompts" / "src").mkdir(parents=True)
+    (ext / "src").mkdir(parents=True)
+    (ext / "src" / "config.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (ext / "prompts" / "src" / "config_Python.prompt").write_text(
+        "<pdd-reason>Fresh config</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "src/config_Python.prompt", "filepath": "src/config.py",
+                 "reason": "Stale config", "description": "C", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured = []
+
+    def capturing_metadata_sync(prompt_path, code_path, **kwargs):
+        captured.append(
+            (Path(prompt_path), code_path, Path(kwargs.get("architecture_path")))
+        )
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True}
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/src/config.py"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert captured, "foreign code-only change was invisible to drift sync"
+    prompt_path, code_path, arch_path = captured[0]
+    assert prompt_path.resolve() == (ext / "prompts" / "src" / "config_Python.prompt").resolve()
+    assert code_path is not None and Path(code_path).resolve() == (ext / "src" / "config.py").resolve()
+    assert arch_path.resolve() == ext_arch.resolve()
+    assert outcome.ok is True
+
+
+def test_drift_sync_nested_foreign_code_only_change_resolves_nested_prompt(monkeypatch, tmp_path):
+    """A foreign code-only change whose prompt lives in a prompts dir NESTED below the
+    owning architecture.json (extensions/app/src/prompts/, not extensions/app/prompts/)
+    must still map to that prompt and metadata-sync against the foreign arch.
+
+    Resolving the prompt only directly under <arch_dir>/prompts/ or <arch_dir>/pdd/
+    prompts/ left nested layouts (which the prompt-change path already supports)
+    invisible to the foreign code-only fallback.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "prompts").mkdir(parents=True)
+    (ext / "src" / "ext_module.py").write_text("X = 1\n", encoding="utf-8")
+    (ext / "src" / "prompts" / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "ext_module_python.prompt", "filepath": "src/ext_module.py",
+                 "reason": "Stale", "description": "E", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured = []
+
+    def capturing_metadata_sync(prompt_path, code_path, **kwargs):
+        captured.append(
+            (Path(prompt_path), code_path, Path(kwargs.get("architecture_path")))
+        )
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True}
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path, ["extensions/app/src/ext_module.py"], base_ref=None, strict=False
+    )
+
+    assert captured, "nested foreign code-only change was invisible to drift sync"
+    prompt_path, code_path, arch_path = captured[0]
+    assert prompt_path.resolve() == (ext / "src" / "prompts" / "ext_module_python.prompt").resolve()
+    assert code_path is not None and Path(code_path).resolve() == (ext / "src" / "ext_module.py").resolve()
+    assert arch_path.resolve() == ext_arch.resolve()
+    assert outcome.ok is True
+
+
+def test_touched_invalid_foreign_architecture_json_blocks(tmp_path):
+    """A broken FOREIGN architecture.json (a nested extensions/app/architecture.json the
+    PR touched, or that drift-sync rewrote into synced_paths) must hard-block too, not
+    only the repo-root file — drift-sync now writes foreign arch files, so a sync that
+    corrupts one must be caught. A foreign arch the PR never touched must NOT block.
+    """
+    ext_arch = tmp_path / "extensions" / "app" / "architecture.json"
+    ext_arch.parent.mkdir(parents=True)
+
+    # Unparseable foreign arch the PR touched -> blocks, named by its repo-relative path.
+    ext_arch.write_text("{ broken ]", encoding="utf-8")
+    err = pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    )
+    assert err and "extensions/app/architecture.json" in err and "not valid JSON" in err, err
+
+    # Wrong-shape foreign arch -> blocks.
+    ext_arch.write_text('"oops"', encoding="utf-8")
+    err = pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    )
+    assert err and "not a recognized architecture shape" in err, err
+
+    # Not touched by the PR -> never blocks, even if broken.
+    ext_arch.write_text("{ broken ]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/src/foo.py"]
+    ) is None
+
+    # Valid foreign arch touched -> does not block.
+    ext_arch.write_text("[]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    ) is None
+
+
+def test_foreign_code_resolution_treats_glob_metachars_in_filename_literally(tmp_path):
+    """A foreign architecture `filename` containing glob metacharacters (e.g.
+    "*.prompt") must be matched LITERALLY when resolving a foreign code-only change's
+    prompt — never interpreted as a glob that selects an arbitrary prompt under a
+    nested prompts/ dir, which would heal/validate the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "prompts").mkdir(parents=True)
+    (ext / "src" / "ext_module.py").write_text("X = 1\n", encoding="utf-8")
+    # A real, unrelated prompt that a glob "*.prompt" would wrongly match.
+    (ext / "src" / "prompts" / "safe_python.prompt").write_text(
+        "<pdd-reason>x</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps([{"filename": "*.prompt", "filepath": "src/ext_module.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    # The direct resolver must not glob-match an arbitrary prompt.
+    assert pre_checkup_gate._resolve_prompt_under_arch(ext, "*.prompt") is None
+
+    # And the end-to-end touched-files map must not spuriously pick safe_python.prompt.
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/ext_module.py"], arch
+    )
+    assert all("safe_python.prompt" not in key for key in touched), touched
+
+    # Sanity: a real (non-glob) filename still resolves via the nested-prompts fallback.
+    assert pre_checkup_gate._resolve_prompt_under_arch(ext, "safe_python.prompt") == (
+        ext / "src" / "prompts" / "safe_python.prompt"
+    )
+
+
+def test_foreign_code_resolution_prefers_prompt_colocated_with_code(tmp_path):
+    """When the same prompt basename exists in several nested prompts dirs, a foreign
+    code-only change must resolve to the prompt COLOCATED with that code file, not a
+    shallow/lexicographic pick — otherwise the gate heals/validates the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "a" / "prompts").mkdir(parents=True)
+    (ext / "src" / "b" / "prompts").mkdir(parents=True)
+    # Same prompt basename in two sibling modules; the code lives in src/b.
+    (ext / "src" / "a" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>A</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>B</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "foo.py").write_text("X = 1\n", encoding="utf-8")
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps([{"filename": "foo_python.prompt", "filepath": "src/b/foo.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/b/foo.py"], arch
+    )
+    assert len(touched) == 1, touched
+    (prompt_path, _code_path), = touched.values()
+    assert prompt_path.resolve() == (ext / "src" / "b" / "prompts" / "foo_python.prompt").resolve(), (
+        f"expected the prompt colocated with src/b/foo.py, got {prompt_path}"
+    )
+
+
+def test_foreign_code_resolution_colocated_wins_over_top_level_prompt(tmp_path):
+    """A foreign code change must bind to the prompt COLOCATED with the code even when
+    a same-named prompt ALSO sits directly under <arch_dir>/prompts/. The direct-under-
+    arch lookup must not shadow the colocated walk, or src/b/foo.py would mistakenly
+    resolve to the top-level prompt and the gate would heal/validate the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "prompts").mkdir(parents=True)
+    (ext / "src" / "b" / "prompts").mkdir(parents=True)
+    # Same basename at the top level AND colocated with the code in src/b.
+    (ext / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>TOP</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>COLOCATED</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "foo.py").write_text("X = 1\n", encoding="utf-8")
+    (ext / "architecture.json").write_text(
+        json.dumps([{"filename": "foo_python.prompt", "filepath": "src/b/foo.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/b/foo.py"], arch
+    )
+    assert len(touched) == 1, touched
+    (prompt_path, _code_path), = touched.values()
+    assert prompt_path.resolve() == (ext / "src" / "b" / "prompts" / "foo_python.prompt").resolve(), (
+        f"top-level prompt shadowed the colocated one; got {prompt_path}"
+    )

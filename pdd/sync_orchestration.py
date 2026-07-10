@@ -48,6 +48,7 @@ from .operation_log import (
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
+    AmbiguousModuleError,
     RunReport,
     SyncDecision,
     PDD_DIR,
@@ -2017,6 +2018,15 @@ def sync_orchestration(
     if max_attempts is None:
         max_attempts = 3
 
+    # Issue #1711: clear the per-(file, query) include-extraction guard counters
+    # at the start of every top-level sync run. The counters live on the
+    # IncludeQueryExtractor class so they survive the fresh instance preprocess.py
+    # creates each cycle; without an explicit reset here they would also leak
+    # across separate runs in a long-lived process (e.g. the server running sync
+    # in-process), falsely tripping the guard on later legitimate runs.
+    from .include_query_extractor import IncludeQueryExtractor
+    IncludeQueryExtractor.reset_session()
+
     # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     
@@ -2030,6 +2040,10 @@ def sync_orchestration(
             _dry_paths = get_pdd_file_paths(
                 basename, language, prompts_dir, context_override=context_override
             )
+        except AmbiguousModuleError:
+            # Issue #1677: surface ambiguity even in dry-run so `pdd sync page
+            # --dry-run` reports the conflict instead of a misleading generic log.
+            raise
         except Exception:
             _dry_paths = None
         if _dry_paths:
@@ -2068,6 +2082,12 @@ def sync_orchestration(
                 "operations_completed": [],
                 "errors": [f"Path construction failed: {str(e)}"]
             }
+    except AmbiguousModuleError:
+        # Issue #1677: an ambiguous bare basename is a hard, actionable error.
+        # Propagate it (like the dry-run branch above) so the CLI reports the
+        # conflict via handle_error instead of burying it in a generic
+        # "Failed to construct paths" result. Generation never starts.
+        raise
     except Exception as e:
         print(f"Error constructing paths: {e}")
         return {
@@ -2157,6 +2177,7 @@ def sync_orchestration(
                 test_paths=[p for p in test_paths if p],
                 run_report_path=get_run_report_path(basename, language, paths=pdd_files),
                 repair_directive=repair_directive,
+                context_compression=os.environ.get("PDD_CONTEXT_COMPRESSION"),
             )
             package_dict = asdict(package)
             compression_phase_metadata.append(compressed_context_metadata(package_dict))

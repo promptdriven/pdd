@@ -53,7 +53,7 @@ dependencies = [
     "pandas==3.0.3",
     "psutil>=7.0.0",
     "pydantic==2.13.4",
-    "litellm[caching]>=1.80.0,<=1.82.6",
+    "litellm[caching]>=1.84.0,<1.85",
     "lxml>=5.0.0",
     "rich==15.0.0",
     "semver==3.0.4",
@@ -141,8 +141,10 @@ markers = [
     "integration: mark a test as an integration test (makes real API calls, costs money)",
     "slow: mark a test as slow-running",
     "e2e: mark a test as E2E test (uses real LLM calls, costs money, runs slowly)",
+    "timeout: mark a test with a custom timeout in seconds",
     "private_prompt: mark a test as exercising a private prompt fixture not shipped in the public repo",
     "uses_real_cli_detector: mark a test that exercises the real CLI detector instead of a stub",
+    "story(story_id, story_hash): mark a story-backed regression test (deterministic/offline executable oracle for a user story)",
 ]
 filterwarnings = [
     "ignore:.*Pydantic V1 style.*deprecated.*",

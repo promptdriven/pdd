@@ -19,6 +19,17 @@ Any non-trivial bug that needs to ship as a PR. Especially when:
 
 All implementation, test, review, rebase, and PR-branch commands happen inside the PR worktree. The main clone is only for orchestration and the final `gh pr merge`.
 
+Prefer external per-user worktrees for hand-created or explicitly configured
+agent worktrees:
+
+```bash
+AGENT_WORKTREE_ROOT="${AGENT_WORKTREE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/agent-worktrees}"
+PDD_AGENT_WORKTREE_DIR="$AGENT_WORKTREE_ROOT/promptdriven__pdd/<name>"
+```
+
+Use the actual path returned by Claude Code if a built-in `isolation:
+"worktree"` dispatch creates the worktree for you.
+
 ## The loop
 
 ### 1. Implementer round
@@ -46,6 +57,7 @@ Dispatch a Claude subagent with `subagent_type: "general-purpose"` and `isolatio
   - Push the failing-test commit BEFORE pushing the fix.
   - Implement the fix.
   - Run targeted pytest + `pylint` on the touched modules until clean. Prefer direct `pylint pdd/<module>.py tests/test_<module>.py` over `make lint` — the `make` target re-runs `pip install -e ".[dev]"` via `ensure-dev-deps`, which fails offline or in network-restricted sandboxes.
+  - Exercise the changed behavior end-to-end through the real CLI entrypoint.
   - Commit the fix as a SEPARATE commit with a `fix(...)` prefix.
 - Open the PR with `gh pr create` (must be non-draft, or transitioned to ready-for-review, for `unit-tests` to run). Unit tests run automatically on PR open/sync — no special comment marker required for the merge gate. (If you want the prompt-healing CI pass too, comment `/heal` on the PR after opening.)
 - Post the red-output from the failing-test commit as a PR comment for TDD evidence.
@@ -58,7 +70,7 @@ Use `codex exec review` — same review engine as plain `codex review`, but insi
 From inside the agent's worktree:
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION: `git reset --hard` below will destroy local work. Confirm
@@ -164,7 +176,20 @@ Then it implements the FIXING items, following the same strict TDD discipline as
 
 Loop back to step 1 until Codex says clean OR remaining findings are explicitly accepted in the response comment.
 
-### 4. Merge
+### 4. Verify end-to-end
+
+Before merge, do not treat targeted pytest, pylint, CI, or Codex review as
+substitutes for end-to-end verification. Exercise the changed behavior through
+the same `pdd` CLI command, installed/local console script, workflow, or
+integration boundary a user or production caller uses.
+
+Include the exact end-to-end command or manual workflow in the PR test plan and
+the final evidence comment. If the full path requires real provider credentials
+or a long-running regression harness, do not run it without explicit user
+approval; document the skipped live path and the closest safe local coverage
+instead.
+
+### 5. Merge
 
 When Codex returns clean:
 
@@ -175,24 +200,20 @@ When Codex returns clean:
 gh pr checks <PR>
 ```
 
-There's no `safe-gh-merge` helper in this repo. Clean up the worktree manually before merging:
-
 ```bash
 # 1. From the worktree, confirm everything is pushed and the tree is clean.
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git status                              # must be clean
 git log origin/<pr-branch>..HEAD        # must be empty (nothing un-pushed)
 
-# 2. Switch to the main clone (NOT inside the worktree) and remove it.
+# 2. Switch to the main clone (NOT inside the worktree), then squash-merge
+# and delete the remote branch.
 cd /path/to/main-clone
-git worktree list                       # confirm the worktree path
-git worktree remove /path/to/.claude/worktrees/agent-<id>
-
-# 3. Squash-merge and delete the remote branch.
 gh pr merge <PR> --squash --delete-branch
 ```
 
-If `git worktree remove` complains about uncommitted state, investigate — don't `--force`. The work in the worktree may still be salvageable.
+Leave the PR worktree in place after merge so the final state remains available
+for inspection or follow-up. Do not remove it as part of this runbook.
 
 ## Guardrails (learned the hard way)
 
@@ -213,7 +234,7 @@ Several pdd test paths exercise the `pdd` CLI itself. Most use `tmp_path`/`CliRu
 If contamination lands, fix via clean rebase:
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin main
 # Cherry-pick the intentional commits onto fresh main
 git checkout origin/main -b tmp-rebase
@@ -302,10 +323,11 @@ Bug fix using strict TDD.
 2. Push red commit.
 3. Implement.
 4. Targeted pytest + pylint on touched modules.
-5. Commit fix separately.
-6. Open PR. (Unit tests run automatically; no marker needed.)
-7. Post red-output as PR comment.
-8. Post investigation-summary comment (from pre-fix step 4).
+5. End-to-end verification through the real affected CLI entrypoint.
+6. Commit fix separately.
+7. Open PR. (Unit tests run automatically; no marker needed.)
+8. Post red-output and end-to-end evidence as PR comments.
+9. Post investigation-summary comment (from pre-fix step 4).
 
 ## Constraints
 - Don't touch <other-session-owned files>.
@@ -317,6 +339,7 @@ Bug fix using strict TDD.
 - PR URL on first line.
 - Files changed.
 - Test names.
+- End-to-end command or workflow.
 - Clean rebase confirmation.
 - PR comment URL.
 
@@ -328,7 +351,7 @@ OUTPUT EARLY when done. Don't iterate silently.
 ### Codex review
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION before any hard reset (see § "Codex review" earlier).
@@ -384,9 +407,10 @@ Rationale: <why this is OK>
    - Commit tests for all FIX items as ONE `test(scope): ...` commit. Push.
    - Implement all fixes.
    - Targeted pytest + pylint. All clean.
+   - End-to-end verification through the real affected CLI entrypoint.
    - Commit fixes as ONE `fix(scope): ...` commit. Push.
 
-3. POST a second PR comment showing red→green output for each test, citing Codex's PR comment by URL.
+3. POST a second PR comment showing red→green output for each test plus the end-to-end verification evidence, citing Codex's PR comment by URL.
 
 ## Constraints
 - Targeted pytest only (`pytest -vv tests/test_<module>.py`). NEVER bare `pytest tests/` or `make regression` from this worktree.
@@ -401,6 +425,7 @@ Rationale: <why this is OK>
 - List of FIX items addressed.
 - List of ACCEPT items + their rationale.
 - Test names added.
+- End-to-end command or workflow.
 - `git log origin/main..HEAD --oneline` output.
 - Evidence comment URL.
 
@@ -410,7 +435,7 @@ OUTPUT EARLY when done. Don't iterate silently.
 ## Sample Codex invocation template
 
 ```bash
-cd /path/to/.claude/worktrees/agent-<id>
+cd <agent-worktree>
 git fetch origin <pr-branch> main
 
 # PRECONDITION before any hard reset.

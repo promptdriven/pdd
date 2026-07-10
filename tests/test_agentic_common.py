@@ -19,6 +19,11 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    select_harness_for_task,
+    _normalize_token_buckets,
+    _meets_usage_contract,
+    _get_provider_cli_version,
+    _provider_cli_binary_name,
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -44,11 +49,138 @@ from pdd.agentic_common import (
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
     AGENTIC_LOG_DIR,
+    TASK_CLASS_HIGH_ISOLATION,
+    TASK_CLASS_MULTI_FILE,
+    TASK_CLASS_REPO_SCALE,
+    TASK_CLASS_SINGLE_FILE,
 )
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
 # ---------------------------------------------------------------------------
+
+def test_select_harness_for_task_routes_known_task_classes():
+    candidates = ["google", "openai", "opencode", "anthropic"]
+
+    assert select_harness_for_task(TASK_CLASS_SINGLE_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_HIGH_ISOLATION, candidates) == [
+        "opencode",
+        "anthropic",
+        "google",
+        "openai",
+    ]
+
+
+def test_select_harness_for_task_preserves_unmatched_and_unknown_order():
+    candidates = ["openai", "custom", "google"]
+
+    assert select_harness_for_task("future_task_class", candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "custom",
+        "openai",
+        "google",
+    ]
+
+
+def test_run_agentic_task_task_class_reorders_available_candidates(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["opencode", "anthropic", "google", "openai"]
+
+
+def test_run_agentic_task_task_class_none_preserves_candidate_order(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=None,
+        )
+
+    assert not result.success
+    assert attempted == ["google", "openai", "opencode", "anthropic"]
+
+
+def test_run_agentic_task_claude_policy_overrides_task_class(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            claude_policy={"outputFormat": "json"},
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["anthropic"]
 
 def test_z3_pricing_properties():
     """
@@ -213,12 +345,21 @@ def mock_shutil_which():
 
 @pytest.fixture
 def mock_subprocess():
-    with patch('pdd.agentic_common._subprocess_run') as mock:
+    # Issue #1646: the openai provider now routes through
+    # ``_subprocess_run_spooled``. Patch it too, sharing the same mock so a
+    # configured ``return_value`` (a plain CompletedProcess-like MagicMock)
+    # flows through and ``_run_with_provider`` takes the in-RAM branch
+    # (result_is_spooled is False).
+    with patch('pdd.agentic_common._subprocess_run') as mock, \
+         patch('pdd.agentic_common._subprocess_run_spooled') as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
 def mock_subprocess_run():
-    with patch("pdd.agentic_common._subprocess_run") as mock:
+    with patch("pdd.agentic_common._subprocess_run") as mock, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
@@ -2637,7 +2778,170 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
         "provider": "anthropic",
         "usage": usage,
         "changed_files": ["src/app.py"],
+        "usage_source": "unavailable",
+        "estimate_method": "unavailable",
+        "cli_version": "",
+        "model_id": None,
+        "cumulative_cost_usd": 0.123,
+        "usage_comparable": False,
+        "token_buckets": {
+            "input_tokens": 21,
+            "output_tokens": 15,
+            "cache_read_tokens": 7,
+            "cache_write_tokens": 11,
+            "reasoning_tokens": 0,
+        },
     }
+
+
+# ---------------------------------------------------------------------------
+# Issue #1593: cross-CLI cost and usage instrumentation
+# ---------------------------------------------------------------------------
+
+
+def test_agentic_task_result_instrumentation_defaults_are_unavailable():
+    """Un-instrumented results default to the 'unavailable' contract values so
+    they are excluded from E[pass]-lambda*cost routing comparisons (#1593)."""
+    result = AgenticTaskResult(True, "ok", 0.5, "anthropic", None)
+    assert result.usage_source == "unavailable"
+    assert result.estimate_method == "unavailable"
+    assert result.cli_version == ""
+    assert result.model_id is None
+    # cost > 0 but usage_source unavailable => NOT comparable.
+    assert result.meets_usage_contract() is False
+    assert _meets_usage_contract(result) is False
+
+
+def test_meets_usage_contract_gate():
+    """_meets_usage_contract requires a known usage_source AND positive cost."""
+    comparable = AgenticTaskResult(
+        True, "ok", 0.4, "openai", None,
+        usage_source="pricing_table_estimate",
+        estimate_method="token_delta_x_pricing_csv",
+    )
+    assert _meets_usage_contract(comparable) is True
+
+    # Known source but zero cost is not comparable.
+    zero_cost = AgenticTaskResult(
+        True, "ok", 0.0, "openai", None, usage_source="provider_reported"
+    )
+    assert _meets_usage_contract(zero_cost) is False
+
+    # Positive cost but unavailable source is not comparable.
+    no_source = AgenticTaskResult(True, "ok", 0.9, "google", None)
+    assert _meets_usage_contract(no_source) is False
+
+
+def test_normalize_token_buckets_per_provider():
+    assert _normalize_token_buckets("anthropic", "not-a-dict") == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    # Anthropic raw envelope field names.
+    anthropic_raw = {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+    }
+    assert _normalize_token_buckets("anthropic", anthropic_raw) == {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 2,
+        "reasoning_tokens": 0,
+    }
+    # OpenAI nested total_token_usage.
+    openai_usage = {
+        "total_token_usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 20,
+            "reasoning_tokens": 9,
+        }
+    }
+    assert _normalize_token_buckets("openai", openai_usage) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_tokens": 20,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 9,
+    }
+    # Google nested tokens.
+    google_usage = {"tokens": {"prompt": 7, "candidates": 8, "cached": 1, "thoughts": 2}}
+    assert _normalize_token_buckets("google", google_usage) == {
+        "input_tokens": 7,
+        "output_tokens": 8,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 2,
+    }
+    # OpenCode nested cache read/write.
+    opencode_usage = {"input": 5, "output": 6, "cache": {"read": 3, "write": 4}}
+    assert _normalize_token_buckets("opencode", opencode_usage) == {
+        "input_tokens": 5,
+        "output_tokens": 6,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 4,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_normalize_token_buckets_handles_wrapped_claude_usage():
+    """AgenticTaskResult.usage wraps Claude rows as {'claude': [...]}; the
+    normalizer must collapse and sum that shape."""
+    wrapped = {
+        "claude": [
+            {"model": "m", "input_tokens": 21, "output_tokens": 15,
+             "cached_input_tokens": 7, "cache_creation_input_tokens": 11},
+            {"model": "m", "input_tokens": 4, "output_tokens": 1,
+             "cached_input_tokens": 0, "cache_creation_input_tokens": 0},
+        ]
+    }
+    assert _normalize_token_buckets("anthropic", wrapped) == {
+        "input_tokens": 25,
+        "output_tokens": 16,
+        "cache_read_tokens": 7,
+        "cache_write_tokens": 11,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_get_provider_cli_version_probes_binary(monkeypatch):
+    """cli_version is read from the resolved binary's --version, cached, and
+    falls back to '' when the CLI is missing (#1593)."""
+    import pdd.agentic_common as ac
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: "/usr/bin/codex")
+
+    calls = {"n": 0}
+
+    def _fake_run(cmd, *args, **kwargs):
+        calls["n"] += 1
+        assert cmd == ["/usr/bin/codex", "--version"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="codex 1.2.3\n", stderr="")
+
+    monkeypatch.setattr(ac.subprocess, "run", _fake_run)
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    # Cached: a second call does not re-probe.
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    assert calls["n"] == 1
+
+    # Missing binary => empty version, no crash.
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: None)
+    assert _get_provider_cli_version("opencode") == ""
+
+
+def test_provider_cli_binary_name_mapping():
+    assert _provider_cli_binary_name("anthropic") == "claude"
+    assert _provider_cli_binary_name("openai") == "codex"
+    assert _provider_cli_binary_name("opencode") == "opencode"
+    assert _provider_cli_binary_name("unknown") is None
 
 
 def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
@@ -2672,6 +2976,317 @@ def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
     assert result[4] == usage
     assert result.usage == usage
     json.dumps(result[4])
+
+
+def test_run_agentic_task_routing_policy_selects_initial_config(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL")))
+        return (True, "done", 0.25, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", calls[0][1], "tier-2-model")]
+    assert calls[0][1]["reasoning_time"] == 0.5
+    assert os.environ.get("CLAUDE_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["model_tier"] == 2
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL"), os.environ.get("GEMINI_MODEL")))
+        return (True, "done via fallback", 0.25, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.provider == "google"
+    assert calls == [("google", calls[0][1], None, None)]
+    assert calls[0][1]["reasoning_time"] is None
+    assert os.environ.get("CLAUDE_MODEL") is None
+    assert os.environ.get("GEMINI_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["harness"] == "anthropic"
+    assert payload["fallback_reason"] == "selected_harness_unavailable:anthropic"
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_unknown_task_class_falls_back_without_env_mutation(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("CLAUDE_MODEL", "preexisting-model")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["anthropic"])
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, os.environ.get("CLAUDE_MODEL"), kwargs))
+        return (True, "done", 0.1, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Do the work",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="unknown-task-class",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", "preexisting-model", calls[0][2])]
+    assert calls[0][2]["reasoning_time"] is None
+    assert os.environ["CLAUDE_MODEL"] == "preexisting-model"
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "default"
+    assert payload["selected_config"] is None
+    assert payload["fallback_reason"] == "no_policy_row"
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_escalates_after_failure(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "fixed on escalation"
+    assert providers == ["anthropic", "google"]
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+    assert [row["verifier_result"] for row in records] == ["fail", "pass"]
+    assert records[1]["escalation_step"] == 1
+    assert records[1]["selected_config"]["harness"] == "google"
+
+
+def test_run_agentic_task_routing_escalation_preserves_before_attempt(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is True
+    assert before_attempts == [("anthropic", 1), ("google", 1)]
+
+
+def test_run_agentic_task_single_provider_attempt_disables_fallback(
+    mock_cwd,
+    monkeypatch,
+):
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "anthropic,google")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+
+    providers = []
+    before_attempts = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        return (False, "first provider failed", 0.1, "anthropic-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Create PR",
+        mock_cwd,
+        max_retries=3,
+        single_provider_attempt=True,
+        before_attempt=lambda provider, attempt: before_attempts.append(
+            (provider, attempt)
+        ),
+    )
+
+    assert result.success is False
+    assert providers == ["anthropic"]
+    assert before_attempts == [("anthropic", 1)]
+
+
+def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_back(
+    mock_cwd,
+    monkeypatch,
+):
+    """Issue #1431: feasibility-aware routing escalation.
+
+    The default ``bug-fix`` ladder escalates the harness to ``google``. When
+    google is not installed/authed but anthropic and openai are, the escalated
+    google configs must be skipped (recorded with an explicit fallback reason,
+    not as failed provider attempts) and routing must fall back to the
+    available openai provider instead of laddering through unavailable google
+    configs and failing with "No agent providers are available".
+    """
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.delenv("PDD_AGENTIC_PROVIDER", raising=False)
+    # anthropic + openai available; google unavailable.
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["anthropic", "openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model"
+    )
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        if provider == "openai":
+            return (True, "fixed by openai fallback", 0.2, "openai-model", None)
+        raise AssertionError(f"infeasible provider must not be invoked: {provider}")
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    # OpenAI is reached and succeeds; the unavailable google harness is never run.
+    assert result.success is True
+    assert result.output_text == "fixed by openai fallback"
+    assert result.provider == "openai"
+    assert "google" not in providers
+    assert providers == ["anthropic", "openai"]
+
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+
+    # Skipped infeasible google configs are recorded with an explicit fallback
+    # reason rather than as failed provider attempts.
+    infeasible = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith("infeasible_harness_unavailable:")
+    ]
+    assert infeasible, "expected at least one infeasible-harness skip record"
+    assert all(
+        row["fallback_reason"] == "infeasible_harness_unavailable:google"
+        for row in infeasible
+    )
+
+    # The fallback to the feasible provider is recorded once and passes.
+    fallback = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith(
+            "cascade_fallback_to_feasible_provider:"
+        )
+    ]
+    assert len(fallback) == 1
+    assert "openai" in fallback[0]["fallback_reason"]
+    assert fallback[0]["verifier_result"] == "pass"
 
 
 # ---------------------------------------------------------------------------
@@ -5935,6 +6550,39 @@ def test_drain_issue_steers_strips_pdd_tags(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_drain_issue_steers_env_filters_pdd_status_comments(mock_cwd):
+    """PDD_STEER_JSON must not re-inject trusted PDD comments as human steers."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "Serhan-Asad",
+            "body": "## Step 9/11: Independent Verification REJECTED the claimed pass",
+        },
+        {
+            "comment_id": "102",
+            "author": "pdd",
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+        },
+        {
+            "comment_id": "103",
+            "author": "greg",
+            "body": "Please tighten the retry guard",
+        },
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert [s.comment_id for s in steers] == ["103"]
+        assert steers[0].body == "Please tighten the retry guard"
+        assert state["last_steered_comment_id"] == "103"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test that prompt is unchanged when steers list is absent."""
     mock_shutil_which.return_value = "/bin/claude"
@@ -6067,6 +6715,177 @@ def test_issue_update_should_not_clear_when_pending_steers(mock_cwd):
         os.environ.pop("PDD_STEER_JSON", None)
 
 
+def test_issue_update_should_not_clear_for_new_bot_comment_drift(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:08:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:08:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "101"
+    assert state["last_steer_at"] == "2026-01-01T00:08:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_not_clear_for_edited_existing_state_comment(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import (
+        GITHUB_STATE_MARKER_END,
+        GITHUB_STATE_MARKER_START,
+        issue_update_should_clear_workflow_state,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 50,
+                "user": {"login": "human", "type": "User"},
+                "body": f"{GITHUB_STATE_MARKER_START}\n{{}}\n{GITHUB_STATE_MARKER_END}",
+                "created_at": "2026-01-01T00:00:30Z",
+                "updated_at": "2026-01-01T00:05:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:05:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "100"
+    assert state["last_steer_at"] == "2026-01-01T00:05:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_not_clear_when_ignored_drift_already_recorded(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:08:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "101",
+        "last_steer_at": "2026-01-01T00:08:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:08:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is False
+    assert state["last_steered_comment_id"] == "101"
+    assert state["last_steer_at"] == "2026-01-01T00:08:00Z"
+    assert "steer_generation" not in state
+
+
+def test_issue_update_should_clear_for_real_edit_with_older_ignored_comment(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        [
+            {
+                "id": 101,
+                "user": {"login": "pdd-bot", "type": "Bot"},
+                "body": "PDD bot progress",
+                "created_at": "2026-01-01T00:05:00Z",
+                "updated_at": "2026-01-01T00:05:00Z",
+            },
+        ]
+    )
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "step_outputs": {},
+        "last_steered_comment_id": "100",
+        "last_steer_at": "2026-01-01T00:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-01T00:10:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is True
+    assert state["last_steered_comment_id"] == "100"
+    assert state["last_steer_at"] == "2026-01-01T00:00:00Z"
+
+
 def test_issue_update_should_clear_when_no_pending_steers(mock_cwd):
     from pdd.agentic_common import issue_update_should_clear_workflow_state
 
@@ -6183,18 +7002,21 @@ def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shut
             "user": {"login": "user1", "type": "User"},
             "body": "User feedback",
             "created_at": "2026-06-01T12:00:00Z",
+            "updated_at": "2026-06-01T12:00:00Z",
         },
         {
             "id": 1002,
             "user": {"login": "pdd-bot", "type": "Bot"},
             "body": "Bot message",
             "created_at": "2026-06-01T12:01:00Z",
+            "updated_at": "2026-06-01T12:03:00Z",
         },
         {
             "id": 1003,
             "user": {"login": "user2", "type": "User"},
             "body": "## Step 1/13: ...",
             "created_at": "2026-06-01T12:02:00Z",
+            "updated_at": "2026-06-01T12:04:00Z",
         },
     ]
 
@@ -6208,7 +7030,8 @@ def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shut
     assert len(steers) == 1
     assert steers[0].author == "user1"
     assert steers[0].comment_id == "1001"
-    assert state["last_steered_comment_id"] == "1001"
+    assert state["last_steered_comment_id"] == "1003"
+    assert state["last_steer_at"] == "2026-06-01T12:04:00Z"
     assert state["steer_generation"] == 1
 
     cmd = mock_subprocess_run.call_args[0][0]
@@ -6257,7 +7080,7 @@ def test_drain_issue_steers_github_since_uses_get(
     cmd = mock_subprocess_run.call_args[0][0]
     assert cmd[cmd.index("--method") + 1] == "GET"
     assert "-f" in cmd
-    assert "since=2026-06-01T11:00:00Z" in cmd
+    assert "since=2026-06-01T10:59:59Z" in cmd
 
 
 def test_drain_issue_steers_without_cursor_skips_github_poll(
@@ -6914,6 +7737,111 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "owner/repo" in cmd
 
 
+def test_post_step_comment_recoverable_mode_posts_degraded_detail(tmp_path):
+    """Recoverable fallback comments must read as degraded, not fatal."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output="All agent providers failed: strategy timed out",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+            failure_detail="Test strategy failed; using fallback/default planning.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** DEGRADED - workflow continuing" in body
+        assert "FAILED - workflow aborting" not in body
+        assert "Test strategy failed; using fallback/default planning." in body
+
+
+def test_post_step_comment_fatal_mode_posts_aborting_detail(tmp_path):
+    """Fatal fallback comments must make the workflow abort explicit."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=12,
+            description="Triage",
+            output="All agent providers failed: third consecutive failure",
+            cwd=tmp_path,
+            failure_mode="fatal",
+            failure_detail="Stopping after 3 consecutive provider failures.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED - workflow aborting" in body
+        assert "Stopping after 3 consecutive provider failures." in body
+
+
+@pytest.mark.parametrize("failure_mode", [None, "unexpected"])
+def test_post_step_comment_unknown_mode_keeps_legacy_failed_body(tmp_path, failure_mode):
+    """Missing or unknown modes keep the legacy fallback wording."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=4,
+            total_steps=12,
+            description="Research",
+            output="Provider unavailable",
+            cwd=tmp_path,
+            failure_mode=failure_mode,
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED\n" in body
+        assert "workflow continuing" not in body
+        assert "workflow aborting" not in body
+        assert "Automated fallback comment - agent did not execute" in body
+
+
+def test_post_step_comment_fallback_modes_redact_and_truncate(tmp_path):
+    """New fallback modes use the same redaction/truncation path as legacy comments."""
+    secret = "ghp_" + "A" * 36
+    long_tail_marker = "x" * 1500
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output=f"Provider failed {secret} {long_tail_marker}",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert secret not in body
+        assert "[REDACTED_GITHUB_TOKEN]" in body
+        assert "[truncated]" in body
+
+
 def test_post_step_comment_skips_github_when_disabled(tmp_path):
     """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
     with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
@@ -7296,7 +8224,10 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7328,7 +8259,11 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
         clear=False,
     ), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai now routes through the spooled runner; share the
+        # mock so the configured CompletedProcess flows through the in-RAM path.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({
@@ -7380,7 +8315,10 @@ def test_codex_nonzero_prefers_jsonl_stdout_error_over_stdin_notice(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -7416,7 +8354,10 @@ def test_codex_nonzero_prefers_terminal_failure_over_intermediate_error(tmp_path
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -7451,7 +8392,10 @@ def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7488,7 +8432,10 @@ def test_issue557_session_end_usage_for_cost(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7530,7 +8477,10 @@ def test_issue557_single_line_json_no_ndjson(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=single_json,
@@ -7639,7 +8589,10 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):  # Skip retry delays
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7690,7 +8643,10 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -9880,12 +10836,10 @@ def test_codex_effort_env_is_case_and_whitespace_tolerant(
     assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
-def test_claude_always_prints_effort_notice_when_not_quiet(
+def test_claude_injects_effort_flag_when_not_quiet(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
 ):
-    """Silent-failure guard: dropping the user's reasoning request with no
-    feedback generates support tickets. The notice fires regardless of
-    --verbose, gated only by --quiet."""
+    """Claude Code supports --effort; PDD should apply the requested effort."""
     from pdd.agentic_common import _run_with_provider
 
     mock_shutil_which.return_value = "/bin/claude"
@@ -9903,8 +10857,11 @@ def test_claude_always_prints_effort_notice_when_not_quiet(
         os.environ.pop("PDD_REASONING_EFFORT", None)
 
     captured = capsys.readouterr()
-    assert "PDD_REASONING_EFFORT=high" in captured.out
-    assert "Claude Code CLI" in captured.out
+    assert "PDD_REASONING_EFFORT=high" not in captured.out
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "high"
 
 
 def test_claude_suppresses_effort_notice_when_quiet(
@@ -9929,6 +10886,57 @@ def test_claude_suppresses_effort_notice_when_quiet(
 
     captured = capsys.readouterr()
     assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+def test_claude_interactive_injects_effort_env(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Interactive bridge cannot receive argv flags, so effort is passed via env."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["PDD_REASONING_EFFORT"] = "medium"
+    try:
+        with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+            bridge.return_value = (True, "ok", 0.0, None)
+            _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_CLAUDE_CODE_MODE", None)
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    _, kwargs = bridge.call_args
+    assert kwargs["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+
+
+def test_opencode_warns_when_effort_requested_without_variant(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """OpenCode has no generic effort flag; users should get the variant hint."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/opencode"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"type": "message", "text": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    os.environ["OPENCODE_MODEL"] = "openai/gpt-5"
+    os.environ.pop("OPENCODE_VARIANT", None)
+    try:
+        _run_with_provider("opencode", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+        os.environ.pop("OPENCODE_MODEL", None)
+
+    captured = capsys.readouterr()
+    assert "OPENCODE_VARIANT" in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -12163,3 +13171,751 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1646: Codex JSONL output is spooled to disk so the parent process
+# never holds the full NDJSON transcript in RAM (3-4x decoded-str copies that
+# could SIGKILL the parent on large runs). These tests drive a real
+# fake-codex script through the OpenAI provider path.
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+
+def _write_fake_codex(
+    tmp_path: Path,
+    *,
+    body_lines: str,
+    exit_code: int = 0,
+    consume_stdin: bool = True,
+) -> Path:
+    """Write an executable fake `codex` CLI that emits NDJSON on stdout.
+
+    ``body_lines`` is python source (run with locals available) that prints the
+    NDJSON event lines. The script optionally drains stdin first so the prompt
+    body the provider pipes in does not cause a broken pipe.
+    """
+    drain = "import sys; _ = sys.stdin.read()\n" if consume_stdin else ""
+    script = "#!/usr/bin/env python3\n" + drain + textwrap.dedent(body_lines)
+    if exit_code:
+        script += f"\nimport sys as _sys; _sys.exit({exit_code})\n"
+    fake = tmp_path / "fake_codex.py"
+    fake.write_text(script)
+    fake.chmod(0o755)
+    return fake
+
+
+def _prompt_file(tmp_path: Path) -> Path:
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the work described here.")
+    return prompt
+
+
+def test_openai_codex_jsonl_spooled_parses_large_transcript(tmp_path, mock_env):
+    """A long Codex NDJSON transcript is parsed correctly via the spooled path.
+
+    Also proves the spooled path (not the in-RAM ``_subprocess_run``) is used:
+    we patch ``_subprocess_run`` to blow up if the openai branch ever calls it.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # K large tool_output events, then the real agent_message + usage.
+        big = "x" * 4096
+        for i in range(2000):
+            print(json.dumps({"type": "item.completed",
+                              "item": {"type": "tool_output", "text": big}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Final answer."}}))
+        print(json.dumps({"type": "turn.completed",
+                          "model": "gpt-5",
+                          "usage": {"input_tokens": 1000000,
+                                    "output_tokens": 1000000,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+
+    prompt = _prompt_file(tmp_path)
+    with patch(
+        "pdd.agentic_common._subprocess_run",
+        side_effect=AssertionError(
+            "openai provider must use the spooled subprocess path, not _subprocess_run"
+        ),
+    ):
+        success, text, cost, actual_model = _run_with_provider(
+            "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+        )
+
+    assert success is True, text
+    assert text == "Final answer."
+    assert actual_model == "gpt-5"
+    # 1M input + 1M output at $1.50/$6.00 per M -> 7.50
+    assert abs(cost - 7.50) < 0.0001
+
+
+def test_openai_codex_spooled_error_extracted(tmp_path, mock_env):
+    """A terminal turn.failed event on a nonzero exit surfaces its message."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        print(json.dumps({"type": "turn.failed",
+                          "error": {"message": "boom"}}))
+        ''',
+        exit_code=1,
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert "boom" in text
+
+
+def test_openai_codex_spooled_blank_stdout(tmp_path, mock_env):
+    """Exit 0 with empty stdout is handled (no crash, returns failure/empty)."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        pass
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, _text, cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert cost == 0.0
+
+
+def test_openai_codex_spooled_skips_oversize_line(tmp_path, mock_env):
+    """A single >16 MiB NDJSON line is skipped without decode; real events parse.
+
+    Issue #1646 FIX 2: a pathological multi-MB tool_output line must not be
+    decoded/json.loads'd (heap spike). The oversize line is dropped by
+    ``_iter_spooled_lines`` while the (tiny) agent_message + turn.completed that
+    follow it are still parsed normally.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # One oversize tool_output event (>16 MiB) the parser must skip.
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "tool_output", "text": "x" * (17 * 1024 * 1024)}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Done."}}))
+        print(json.dumps({"type": "turn.completed", "model": "gpt-5",
+                          "usage": {"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, actual_model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is True, text
+    assert text == "Done."
+    assert actual_model == "gpt-5"
+
+
+def test_iter_spooled_lines_drops_oversize_and_resumes():
+    """Issue #1646 (FM2): a line larger than the cap is drained and dropped
+    WITHOUT being decoded, and iteration resumes at the next line. The blob here
+    deliberately contains the words ``error``/``failed`` — size, not content,
+    decides, so a huge tool-output log can no longer force a full decode.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    before = b'{"type":"item.completed","item":{"type":"agent_message","text":"first"}}\n'
+    blob = b'{"type":"tool_output","text":"error failed ' + b"x" * (cap + 4096) + b'"}\n'
+    after = b'{"type":"turn.completed","model":"gpt-5","usage":{}}\n'
+
+    out = list(_iter_spooled_lines(io.BytesIO(before + blob + after)))
+
+    assert out == [before.decode("utf-8"), after.decode("utf-8")]
+    assert all("tool_output" not in line for line in out)  # oversize blob dropped
+
+
+def test_iter_spooled_lines_bounds_per_line_read():
+    """Issue #1646 (FM1): the reader never pulls more than the cap into memory in
+    a single read, even for one line several times the cap — so a pathological
+    multi-MB NDJSON line cannot cause an unbounded parent allocation.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+
+    class _TrackingBytesIO(io.BytesIO):
+        def __init__(self, data):
+            super().__init__(data)
+            self.max_read = 0
+
+        def readline(self, size=-1):
+            data = super().readline(size)
+            self.max_read = max(self.max_read, len(data))
+            return data
+
+    huge = b'{"type":"tool_output","text":"' + b"x" * (cap + (1 << 20)) + b'"}\n'
+    real = b'{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+
+    spool = _TrackingBytesIO(huge + real)
+    out = list(_iter_spooled_lines(spool))
+
+    assert out == [real.decode("utf-8")]     # huge line dropped, real one kept
+    assert spool.max_read <= cap             # never read more than the cap at once
+
+
+def test_iter_spooled_lines_keeps_oversize_retained_event():
+    """Issue #1646 (review): an oversize line whose event TYPE is one a consumer
+    retains (here a pathologically large agent_message) is read in full and
+    yielded — never silently dropped — so the actual answer can't be lost. A
+    same-size tool-output blob (different type) is still dropped.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    big_answer = "A" * (cap + 4096)
+    retained = (
+        '{"type":"item.completed","item":{"type":"agent_message","text":"'
+        + big_answer + '"}}\n'
+    ).encode()
+    blob = (
+        '{"type":"item.completed","item":{"type":"tool_output","text":"'
+        + ("x" * (cap + 4096)) + '"}}\n'
+    ).encode()
+
+    out = list(_iter_spooled_lines(io.BytesIO(retained + blob)))
+
+    assert len(out) == 1                 # retained kept, blob dropped
+    assert '"type":"agent_message"' in out[0]
+    assert big_answer in out[0]          # full payload preserved, not truncated
+
+
+def test_iter_spooled_lines_drops_retained_event_over_ceiling(monkeypatch):
+    """Issue #1646 (review): even a retained-type line is bounded — one beyond
+    the hard ceiling is dropped (not buffered without limit), and iteration
+    resumes at the next line.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_MAX_JSONL_LINE_BYTES", 1024)
+    monkeypatch.setattr(ac, "_AGENT_MAX_RETAINED_LINE_BYTES", 4096)
+
+    over_ceiling = (
+        '{"type":"agent_message","text":"' + ("A" * 8192) + '"}\n'
+    ).encode()
+    after = b'{"type":"turn.completed","model":"gpt-5"}\n'
+
+    out = list(ac._iter_spooled_lines(io.BytesIO(over_ceiling + after)))
+
+    assert out == [after.decode("utf-8")]   # over-ceiling retained line dropped
+
+
+def test_agent_spool_dir_unset_returns_none(monkeypatch):
+    """Issue #1646: unset env var -> system default temp (None), no warning."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.delenv("PDD_AGENT_SPOOL_DIR", raising=False)
+    assert ac._agent_spool_dir() is None
+
+
+def test_agent_spool_dir_returns_writable_path(monkeypatch, tmp_path):
+    """Issue #1646: a set, writable directory is used as the spool dir."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path))
+    assert ac._agent_spool_dir() == str(tmp_path)
+
+
+def test_agent_spool_dir_warns_once_on_unusable_path(monkeypatch, capsys, tmp_path):
+    """Issue #1646: a set-but-unusable path warns (once) instead of silently
+    falling back, so operators know disk spooling isn't actually active.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_SPOOL_DIR_WARNED", False)
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path / "nope"))
+
+    assert ac._agent_spool_dir() is None
+    first = capsys.readouterr().out
+    assert "PDD_AGENT_SPOOL_DIR" in first
+
+    # Second call stays silent (one-shot).
+    assert ac._agent_spool_dir() is None
+    assert "PDD_AGENT_SPOOL_DIR" not in capsys.readouterr().out
+
+
+# Driver that runs _run_with_provider against a fake codex in a FRESH
+# interpreter and reports peak RSS. Running in its own process keeps the
+# measurement free of pytest's heap. argv: repo_root, fake_cli, prompt, cwd.
+_RSS_DRIVER = r"""
+import json
+import os
+import resource
+import sys
+from pathlib import Path
+
+repo, fake, prompt, cwd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, repo)
+
+# Keep env minimal/deterministic (no provider creds leaking in).
+for k in list(os.environ):
+    if "TOKEN" in k or "API_KEY" in k:
+        os.environ.pop(k, None)
+
+from pdd.agentic_common import _run_with_provider
+
+success, text, cost, model = _run_with_provider(
+    "openai", Path(prompt), Path(cwd), quiet=True, cli_path=fake
+)
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+# darwin reports ru_maxrss in bytes, linux in kilobytes.
+peak_bytes = peak if sys.platform == "darwin" else peak * 1024
+print(json.dumps({"success": success, "text": text[:64],
+                  "cost": cost, "peak_bytes": peak_bytes}))
+"""
+
+
+def _fake_codex_n_lines(tmp_path: Path, n_lines: int) -> Path:
+    """A fake codex emitting ``n_lines`` large tool_output events + a result."""
+    return _write_fake_codex(
+        tmp_path,
+        body_lines=f'''
+        import json
+        big = "x" * 4096
+        for i in range({n_lines}):
+            print(json.dumps({{"type": "item.completed",
+                              "item": {{"type": "tool_output", "text": big}}}}))
+        print(json.dumps({{"type": "item.completed",
+                          "item": {{"type": "agent_message", "text": "Done."}}}}))
+        print(json.dumps({{"type": "turn.completed", "model": "gpt-5",
+                          "usage": {{"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}}}))
+        ''',
+    )
+
+
+def _run_rss_driver(tmp_path, n_lines: int) -> dict:
+    """Run the RSS driver subprocess against a fake codex with ``n_lines`` events."""
+    work = tmp_path / f"work_{n_lines}"
+    work.mkdir()
+    fake = _fake_codex_n_lines(work, n_lines)
+    prompt = _prompt_file(work)
+    driver = work / "rss_driver.py"
+    driver.write_text(_RSS_DRIVER)
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    proc = subprocess.run(
+        [sys.executable, str(driver), repo_root, str(fake), str(prompt), str(work)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"driver crashed (rc={proc.returncode}, n_lines={n_lines}); "
+        f"stdout={proc.stdout!r} stderr={proc.stderr[-2000:]!r}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.slow
+def test_openai_codex_spool_caps_peak_rss(tmp_path):
+    """#1646 reproduction: a >=128 MiB Codex transcript must NOT blow up parent RSS.
+
+    The pre-fix in-RAM path (`capture_output=True, text=True` + `.strip()` +
+    `.splitlines()`) peaks at ~3-4x the transcript size, which crossed cloud
+    RSS limits and SIGKILLed the parent. The spooled path keeps peak ~constant
+    regardless of transcript size.
+
+    We run the SAME workload twice in fresh interpreters — a tiny transcript
+    (calibrates the module-import baseline) and a >=128 MiB transcript — and
+    assert the large run's peak RSS is only marginally above the tiny run's.
+    On the old path the large run would be hundreds of MiB higher; the spooled
+    path keeps the delta tiny because only bounded snippets are decoded.
+    """
+    # ~128 MiB of NDJSON for the large run: 32768 lines * 4096-byte payload.
+    small = _run_rss_driver(tmp_path, n_lines=4)
+    large = _run_rss_driver(tmp_path, n_lines=32768)
+
+    assert small["success"] is True and small["text"] == "Done.", small
+    assert large["success"] is True and large["text"] == "Done.", large
+
+    small_mib = small["peak_bytes"] / (1024 * 1024)
+    large_mib = large["peak_bytes"] / (1024 * 1024)
+    delta_mib = large_mib - small_mib
+    # The old in-RAM path would add ~384-512 MiB for a 128 MiB transcript. The
+    # spooled path adds essentially nothing; 96 MiB is a generous ceiling that
+    # the old path blows past while the fix clears it with wide margin.
+    assert delta_mib < 96, (
+        f"128 MiB transcript inflated peak RSS by {delta_mib:.1f} MiB "
+        f"(small={small_mib:.1f}, large={large_mib:.1f}); spool not bounding heap"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1738: bot-only ``issue.updated_at`` drift must not wipe workflow state
+#
+# When the only new GitHub activity since the saved steer cursor is PDD's own
+# bot / ``## Step N/M:`` progress / hidden ``PDD_WORKFLOW_STATE`` comments,
+# ``issue_update_should_clear_workflow_state(...)`` must return False and the
+# cached ``step_outputs`` must be preserved (no restart from Step 0).
+#
+# Root cause (CROSS_CUTTING, pdd/agentic_common.py):
+#   - ``drain_issue_steers`` skips ignored bot/state/progress comments with bare
+#     ``continue``s and only persists the cursor inside ``if new_steers:``, so
+#     bot-only drift yields ``[]`` and freezes the cursor.
+#   - ``issue_update_should_clear_workflow_state`` then cannot tell "no new
+#     comments" apart from "only ignored PDD bot comments" and returns True.
+#
+# These tests drive the GitHub-poll path (the env path does not filter bot
+# comments) using the shared ``mock_subprocess_run`` / ``mock_shutil_which``
+# fixtures, matching the existing ``test_drain_issue_steers_from_github`` style.
+# ---------------------------------------------------------------------------
+
+
+def test_bot_only_updated_at_drift_does_not_clear_workflow_state(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Primary repro (#1738 / pdd_cloud#2516): updated_at drift caused only by
+    PDD's own bot ``## Step`` + hidden ``PDD_WORKFLOW_STATE`` comments must NOT
+    clear state, and existing ``step_outputs`` must be preserved.
+
+    Fails on buggy code: ``drain_issue_steers`` returns ``[]`` for bot-only
+    activity, so the helper returns True -> caller wipes state -> Step 0.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    # Cursor sits at the incident's Step 7 bot comment id.
+    cursor_id = 4812173117
+    preserved_outputs = {"7": "## Step 7/13: Review architecture\nDONE"}
+    state = {
+        "step_outputs": dict(preserved_outputs),
+        "last_completed_step": 7,
+        "last_steered_comment_id": str(cursor_id),
+        "last_steer_at": "2026-06-26T18:08:29Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:08:29Z",
+    }
+
+    # The only new activity since the cursor: PDD's own bot/progress/state
+    # comments (taken from the real incident timeline).
+    bot_comments = [
+        {
+            "id": cursor_id + 1,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 0/13: Workflow Startup",
+            "created_at": "2026-06-26T18:16:29Z",
+        },
+        {
+            "id": cursor_id + 2,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "## Step 1/13: Search for duplicate issues",
+            "created_at": "2026-06-26T18:16:47Z",
+        },
+        {
+            # The hidden state comment is *edited* each step. A comment edit
+            # bumps the comment's ``updated_at`` (18:17:13Z) but NOT the parent
+            # issue's ``updated_at`` (which stays at the last new comment, 18:16:59Z) —
+            # the exact shape observed on pdd_cloud#2516.
+            "id": cursor_id + 3,
+            "user": {"login": "prompt-driven-github[bot]", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: eyJzdGF0ZSI6IDF9 -->",
+            "created_at": "2026-06-26T18:16:58Z",
+            "updated_at": "2026-06-26T18:17:13Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(bot_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:08:29Z",   # stored issue_updated_at (A)
+        "2026-06-26T18:16:59Z",   # current issue_updated_at (B) — bot drift only
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is False
+    assert state["step_outputs"] == preserved_outputs
+    # The drift was recorded as harmless: the steer cursor advanced over the
+    # ignored bot comments so the next resume won't reprocess them.
+    assert int(state["last_steered_comment_id"]) >= cursor_id + 3
+
+
+def test_drain_issue_steers_advances_cursor_over_ignored_bot_comments(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Centralized mechanism: ``drain_issue_steers`` must advance the steer
+    cursor past ignored bot/progress/state comments (recording the drift as
+    harmless) even though it returns no human steers, and stay idempotent.
+
+    Fails on buggy code: the cursor is only persisted inside ``if new_steers:``,
+    so bot-only activity leaves ``last_steered_comment_id`` frozen at "1000".
+    """
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "last_steered_comment_id": "1000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+    bot_comments = [
+        {
+            "id": 1001,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 0/13: Workflow Startup",
+            "created_at": "2026-06-26T18:16:29Z",
+        },
+        {
+            "id": 1002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2026-06-26T18:16:58Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(bot_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    # Bot-only activity produces no human steers (that part is correct)...
+    assert steers == []
+    # ...but the cursor MUST advance past the ignored comments so the drift is
+    # recorded as harmless and the next staleness check can explain it.
+    assert int(state["last_steered_comment_id"]) >= 1002
+
+    # Re-polling the same comments is idempotent and does not regress.
+    steers_again = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert steers_again == []
+    assert int(state["last_steered_comment_id"]) >= 1002
+
+
+def test_human_comment_among_bot_comments_preserves_state_and_applies_steer(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Intended behavior preserved (issue Case 2): when a genuine human comment
+    is mixed in with PDD bot comments, the helper still returns False AND the
+    human steer is applied (cursor advances to the human comment, generation
+    bumps). Guards against the fix over-correcting away real steering.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "step_outputs": {"7": "WIP"},
+        "last_steered_comment_id": "4812173117",
+        "last_steer_at": "2026-06-26T18:08:29Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:08:29Z",
+    }
+    comments = [
+        {
+            "id": 4812269998,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 8/13: Implement fix",
+            "created_at": "2026-06-26T18:20:00Z",
+        },
+        {
+            "id": 4812269999,
+            "user": {"login": "Serhan-Asad", "type": "User"},
+            "body": "please also handle the null case",
+            "created_at": "2026-06-26T18:21:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:08:29Z",
+        "2026-06-26T18:21:30Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is False
+    # The human steer was merged back into state (issue's Case 2 evidence:
+    # last_steered_comment_id=4812269999, steer_generation=1).
+    assert state["last_steered_comment_id"] == "4812269999"
+    assert state.get("steer_generation") == 1
+
+
+def test_external_edit_without_new_comments_still_clears_state(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Guard / no over-correction: an ``updated_at`` drift with NO new comments
+    is a real external edit (title/body/label) and MUST still clear state. The
+    fix must only treat drift as harmless when it is explained by ignored PDD
+    comments — not blanket-return False.
+    """
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "step_outputs": {"7": "WIP"},
+        "last_steered_comment_id": "5000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:00:00Z",
+    }
+    # No comments after the cursor -> nothing explains the drift.
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = "[]"
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:00:00Z",
+        "2026-06-26T19:30:00Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+    )
+
+    assert should_clear is True
+
+
+def test_body_filtered_pdd_marker_comments_count_as_harmless_drift(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Each body-based ignored PDD category (``## Step``, ``PDD_WORKFLOW_STATE``
+    state marker, ``PDD-INCREMENTAL-STATUS``) must count as harmless drift even
+    when the comment author is NOT typed as a Bot — exercising the body filters
+    distinct from the ``user.type == "Bot"`` branch. Driven exactly as the
+    change orchestrator calls the helper (clarification step set passed).
+
+    Fails on buggy code: these comments are skipped via bare ``continue``s, so
+    no steer is produced and the helper returns True (clear).
+    """
+    from pdd.agentic_common import (
+        GITHUB_STATE_MARKER_END,
+        GITHUB_STATE_MARKER_START,
+        issue_update_should_clear_workflow_state,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    preserved_outputs = {"5": "partial work"}
+    state = {
+        "step_outputs": dict(preserved_outputs),
+        "last_completed_step": 5,
+        "last_steered_comment_id": "7000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+        "issue_updated_at": "2026-06-26T18:00:00Z",
+    }
+    state_marker_body = (
+        f"{GITHUB_STATE_MARKER_START} eyJzdGF0ZSI6IDF9 {GITHUB_STATE_MARKER_END}"
+    )
+    comments = [
+        {
+            "id": 7001,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": "## Step 6/13: Diagnose root cause",
+            "created_at": "2026-06-26T18:10:00Z",
+        },
+        {
+            "id": 7002,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": state_marker_body,
+            "created_at": "2026-06-26T18:11:00Z",
+        },
+        {
+            "id": 7003,
+            "user": {"login": "prompt-driven-github", "type": "User"},
+            "body": "PDD-INCREMENTAL-STATUS: running step 7",
+            "created_at": "2026-06-26T18:12:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    should_clear = issue_update_should_clear_workflow_state(
+        state,
+        "2026-06-26T18:00:00Z",
+        # issue.updated_at tracks the last *new* comment's created_at (18:12:00Z);
+        # the drift is fully explained by the ignored PDD comments above.
+        "2026-06-26T18:12:00Z",
+        "promptdriven",
+        "pdd_cloud",
+        2516,
+        cwd=mock_cwd,
+        clarification_step_numbers={3, 7},
+    )
+
+    assert should_clear is False
+    assert state["step_outputs"] == preserved_outputs
+    assert int(state["last_steered_comment_id"]) >= 7003
+
+
+def test_drain_step_steers_surfaces_human_steer_after_bot_cursor_advance(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """No-regression for the e2e-fix / checkup consumers that reach
+    ``drain_issue_steers`` via ``drain_step_steers``: after the cursor advances
+    over bot-only comments, a genuine human steer arriving later must still be
+    surfaced exactly once (and not be skipped by the cursor advancement).
+    """
+    # Scope addition: covers expansion items
+    # "agentic_e2e_fix_orchestrator.py:2279 / agentic_checkup_orchestrator.py:3243
+    #  drain_step_steers cursor advancement must not regress" identified by
+    # Step 6 — distinct shared-helper entry point.
+    from pdd.agentic_common import drain_step_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    state = {
+        "last_steered_comment_id": "8000",
+        "last_steer_at": "2026-06-26T18:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+
+    # Poll 1: only bot/state comments -> cursor advances, no steers surfaced.
+    first_comments = [
+        {
+            "id": 8001,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "## Step 2/13: Plan",
+            "created_at": "2026-06-26T18:05:00Z",
+        },
+        {
+            "id": 8002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "<!-- PDD_WORKFLOW_STATE: e30= -->",
+            "created_at": "2026-06-26T18:06:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(first_comments)
+    mock_subprocess_run.return_value.stderr = ""
+    assert drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True) == []
+
+    # Poll 2: a real human comment after the advanced cursor must surface once.
+    second_comments = first_comments + [
+        {
+            "id": 8003,
+            "user": {"login": "human", "type": "User"},
+            "body": "tweak the retry budget",
+            "created_at": "2026-06-26T18:07:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.stdout = json.dumps(second_comments)
+    steers = drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True)
+    assert [s.comment_id for s in steers] == ["8003"]
+    assert steers[0].body == "tweak the retry budget"
+
+    # Poll 3: idempotent — the human steer is not re-surfaced.
+    assert drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd, quiet=True) == []

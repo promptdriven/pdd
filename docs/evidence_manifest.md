@@ -193,6 +193,63 @@ prompt, test, example, contract, or repair text.
 or used, which phases were involved, why fallback occurred, and provider/tool
 metadata when available.
 
+### Story Regression Coverage
+
+The story regression lane (`make regression-stories`) emits a deterministic,
+machine-readable coverage artifact alongside the run/devunit manifests. It
+measures the **executable** `@pytest.mark.story` suite — distinct from the
+LLM-backed `pdd detect --stories` validation — and is computed without any LLM
+calls from the marker/traceability API and the story gate statuses.
+
+Artifacts are written under:
+
+```text
+.pdd/evidence/stories/coverage.latest.json
+.pdd/evidence/stories/runs/<run_id>.json
+```
+
+The `*.latest.json` path is the stable lookup for downstream automation
+(repo-health dashboard in `pdd_cloud`, `pdd checkup`); the per-run snapshot
+preserves history so trend can be computed downstream. This mirrors the
+`runs/<run_id>.json` + `*.latest.json` convention used by evidence manifests.
+
+The artifact uses an integer `schema_version` and is packaged at
+`pdd/schemas/story_coverage.schema.json`. Fields:
+
+- `schema_version` — integer schema version for the artifact (bumped on any
+  breaking field change).
+- `status` — `"ok"` only for a real measurement with pass/fail and freshness
+  verdicts, or `"not_applicable"` when `story_count` is `0` or the upstream
+  marker/traceability API or gate statuses are absent (the degraded case
+  described below). Downstream consumers
+  (`pdd_cloud`, `pdd checkup`) must branch on this field to distinguish a real
+  measurement from a degraded one.
+- `run_id` / `generated_at` — the per-run snapshot identifier and the ISO-8601
+  UTC timestamp at which the artifact was emitted.
+- `story_count` — total stories discovered.
+- `story_backed_test_count` — collected `-m story` test items (parametrizations
+  count individually, matching the "142 tests" example).
+- `stories_covered` — distinct stories with at least one passing, non-stale
+  regression test. Collection-only marker data is not enough to award coverage
+  credit.
+- `story_coverage_pct` — `stories_covered / story_count`, or `null` when
+  `story_count` is `0` or pass/fail verdicts are unavailable (no
+  division-by-zero; never reported as `0%` in degraded mode).
+- `pass_rate` / `passing_test_count` — over collected story tests when real
+  pass/fail verdicts are available. `pass_rate` is a fraction in `0.0..1.0`,
+  not a percentage. When the emitter only has collection data, `pass_rate` is
+  `null` and `passing_test_count` is `0`; it must not infer passing tests from
+  collected markers. `skip`/`xfail` items are excluded from both the pass-rate
+  and the "covered" count.
+- `gap_stories[]` / `orphan_tests[]` — optional dashboard hints (stories with no
+  test; story-marked tests pointing at no known story).
+
+When the upstream marker/traceability API or gate statuses are unavailable (the
+executable story suite is not yet present), the emitter writes a well-formed
+artifact with `status: "not_applicable"` and unavailable pass-rate fields rather
+than failing or overstating pass results — the same degradation convention used
+elsewhere for missing stories/contracts.
+
 ## Verification
 
 For this feature, use the focused pytest gate (not full `pytest -q` collection

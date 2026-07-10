@@ -32,7 +32,13 @@ from .agentic_common import (
     ensure_issue_steer_cursor_seeded,
     peek_agentic_progress_steer_metadata,
 )
-from .construct_paths import _is_known_language
+from .construct_paths import (
+    _detect_context_from_basename,
+    _find_pddrc_file,
+    _is_known_language,
+    _load_pddrc_config,
+)
+from .resolved_sync_unit import ResolvedSyncUnit
 from .sync_order import compute_sccs
 
 console = Console()
@@ -281,6 +287,12 @@ def _format_duration(start: Optional[float], end: Optional[float]) -> str:
 
 
 _CONFORMANCE_PREFIX = "Architecture conformance error for "
+_PROSE_OUTPUT_PREFIX = "Generation output extraction failure for "
+_PROSE_OUTPUT_REPAIR_DIRECTIVE = (
+    "The previous response contained no extractable code. Return the complete "
+    "source file only, inside a single code block. Do not include any planning "
+    "text, prose explanation, or partial snippets outside the code block."
+)
 _MISSING_DECLARED_MARKER = "declared symbols missing from generated code"
 _MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
 _MISSING_PDD_INTERFACE_PARAMS_MARKER = (
@@ -294,6 +306,16 @@ _PDD_INTERFACE_DRIFT_MARKER = (
 )
 _PUBLIC_SURFACE_PREFIX = "Public surface regression for "
 _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
+
+
+def _parse_prose_output_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a prose/empty-output extraction failure in subprocess output."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _PROSE_OUTPUT_PREFIX not in combined:
+        return None
+    return _PROSE_OUTPUT_REPAIR_DIRECTIVE, ("prose",)
 
 
 def _parse_conformance_failure(
@@ -558,6 +580,34 @@ def _parse_conformance_failure(
 
     repair_directive = "\n".join(directive_lines)
     return repair_directive, missing_sorted
+
+
+def build_prose_output_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured generation-output extraction hard-failure block."""
+    block_lines = [
+        str(exc),
+        "",
+        "=== generation output extraction failure ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        f"language: {getattr(exc, 'language', '') or '<unknown>'}",
+        f"model: {getattr(exc, 'model_name', '') or '<unknown>'}",
+        f"extractor_result: {getattr(exc, 'extractor_result', '') or '<unknown>'}",
+        f"raw_output_excerpt: {getattr(exc, 'raw_output_excerpt', '') or '<unknown>'}",
+        (
+            "note: The model returned no extractable code. Check that the "
+            "provider/model is configured to return complete source files, not "
+            "planning text or agentic responses."
+        ),
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
 
 
 def build_conformance_hard_failure_from_error(
@@ -1057,6 +1107,61 @@ def build_dep_graph_from_architecture(
 
 
 # ---------------------------------------------------------------------------
+# Per-module context resolution (issue #1675)
+# ---------------------------------------------------------------------------
+
+
+class SyncContextResolutionError(RuntimeError):
+    """A requested ``--context`` is invalid for a module's own cwd.
+
+    Raised when the global ``--context`` does not exist in the ``.pddrc`` that
+    governs the module's resolved cwd and no per-module context can be resolved
+    for the target. Surfacing this before spawning the child sync turns a later,
+    opaque child-process ``Unknown context`` failure into an actionable
+    resolver error.
+    """
+
+
+class _ModuleContextDecision(NamedTuple):
+    """Resolved ``--context`` decision for a single module.
+
+    ``status`` is one of:
+      * ``"omitted"`` — no global context requested; let the child resolve from
+        its own cwd (legacy behavior).
+      * ``"ok"`` — forward the requested context unchanged (valid for the cwd,
+        or no governing ``.pddrc`` to validate against).
+      * ``"substituted"`` — the requested context is not defined for this cwd,
+        so the cwd's own context for the target is used instead.
+      * ``"unresolved"`` — the requested context is invalid for the cwd and no
+        per-module context resolves; the caller must fail early.
+    """
+
+    context: Optional[str]
+    status: str
+    requested: Optional[str] = None
+    cwd: Optional[Path] = None
+    available: Tuple[str, ...] = ()
+    target: Optional[str] = None
+
+
+def _detect_context_for_cwd(target: str, cwd: Path) -> Optional[str]:
+    """Return the context the ``.pddrc`` governing ``cwd`` assigns to ``target``.
+
+    Mirrors the child's own resolution: find the nearest ``.pddrc`` from ``cwd``
+    and match ``target`` against its contexts. Returns ``None`` when no
+    ``.pddrc`` is found, it cannot be parsed, or no context matches.
+    """
+    pddrc = _find_pddrc_file(cwd)
+    if pddrc is None:
+        return None
+    try:
+        config = _load_pddrc_config(pddrc)
+        return _detect_context_from_basename(target, config, pddrc_path=pddrc)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # AsyncSyncRunner
 # ---------------------------------------------------------------------------
 
@@ -1079,6 +1184,8 @@ class AsyncSyncRunner:
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
         module_targets: Optional[Dict[str, str]] = None,
+        module_contexts: Optional[Dict[str, Optional[str]]] = None,
+        module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
     ):
         self.basenames: List[str] = list(basenames)
@@ -1093,6 +1200,15 @@ class AsyncSyncRunner:
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
+        # Per-module context resolved against each module's own .pddrc (issue
+        # #1675). Mirrors module_cwds/module_targets; the runner never forwards
+        # a context that is invalid for the cwd the child will run in.
+        self.module_contexts: Dict[str, Optional[str]] = dict(module_contexts or {})
+        # Canonical per-module identity (issue #1675). When a unit exists for a
+        # key it is the single source of truth for cwd / target / context; the
+        # module_cwds/targets/contexts dicts are a fallback for callers that pass
+        # no units (ad-hoc callers, unit tests).
+        self.module_units: Dict[str, ResolvedSyncUnit] = dict(module_units or {})
         self.initial_cost = float(initial_cost or 0.0)
         self._steer_state: Dict[str, Any] = {}
 
@@ -2039,6 +2155,168 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     # Subprocess execution
     # ------------------------------------------------------------------
+    def _unit_for(self, basename: str) -> Optional[ResolvedSyncUnit]:
+        """Return the canonical ResolvedSyncUnit for a key, if one was provided."""
+        return self.module_units.get(basename)
+
+    def _module_cwd_path(self, basename: str) -> Path:
+        """Return the resolved cwd the child sync for `basename` will run in.
+
+        A canonical unit (when present) is the source of truth; otherwise fall
+        back to the module_cwds dict / project_root.
+        """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return Path(unit.cwd)
+        return Path(self.module_cwds.get(basename, str(self.project_root)))
+
+    def _module_target(self, basename: str) -> str:
+        """Return the actual `pdd sync` target for a scheduler key."""
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return unit.target_basename
+        return self.module_targets.get(basename, basename)
+
+    def _compute_module_context(self, basename: str) -> _ModuleContextDecision:
+        """Decide which ``--context`` (if any) to pass to this module's child.
+
+        The child runs in this module's own cwd (``module_cwds``), which may be a
+        nested project with its own ``.pddrc``. A global ``--context`` is only
+        valid when that ``.pddrc`` defines it; forwarding a parent/root context
+        into a nested cwd (or vice versa) makes the child die with
+        ``Unknown context`` (issue #1675).
+
+        When a canonical :class:`ResolvedSyncUnit` exists for the key, its
+        already-resolved context is authoritative (resolved with the
+        omit-not-fail policy — a nested project that only has a default context
+        omits ``--context`` rather than failing). Without a unit, behavior is a
+        no-op for every case that works today: when no context is requested, when
+        the runner has no resolved cwd for the module, when no ``.pddrc`` governs
+        the cwd, or when the requested context is valid there, the requested
+        value is forwarded unchanged. Resolution only intervenes when a requested
+        context is invalid for the module's own cwd — exactly the leak this fixes.
+        """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return _ModuleContextDecision(
+                context=unit.context,
+                status="unit",
+                requested=(
+                    str(self.sync_options["context"])
+                    if self.sync_options.get("context")
+                    else None
+                ),
+                cwd=Path(unit.cwd),
+                target=unit.target_basename,
+            )
+
+        requested = self.sync_options.get("context")
+        requested = str(requested) if requested else None
+        if not requested:
+            return _ModuleContextDecision(context=None, status="omitted")
+
+        # Only modules the orchestrator placed in a specific cwd get cwd-aware
+        # resolution. Directly-constructed runners (ad-hoc callers, unit tests)
+        # keep legacy forwarding.
+        if basename not in self.module_cwds:
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested
+            )
+
+        cwd = self._module_cwd_path(basename)
+        pddrc = _find_pddrc_file(cwd)
+        if pddrc is None:
+            # No .pddrc governs this cwd — nothing to validate against; preserve
+            # legacy behavior and forward the requested context unchanged.
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested, cwd=cwd
+            )
+        try:
+            config = _load_pddrc_config(pddrc)
+            available = tuple((config.get("contexts") or {}).keys())
+        except Exception:
+            # Malformed .pddrc: do not second-guess it here; forward as-is and
+            # let the child surface the parse error.
+            return _ModuleContextDecision(
+                context=requested, status="ok", requested=requested, cwd=cwd
+            )
+
+        if requested in available:
+            return _ModuleContextDecision(
+                context=requested,
+                status="ok",
+                requested=requested,
+                cwd=cwd,
+                available=available,
+            )
+
+        # Requested context is not defined for this cwd's .pddrc (the leak).
+        # Resolve the context the cwd's own .pddrc assigns to this target.
+        target = self.module_targets.get(basename, basename)
+        resolved = self.module_contexts.get(basename)
+        if not resolved:
+            resolved = _detect_context_for_cwd(target, cwd)
+        if resolved and resolved in available:
+            return _ModuleContextDecision(
+                context=resolved,
+                status="substituted",
+                requested=requested,
+                cwd=cwd,
+                available=available,
+                target=target,
+            )
+
+        return _ModuleContextDecision(
+            context=None,
+            status="unresolved",
+            requested=requested,
+            cwd=cwd,
+            available=available,
+            target=target,
+        )
+
+    @staticmethod
+    def _format_context_resolution_error(
+        basename: str, decision: _ModuleContextDecision
+    ) -> str:
+        """Build an actionable message for an unresolved context decision."""
+        available = ", ".join(decision.available) if decision.available else "<none>"
+        cwd = decision.cwd if decision.cwd is not None else "<unknown>"
+        return (
+            f"Requested --context '{decision.requested}' is not defined in the "
+            f".pddrc governing module '{basename}' (cwd: {cwd}); available "
+            f"contexts: {available}. No context in that .pddrc maps to target "
+            f"'{decision.target or basename}'. Add the context to that .pddrc, "
+            f"or run from the directory whose .pddrc defines it."
+        )
+
+    def _reproduce_command(self, basename: str) -> str:
+        """Return a copy-pasteable reproduce-local command for `basename`.
+
+        Includes the module's cwd and the resolved context so the printed
+        command matches what the runner actually executed (issue #1675).
+        """
+        target = self._module_target(basename)
+        try:
+            context = self._compute_module_context(basename).context
+        except Exception:
+            context = None
+
+        cmd = "pdd "
+        if context:
+            cmd += f"--context {context} "
+        cmd += f"sync {target}"
+
+        cwd = self._module_cwd_path(basename)
+        rel_str = ""
+        try:
+            rel_str = str(cwd.resolve().relative_to(self.project_root.resolve()))
+        except Exception:
+            rel_str = str(cwd)
+        if rel_str and rel_str != ".":
+            return f"cd {rel_str} && {cmd}"
+        return cmd
+
     def _build_command(self, basename: str, in_flight_cost: float = 0.0) -> List[str]:
         """Build the pdd sync subprocess command for a basename."""
         pdd_exe = _find_pdd_executable()
@@ -2049,9 +2327,23 @@ class AsyncSyncRunner:
 
         if self.sync_options.get("local"):
             cmd.append("--local")
-        context_override = self.sync_options.get("context")
-        if context_override:
-            cmd.extend(["--context", str(context_override)])
+        decision = self._compute_module_context(basename)
+        if decision.status == "unresolved":
+            raise SyncContextResolutionError(
+                self._format_context_resolution_error(basename, decision)
+            )
+        if decision.status == "substituted" and not self.quiet:
+            try:
+                console.print(
+                    f"[yellow]Module {basename}: requested context "
+                    f"'{decision.requested}' is not defined in {decision.cwd}/"
+                    f".pddrc; using its own context '{decision.context}' "
+                    f"instead.[/yellow]"
+                )
+            except Exception:
+                pass
+        if decision.context:
+            cmd.extend(["--context", str(decision.context)])
         strength = self.sync_options.get("strength")
         if strength is not None:
             cmd.extend(["--strength", str(strength)])
@@ -2095,7 +2387,7 @@ class AsyncSyncRunner:
         elif self.sync_options.get("budget") is not None:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
 
-        cmd.append(self.module_targets.get(basename, basename))
+        cmd.append(self._module_target(basename))
         return cmd
 
     def _build_env(
@@ -2144,11 +2436,16 @@ class AsyncSyncRunner:
             if success:
                 return True, total_cost, ""
 
+            prose_output = _parse_prose_output_failure(stdout, stderr)
             conformance = _parse_conformance_failure(stdout, stderr)
             public_surface = _parse_public_surface_failure(stdout, stderr)
             test_churn = _parse_test_churn_failure(stdout, stderr)
             failure_kind = "architecture"
-            parsed_failure = conformance
+            parsed_failure = prose_output
+            if parsed_failure is not None:
+                failure_kind = "prose_output"
+            if parsed_failure is None and conformance is not None:
+                parsed_failure = conformance
             if parsed_failure is None and public_surface is not None:
                 failure_kind = "public_surface"
                 parsed_failure = public_surface
@@ -2174,6 +2471,8 @@ class AsyncSyncRunner:
 
             if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
                 break
+            if failure_kind == "prose_output" and attempt >= 1:
+                break
             if failure_kind == "test_churn" and attempt >= 1:
                 break
             remaining_budget = self._remaining_total_budget(total_cost)
@@ -2190,7 +2489,11 @@ class AsyncSyncRunner:
                 break
 
         # Hard-failure path: include structured conformance block
-        if last_failure_kind == "public_surface":
+        if last_failure_kind == "prose_output":
+            hard_block = self._build_prose_output_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        elif last_failure_kind == "public_surface":
             hard_block = self._build_public_surface_hard_failure(
                 basename, last_error, last_stdout, last_stderr
             )
@@ -2203,6 +2506,56 @@ class AsyncSyncRunner:
                 basename, last_error, last_stdout, last_stderr
             )
         return False, total_cost, hard_block
+
+    def _build_prose_output_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured prose-output hard-failure error string."""
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _PROSE_OUTPUT_PREFIX in line:
+                tail = line.split(_PROSE_OUTPUT_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        def _extract_line_field(label: str, default: str = "<unknown>") -> str:
+            line_match = re.search(
+                rf"^{re.escape(label)}:\s*(.+)$",
+                combined,
+                re.MULTILINE | re.IGNORECASE,
+            )
+            if line_match:
+                return line_match.group(1).strip() or default
+            return default
+
+        return "\n".join(
+            [
+                failure_summary or "Generation output extraction failure",
+                "",
+                "=== generation output extraction failure ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_line_field('output')}",
+                f"language: {_extract_line_field('language')}",
+                f"model: {_extract_line_field('model_name')}",
+                f"extractor_result: {_extract_line_field('Extractor result')}",
+                f"raw_output_excerpt: {_extract_line_field('Raw output excerpt')}",
+                (
+                    "note: The model returned no extractable code. Check that "
+                    "the provider/model is configured to return complete source "
+                    "files, not planning text or agentic responses."
+                ),
+                "",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
 
     def _build_conformance_hard_failure(
         self,
@@ -2253,7 +2606,7 @@ class AsyncSyncRunner:
             "missing: "
             + (", ".join(missing_symbols) if missing_symbols else "<none>"),
             "",
-            f"Reproduce locally: pdd sync {basename}",
+            f"Reproduce locally: {self._reproduce_command(basename)}",
             "",
             _env_fingerprint(),
         ]
@@ -2324,7 +2677,7 @@ class AsyncSyncRunner:
                 "the prompt body. Example: `BREAKING-CHANGE: remove <symbol>` (or",
                 "`rename`, `change signature`).",
                 "",
-                f"Reproduce locally: pdd sync {basename}",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
@@ -2400,7 +2753,7 @@ class AsyncSyncRunner:
                 "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
                 "directive to the prompt body.",
                 "",
-                f"Reproduce locally: pdd sync {basename}",
+                f"Reproduce locally: {self._reproduce_command(basename)}",
                 "",
                 _env_fingerprint(),
             ]
@@ -2417,7 +2770,12 @@ class AsyncSyncRunner:
 
         Returns (success, cost, error, stdout, stderr).
         """
-        cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
+        try:
+            cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
+        except SyncContextResolutionError as exc:
+            # Fail this module early with an actionable resolver error instead of
+            # spawning a child that would die with "Unknown context" (#1675).
+            return False, 0.0, str(exc), "", ""
 
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         cost_file.close()
@@ -2552,8 +2910,7 @@ class AsyncSyncRunner:
                 except Exception:
                     pass
 
-        cwd_value = self.module_cwds.get(basename, str(self.project_root))
-        cwd_str = str(cwd_value)
+        cwd_str = str(self._module_cwd_path(basename))
 
         try:
             process = subprocess.Popen(

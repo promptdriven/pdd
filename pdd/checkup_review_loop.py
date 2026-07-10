@@ -717,9 +717,14 @@ class ReviewLoopConfig:
     # the regenerated code matches, then re-runs the guards before push.
     # New modules / deleted-prompt offenders are NEVER auto-authored —
     # they remain a precise structured blocker. Set False to restore the
-    # legacy "refuse and stop" behavior. MUST stay at the end of the field
-    # list so positional callers keep working unchanged.
+    # legacy "refuse and stop" behavior. MUST stay in the appended field
+    # block so positional callers keep working unchanged.
     enable_source_of_truth_repair: bool = True
+    # APPENDED — explicit single-role review/fix mode. Off by default to
+    # preserve the independent reviewer/fixer contract; when enabled, the
+    # loop accepts ``reviewer == fixer`` for non-review-only runs and keeps
+    # reviewer status/reporting distinct from fixer artifacts.
+    allow_same_reviewer_fixer: bool = False
 
 
 @dataclass
@@ -801,8 +806,7 @@ def _layer1_step5_evidence_findings(
             area="test",
             evidence="\n".join(evidence_lines),
             finding=(
-                "Layer 1 Step 5 shell-first test execution failed before "
-                "Layer 2."
+                "Layer 1 Step 5 shell-first test execution failed before " "Layer 2."
             ),
             required_fix=(
                 "Fix the code or tests causing this command to fail, then rerun "
@@ -906,11 +910,15 @@ class ReviewLoopState:
     # ``{"blocked": bool, "repair_attempted": bool, "repaired": [...],
     #    "unrepairable": [{"code_path","prompt_path","kind","reason"}],
     #    "offenders": [{"code_path","prompt_path","kind"}]}``.
-    # Surfaced verbatim in the final-gate machine verdict so pdd_cloud can
-    # report exactly which prompt/architecture source files need repair.
-    # Kept at the end of the field list so positional construction stays
-    # stable.
+    # Surfaced verbatim in the final-gate machine verdict and final-state.json
+    # so pdd_cloud can report exactly which prompt/architecture source files
+    # need repair. Kept in the appended field block so positional construction
+    # stays stable.
     source_of_truth: Optional[Dict[str, Any]] = None
+    # Explicit marker for ``--allow-same-reviewer-fixer`` runs. Keeps
+    # final-state/report consumers from inferring the legacy independent
+    # reviewer/fixer loop when one role intentionally handled both steps.
+    same_role_review_fix: bool = False
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -945,13 +953,19 @@ def run_checkup_review_loop(
         )
         return True, _render_final_report(context, state, roles), 0.0, "unknown"
 
+    same_role_review_fix = (
+        not config.review_only
+        and config.allow_same_reviewer_fixer
+        and reviewer == fixer
+    )
     reviewer_status = {reviewer: "missing"}
-    if not config.review_only:
+    if not config.review_only and fixer != reviewer:
         reviewer_status[fixer] = "fixer"
     state = ReviewLoopState(
         reviewer_status=reviewer_status,
         active_reviewer=reviewer,
         original_reviewer=reviewer,
+        same_role_review_fix=same_role_review_fix,
     )
     deadline = time.monotonic() + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
@@ -1173,8 +1187,7 @@ def run_checkup_review_loop(
         state.reviewer_status[reviewer] = "findings"
         if config.review_only:
             state.stop_reason = (
-                "Review-only mode: Layer 1 Step 5 shell evidence reported "
-                "failures."
+                "Review-only mode: Layer 1 Step 5 shell evidence reported " "failures."
             )
             report = _finalize(context, state, roles, artifacts_dir)
             _post_review_loop_report(context, report, use_github_state)
@@ -1720,7 +1733,8 @@ def run_checkup_review_loop(
             state.source_of_truth = sot_details
             if residual_refusal:
                 _write_artifact(
-                    artifacts_dir / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                    artifacts_dir
+                    / f"round-{round_number}-prompt-source-guard-refusal.txt",
                     residual_refusal
                     + "\n\n"
                     + json.dumps(sot_details, indent=2, sort_keys=True)
@@ -2009,23 +2023,24 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0]
-        if legacy_roles
-        else DEFAULT_REVIEWER
+        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1]
-        if len(legacy_roles) > 1
-        else DEFAULT_FIXER
+        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
     )
 
-    if reviewer == fixer and not config.review_only:
+    if (
+        reviewer == fixer
+        and not config.review_only
+        and not config.allow_same_reviewer_fixer
+    ):
         return (
             reviewer,
             fixer,
-            "Primary reviewer and fixer must be different roles in review-loop mode.",
+            "Primary reviewer and fixer must be different roles in review-loop mode "
+            "unless --allow-same-reviewer-fixer is set.",
         )
     return reviewer, fixer, ""
 
@@ -3474,6 +3489,10 @@ such as pending or action-required status checks, Cloud Build state,
 mergeability, or auto-heal workflow status, unless the raw output ties that
 state to a concrete code or repository-file defect introduced by the PR.
 
+Do not preserve rows that merely verify an earlier finding is now fixed. If the
+raw output says a prior finding is fixed/resolved/addressed and does not request
+a further concrete change, return status "clean" with an empty findings array.
+
 Return ONLY JSON with this shape:
 {{
   "status": "clean" | "findings" | "failed",
@@ -3921,6 +3940,10 @@ Return status "findings" if any valid, in-scope finding remains that should be
 fixed before merge, even when its severity is outside that priority list. Return
 status "clean" when no actionable code, prompt, docs, architecture, test, or
 repository-file findings remain and the findings array is empty.
+Do not include verified-fixed prior findings in the findings array. If a prior
+finding is now fixed/resolved/addressed and you do not need a further concrete
+change, mention it only in summary and return status "clean" when nothing else
+is actionable.
 """
 
 
@@ -4112,8 +4135,100 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 def _filter_actionable_review_findings(
     findings: Sequence[ReviewFinding],
 ) -> List[ReviewFinding]:
-    """Drop findings that only reflect external PR readiness status."""
-    return [finding for finding in findings if not _is_external_status_finding(finding)]
+    """Drop reviewer rows that are not actionable PR defects."""
+    return [
+        finding
+        for finding in findings
+        if not _is_external_status_finding(finding)
+        and not _is_resolved_non_actionable_finding(finding)
+    ]
+
+
+_GENERIC_NOOP_REQUIRED_FIXES = {
+    "",
+    "-",
+    "n/a",
+    "na",
+    "none",
+    "no fix required",
+    "no fix needed",
+    "no action required",
+    "no action needed",
+    "not applicable",
+    "already fixed",
+    "already addressed",
+    "verified fixed",
+    "address the reviewer finding",
+}
+
+_RESOLVED_FINDING_MARKER_RE: re.Pattern[str] = re.compile(
+    r"\b(?:"
+    r"has\s+been\s+(?:fixed|resolved|addressed)"
+    r"|is\s+(?:fixed|resolved|addressed)"
+    r"|verified\s+(?:fixed|resolved|addressed)"
+    r"|confirmed\s+(?:fixed|resolved|addressed)"
+    r"|not\s+reproducible"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_RESOLVED_CHECKMARK_MARKER_RE: re.Pattern[str] = re.compile(
+    r"(?:\u2713|\u2705).*\bnow\s+(?:correctly\s+)?(?:uses?|includes?|handles?|"
+    r"accepts?|rejects?|preserves?|records?|reports?|parses?|passes?|"
+    r"returns?|treats?|emits?|checks?|classifies?|recognizes?)\b"
+    r"|\bnow\s+(?:correctly\s+)?(?:uses?|includes?|handles?|accepts?|rejects?|"
+    r"preserves?|records?|reports?|parses?|passes?|returns?|treats?|emits?|"
+    r"checks?|classifies?|recognizes?)\b.*(?:\u2713|\u2705)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_RESOLVED_FINDING_CONFLICT_RE: re.Pattern[str] = re.compile(
+    r"\b(?:but|however|except|still|needs?|must|should|remains?|"
+    r"unresolved|unfixed|open|regression|not\s+(?:fixed|resolved|addressed|"
+    r"yet)|does\s+not|did\s+not|cannot|can't|won't)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalized_noop_required_fix(value: str) -> str:
+    """Normalize a required-fix cell before comparing generic no-op values."""
+    normalized = re.sub(r"\s+", " ", (value or "").strip().lower())
+    normalized = normalized.strip(" .;:")
+    return normalized
+
+
+def _is_noop_required_fix(value: str) -> bool:
+    normalized = _normalized_noop_required_fix(value)
+    return normalized in _GENERIC_NOOP_REQUIRED_FIXES
+
+
+def _is_resolved_non_actionable_finding(finding: ReviewFinding) -> bool:
+    """True when a row only verifies a prior finding as already fixed.
+
+    This intentionally requires both a resolved marker and a no-op required-fix
+    cell. A row that says "now X, but/still/needs..." remains actionable even
+    if its required_fix was rendered generically.
+    """
+    if not _is_noop_required_fix(finding.required_fix):
+        return False
+    text = "\n".join(
+        part
+        for part in (finding.finding, finding.evidence)
+        if part and part.strip()
+    )
+    if not text:
+        return False
+    all_text = "\n".join(
+        part
+        for part in (finding.finding, finding.evidence, finding.required_fix)
+        if part and part.strip()
+    )
+    if _RESOLVED_FINDING_CONFLICT_RE.search(all_text):
+        return False
+    return bool(
+        _RESOLVED_FINDING_MARKER_RE.search(text)
+        or _RESOLVED_CHECKMARK_MARKER_RE.search(text)
+    )
 
 
 def _is_external_status_finding(finding: ReviewFinding) -> bool:
@@ -5098,9 +5213,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[finding.key] += (
-                    f" Fixer rationale was: {rationale}"
-                )
+                state.reviewer_feedback_by_key[
+                    finding.key
+                ] += f" Fixer rationale was: {rationale}"
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -6273,12 +6388,20 @@ def _prompt_source_offenders(
             if not prompt_still_exists or prompt_path in changed_norm:
                 continue
             offenders.append(
-                {"code_path": code_path, "prompt_path": prompt_path, "kind": "rename_drift"}
+                {
+                    "code_path": code_path,
+                    "prompt_path": prompt_path,
+                    "kind": "rename_drift",
+                }
             )
             continue
         if not prompt_still_exists:
             offenders.append(
-                {"code_path": code_path, "prompt_path": prompt_path, "kind": "missing_prompt"}
+                {
+                    "code_path": code_path,
+                    "prompt_path": prompt_path,
+                    "kind": "missing_prompt",
+                }
             )
             continue
         if prompt_path in changed_norm:
@@ -6466,7 +6589,12 @@ def _attempt_source_of_truth_repair(
     offenders = _prompt_source_offenders(worktree, changed_files, head_ref=head_ref)
     repairable = [o for o in offenders if o.get("kind") == "drift"]
     unrepairable = [
-        {**o, "reason": _SOT_UNREPAIRABLE_REASON.get(o.get("kind", ""), "not auto-repairable")}
+        {
+            **o,
+            "reason": _SOT_UNREPAIRABLE_REASON.get(
+                o.get("kind", ""), "not auto-repairable"
+            ),
+        }
         for o in offenders
         if o.get("kind") != "drift"
     ]
@@ -6484,7 +6612,9 @@ def _attempt_source_of_truth_repair(
         # Pure blocker (e.g. #1519: new modules needing prompt contracts).
         return details
     if _budget_exhausted(config, state, deadline):
-        details["repair_skipped_reason"] = "budget exhausted before source-of-truth repair"
+        details["repair_skipped_reason"] = (
+            "budget exhausted before source-of-truth repair"
+        )
         return details
 
     details["repair_attempted"] = True
@@ -6518,7 +6648,9 @@ def _attempt_source_of_truth_repair(
         # possibly-botched prompt edit, and signal the caller to block rather
         # than push a partial repair (even if a partial prompt co-edit would
         # let the deterministic guard pass).
-        details["repair_skipped_reason"] = "source-of-truth repair fixer reported failure"
+        details["repair_skipped_reason"] = (
+            "source-of-truth repair fixer reported failure"
+        )
         details["blocked"] = True
         return details
     # Best-effort regeneration so the code provably matches the repaired prompt.
@@ -6528,7 +6660,13 @@ def _attempt_source_of_truth_repair(
             worktree, offender["code_path"], offender["prompt_path"]
         )
         state.total_cost += float(regen.get("cost") or 0.0)
-        regen_results.append({**offender, "regenerated": regen.get("ok"), "regen_error": regen.get("error")})
+        regen_results.append(
+            {
+                **offender,
+                "regenerated": regen.get("ok"),
+                "regen_error": regen.get("error"),
+            }
+        )
     details["repaired"] = regen_results
     # ``blocked`` is provisional here; the caller re-runs the guards and
     # overwrites it with the authoritative residual result.
@@ -7255,6 +7393,13 @@ def _write_final_state(
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
+        "same_role_review_fix": state.same_role_review_fix,
+        "mode": (
+            "single-role-review-fix"
+            if state.same_role_review_fix
+            else "independent-reviewer-fixer"
+        ),
+        "source_of_truth": state.source_of_truth,
         # SHA-backed verification trust boundary (issue #1088). Always
         # present so downstream consumers can rely on the schema rather
         # than feature-detecting.
@@ -7648,7 +7793,8 @@ def _render_machine_verdict_block(
     }
     reviewer_status["fresh-final"] = state.fresh_final_status
     has_clean_reviewer = any(
-        status == "clean" for reviewer, status in reviewer_status.items()
+        status == "clean"
+        for reviewer, status in reviewer_status.items()
         if reviewer != "fresh-final"
     )
     passed = (
@@ -7747,6 +7893,7 @@ def _render_final_report(
         f"Issue: {context.issue_url}",
         f"issue_aligned: {issue_aligned}",
         f"active-reviewer: {state.active_reviewer or 'unknown'}",
+        f"same-role-review-fix: {str(state.same_role_review_fix).lower()}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
         f"verified-head-sha: {verified_sha_line}",
@@ -7764,7 +7911,9 @@ def _render_final_report(
     if context.full_suite_source == "github-checks":
         lines.extend(["", "Verification scope: targeted with GitHub checks gate."])
     elif context.test_scope == "full":
-        lines.extend(["", "Verification scope: local full suite plus Layer 2 review-loop."])
+        lines.extend(
+            ["", "Verification scope: local full suite plus Layer 2 review-loop."]
+        )
     else:
         lines.extend(["", f"Verification scope: {context.test_scope}."])
     lines.extend(

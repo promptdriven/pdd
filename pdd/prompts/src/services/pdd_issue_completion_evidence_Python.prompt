@@ -1,0 +1,97 @@
+<pdd-reason>Verifies durable GitHub outcome evidence before accepting pdd-issue goal completion claims.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "CompletionEvidenceResult",
+        "signature": "dataclass CompletionEvidenceResult",
+        "returns": "serializable completion-evidence decision with evidence and diagnostics"
+      },
+      {
+        "name": "verify_pdd_issue_completion_evidence",
+        "signature": "async def verify_pdd_issue_completion_evidence(*, owner: str, repo: str, issue_number: int, token: str, base_ref: str | None = None, transcript_hints: dict[str, Any] | None = None) -> CompletionEvidenceResult",
+        "returns": "whether the completed terminal claim has durable same-repo current-issue GitHub evidence"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>src/clients/github_client_Python.prompt</pdd-dependency>
+
+% Goal
+  Implement `src/services/pdd_issue_completion_evidence.py` to verify durable
+  GitHub outcome evidence before `pdd-issue` accepts a completed goal-session
+  claim.
+
+% Role & Scope
+  This service owns finalization policy for `pdd-issue` completion. It combines
+  low-level GitHub discovery signals from `src.clients.github_client` and
+  returns a deterministic decision for the runner. It must not parse terminal
+  goal markers, mutate labels/progress, post comments, or perform low-level
+  GitHub transport work itself.
+
+% Requirements
+  1. Provide a serializable result model `CompletionEvidenceResult` with
+     `is_complete`, `status_reason`, `evidence`, `missing_evidence`,
+     `checked_sources`, and optional `error` fields.
+  2. Provide `verify_pdd_issue_completion_evidence(...)` accepting owner, repo,
+     issue number, token, optional base ref, and optional transcript/job hints
+     such as URLs, branch names, and commit SHAs.
+  3. Treat transcript links and hosted PromptDriven job URLs as untrusted hints
+     only; they cannot satisfy completion without same-repo GitHub evidence for
+     the triggering issue.
+  4. Accept completion when at least one durable verified evidence class exists:
+     same-repo PR for the issue, pushed issue-specific branch with work distinct
+     from base when base comparison is available, or linked commit/merge
+     timeline evidence. PR evidence completes only when the PR is open or
+     merged and has a strong current-issue artifact signal such as a native
+     close link or same-repo issue-specific branch. Closed unmerged PRs and
+     PRs found only through a casual body `#N` mention are diagnostics, not
+     durable completion evidence. Timeline PR evidence must apply the same
+     policy before it can complete: merged timeline PRs are durable artifacts,
+     open timeline PRs require a strong current-issue signal, and closed
+     unmerged or body-only/casual timeline PR references are diagnostics only.
+     Hinted commit evidence discovered through commit-to-PR association must
+     apply the same PR completion policy before it can complete, except when
+     the associated PR number was already verified as completing by the current
+     run's PR or timeline discovery. Closed unmerged hinted-commit PRs and
+     body-only/casual hinted-commit PR references are diagnostics only.
+     Same-repo issue-only cross-references are also diagnostics, not durable
+     completion evidence. Issue-specific branch text must require an explicit
+     `issue` token before the number and a non-word boundary after it, so
+     `change/issue-42abc`, `fix/42-fix`, and `issue-420` do not complete issue
+     42. When an issue-specific branch includes explicit unavailable compare
+     metadata such as `available: false` or a 404 compare,
+     reject that branch as non-completing rather than failing open; only absent
+     compare metadata may use the legacy fallback.
+  5. Distinguish missing linkage from missing artifact by combining issue
+     number, branch patterns, PRs, commits, and cross-reference/timeline
+     signals instead of relying only on PR body keywords.
+  6. Fail closed on GitHub API errors, rate-limit failures, or inconclusive
+     discovery by returning `is_complete=False` with actionable checked-source
+     diagnostics and the error message/type.
+  7. Return stable evidence summaries suitable for runner progress, summary
+     artifacts, and final comments. Evidence entries should include source,
+     artifact type, URL, number or SHA where available, state/merged metadata,
+     and match reason.
+  8. Keep transport concerns in `src.clients.github_client`; this module only
+     coordinates discovery helpers and applies completion policy.
+
+% Dependencies
+  - `src.clients.github_client` for all-state PR discovery, issue-specific
+    branch discovery, timeline/cross-reference discovery, commit-to-PR
+    association, and `GitHubAPIError`.
+
+% Deliverable
+  A single Python file at `src/services/pdd_issue_completion_evidence.py`.
+
+% Tests
+  Must satisfy tests for no-artifact completion claims, hosted job URL only,
+  valid PR evidence, valid issue-specific branch evidence, valid commit/merge
+  evidence, rejected closed-unmerged hinted-commit PR evidence, rejected
+  body-only hinted-commit PR evidence, GitHub API failure, deterministic
+  diagnostics, and serialization.

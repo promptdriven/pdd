@@ -8,7 +8,13 @@ from typing import Any, Optional
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task, DEFAULT_MAX_RETRIES, get_job_deadline, _revert_out_of_scope_changes
+from .agentic_common import (
+    run_agentic_task,
+    DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
+    get_job_deadline,
+    _revert_out_of_scope_changes,
+)
 from .load_prompt_template import load_prompt_template
 
 console = Console()
@@ -138,6 +144,7 @@ def run_agentic_verify(
         verbose=verbose,
         quiet=quiet,
         label="verify-explore",
+        timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
         max_retries=DEFAULT_MAX_RETRIES,
         deadline=effective_deadline,
     )

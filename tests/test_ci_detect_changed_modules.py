@@ -10,8 +10,17 @@ def _load_module():
     script_path = (
         Path(__file__).resolve().parents[1] / "scripts" / "ci_detect_changed_modules.py"
     )
+    return _load_module_from_path("ci_detect_changed_modules", script_path)
+
+
+def _load_packaged_module():
+    script_path = Path(__file__).resolve().parents[1] / "pdd" / "ci_detect_changed_modules.py"
+    return _load_module_from_path("pdd_ci_detect_changed_modules", script_path)
+
+
+def _load_module_from_path(name: str, script_path: Path):
     spec = importlib.util.spec_from_file_location(
-        "ci_detect_changed_modules", script_path
+        name, script_path
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -86,6 +95,33 @@ def test_basename_excludes_agent_reviewed_model_catalog():
     )
     assert module._basename_from_path("context/generate_model_catalog_example.py") is None
     assert module._basename_from_path("tests/test_generate_model_catalog.py") is None
+
+
+def test_basename_excludes_external_canonical_pdd_cloud_prompts():
+    """Packaged canonical GitHub App prompts have no local PDD code files.
+
+    They must not trigger headless auto-heal against bogus paths such as
+    pdd/src/clients/github_client.py.
+    """
+    for module in (_load_module(), _load_packaged_module()):
+        assert (
+            module._basename_from_path(
+                "pdd/prompts/src/clients/github_client_Python.prompt"
+            )
+            is None
+        )
+        assert (
+            module._basename_from_path(
+                "pdd/prompts/src/pdd_issue_runner_job_Python.prompt"
+            )
+            is None
+        )
+        assert (
+            module._basename_from_path(
+                "pdd/prompts/src/services/pdd_issue_completion_evidence_Python.prompt"
+            )
+            is None
+        )
 
 
 def test_basename_from_nested_context_and_tests():

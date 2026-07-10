@@ -43,7 +43,6 @@ from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
 from .ci_validation import (
     _commit_ci_fix,
-    _find_open_pr_number,
     _render_step_template,
     run_ci_validation_loop,
 )
@@ -78,7 +77,7 @@ STEP_DESCRIPTIONS = {
     11: "Code cleanup",
 }
 
-# Per-step timeouts for the 12-step agentic e2e fix workflow
+# Per-step timeouts for the 11-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -98,6 +97,62 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 # duration of the last file executed.  Module-level so tests can monkeypatch.
 # See Issues #953, #1010, #1031 for history of fallback-scan stalls.
 VERIFY_TIMEOUT_SECONDS = 600
+
+_VERIFIER_DETAIL_MAX_CHARS = 3000
+_VERIFIER_REJECT_COMMENT_SUBKEY = 909
+
+
+def _truncate_verifier_detail(detail: str) -> str:
+    """Bound verifier rejection detail while preserving file context and summary."""
+    if len(detail) <= _VERIFIER_DETAIL_MAX_CHARS:
+        return detail
+    head = _VERIFIER_DETAIL_MAX_CHARS // 3
+    tail = _VERIFIER_DETAIL_MAX_CHARS - head
+    return (
+        f"{detail[:head]}\n"
+        f"...[verifier output truncated to ~{_VERIFIER_DETAIL_MAX_CHARS} chars; "
+        "kept the file/context head and failure-summary tail]...\n"
+        f"{detail[-tail:]}"
+    )
+
+
+def _build_step9_verifier_rejection_comment(
+    current_cycle: int,
+    test_files: Optional[List[str]],
+    verifier_detail: str,
+    resumed: bool = False,
+) -> str:
+    """Build the visible at-rejection-time Step 9 verifier comment."""
+    files_line = (
+        ", ".join(f"`{f}`" for f in test_files)
+        if test_files
+        else "(none discovered)"
+    )
+    resumed_note = " (cached claim re-verified on resume)" if resumed else ""
+    bounded = _truncate_verifier_detail(verifier_detail)
+    return (
+        "## Step 9/11: Independent Verification REJECTED the claimed pass "
+        f"(Cycle {current_cycle})\n\n"
+        "Step 9 reported a tests-pass claim (`ALL_TESTS_PASS`/"
+        f"`LOCAL_TESTS_PASS`){resumed_note}, but the orchestrator's "
+        "**independent verification REJECTED** the claimed pass. The \"tests "
+        "pass\" report above may have run a targeted subset; the independent "
+        "verifier re-runs the discovered test files in full and takes "
+        "precedence. This cycle is NOT recorded as a success; the workflow "
+        "continues with another fix cycle, or stops if the cycle budget is "
+        "exhausted.\n\n"
+        f"**Test files verified independently:** {files_line}\n\n"
+        "<details>\n"
+        "<summary>Independent verifier detail (exact command + output, "
+        "bounded)</summary>\n\n"
+        "```text\n"
+        f"{bounded}\n"
+        "```\n"
+        "</details>\n\n"
+        "---\n"
+        "*Posted by PDD orchestrator (trusted credentials). Independent "
+        "verification overrides agent-reported test results (Issue #1792).*"
+    )
 
 # Maximum number of test files the fallback directory scan in _extract_test_files
 # may return.  Prevents runaway verification when targeted discovery fails and
@@ -348,6 +403,8 @@ class _Step9TokenApplyResult(NamedTuple):
     last_completed_step: Optional[int] = None
     step_outputs_9: Optional[str] = None
     verification_failure_context_update: Optional[str] = None  # None = no change; str = set
+    verifier_failure_detail: Optional[str] = None
+    verifier_test_files: Optional[List[str]] = None
 
 
 def _apply_step9_resolved_token(
@@ -409,12 +466,16 @@ def _apply_step9_resolved_token(
                     import_error_retries=new_retries,
                     step_outputs_9=full_failed,
                     verification_failure_context_update=verify_output,
+                    verifier_failure_detail=failed_body,
+                    verifier_test_files=list(test_files),
                     last_completed_step=0,
                 )
             return _Step9TokenApplyResult(
                 break_inner=False,
                 import_error_retries=new_retries,
                 step_outputs_9=full_failed,
+                verifier_failure_detail=failed_body,
+                verifier_test_files=list(test_files),
                 last_completed_step=step_num - 1,
             )
         console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
@@ -811,6 +872,15 @@ def _extract_test_files(
     return test_files
 
 
+def _decode_stream(value: Any) -> str:
+    """Return subprocess stdout/stderr as text across str/bytes/None variants."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return str(value)
+
+
 def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool, str]:
     """Run appropriate test runner on test files via subprocess. Returns (all_passed, output).
 
@@ -851,11 +921,19 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
             tr = result["test_results"][0]
             failures = tr.get("failures", 0) + tr.get("errors", 0)
             passed = tr.get("passed", 0)
-            stdout = tr.get("standard_output", "")
+            stdout = _decode_stream(tr.get("standard_output", ""))
+            stderr = _decode_stream(tr.get("standard_error", ""))
+            command = result.get("command") or (
+                f"pytest {shlex.quote(str(abs_path))}"
+            )
 
             if failures > 0:
                 all_passed = False
-                all_outputs.append(f"{test_file}: {failures} failure(s)\n{stdout}")
+                all_outputs.append(
+                    f"{test_file}: {failures} failure(s)\n"
+                    f"$ {command}\n"
+                    f"{stdout}{stderr}"
+                )
             else:
                 all_outputs.append(f"{test_file}: {passed} passed")
         else:
@@ -879,16 +957,28 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 )
                 if proc.returncode != 0:
                     all_passed = False
-                    output = proc.stdout + proc.stderr
-                    all_outputs.append(f"{test_file}: FAILED (exit code {proc.returncode})\n{output}")
+                    output = _decode_stream(proc.stdout) + _decode_stream(proc.stderr)
+                    all_outputs.append(
+                        f"{test_file}: FAILED (exit code {proc.returncode})\n"
+                        f"$ {test_cmd.command}\n"
+                        f"{output}"
+                    )
                 else:
                     all_outputs.append(f"{test_file}: passed")
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as te:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED (timeout)")
+                partial = _decode_stream(te.stdout) + _decode_stream(te.stderr)
+                all_outputs.append(
+                    f"{test_file}: FAILED (timeout)\n"
+                    f"$ {test_cmd.command}\n"
+                    f"{partial}"
+                )
             except Exception as e:
                 all_passed = False
-                all_outputs.append(f"{test_file}: FAILED ({e})")
+                all_outputs.append(
+                    f"{test_file}: FAILED ({e})\n"
+                    f"$ {test_cmd.command}"
+                )
 
     return all_passed, "\n".join(all_outputs)
 
@@ -1592,95 +1682,6 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
-def _fetch_pr_head_sha(repo_owner: str, repo_name: str, pr_number: int) -> str:
-    """Best-effort fetch of the PR's remote head SHA. Empty string on failure."""
-    try:
-        from .checkup_review_loop import _fetch_pr_metadata  # pylint: disable=import-outside-toplevel
-        metadata = _fetch_pr_metadata(repo_owner, repo_name, pr_number)
-    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
-        return ""
-    return str(metadata.get("head_sha", "") or "")
-
-
-def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
-    """Read HEAD SHA of the PR-mode checkup worktree.
-
-    The checkup orchestrator creates ``.pdd/worktrees/checkup-pr-{N}/``
-    under the repository's git root and runs Step 7 verification (plus
-    any rebased push) against that worktree. After ``run_agentic_checkup``
-    returns, the worktree's HEAD is the *exact* SHA the checkup's verdict
-    and push apply to.
-
-    Comparing this SHA to the live PR remote head SHA is what
-    distinguishes "checkup pushed" from "external party pushed during
-    checkup". On equality, the checkup's verdict covers the current PR
-    head; on divergence, the PR advanced past what was verified and
-    pdd-issue must NOT green-light it.
-
-    Returns the worktree HEAD SHA or empty string on any failure.
-    """
-    try:
-        toplevel = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if toplevel.returncode != 0:
-        return ""
-    git_root = Path(toplevel.stdout.strip())
-
-    worktree = git_root / ".pdd" / "worktrees" / f"checkup-pr-{pr_number}"
-    if not worktree.exists():
-        return ""
-
-    try:
-        rev = subprocess.run(
-            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ""
-    if rev.returncode != 0:
-        return ""
-    return rev.stdout.strip()
-
-
-def _read_review_loop_verified_head_sha(
-    cwd: Path, issue_number: int, pr_number: int
-) -> str:
-    """Read the head SHA the final gate's Layer 2 (review-loop) verified+pushed.
-
-    The canonical final gate (issue #1406) runs Layer 1 (the PR-mode checkup
-    orchestrator, which pushes from ``.pdd/worktrees/checkup-pr-{N}/``) and then
-    Layer 2 (the review-loop, which pushes from its OWN worktree and records the
-    verified head in ``.pdd/checkup-review-loop/issue-{I}-pr-{N}/final-state.json``).
-
-    When Layer 2 pushes a fix, the remote PR head advances to the review-loop's
-    verified head, NOT the legacy checkup worktree head. Treating that as an
-    external push (the pre-#1406 single-layer assumption) would falsely fail the
-    gate, so the post-checkup head-provenance check accepts this SHA as "ours"
-    too. ``run_agentic_checkup`` clears the prior ``final-state.json`` before
-    Layer 2, so a value here reflects the current gate run.
-
-    Returns the verified head SHA, or empty string when no review-loop verdict
-    is available (Layer 2 not run, or it errored before finalizing).
-    """
-    try:
-        from .checkup_review_loop import load_final_state  # pylint: disable=import-outside-toplevel
-        final_state = load_final_state(cwd, issue_number, pr_number)
-    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
-        return ""
-    if not isinstance(final_state, dict):
-        return ""
-    return str(final_state.get("verified_head_sha", "") or "")
-
-
 def _run_pre_checkup_gate_with_remediation(
     *,
     cwd: Path,
@@ -1790,182 +1791,6 @@ def _run_pre_checkup_gate_with_remediation(
             console.print(f"[green]{commit_message}[/green]")
 
         latest_changed_files = _detect_changed_files(cwd, initial_file_hashes) or latest_changed_files
-
-
-def _run_final_checkup_on_pr(
-    *,
-    issue_url: str,
-    issue_number: int,
-    repo_owner: str,
-    repo_name: str,
-    cwd: Path,
-    verbose: bool,
-    quiet: bool,
-    timeout_adder: float,
-    use_github_state: bool,
-    reasoning_time: Optional[float],
-    ci_step_template: str,
-    ci_validation_timeout: float,
-) -> Tuple[bool, str, float, str]:
-    """Run full PR-mode checkup against the current branch's open PR.
-
-    Closes the post-CI mutation hole: the final checkup gate runs with
-    ``no_fix=False`` and may push generated fixes to the PR head. CI passed
-    against the head SHA we observed before this call, so any push advances
-    the PR to code that has not been CI-validated. We snapshot the PR head
-    SHA before and after; if it advanced, we re-run ``run_ci_validation_loop``
-    with ``max_retries=0`` (verify-only — no further fixing on top of fixes).
-    """
-    pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
-    if pr_number is None:
-        return (
-            True,
-            "No open PR found for current branch; skipping final checkup",
-            0.0,
-            "",
-        )
-
-    pre_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
-
-    pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
-    from .agentic_checkup import run_agentic_checkup
-
-    checkup_success, checkup_message, checkup_cost, checkup_model = run_agentic_checkup(
-        issue_url=issue_url,
-        verbose=verbose,
-        quiet=quiet,
-        no_fix=False,
-        timeout_adder=timeout_adder,
-        use_github_state=use_github_state,
-        reasoning_time=reasoning_time,
-        pr_url=pr_url,
-        final_gate=True,
-        cwd=cwd,
-    )
-
-    if not checkup_success:
-        return checkup_success, checkup_message, checkup_cost, checkup_model
-
-    if not pre_checkup_head_sha:
-        # Fail closed: without the pre-checkup SHA we cannot tell whether the
-        # checkup pushed new commits on top of the CI-validated head. Returning
-        # success here would re-introduce the post-CI mutation hole.
-        return (
-            False,
-            (
-                "Final checkup completed but the pre-checkup PR head SHA was "
-                "unavailable; cannot verify whether checkup pushed new commits "
-                "that bypass CI. Re-run after confirming gh access."
-            ),
-            checkup_cost,
-            checkup_model,
-        )
-
-    post_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
-    if not post_checkup_head_sha:
-        return (
-            False,
-            (
-                "Final checkup completed but the post-checkup PR head SHA was "
-                "unavailable; cannot verify whether checkup pushed new commits "
-                "that bypass CI. Re-run after confirming gh access."
-            ),
-            checkup_cost,
-            checkup_model,
-        )
-
-    if post_checkup_head_sha == pre_checkup_head_sha:
-        return checkup_success, checkup_message, checkup_cost, checkup_model
-
-    # Round-5 finding: the PR head can advance externally during the
-    # final checkup (maintainer push, another bot, etc.). Treating EVERY
-    # SHA delta as a checkup push would re-validate CI on code that
-    # no reviewer saw, green-lighting an unverified head.
-    #
-    # The final gate (issue #1406) has TWO authoritative "last verified/pushed"
-    # heads: Layer 1's checkup worktree HEAD and Layer 2's review-loop verified
-    # head (the review-loop pushes from its own worktree, so a Layer-2 fix
-    # advances the remote head past the Layer-1 worktree). The remote head is
-    # "ours" — and safe to CI-revalidate — when it matches EITHER. If it matches
-    # neither, an external push raced us and we must fail closed.
-    checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
-    review_loop_head_sha = _read_review_loop_verified_head_sha(
-        cwd, issue_number, pr_number
-    )
-    verified_heads = {
-        sha for sha in (checkup_worktree_head_sha, review_loop_head_sha) if sha
-    }
-    if not verified_heads:
-        return (
-            False,
-            (
-                "Final gate completed but neither the checkup worktree HEAD "
-                "SHA nor the review-loop verified head was available; cannot "
-                "prove the PR remote head matches what was verified. Failing "
-                "closed to avoid green-lighting an unverified head."
-            ),
-            checkup_cost,
-            checkup_model,
-        )
-    if post_checkup_head_sha not in verified_heads:
-        verified_preview = ", ".join(sorted(sha[:8] for sha in verified_heads))
-        return (
-            False,
-            (
-                f"PR head advanced to {post_checkup_head_sha[:8]} during the "
-                f"final gate but the gate last verified {verified_preview}. "
-                f"External push during the final gate detected — re-run "
-                f"pdd-issue so the new head is verified before CI "
-                f"re-validation."
-            ),
-            checkup_cost,
-            checkup_model,
-        )
-
-    if not quiet:
-        verified_by = (
-            "Layer-1 checkup worktree"
-            if post_checkup_head_sha == checkup_worktree_head_sha
-            else "Layer-2 review-loop"
-        )
-        console.print(
-            f"[yellow]Final gate pushed to PR head "
-            f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
-            f"verified by {verified_by}); re-validating CI on new "
-            f"head...[/yellow]"
-        )
-
-    # The checkup pushes from its OWN worktree (.pdd/worktrees/checkup-pr-N),
-    # so ``cwd``'s local HEAD is stale relative to the PR remote. Without the
-    # override below, ``run_ci_validation_loop`` would use ``_get_head_sha(cwd)``
-    # as the expected head and burn the poll timeout waiting for the remote
-    # to match a SHA it will never reach.
-    revalidate_success, revalidate_message, revalidate_cost = run_ci_validation_loop(
-        cwd=cwd,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        issue_number=issue_number,
-        max_retries=0,
-        step_template=ci_step_template,
-        run_agentic_task_fn=run_agentic_task,
-        timeout=ci_validation_timeout,
-        quiet=quiet,
-        expected_head_sha_override=post_checkup_head_sha,
-    )
-
-    total_cost = checkup_cost + revalidate_cost
-    if not revalidate_success:
-        return (
-            False,
-            (
-                f"Final checkup pushed fixes ({pre_checkup_head_sha[:8]}->"
-                f"{post_checkup_head_sha[:8]}) but post-push CI re-validation "
-                f"failed: {revalidate_message}"
-            ),
-            total_cost,
-            checkup_model,
-        )
-    return True, checkup_message, total_cost, checkup_model
 
 
 def _run_step11_code_cleanup(
@@ -2233,7 +2058,7 @@ def run_agentic_e2e_fix_orchestrator(
     clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 12-step agentic e2e fix workflow.
+    Orchestrator for the 11-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -2641,6 +2466,34 @@ def run_agentic_e2e_fix_orchestrator(
                 exc_info=True,
             )
 
+    def _post_verifier_rejection_comment(
+        cycle: int,
+        rejected_test_files: Optional[List[str]],
+        rejection_detail: str,
+        resumed: bool = False,
+    ) -> None:
+        """Post the Step 9 verifier-rejection comment once per cycle."""
+        try:
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=cycle * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY,
+                body=_build_step9_verifier_rejection_comment(
+                    cycle,
+                    rejected_test_files,
+                    rejection_detail,
+                    resumed=resumed,
+                ),
+                posted_steps=step_comments_set,
+                cwd=cwd,
+            )
+        except Exception as post_exc:  # pylint: disable=broad-except
+            console.print(
+                "[yellow]Step 9 verifier-rejection comment failed"
+                f"{' (resume)' if resumed else ''}: {post_exc}[/yellow]"
+            )
+
     # Issue #1033: a prior run can persist Step 2's raw ALL_TESTS_PASS before
     # independent verification. Re-check cached pass tokens before the resume
     # skip at the top of the inner loop can trust them.
@@ -2723,6 +2576,10 @@ def run_agentic_e2e_fix_orchestrator(
                 )
                 step_outputs["9"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+
+                _post_verifier_rejection_comment(
+                    current_cycle, test_files, step_outputs["9"], resumed=True
                 )
 
                 _persist_resume_reverification_state()
@@ -3255,7 +3112,41 @@ def run_agentic_e2e_fix_orchestrator(
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
                         nonlocal last_completed_step, verification_failure_context
+                        nonlocal github_comment_id
                         import_error_retries = r.import_error_retries
+                        if r.verifier_failure_detail is not None:
+                            _post_verifier_rejection_comment(
+                                current_cycle,
+                                r.verifier_test_files,
+                                r.verifier_failure_detail,
+                            )
+                            try:
+                                state_data["step_comments"] = sorted(
+                                    step_comments_set
+                                )
+                                state_data["last_saved_at"] = (
+                                    datetime.now().isoformat()
+                                )
+                                new_gh_id = save_workflow_state(
+                                    cwd,
+                                    issue_number,
+                                    workflow_name,
+                                    state_data,
+                                    state_dir,
+                                    repo_owner,
+                                    repo_name,
+                                    use_github_state,
+                                    github_comment_id,
+                                )
+                                if new_gh_id:
+                                    github_comment_id = new_gh_id
+                                    state_data["github_comment_id"] = github_comment_id
+                            except Exception as save_exc:  # pylint: disable=broad-except
+                                logger.debug(
+                                    "Best-effort rejection-comment key save failed: %s",
+                                    save_exc,
+                                    exc_info=True,
+                                )
                         if r.step_outputs_9 is not None:
                             step_outputs[str(step_num)] = r.step_outputs_9
                         if r.success is not None:
@@ -3416,6 +3307,7 @@ def run_agentic_e2e_fix_orchestrator(
             state_data["last_completed_step"] = 0
             state_data["step_outputs"] = {}
             state_data["last_saved_at"] = datetime.now().isoformat()
+            state_data["step_comments"] = sorted(step_comments_set)
             # Issue #1034 codex P2 follow-up: the just-completed cycle's
             # cycle_start_hashes is stale for the next cycle. Clear it so
             # any resume from this transitional state falls back to the
@@ -3425,7 +3317,7 @@ def run_agentic_e2e_fix_orchestrator(
             state_data["cycle_start_hashes"] = None
 
             if current_cycle <= max_cycles:
-                 save_workflow_state(
+                save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
                 )
 
@@ -3601,10 +3493,9 @@ def run_agentic_e2e_fix_orchestrator(
                     # Round-3/4 of Greg's review (idempotency across resume):
                     # persist `step_comments` *immediately* after the post so
                     # the composite key (`current_cycle * 10000 + 10`)
-                    # survives the failure-return path below — specifically
-                    # when `_run_final_checkup_on_pr` returns
-                    # `checkup_success=False` and the orchestrator returns
-                    # without clearing or saving state.
+                    # survives the failure-return paths below — specifically
+                    # when the pre-checkup gate or its drift-sync push fails and
+                    # the orchestrator returns without clearing or saving state.
                     #
                     # Round-4 fix: do NOT mutate the inner-loop `state_data`
                     # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
@@ -3666,16 +3557,15 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Issue #1293 (FM2): the gate's drift-sync phase may have healed
                 # the prompt/example to match the fixed code (pdd update / pdd
-                # example). Those edits live only in this local worktree, but
-                # _run_final_checkup_on_pr reviews the PR head in its OWN
-                # checkout (.pdd/worktrees/checkup-pr-N) — so without committing
-                # and pushing them now, checkup would review a tree whose prompts
-                # are out of sync with the code, and the heal would be orphaned.
-                # Reuse _commit_and_push: it stages workflow-changed files vs the
-                # initial snapshot and filters .pdd/** (so the prompt/example
-                # sync lands while .pdd/meta fingerprint finalization stays with
-                # the post-merge sync, per the PR plan). It is a safe no-op
-                # (returns success) when the gate healed nothing.
+                # example). Those edits live only in this local worktree, so they
+                # must be committed and pushed to the PR head now; otherwise the
+                # heal is orphaned and the PR would merge code that is out of sync
+                # with its prompt/example. Reuse _commit_and_push: it stages
+                # workflow-changed files vs the initial snapshot and filters
+                # .pdd/** (so the prompt/example sync lands while .pdd/meta
+                # fingerprint finalization stays with the post-merge sync, per the
+                # PR plan). It is a safe no-op (returns success) when the gate
+                # healed nothing.
                 gate_sync_ok, gate_sync_message = _commit_and_push(
                     cwd=cwd,
                     issue_number=issue_number,
@@ -3687,8 +3577,8 @@ def run_agentic_e2e_fix_orchestrator(
                 )
                 if not gate_sync_ok:
                     # A failed push leaves the PR head out of sync with the
-                    # gate's heal; fail closed rather than have checkup review a
-                    # stale tree.
+                    # gate's heal; fail closed rather than merge a PR whose head
+                    # omits the prompt/example sync.
                     return (
                         False,
                         f"pre_checkup_gate drift-sync push failed: {gate_sync_message}",
@@ -3698,32 +3588,18 @@ def run_agentic_e2e_fix_orchestrator(
                     )
                 changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
 
-                checkup_success, checkup_message, checkup_cost, checkup_model = (
-                    _run_final_checkup_on_pr(
-                        issue_url=issue_url,
-                        issue_number=issue_number,
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        cwd=cwd,
-                        verbose=verbose,
-                        quiet=quiet,
-                        timeout_adder=timeout_adder,
-                        use_github_state=use_github_state,
-                        reasoning_time=reasoning_time,
-                        ci_step_template=step10_template,
-                        ci_validation_timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
-                    )
-                )
-                total_cost += checkup_cost
-                if checkup_model:
-                    model_used = checkup_model
-                if not checkup_success:
-                    return False, checkup_message, total_cost, model_used, changed_files
-                if checkup_message not in {
-                    "No open PR found for current branch; skipping final checkup",
-                }:
-                    final_message = checkup_message
-
+                # pdd fix no longer runs the agentic `pdd checkup`
+                # (Layer 1 PR-mode checkup + Layer 2 review-loop) as a
+                # post-commit final gate. The fix is verified by the workflow's
+                # own steps (Step 7 "verifying tests detect bugs", Step 9 "final
+                # verification") plus the lean, deterministic pre-checkup
+                # build/smoke gate run above; `pdd checkup` stays a separate
+                # command run on its own. Removing the agentic gate stops a
+                # transient checkup verdict (empty/garbled output, provider
+                # rate-limit) from failing an already-committed, correct fix — it
+                # was the largest LLM consumer and the step most exposed to
+                # provider rate-limits in a fix run. `final_message` already
+                # holds the fix/CI result and is returned unchanged.
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files
 

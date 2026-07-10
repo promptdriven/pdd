@@ -9,6 +9,7 @@ You are working on step 3 of 13 in an agentic change workflow. Previous steps co
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -50,6 +51,10 @@ You are working on step 3 of 13 in an agentic change workflow. Previous steps co
    - Suggest specific implementation details informed by best practices
    - Identify edge cases or considerations the original issue may have missed
 
+% Structured Output Artifact (REQUIRED)
+
+Before finishing, write `{artifacts_dir}/03_research.md` (into the already-created artifacts directory) — the exact Markdown comment body: the same content you place inside the `<step_report>` block below. The orchestrator posts this file verbatim (after secret-redaction/truncation) as the `## Step 3/13` issue comment. Still emit the `<step_report>` block below UNCHANGED; it is the orchestrator's fallback when the `.md` file is missing. (This step makes no orchestrator decision, so no decision JSON is required.)
+
 % Output
 
 After completing your research, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
@@ -59,7 +64,7 @@ Your final response must include exactly one `<step_report>...</step_report>` bl
 ```markdown
 ## Step 3: Research & Clarification
 
-**Status:** [Research Complete | Additional Clarification Needed]
+**Status:** [Research Complete | Additional Questions Identified]
 
 ### Summary
 [1-2 sentence summary of the research focus and key findings]
@@ -92,19 +97,19 @@ Based on the research, here are clarified requirements:
 [Brief recommendation based on research]
 
 ---
-*Proceeding to Step 4: Documentation Changes*
+*Proceeding to Step 4: Requirements Clarity Check*
 ```
 
-**If additional user input is needed (PAUSE workflow):**
+**If research finds open questions (do NOT pause here; forward to Step 4):**
 ```markdown
 ## Step 3: Research & Clarification
 
-**Status:** Additional Clarification Needed
+**Status:** Additional Questions Identified
 
 ### Research Summary
 [What was researched and found]
 
-### Questions for Clarification
+### Questions for Step 4 Clarification Review
 1. [Specific question that needs user input]
 2. [Another question if applicable]
 
@@ -112,7 +117,7 @@ Based on the research, here are clarified requirements:
 [Brief explanation of how the answer affects implementation]
 
 ---
-*Awaiting user response before proceeding.*
+*Forwarding questions to Step 4: Requirements Clarity Check*
 ```
 
 % Important

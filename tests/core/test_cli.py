@@ -70,7 +70,11 @@ def _capture_summary(invoked_subcommands, results):
     
     with patch('pdd.core.cli.console.print') as mock_print:
         with ctx:
-            process_commands(results=results)
+            try:
+                process_commands(results=results)
+            except click.exceptions.Exit as exc:
+                if exc.exit_code != 1:
+                    raise
             
     return ["".join(str(arg) for arg in call.args) for call in mock_print.call_args_list]
 
@@ -205,11 +209,13 @@ def test_cli_command_help(runner):
     assert result.exit_code == 0
     assert "Usage: cli generate [OPTIONS]" in result.output
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
-def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
+def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch):
     """Test default global options are passed in context."""
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
     files = create_dummy_files("test.prompt")
     mock_main.return_value = ('code', False, 0.0, 'model')
     
@@ -239,6 +245,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['time'] == DEFAULT_TIME
     mock_auto_update.assert_called_once_with()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -383,6 +390,7 @@ def test_process_commands_includes_compression_summary(mock_auto_update):
         cr.clear_compression_fallback_events()
 
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -404,6 +412,7 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, m
     assert ctx.obj['quiet'] is True
     mock_auto_update.assert_called_once_with()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -439,6 +448,7 @@ def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, moc
     runner.invoke(cli_command, ["generate", str(files["test.prompt"])])
     mock_auto_update.assert_not_called()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update', side_effect=Exception("Network error"))
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -505,6 +515,315 @@ def test_cli_result_callback_non_tuple_result_warning():
     lines = _capture_summary(['generate'], "unexpected string result")
     summary = "\n".join(lines)
     assert "Step 1 (generate):[/warning] Unexpected result format: str" in summary
+
+
+def test_cli_summary_uses_shared_status_glyphs():
+    """EPIC #1540, workstream 2: the execution summary speaks the same
+    SUCCESS/FAILURE vocabulary as every other command, so each step line is
+    prefixed with the shared cli_status glyph (✓ for success, ✗ for failure)."""
+    from pdd.cli_status import GLYPHS, Status
+
+    ok, fail = GLYPHS[Status.SUCCESS], GLYPHS[Status.FAILURE]
+
+    # A successful (cost-bearing) step is marked with the success glyph.
+    success = "\n".join(_capture_summary(['generate'], ('code', 0.1, 'model-A')))
+    assert ok in success
+    assert f"[success]{ok}[/success]" in success
+
+    # A failed step (None result) is marked with the failure glyph.
+    failure = "\n".join(_capture_summary(['generate'], [None]))
+    assert fail in failure
+    assert f"[error]{fail}[/error]" in failure
+
+
+def test_shared_console_uses_brand_palette():
+    """EPIC #1540, workstream 1: the shared CLI console renders semantic roles
+    from the central brand palette by default (not an ad-hoc per-module theme),
+    so the enhanced color system is on without any flag."""
+    from pdd.core.errors import custom_theme
+    from pdd.cli_theme import ELECTRIC_CYAN, BUILD_GREEN
+
+    # 'command' is the hero role -> Electric-Cyan (brand), not the old magenta.
+    assert ELECTRIC_CYAN.lower() in str(custom_theme.styles.get("command")).lower()
+    assert BUILD_GREEN.lower() in str(custom_theme.styles.get("success")).lower()
+
+
+import io as _io
+from contextlib import contextmanager as _contextmanager
+
+
+@_contextmanager
+def _restore_shared_console_color():
+    """Snapshot/restore the shared console's color state and NO_COLOR/FORCE_COLOR
+    so a test that flips the global color preference never leaks into others."""
+    from pdd.core import errors as _errors
+
+    con = _errors.console
+    saved = (con.no_color, con._force_terminal, con._color_system)
+    saved_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
+    try:
+        yield con
+    finally:
+        con.no_color, con._force_terminal, con._color_system = saved
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _render(con):
+    buf = _io.StringIO()
+    saved_file = getattr(con, "_file", None)
+    try:
+        con.file = buf
+        con.print("[command]pdd[/command]")
+        return buf.getvalue()
+    finally:
+        con._file = saved_file
+
+
+def test_set_console_color_toggles_a_console():
+    """_set_console_color forces color on (even non-TTY) and strips it off."""
+    from rich.console import Console
+    from rich.theme import Theme
+    from pdd.core.errors import _set_console_color
+    from pdd.cli_theme import SEMANTIC_STYLES
+
+    con = Console(theme=Theme(SEMANTIC_STYLES), force_terminal=True)
+    _set_console_color(con, False)
+    assert "\x1b[" not in _render(con)
+    _set_console_color(con, True)
+    assert "\x1b[" in _render(con)
+
+
+def test_apply_color_preference_env_and_shared_console():
+    """The global preference sets NO_COLOR/FORCE_COLOR (so later-built consoles
+    inherit it) and updates the already-constructed shared console in place."""
+    from pdd.core import errors
+
+    with _restore_shared_console_color() as con:
+        restore_no_color = errors.apply_color_preference(False)
+        try:
+            assert os.environ.get("NO_COLOR") == "1"
+            assert "FORCE_COLOR" not in os.environ
+            assert con.no_color is True
+
+            restore_color = errors.apply_color_preference(True)
+            try:
+                assert os.environ.get("FORCE_COLOR") == "1"
+                assert "NO_COLOR" not in os.environ
+                assert con.no_color is False
+                assert "\x1b[" in _render(con)
+
+                # None is auto (the default) and must change nothing it was just set to.
+                errors.apply_color_preference(None)
+                assert os.environ.get("FORCE_COLOR") == "1"
+            finally:
+                restore_color()
+
+            assert os.environ.get("NO_COLOR") == "1"
+            assert "FORCE_COLOR" not in os.environ
+        finally:
+            restore_no_color()
+
+
+def test_apply_color_preference_updates_preexisting_command_consoles():
+    """Module-level command consoles imported before the root callback must
+    honor the later global ``--no-color`` preference."""
+    from pdd.commands.auth import console as auth_console
+    from pdd.cmd_test_main import console as test_console
+    from pdd.core import errors
+
+    consoles = (errors.console, auth_console, test_console)
+    before = [
+        (con.no_color, con._force_terminal, con._color_system)
+        for con in consoles
+    ]
+
+    restore = errors.apply_color_preference(False)
+    try:
+        assert all(con.no_color is True for con in consoles)
+    finally:
+        restore()
+
+    assert [
+        (con.no_color, con._force_terminal, con._color_system)
+        for con in consoles
+    ] == before
+
+
+def test_apply_color_preference_forces_later_bare_console_output(monkeypatch):
+    """A Rich ``Console()`` built after ``--color`` must emit ANSI even when
+    output is captured or piped."""
+    from rich.console import Console
+    from pdd.core import errors
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    restore = errors.apply_color_preference(True)
+    try:
+        con = Console()
+        assert con.no_color is False
+        assert con._force_terminal is True
+        with con.capture() as cap:
+            con.print("[red]RED[/red]")
+        assert "\x1b[" in cap.get()
+    finally:
+        restore()
+
+
+def test_apply_color_preference_restores_later_bare_console_to_auto(monkeypatch):
+    """A console constructed during ``--no-color`` must not keep the temporary
+    preference after the invocation cleanup restores a clean environment."""
+    from rich.console import Console
+    from pdd.core import errors
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+    restore = errors.apply_color_preference(False)
+    con = Console()
+    assert con.no_color is True
+    restore()
+
+    assert "NO_COLOR" not in os.environ
+    assert "FORCE_COLOR" not in os.environ
+    assert con.no_color is False
+    assert con._force_terminal is None
+    assert con._color_system is None
+
+
+def test_apply_color_preference_reaches_construct_paths_early_import():
+    """Regression for CLI import order: ``pdd.core.cli`` imports
+    ``construct_paths`` before ``pdd.core.errors``. The construct_paths module
+    console must still be registered for global color preferences."""
+    script = """
+from pdd.core import cli as _cli
+from pdd import construct_paths
+from pdd.core.errors import apply_color_preference
+
+restore = apply_color_preference(False)
+try:
+    print('no-color', construct_paths.console.no_color)
+finally:
+    restore()
+
+restore = apply_color_preference(True)
+try:
+    print(
+        'color',
+        construct_paths.console.no_color,
+        construct_paths.console._force_terminal,
+        construct_paths.console._color_system is not None,
+    )
+finally:
+    restore()
+"""
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "no-color True" in result.stdout
+    assert "color False True True" in result.stdout
+
+
+def test_apply_color_preference_survives_cli_theme_reload():
+    """Regression: ``pdd.core.errors.console`` exists before reloading
+    ``pdd.cli_theme``; later ``apply_color_preference(...)`` calls must still
+    update it.
+
+    The console registry is anchored on the process-global ``Console`` class, so
+    ``importlib.reload(pdd.cli_theme)`` (which resets the module's globals) must
+    not drop consoles that were registered before the reload. Run in a fresh
+    interpreter so the in-place reload cannot perturb the rest of the suite."""
+    script = """
+import importlib
+from pdd.core.errors import apply_color_preference, console as core_console
+import pdd.cli_theme as cli_theme
+
+importlib.reload(cli_theme)
+
+restore = apply_color_preference(False)
+try:
+    print('no-color', core_console.no_color)
+finally:
+    restore()
+
+restore = apply_color_preference(True)
+try:
+    print('color', core_console.no_color, core_console._force_terminal)
+finally:
+    restore()
+"""
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "no-color True" in result.stdout
+    assert "color False True" in result.stdout
+
+
+def test_cli_no_color_flag_disables_color(runner):
+    """`pdd --no-color …` is invocation-scoped and does not leak into later runs."""
+    with _restore_shared_console_color() as con:
+        before = (con.no_color, con._force_terminal, con._color_system)
+        before_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
+        result = runner.invoke(cli_command, ["--no-color", "--list-contexts"])
+        assert result.exit_code == 0
+        assert {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")} == before_env
+        assert (con.no_color, con._force_terminal, con._color_system) == before
+
+
+def test_cli_color_flag_forces_color(runner):
+    """`pdd --color …` is invocation-scoped and does not leak into later runs."""
+    with _restore_shared_console_color() as con:
+        before = (con.no_color, con._force_terminal, con._color_system)
+        before_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
+        result = runner.invoke(cli_command, ["--color", "--list-contexts"])
+        assert result.exit_code == 0
+        assert {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")} == before_env
+        assert (con.no_color, con._force_terminal, con._color_system) == before
+
+
+def test_cli_color_flags_do_not_break_later_output_capture(runner, monkeypatch, tmp_path):
+    """Regression guard for full-suite ordering: a forced-color invocation must not
+    leave the shared Rich console writing outside the next CliRunner capture."""
+    import pdd.cli as package_cli
+    from pdd.core import utils as core_utils
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    rc_path = home_dir / ".bashrc"
+
+    monkeypatch.setattr(core_cli_module, "auto_update", lambda: None)
+    monkeypatch.setattr(core_utils, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(core_utils, "get_shell_rc_path", lambda _shell: str(rc_path))
+    monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
+
+    with _restore_shared_console_color():
+        first = runner.invoke(cli_command, ["--color", "--list-contexts"])
+        assert first.exit_code == 0
+
+        with patch("pdd.core.utils.Path.home", return_value=home_dir):
+            with runner.isolated_filesystem():
+                second = runner.invoke(package_cli.cli, [])
+
+    assert second.exit_code == 0
+    assert "Complete onboarding with `pdd setup`" in second.output
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
@@ -837,10 +1156,25 @@ def test_process_commands_install_completion_success(mock_write_dump, mock_print
     ctx = click.Context(cli_command)
     ctx.obj = {"quiet": False, "core_dump": False}
     ctx.invoked_subcommands = ["install_completion"]
+    ctx.exit = Mock()
     with ctx:
         process_commands(results=[None])
     printed_text = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
     assert "Command completed" in printed_text
+    ctx.exit.assert_not_called()
+
+@patch('pdd.core.cli.console.print')
+@patch('pdd.core.cli._write_core_dump')
+def test_process_commands_failed_normalized_result_exits_nonzero(mock_write_dump, mock_print):
+    ctx = click.Context(cli_command)
+    ctx.obj = {"quiet": False, "core_dump": False}
+    ctx.invoked_subcommands = ["detect"]
+    ctx.exit = Mock()
+    with ctx:
+        process_commands(results=[None])
+    printed_text = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+    assert "Command failed" in printed_text
+    ctx.exit.assert_called_with(1)
 
 @patch('pdd.core.cli.console.print')
 @patch('pdd.core.cli._write_core_dump')
@@ -852,6 +1186,64 @@ def test_process_commands_fatal_exception(mock_write_dump, mock_print):
     with ctx:
         process_commands(results=[({}, 0.1, "gpt-4")])
     ctx.exit.assert_called_with(1)
+
+# ---------------------------------------------------------------------------
+# Issue #1634: summary line format and apply_color_preference edge cases
+# ---------------------------------------------------------------------------
+
+def test_cli_summary_step_line_has_glyph_and_step_substring():
+    """EPIC #1540 — the execution summary line for a successful step must contain
+    both the shared cli_status SUCCESS glyph *and* the 'Step N (cmd):[/info] Cost:'
+    substring in the same captured output, proving they coexist rather than one
+    replacing the other."""
+    from pdd.cli_status import GLYPHS, Status
+
+    success_glyph = GLYPHS[Status.SUCCESS]
+    lines = _capture_summary(['generate'], [('code', 0.05, 'model-X')])
+    summary = "\n".join(lines)
+
+    # Both the glyph (within its semantic markup) and the step cost label must appear.
+    assert f"[success]{success_glyph}[/success]" in summary
+    assert "Step 1 (generate):[/info] Cost:" in summary
+
+
+def test_cli_summary_failure_line_has_glyph_and_step_info():
+    """A failed step (None result) shows the FAILURE glyph AND 'Step N (cmd)'
+    in the same output — glyph prefix and step label coexist on failure too."""
+    from pdd.cli_status import GLYPHS, Status
+
+    failure_glyph = GLYPHS[Status.FAILURE]
+    lines = _capture_summary(['generate'], [None])
+    summary = "\n".join(lines)
+
+    assert f"[error]{failure_glyph}[/error]" in summary
+    assert "Step 1 (generate)" in summary
+
+
+def test_apply_color_preference_none_is_noop(monkeypatch):
+    """apply_color_preference(None) must leave the environment and shared console
+    color state exactly as it found them — it is the auto-detect path and calling
+    it without prior flags must be a no-op (EPIC #1540, workstream 3)."""
+    import pdd.core.errors as errors
+
+    # Ensure a clean slate: neither flag is set.
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+    # Snapshot the shared console's color attributes before the call.
+    con = errors.console
+    before_no_color = con.no_color
+    before_force_terminal = con._force_terminal
+
+    errors.apply_color_preference(None)
+
+    # Environment must be unchanged.
+    assert "NO_COLOR" not in os.environ
+    assert "FORCE_COLOR" not in os.environ
+    # Shared console must be unchanged.
+    assert con.no_color == before_no_color
+    assert con._force_terminal == before_force_terminal
+
 
 if __name__ == "__main__":
     import pytest

@@ -1926,6 +1926,7 @@ requires_cloud_e2e = pytest.mark.skipif(
 
 
 @pytest.mark.e2e
+@pytest.mark.timeout(900)
 @requires_cloud_e2e
 def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     """
@@ -1983,6 +1984,8 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
                 "PDD Cloud account not approved. Visit https://pdd.ai to request access, "
                 "or run tests with --local flag to skip cloud E2E tests."
             )
+        elif "Insufficient credits" in error_msg:
+            pytest.skip(f"PDD Cloud account has insufficient credits: {error_msg}")
         elif "No response content" in error_msg or "HTTP" in error_msg:
             pytest.skip(
                 f"PDD Cloud authentication failed: {error_msg}. "

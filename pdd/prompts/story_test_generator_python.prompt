@@ -1,0 +1,38 @@
+<pdd-reason>Deterministically compiles a user story contract into public-safe pytest regression tests.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_story_test_spec", "signature": "(story_path: Path) -> StoryTestSpec", "returns": "StoryTestSpec"},
+      {"name": "render_story_test", "signature": "(spec: StoryTestSpec) -> str", "returns": "str"},
+      {"name": "generate_story_test", "signature": "(story_path: Path, output: Optional[Path] = None) -> StoryTestGenerationResult", "returns": "StoryTestGenerationResult"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+
+% Generate `pdd/story_test_generator.py`.
+
+<requirements>
+- Implement the deterministic `pdd test --from-story <story>` backend for EPIC #1698 / issue #1700.
+- Accept a human story file at `user_stories/story__<slug>.md` and resolve its sibling contract at `user_stories/contracts/<slug>.contract.md`.
+- Parse `## Entry Point` as machine-readable bullets:
+  - `module: <importable module>`
+  - `callable: <callable name>`
+  - optional `args: [...]`
+  - optional `kwargs: {...}`
+- Parse optional `## Seams` bullets as `dotted.import.path = <python literal>` and emit `monkeypatch.setattr` calls.
+- Parse `## Covers` for `R<n>` ids, and parse `## Oracle` plus `## Negative Cases` bullets as Python assertion expressions over a `result` variable.
+- Emit plain pytest tests that import cleanly, call the entry point in-process, patch seams before calling it, and tag every generated test with `@pytest.mark.story(story_id=..., story_hash=...)`.
+- Use `_story_content_hash` from `user_story_tests`; do not reimplement hashing.
+- Runtime execution of generated tests must be public-safe: no LLM, no network, no cloud credentials.
+- Generation must be stable: regenerating an unchanged story+contract must produce byte-identical output and avoid churn.
+- If the contract lacks an entry point or assertion expressions, fail clearly instead of emitting empty or false-green tests.
+</requirements>
+
+<acceptance_tests>
+- `pytest tests/test_story_test_generator.py -q` must pass.
+- `pdd test --from-story user_stories/story__x.md --output tests/story_regression/test_story_x.py` must write a pytest file with story marker and story_hash.
+</acceptance_tests>

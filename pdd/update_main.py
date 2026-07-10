@@ -36,6 +36,11 @@ from .sync_determine_operation import calculate_sha256, extract_include_deps, re
 from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
 
+# Issue #1714: bound the PRD-sync agentic step below the 600s
+# DEFAULT_TIMEOUT_SECONDS so a silent provider hang fails fast instead of
+# burning the full per-step budget.
+PRD_SYNC_TIMEOUT_SECONDS: float = 240.0
+
 # Config/data files that should not get prompts in repo-scan mode.
 # Users can still target these explicitly with single-file mode.
 _SKIP_EXTENSIONS = {
@@ -148,13 +153,11 @@ def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> b
                 return True
     return False
 
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "bold red",
-    "success": "green",
-    "path": "dim blue",
-})
+# Use the central brand palette (EPIC #1540) so ``pdd update`` shares the same
+# enhanced color system as the rest of the CLI rather than a local ad-hoc theme.
+from .cli_theme import SEMANTIC_STYLES
+
+custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
 
 def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:
@@ -1563,6 +1566,7 @@ def update_main(
                         verbose=ctx.obj.get("verbose", False),
                         quiet=True,
                         label="prd-sync",
+                        timeout=PRD_SYNC_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
                     )
 
                     if llm_cost:

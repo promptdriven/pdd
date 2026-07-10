@@ -35,6 +35,17 @@ _GITHUB_ISSUE_RE = re.compile(
 )
 
 
+def _mark_command_failed(ctx: click.Context) -> None:
+    """Mark handled command exceptions so the cli result-callback exits nonzero.
+
+    Mirrors ``pdd.commands.analysis._mark_command_failed`` (#1895): a command
+    that returns ``None`` on a handled error is otherwise treated as "no
+    results" by ``process_commands`` and the process exits 0.
+    """
+    if isinstance(getattr(ctx, "obj", None), dict):
+        ctx.obj["_command_failed"] = True
+
+
 def _estimate_mode_active(ctx: click.Context) -> bool:
     """Return whether the global dry-run cost estimate mode is active."""
     return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
@@ -736,6 +747,16 @@ def example(
     ),
 )
 @click.option(
+    "--from-story",
+    "from_story",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help=(
+        "Generate deterministic pytest regression tests from a story__*.md "
+        "file. Execution of generated tests is offline and LLM-free."
+    ),
+)
+@click.option(
     "--evidence",
     is_flag=True,
     default=False,
@@ -758,26 +779,69 @@ def test(
     target_coverage: float,
     merge: bool,
     issue: Optional[str],
+    from_story: Optional[str],
     evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Generate or enhance unit tests, or link story prompt metadata.
 
-    Supports four modes:
+    Supports five modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
     3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
     4. Story Metadata Linking: pdd test user_stories/story__my_story.md
+    5. Story Regression Generation: pdd test --from-story user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
     from ..agentic_test import run_agentic_test
 
     try:
+        estimate_mode = _estimate_mode_active(ctx)
+        if from_story:
+            if args:
+                raise click.UsageError("--from-story does not accept positional arguments.")
+            if manual or issue:
+                raise click.UsageError("--from-story cannot be combined with --manual or --issue.")
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
+            from ..story_test_generation import generate_story_regression_test
+
+            try:
+                generated = generate_story_regression_test(from_story, output=output)
+            except (ValueError, FileNotFoundError) as exc:
+                # #1889: surface malformed-story / missing-contract failures as a
+                # clean, nonzero-exit ClickException instead of swallowing them
+                # via handle_error + return None (which exits 0 and hides the
+                # failure from CI). No traceback is shown; the message is
+                # preserved verbatim.
+                raise click.ClickException(str(exc)) from exc
+            obj = ctx.obj or {}
+            if not obj.get("quiet", False):
+                action = "generated" if generated.changed else "already current"
+                console.print(
+                    "[bold green]Story regression test "
+                    f"{action}:[/bold green] {generated.test_file}"
+                )
+            result_dict = {
+                "success": True,
+                "message": "Story regression test generated.",
+                **generated.as_dict(),
+            }
+            if evidence:
+                write_evidence_manifest(
+                    command="pdd test --from-story",
+                    output_files=[generated.test_file],
+                    model="deterministic",
+                    cost_usd=0.0,
+                    validation={"story_regression": "generated"},
+                    basename=generated.story_id,
+                )
+            return result_dict, 0.0, "deterministic"
+
         if not args:
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
-        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
@@ -971,5 +1035,11 @@ def test(
         if _is_estimate_only_result(e):
             return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        # #1889: mark the command failed so the cli result-callback exits
+        # nonzero. A bare `return None` is treated as "no results" (results is
+        # None -> normalized_results == []) by process_commands, so the None
+        # never triggers the nonzero-exit path and CI silently sees exit 0.
+        # This mirrors the #1895 convention for `detect --stories`.
+        _mark_command_failed(ctx)
         handle_error(e, "test", quiet)
         return None

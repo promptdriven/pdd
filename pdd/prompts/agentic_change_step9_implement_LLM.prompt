@@ -50,6 +50,7 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Worktree Path: {worktree_path}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -183,6 +184,30 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
    - Report any flagged Step 5 conflicts with `MANUAL_REVIEW:` prefix (one line per conflict)
    - Associated-document edits appear in `FILES_MODIFIED:` alongside prompt edits — they are committed atomically in the same commit so the repository never lands in a half-synced state
 
+% Structured Output Artifacts (REQUIRED — source of truth)
+
+Before finishing, write TWO files into the artifacts directory `{artifacts_dir}` (already created for you). These are how the orchestrator learns what you did; the prose markers in `% Output` below are now a FALLBACK only.
+
+1. `{artifacts_dir}/09_implement.json` — the machine-readable decision. Emit valid JSON (double quotes, no trailing commas, no comments; use `[]` for empty lists):
+   ```json
+   {{
+     "status": "changed",
+     "files_modified": ["prompts/foo_python.prompt", "README.md"],
+     "files_created": ["prompts/bar_python.prompt"],
+     "direct_edits": ["frontend/src/path/Component.tsx"],
+     "manual_review": [{{"path": "docs/x.md", "reason": "originating prompt not confirmed by Step 6"}}],
+     "error": ""
+   }}
+   ```
+   - `status`: `"changed"` when any file was modified, created, or direct-edited; `"no_change_needed"` when no edits were necessary; `"failed"` when implementation could not be completed and the workflow must stop.
+   - `files_modified` / `files_created` / `direct_edits`: repo-relative POSIX paths — exactly the same sets you report in the `FILES_MODIFIED:` / `FILES_CREATED:` / `DIRECT_EDITS:` markers below. Use the real language suffix from the project's `.pddrc` (e.g. `_python`).
+   - `error`: for `"failed"`, a concise implementation error summary. Use `""` otherwise.
+   - `manual_review`: one object per flagged Step 5 conflict or skipped associated-doc edit — the same items as the `MANUAL_REVIEW:` lines below. Empty list if none.
+
+2. `{artifacts_dir}/09_implement.md` — the exact Markdown comment body: the same content you place inside the `<step_report>` block below. The orchestrator posts this verbatim (after secret-redaction/truncation) as the `## Step 9/13` issue comment.
+
+Still emit the `<step_report>` block and every `FILES_MODIFIED:` / `FILES_CREATED:` / `DIRECT_EDITS:` / `MANUAL_REVIEW:` marker described below UNCHANGED — they are the orchestrator's fallback when these files are missing or unparseable.
+
 % Output
 
 After completing your changes, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
@@ -257,6 +282,26 @@ After review, run `pdd sync` on modified prompts to regenerate code.
 
 ---
 *Investigation paused - implementation failed.*
+```
+
+**If no changes are needed (STOP successfully, no PR):**
+```markdown
+## Step 9: Implement Changes
+
+**Status:** No Changes Needed
+
+### Summary
+[Explain why the issue requires no prompt/code/documentation edits after the prior analysis.]
+
+### Evidence
+- [Evidence from the issue, docs, or repository state]
+
+FILES_MODIFIED:
+FILES_CREATED:
+DIRECT_EDITS:
+
+---
+*No repository changes needed. Workflow can stop without creating a PR.*
 ```
 
 % Important

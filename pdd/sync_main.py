@@ -3,6 +3,7 @@ import glob
 import os
 import re
 import time
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -26,7 +27,7 @@ from .construct_paths import (
     _get_context_config,
     get_extension
 )
-from .sync_determine_operation import get_pdd_file_paths
+from .sync_determine_operation import get_pdd_file_paths, AmbiguousModuleError
 from .operation_log import get_run_report_path
 from .architecture_include_validation import print_architecture_include_validation_warnings
 from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
@@ -633,6 +634,16 @@ def sync_main(
     console = Console()
     start_time = time.time()
 
+    # Issue #1711: reset the per-(file, query) include-extraction guard counters
+    # at the shared top-level sync entry point. sync_main() dispatches to either
+    # sync_orchestration() (which also resets) or, for one_session=True, directly
+    # to run_one_session_sync() (which does not). Resetting here covers BOTH
+    # branches so the class-level counters never leak across top-level sync runs
+    # in a long-lived process (e.g. the server running one-session sync more than
+    # once), which would otherwise falsely raise RepeatedRetrievalQueryError.
+    from .include_query_extractor import IncludeQueryExtractor
+    IncludeQueryExtractor.reset_session()
+
     # 1. Retrieve global parameters from context
     strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature = ctx.obj.get("temperature", 0.0)
@@ -984,6 +995,7 @@ def sync_main(
                                     paths=pdd_files,
                                 ),
                                 repair_directive=repair_directive,
+                                context_compression=os.environ.get("PDD_CONTEXT_COMPRESSION"),
                             )
                             package_dict = asdict(package)
                             compression_phase_metadata.append(
@@ -1287,11 +1299,35 @@ def sync_main(
 
             aggregated_results["results_by_language"][lang] = sync_result
 
+        except AmbiguousModuleError:
+            # Issue #1677: an ambiguous bare basename is an actionable user error, not
+            # an "unexpected" per-language failure. Propagate it so the sync command
+            # surfaces the conflict (and the list of valid path-qualified choices)
+            # through handle_error, consistent with the dry-run path.
+            raise
         except Exception as e:
             if not quiet:
-                rprint(f"[bold red]An unexpected error occurred during sync for '{lang}':[/bold red] {e}")
+                rprint(
+                    f"[bold red]An unexpected error occurred during sync for '{lang}' "
+                    f"({type(e).__name__}):[/bold red] {e}"
+                )
                 if verbose:
                     console.print_exception(show_locals=True)
+            # Issue #1714 (Bug 2): record a core dump so pdd_cloud can harvest the
+            # real exception type, stage, and traceback instead of surfacing an
+            # opaque "An unexpected error occurred during sync". Mirrors the
+            # budget-exhaustion handler above.
+            record_core_dump_error(
+                command="sync",
+                type=type(e).__name__,
+                message=str(e),
+                details={
+                    "basename": basename,
+                    "language": lang,
+                    "stage": "sync_orchestration",
+                },
+                traceback_text=traceback.format_exc(),
+            )
             exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)
             exc_model = getattr(e, "model_name", "") or ""
             if exc_cost:

@@ -5364,6 +5364,17 @@ class TestStep11CodeCleanup:
     if tests pass. Reverts all cleanup changes if tests fail.
     """
 
+    def test_step11_cleanup_prompt_forbids_checkup_verifier(self):
+        """Cleanup must not inspect or invoke the explicit checkup verifier path."""
+        template = load_prompt_template("agentic_e2e_fix_step11_code_cleanup_LLM")
+
+        assert "Do NOT run `pdd checkup`" in template
+        assert "`pdd checkup --help`" in template
+        assert "run_agentic_checkup" in template
+        assert "review loop" in template
+        assert "final gate" in template
+        assert "Do not inspect or invoke the PDD checkup verifier" in template
+
     def test_step11_skipped_when_no_files_changed(self, tmp_path):
         """Step 11 should be skipped when no files changed during workflow."""
         from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
@@ -5540,10 +5551,15 @@ class TestStep11CodeCleanup:
             assert success is True
             mock_step11.assert_called_once()
 
-    def test_final_checkup_pr_gate_runs_after_ci_success(
+    def test_fix_flow_does_not_invoke_agentic_checkup(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
     ):
-        """pdd-issue must finish by running full checkup on the PR it created."""
+        """pdd fix's final gate must NOT invoke the agentic pdd
+        checkup (no run_agentic_checkup, no review-loop). Verification is the fix
+        workflow's own steps (Step 7/9) plus the lean deterministic pre-checkup
+        gate; `pdd checkup` stays a separate command. The run succeeds on the
+        gate alone — a transient checkup verdict can no longer fail an
+        already-committed fix."""
         mock_run, _, _ = e2e_fix_mock_dependencies
 
         def side_effect(*args, **kwargs):
@@ -5569,10 +5585,6 @@ class TestStep11CodeCleanup:
             "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
             return_value=77,
             create=True,
-        ), patch(
-            # Same SHA before/after → no push happened, no CI re-validation.
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
         ), patch(
             "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
             return_value=(True, "pre_checkup_gate passed", 0.0),
@@ -5586,145 +5598,7 @@ class TestStep11CodeCleanup:
 
         assert success is True, msg
         gate_mock.assert_called_once()
-        checkup_mock.assert_called_once()
-        assert checkup_mock.call_args.kwargs["pr_url"] == (
-            "https://github.com/owner/repo/pull/77"
-        )
-        assert checkup_mock.call_args.kwargs["no_fix"] is False
-        # Issue #1406: pdd-issue's final verification must route through the
-        # canonical two-layer final gate, not the legacy single-layer checkup.
-        assert checkup_mock.call_args.kwargs["final_gate"] is True
-
-    def test_final_gate_accepts_review_loop_pushed_head(
-        self, e2e_fix_mock_dependencies, e2e_fix_default_args
-    ):
-        """Issue #1406: when the final gate's Layer 2 (review-loop) pushes a fix,
-        the PR head advances to the review-loop worktree head, NOT the legacy
-        checkup worktree head. The post-checkup head-provenance check must accept
-        the review-loop's verified head as 'ours' and re-validate CI instead of
-        falsely reporting an external push."""
-        mock_run, _, _ = e2e_fix_mock_dependencies
-
-        def side_effect(*args, **kwargs):
-            label = kwargs.get("label", "")
-            if "step9" in label:
-                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
-
-        mock_run.side_effect = side_effect
-        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
-        e2e_fix_default_args["skip_cleanup"] = True
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
-            return_value=(True, "1 passed"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
-            return_value=["tests/test_foo.py"],
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-            return_value=(True, "Required CI checks passed", 0.0),
-        ) as revalidate_mock, patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=77,
-            create=True,
-        ), patch(
-            # pre-checkup head, then post-checkup head advanced by Layer 2.
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "bbbbbbbb"],
-        ), patch(
-            # Layer 1 (legacy checkup worktree) did not push: still at pre head.
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="aaaaaaaa",
-        ), patch(
-            # Layer 2 (review-loop) verified+pushed the advanced head.
-            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
-            return_value="bbbbbbbb",
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
-            return_value=(True, "pre_checkup_gate passed", 0.0),
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "Final gate passed", 0.0, "model"),
-        ):
-            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
-                **e2e_fix_default_args
-            )
-
-        assert success is True, msg
-        assert "external push" not in msg.lower()
-        # CI was re-validated on the Layer-2-advanced head exactly once (the
-        # earlier main CI-validation call has no head-override).
-        override_calls = [
-            c
-            for c in revalidate_mock.call_args_list
-            if c.kwargs.get("expected_head_sha_override") == "bbbbbbbb"
-        ]
-        assert len(override_calls) == 1
-
-    def test_final_gate_external_push_still_fails(
-        self, e2e_fix_mock_dependencies, e2e_fix_default_args
-    ):
-        """A head that matches NEITHER the legacy checkup worktree NOR the
-        review-loop verified head is a genuine external push and must fail
-        closed — never green-light CI re-validation on an unverified head."""
-        mock_run, _, _ = e2e_fix_mock_dependencies
-
-        def side_effect(*args, **kwargs):
-            label = kwargs.get("label", "")
-            if "step9" in label:
-                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
-
-        mock_run.side_effect = side_effect
-        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
-        e2e_fix_default_args["skip_cleanup"] = True
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
-            return_value=(True, "1 passed"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
-            return_value=["tests/test_foo.py"],
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-            return_value=(True, "Required CI checks passed", 0.0),
-        ) as revalidate_mock, patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=77,
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "cccccccc"],
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="aaaaaaaa",
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
-            return_value="bbbbbbbb",
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
-            return_value=(True, "pre_checkup_gate passed", 0.0),
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "Final gate passed", 0.0, "model"),
-        ):
-            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
-                **e2e_fix_default_args
-            )
-
-        assert success is False
-        assert "external push" in msg.lower()
-        # The post-push CI re-validation (head-override call) must NOT fire on a
-        # genuine external push, even though the earlier main CI loop ran.
-        override_calls = [
-            c
-            for c in revalidate_mock.call_args_list
-            if c.kwargs.get("expected_head_sha_override")
-        ]
-        assert override_calls == []
+        checkup_mock.assert_not_called()
 
     def test_pre_checkup_gate_blocks_final_checkup(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
@@ -10252,17 +10126,6 @@ class TestTrustedStepCommentPosting:
             "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
             return_value=(True, "Required CI checks passed", 0.0),
         ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=77,
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
-            create=True,
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.0, "fake-model"),
-        ), patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
         ) as mock_post_once:
@@ -10408,7 +10271,7 @@ class TestTrustedStepCommentPosting:
             "none carried 10011 in their state['step_comments']."
         )
 
-    def test_step10_post_persists_step_comments_before_checkup_failure_return(
+    def test_step10_post_persists_step_comments_before_gate_failure_return(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
     ):
         """Regression for Greg's PR review (round 3 — idempotency).
@@ -10416,13 +10279,13 @@ class TestTrustedStepCommentPosting:
         After Step 10 (CI validation) posts its trusted comment on
         ``ci_success=True``, the orchestrator MUST save workflow state so
         the composite key ``current_cycle * 10000 + 10`` is durable.
-        Otherwise, when ``_run_final_checkup_on_pr`` returns
-        ``checkup_success=False`` and the orchestrator returns at the
-        final-checkup-failure path, a later resume re-posts the Step 10
-        comment (and likely Step 11 too).
+        Otherwise, when a later failure-return fires (with the agentic checkup
+        removed, the next failure-return after the Step 10 post is
+        the pre-checkup gate failing — or its drift-sync push failing), a later
+        resume re-posts the Step 10 comment (and likely Step 11 too).
 
         Assertion: at least one ``save_workflow_state`` call between
-        Step 10 post and the checkup-failure return must carry the Step 10
+        Step 10 post and the gate-failure return must carry the Step 10
         key (``10010``) in its ``state``'s ``step_comments``.
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
@@ -10451,16 +10314,8 @@ class TestTrustedStepCommentPosting:
             "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
             return_value=(True, "Required CI checks passed", 0.0),
         ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=77,
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
-            create=True,
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(False, "checkup failed", 0.0, "fake-model"),
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(False, "pre_checkup_gate blocked: py_compile failed", 0.0),
         ), patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             side_effect=_add_key,
@@ -10472,7 +10327,7 @@ class TestTrustedStepCommentPosting:
                 **e2e_fix_default_args
             )
 
-        assert success is False, "Final-checkup failure must propagate"
+        assert success is False, "Pre-checkup gate failure must propagate"
         step10_persisted = any(
             10010 in (
                 call.args[3] if len(call.args) > 3 else call.kwargs.get("state", {})
@@ -10481,7 +10336,7 @@ class TestTrustedStepCommentPosting:
         )
         assert step10_persisted, (
             "Step 10 CI trusted post must persist step_comments via "
-            "save_workflow_state before any final-checkup-failure return so "
+            "save_workflow_state before any gate-failure return so "
             "the composite key 10010 is durable across resume/retry. "
             f"save_workflow_state was called {mock_save.call_count} times but "
             "none carried 10010 in their state['step_comments']."
@@ -10616,8 +10471,9 @@ class TestTrustedStepCommentPosting:
         """Same round-4 regression as above, but for the Step 10 CI post
         on a SUCCESS_FALL_THROUGH resume path. The inner loop never runs,
         but Step 10's trusted post must still persist its composite key
-        (``10010``) to saved state before any final-checkup-failure
-        return.
+        (``10010``) to saved state before any gate-failure return (with the
+        agentic checkup removed, the gate is now the last failure-return
+        after the Step 10 post).
         """
         mock_run, _, _ = e2e_fix_mock_dependencies
 
@@ -10680,16 +10536,8 @@ class TestTrustedStepCommentPosting:
             "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
             return_value=(True, "Required CI checks passed", 0.0),
         ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=77,
-            create=True,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
-            create=True,
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(False, "checkup failed", 0.0, "fake-model"),
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(False, "pre_checkup_gate blocked: py_compile failed", 0.0),
         ), patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             side_effect=_add_key,
@@ -10714,343 +10562,6 @@ class TestTrustedStepCommentPosting:
             f"called {mock_save.call_count} times but none carried 10010 "
             "in their state['step_comments']."
         )
-
-
-class TestFinalCheckupForwardsCwd:
-    def test_run_final_checkup_passes_cwd_to_run_agentic_checkup(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "ok", 0.0, "fake-model"),
-        ) as checkup_mock:
-            _run_final_checkup_on_pr(
-                issue_url="https://github.com/o/r/issues/99",
-                issue_number=99,
-                repo_owner="o",
-                repo_name="r",
-                cwd=tmp_path,
-                verbose=False,
-                quiet=True,
-                timeout_adder=0.0,
-                use_github_state=False,
-                reasoning_time=None,
-                ci_step_template="ignored",
-                ci_validation_timeout=60.0,
-            )
-
-        assert checkup_mock.call_args.kwargs["cwd"] == tmp_path
-
-    def test_no_pr_found_skips_checkup_without_invoking(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=None,
-        ), patch("pdd.agentic_checkup.run_agentic_checkup") as checkup_mock:
-            success, msg, _cost, _model = _run_final_checkup_on_pr(
-                issue_url="https://github.com/o/r/issues/99",
-                issue_number=99,
-                repo_owner="o",
-                repo_name="r",
-                cwd=tmp_path,
-                verbose=False,
-                quiet=True,
-                timeout_adder=0.0,
-                use_github_state=False,
-                reasoning_time=None,
-                ci_step_template="ignored",
-                ci_validation_timeout=60.0,
-            )
-
-        assert success is True
-        assert "No open PR" in msg
-        assert not checkup_mock.called
-
-
-class TestFinalCheckupHeadSafetyChecks:
-    """Round-3 FM1 + Round-5: head-SHA invariants the final checkup must enforce.
-
-    Round-3 closed the post-CI mutation hole: when the checkup pushes
-    fixes, CI must be re-validated against the new head. Round-5 closed
-    the external-push race: an external party (maintainer, bot) advancing
-    the PR during the checkup must NOT slip through as a checkup self-push
-    because Step 7's verdict applies to the checkup worktree's HEAD, not
-    to an externally-advanced remote.
-
-    The current contract:
-      - pre == post  → no head movement; return checkup result unchanged
-      - pre != post and worktree == post → checkup self-push; re-validate CI
-      - pre != post and worktree != post → external push raced; fail closed
-      - any SHA fetch empty → fail closed
-    """
-
-    def _common_args(self, tmp_path):
-        return dict(
-            issue_url="https://github.com/o/r/issues/99",
-            issue_number=99,
-            repo_owner="o",
-            repo_name="r",
-            cwd=tmp_path,
-            verbose=False,
-            quiet=True,
-            timeout_adder=0.0,
-            use_github_state=False,
-            reasoning_time=None,
-            ci_step_template="ignored",
-            ci_validation_timeout=60.0,
-        )
-
-    def test_unchanged_head_skips_ci_revalidation(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "aaaaaaaa"],
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is True
-        assert msg == "checkup ok"
-        assert cost == 0.5
-        assert not ci_mock.called, "CI must not re-run when PR head is unchanged"
-
-    def test_changed_head_revalidates_ci_and_succeeds_when_ci_passes(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "bbbbbbbb"],
-        ), patch(
-            # Checkup worktree HEAD matches the post-checkup remote head:
-            # the SHA advance is the checkup's own push, not an external one.
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="bbbbbbbb",
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-            return_value=(True, "Required CI checks passed", 0.1),
-        ) as ci_mock:
-            success, msg, cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is True
-        assert msg == "checkup ok"
-        assert cost == pytest.approx(0.6)
-        ci_mock.assert_called_once()
-        assert ci_mock.call_args.kwargs["max_retries"] == 0, (
-            "CI re-validation after checkup push must be verify-only "
-            "(no further fixing on top of fixes)"
-        )
-        # Round-4 Finding 1: the override is REQUIRED, not optional.
-        # Without it, run_ci_validation_loop reads _get_head_sha(cwd) — but
-        # the checkup pushed from a different worktree, so cwd's HEAD is
-        # stale. The poll would wait for the remote PR head to match the
-        # old local HEAD and burn the timeout.
-        assert (
-            ci_mock.call_args.kwargs["expected_head_sha_override"]
-            == "bbbbbbbb"
-        ), "CI re-validation must wait for the post-checkup remote head"
-
-    def test_changed_head_revalidates_ci_and_fails_when_ci_fails(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "bbbbbbbb"],
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="bbbbbbbb",
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-            return_value=(False, "Required check 'lint' failed", 0.0),
-        ):
-            success, msg, cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False
-        assert "pushed fixes" in msg
-        assert "post-push CI re-validation failed" in msg
-        assert "aaaaaaaa" in msg and "bbbbbbbb" in msg
-        assert cost == pytest.approx(0.5)
-
-    def test_external_push_during_checkup_fails_closed(self, tmp_path):
-        """Round-5 finding: an external party advancing the PR head during
-        the final checkup must NOT slip through.
-
-        The checkup worktree's HEAD records the SHA the checkup actually
-        verified/pushed. If the remote PR head differs, the PR advanced past
-        what Step 7 verified — re-validating CI alone would green-light an
-        unreviewed head.
-        """
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "external_pushed_sha_xxxx"],
-        ), patch(
-            # Checkup worktree saw a different SHA than the post-checkup
-            # remote head — an external push happened during the checkup.
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="checkup_worktree_sha_yyy",
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, _cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False, (
-            "External push during checkup must fail closed — Step 7's "
-            "verdict applies to the worktree HEAD, not the advanced remote"
-        )
-        assert "External push during" in msg or "advanced" in msg
-        assert not ci_mock.called, (
-            "CI re-validation must not run when the head divergence is "
-            "external — re-running CI on unverified code would mask the "
-            "race"
-        )
-
-    def test_missing_checkup_worktree_head_sha_fails_closed(self, tmp_path):
-        """If we can't read the checkup worktree HEAD, we can't prove the
-        remote head matches what was verified. Fail closed."""
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", "bbbbbbbb"],
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
-            return_value="",
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, _cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False
-        assert "checkup worktree HEAD SHA" in msg
-        assert not ci_mock.called
-
-    def test_missing_pre_head_sha_fails_closed(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["", "bbbbbbbb"],
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, _cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False, (
-            "Missing pre-checkup SHA must fail closed — otherwise we'd "
-            "silently re-introduce the post-CI mutation hole"
-        )
-        assert "pre-checkup PR head SHA" in msg
-        assert not ci_mock.called
-
-    def test_missing_post_head_sha_fails_closed(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            side_effect=["aaaaaaaa", ""],
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(True, "checkup ok", 0.5, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, _cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False
-        assert "post-checkup PR head SHA" in msg
-        assert not ci_mock.called
-
-    def test_failed_checkup_short_circuits_before_revalidation(self, tmp_path):
-        """When the checkup itself fails, we propagate the failure as-is and
-        do NOT compare head SHAs or re-run CI — there's no push to verify."""
-        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
-            return_value=200,
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
-            return_value="aaaaaaaa",
-        ) as sha_mock, patch(
-            "pdd.agentic_checkup.run_agentic_checkup",
-            return_value=(False, "Step 7 gate failed", 0.3, "fake-model"),
-        ), patch(
-            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
-        ) as ci_mock:
-            success, msg, cost, _model = _run_final_checkup_on_pr(
-                **self._common_args(tmp_path)
-            )
-
-        assert success is False
-        assert msg == "Step 7 gate failed"
-        assert cost == 0.3
-        assert not ci_mock.called
-        # Only the pre-checkup SHA is fetched; the post-checkup fetch must
-        # not happen because the checkup failed before any push.
-        assert sha_mock.call_count == 1
 
 
 # Additional tests appended below
@@ -11136,83 +10647,20 @@ class TestPushWithRetryNewSignature:
         assert any("x-access-token:ghs_xyz" in arg for arg in push_cmds[1])
 
 
-class TestFetchPrHeadShaHelper:
-    """Tests for _fetch_pr_head_sha best-effort helper."""
-
-    def test_returns_empty_string_on_exception(self):
-        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
-
-        with patch(
-            "pdd.checkup_review_loop._fetch_pr_metadata",
-            side_effect=RuntimeError("gh unavailable"),
-        ):
-            result = _fetch_pr_head_sha("owner", "repo", 42)
-        assert result == ""
-
-    def test_returns_head_sha_on_success(self):
-        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
-
-        with patch(
-            "pdd.checkup_review_loop._fetch_pr_metadata",
-            return_value={"head_sha": "abc123def"},
-        ):
-            result = _fetch_pr_head_sha("owner", "repo", 42)
-        assert result == "abc123def"
-
-    def test_returns_empty_when_metadata_missing_sha(self):
-        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
-
-        with patch(
-            "pdd.checkup_review_loop._fetch_pr_metadata",
-            return_value={},
-        ):
-            result = _fetch_pr_head_sha("owner", "repo", 42)
-        assert result == ""
-
-
-class TestReadCheckupWorktreeHeadSha:
-    """Tests for _read_checkup_worktree_head_sha best-effort helper."""
-
-    def test_returns_empty_when_worktree_missing(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
-
-        def mock_run(cmd, **kwargs):
-            r = type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
-            return r
-
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
-            result = _read_checkup_worktree_head_sha(tmp_path, 42)
-        assert result == ""
-
-    def test_returns_sha_when_worktree_exists(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
-
-        worktree = tmp_path / ".pdd" / "worktrees" / "checkup-pr-42"
-        worktree.mkdir(parents=True)
-
-        def mock_run(cmd, **kwargs):
-            if "rev-parse" in cmd and "--show-toplevel" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
-            if "rev-parse" in cmd and "HEAD" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "deadbeef\n", "stderr": ""})()
-            return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
-
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
-            result = _read_checkup_worktree_head_sha(tmp_path, 42)
-        assert result == "deadbeef"
-
-    def test_returns_empty_on_oserror(self, tmp_path):
-        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
-
-        with patch(
-            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
-            side_effect=OSError("boom"),
-        ):
-            result = _read_checkup_worktree_head_sha(tmp_path, 42)
-        assert result == ""
-
-
 class TestPreCheckupGateRemediation:
+    def test_local_gate_remediation_prompt_forbids_checkup_verifier(self):
+        """Local pre-checkup gate fixes must use gate logs, not pdd checkup."""
+        template = load_prompt_template("agentic_e2e_fix_step10_ci_validation_LLM")
+
+        assert "When `ci_system` is `local pre-checkup gate`" in template
+        assert "do not fetch remote logs" in template
+        assert "Do NOT run `pdd checkup`" in template
+        assert "`pdd checkup --help`" in template
+        assert "run_agentic_checkup" in template
+        assert "review loop" in template
+        assert "final gate" in template
+        assert "Do not inspect the broader PDD checkup verifier namespace" in template
+
     def test_local_gate_failure_is_remediated_and_retried(self, tmp_path, monkeypatch):
         from pdd import agentic_e2e_fix_orchestrator as orch
 
@@ -11295,3 +10743,502 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+
+class TestVerifierOutputDetail:
+    """Independent verifier rejection detail must be reproducible."""
+
+    def test_python_failure_surfaces_exact_command_and_stderr(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        exact_cmd = (
+            "/usr/bin/python3 -B -m pytest /abs/tests/test_x.py -v --rootdir=/abs"
+        )
+        fake_result = {
+            "test_file": "tests/test_x.py",
+            "command": exact_cmd,
+            "test_results": [
+                {
+                    "failures": 1,
+                    "errors": 0,
+                    "passed": 0,
+                    "standard_output": "FAILED tests/test_x.py::test_a - assert 1 == 2",
+                    "standard_error": "ERROR collecting: ImportError: no widget",
+                }
+            ],
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output",
+            return_value=fake_result,
+        ):
+            passed, output = _verify_tests_independently(["tests/test_x.py"], tmp_path)
+
+        assert passed is False
+        assert exact_cmd in output
+        assert "assert 1 == 2" in output
+        assert "ImportError: no widget" in output
+
+    def test_non_python_timeout_surfaces_command_and_partial_output(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _verify_tests_independently
+
+        cmd_obj = MagicMock()
+        cmd_obj.command = "npx playwright test tests/widget.spec.ts"
+        cmd_obj.cwd = None
+        timeout_exc = subprocess.TimeoutExpired(
+            cmd="npx",
+            timeout=120,
+            output=b"partial stdout here",
+            stderr=b"",
+        )
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file",
+            return_value=cmd_obj,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=timeout_exc,
+        ):
+            passed, output = _verify_tests_independently(
+                ["tests/widget.spec.ts"], tmp_path
+            )
+
+        assert passed is False
+        assert "npx playwright test tests/widget.spec.ts" in output
+        assert "timeout" in output.lower()
+        assert "partial stdout here" in output
+
+
+class TestStep9VerifierRejectionVisibleComment:
+    """Step 9 verifier rejections must be visible at rejection time."""
+
+    VERIFIER_OUTPUT = (
+        "$ /usr/bin/python3 -B -m pytest /abs/tests/test_widget.py -v --rootdir=/abs\n"
+        "tests/test_widget.py: 2 failure(s)\n"
+        "FAILED tests/test_widget.py::test_a - assert widget.height == 10"
+    )
+
+    @staticmethod
+    def _rejection_calls(mock_post_once):
+        return [
+            c
+            for c in mock_post_once.call_args_list
+            if "rejected" in c.kwargs.get("body", "").lower()
+            and "independent" in c.kwargs.get("body", "").lower()
+        ]
+
+    def test_step9_rejection_posts_visible_comment_per_cycle(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        rejections = self._rejection_calls(mock_post_once)
+        assert len(rejections) == 2
+        keys = sorted(c.kwargs["step_num"] for c in rejections)
+        assert keys[0] // 10000 == 1 and keys[1] // 10000 == 2
+        assert all(k % 10000 not in range(0, 12) for k in keys)
+
+    def test_rejection_comment_includes_files_command_output_and_statement(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        rejections = self._rejection_calls(mock_post_once)
+        assert rejections
+        body = rejections[0].kwargs["body"]
+        assert "tests/test_widget.py" in body
+        assert "$ /usr/bin/python3 -B -m pytest" in body
+        assert "2 failure(s)" in body
+        assert "ALL_TESTS_PASS" in body or "tests pass" in body.lower()
+        assert "rejected" in body.lower()
+        assert "Step 9" in body
+
+    def test_rejection_comment_posted_even_when_later_cycle_succeeds(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_ci"] = True
+        e2e_fix_default_args["skip_cleanup"] = True
+        verify_calls = {"n": 0}
+
+        def verify_side_effect(*_args, **_kwargs):
+            verify_calls["n"] += 1
+            if verify_calls["n"] == 1:
+                return (False, self.VERIFIER_OUTPUT)
+            return (True, "")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG in widget sizing.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (
+                    True,
+                    "All targeted tests pass now. ALL_TESTS_PASS",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            side_effect=verify_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        rejections = self._rejection_calls(mock_post_once)
+        assert len(rejections) == 1
+        assert rejections[0].kwargs["step_num"] // 10000 == 1
+
+    def test_resume_reverify_rejection_posts_visible_comment(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "9": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        rejections = self._rejection_calls(mock_post_once)
+        assert rejections, msg
+        assert rejections[0].kwargs["step_num"] // 10000 == 1
+        assert "tests/test_widget.py" in rejections[0].kwargs["body"]
+
+    def test_rejection_comment_body_is_bounded(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_DETAIL_MAX_CHARS
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        big_output = (
+            "$ /usr/bin/python3 -B -m pytest /abs/tests/test_big.py -v\n"
+            "tests/test_big.py: HEADMARKER 4 failure(s)\n"
+            + ("E   assertion detail line\n" * 6000)
+            + "===== TAILMARKER 4 failed, 0 passed in 1.23s ====="
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_big.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, big_output),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        body = self._rejection_calls(mock_post_once)[0].kwargs["body"]
+        assert len(body) < _VERIFIER_DETAIL_MAX_CHARS + 2500
+        assert "HEADMARKER" in body
+        assert "TAILMARKER" in body
+
+    def test_rejection_comment_post_failure_does_not_break_run(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+
+    def test_rejection_comment_header_matches_steer_status_filter(self):
+        from pdd.agentic_common import _is_pdd_status_comment_body
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _build_step9_verifier_rejection_comment,
+        )
+
+        for resumed in (False, True):
+            body = _build_step9_verifier_rejection_comment(
+                3, ["tests/test_widget.py"], "detail", resumed=resumed
+            )
+            assert _is_pdd_status_comment_body(body)
+
+    @staticmethod
+    def _faithful_post_once(recorded_posts):
+        def _side_effect(**kwargs):
+            posted = kwargs["posted_steps"]
+            if kwargs["step_num"] in posted:
+                return True
+            posted.add(kwargs["step_num"])
+            recorded_posts.append(kwargs)
+            return True
+
+        return _side_effect
+
+    def test_final_cycle_rejection_persists_comment_key(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: CODE_BUG.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "All tests pass now. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+        import pdd.agentic_e2e_fix_orchestrator as orch
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        assert any(kw["step_num"] == reject_key for kw in recorded)
+        saved_with_key = [
+            c
+            for c in orch.save_workflow_state.call_args_list
+            if reject_key in (c.args[3].get("step_comments") or [])
+        ]
+        assert saved_with_key
+
+    def test_resume_does_not_repost_rejection_when_key_persisted(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        from pdd.agentic_e2e_fix_orchestrator import _VERIFIER_REJECT_COMMENT_SUBKEY
+
+        reject_key = 1 * 10000 + _VERIFIER_REJECT_COMMENT_SUBKEY
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "9": "All targeted tests pass now. ALL_TESTS_PASS",
+            },
+            "step_comments": [10009, reject_key],
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"pdd/agentic_common.py": "h"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "h"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+        recorded = []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_widget.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, self.VERIFIER_OUTPUT),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=self._faithful_post_once(recorded),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert not any(kw["step_num"] == reject_key for kw in recorded)

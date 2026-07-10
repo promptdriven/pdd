@@ -13,15 +13,17 @@
                                 "VERTEX_PROJECT": "{{PROJECT_ID}}",
                                 "PDD_TEST_HEADLESS": "1",
                                 "GCS_BUCKET_NAME": "litellm_cache",
-                                "SKIP_INDEX": "54",
-                                "PDD_CLOUD_TIMEOUT": "720",
+                                "SKIP_INDEXES": "54,68,69,70,71,72,73,74,75",
+                                "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
+                                "PDD_ENV": "staging",
+                                "PDD_CLOUD_TIMEOUT": "1200",
                                 "PYTEST_CHUNK_TIMEOUT": "1800"
                             },
                             "secretVariables": {
                                 "GCS_HMAC_ACCESS_KEY_ID": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/latest",
                                 "GCS_HMAC_SECRET_ACCESS_KEY": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_SECRET_ACCESS_KEY/versions/latest",
                                 "OPENAI_API_KEY": "projects/{{PROJECT_ID}}/secrets/OPENAI_API_KEY/versions/latest",
-                                "FIREBASE_API_KEY": "projects/{{PROJECT_ID}}/secrets/NEXT_PUBLIC_FIREBASE_API_KEY/versions/latest",
+                                "FIREBASE_API_KEY": "projects/{{PROJECT_ID}}/secrets/staging-firebase-api-key/versions/latest",
                                 "GITHUB_CLIENT_ID": "projects/{{PROJECT_ID}}/secrets/github-client-id/versions/latest",
                                 "PDD_REFRESH_TOKEN": "projects/{{PROJECT_ID}}/secrets/pdd-refresh-token/versions/latest",
                                 "CLAUDE_CODE_OAUTH_TOKEN": "projects/{{PROJECT_ID}}/secrets/CLAUDE_CODE_OAUTH_TOKEN/versions/latest"
@@ -54,8 +56,8 @@
                     }
                 ]
             },
-            "taskCount": "76",
-            "parallelism": "76"
+            "taskCount": "68",
+            "parallelism": "68"
         }
     ],
     "allocationPolicy": {
@@ -63,7 +65,7 @@
             {
                 "policy": {
                     "machineType": "e2-standard-8",
-                    "provisioningModel": "SPOT"
+                    "provisioningModel": "{{SPOT_PROVISIONING_MODEL}}"
                 }
             }
         ],

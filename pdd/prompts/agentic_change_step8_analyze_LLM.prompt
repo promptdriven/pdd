@@ -15,6 +15,7 @@ You are working on step 8 of 13 in an agentic change workflow. Previous steps id
 - GitHub Issue URL: {issue_url}
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
+- Artifacts Directory: {artifacts_dir}
 
 % Issue Content
 <issue_content>
@@ -100,6 +101,10 @@ Prompt-backed code is a GENERATED artifact in PDD. To change prompt-backed code 
    - Do any changes conflict with existing behavior?
    - Are there breaking changes to interfaces?
    - Will existing tests still pass?
+
+% Structured Output Artifact (REQUIRED)
+
+Before finishing, write `{artifacts_dir}/08_analyze.md` (into the already-created artifacts directory) — the exact Markdown comment body: the same content you place inside the `<step_report>` block below. The orchestrator posts this file verbatim (after secret-redaction/truncation) as the `## Step 8/13` issue comment. Still emit the `<step_report>` block below UNCHANGED; it is the orchestrator's fallback when the `.md` file is missing. (This step makes no orchestrator hard-stop decision — `No Changes Required` still proceeds to Step 9 — so no decision JSON is required.)
 
 % Output
 

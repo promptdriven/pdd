@@ -242,7 +242,10 @@ def test_execute_pdd_command_success():
         click.echo("High level exec")
         return "Done"
 
-    with patch("pdd.server.executor.get_pdd_command", return_value=real_dummy_cmd):
+    with patch.dict(
+        execute_pdd_command.__globals__,
+        {"get_pdd_command": MagicMock(return_value=real_dummy_cmd)},
+    ):
         output = execute_pdd_command("dummy", args={})
         
         assert output.exit_code == 0

@@ -683,3 +683,121 @@ def test_real_subprocess_durable_max_workers_limits_concurrency(
         f"assertion would be vacuous — with 4 ready modules and 2 workers the "
         f"peak must reach 2"
     )
+
+
+def test_durable_runner_builds_remapped_context_and_target(tmp_path):
+    """Durable carries target + context identity into `_build_command` (#1675).
+
+    Target and context are cwd-independent, so even though durable repopulates
+    module_cwds with a per-module worktree at runtime, the child must still run
+    `pdd --context <ctx> sync <target>` — using the resolved target (not the
+    scheduler key) and the cwd's own context (not the invalid global one).
+    """
+    worktree = tmp_path / "wt" / "backend"
+    worktree.mkdir(parents=True)
+    (worktree / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  report_ctx:\n    paths: ["report*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},  # not defined in the nested .pddrc
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/report": tmp_path / "backend"},
+        module_targets={"backend/report": "report"},
+        module_contexts={"backend/report": "report_ctx"},
+    )
+    # Simulate the per-module worktree cwd that _sync_one_module sets at runtime.
+    runner.module_cwds["backend/report"] = worktree
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"  # resolved target, not the "backend/report" key
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert "root_ctx" not in cmd
+
+
+def test_durable_remaps_unit_into_worktree_for_build_command(tmp_path):
+    """Durable carries a ResolvedSyncUnit and rebases it onto the worktree cwd
+    so the child runs `pdd --context <ctx> sync <target>` there (#1675)."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    parent_cwd = tmp_path / "backend"
+    parent_cwd.mkdir()
+    unit = ResolvedSyncUnit(
+        key="backend/report",
+        target_basename="report",
+        cwd=parent_cwd,
+        pddrc_path=parent_cwd / ".pddrc",
+        context="report_ctx",
+        prompts_dir=parent_cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_units={"backend/report": unit},
+    )
+    assert runner.parent_module_units["backend/report"].context == "report_ctx"
+
+    # Simulate the per-module worktree remap that _sync_one_module performs
+    # (relocate from the repo root onto the worktree root).
+    worktree_root = tmp_path / "wt"
+    runner.module_units["backend/report"] = runner.parent_module_units[
+        "backend/report"
+    ].relocate(tmp_path, worktree_root)
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert runner._module_cwd_path("backend/report") == worktree_root / "backend"
+
+
+def test_durable_allows_ancestor_pddrc_metadata(tmp_path):
+    """#1675 (review): operation_log anchors a module's metadata at the nearest
+    .pddrc PARENT, which can be an ANCESTOR of the module cwd. A module run from
+    backend/functions governed by backend/.pddrc writes backend/.pdd/meta — durable
+    mode must treat that as allowed, not reject the correctly-staged file as unsafe."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    cwd = tmp_path / "backend" / "functions"
+    cwd.mkdir(parents=True)
+    governing = tmp_path / "backend"
+    unit = ResolvedSyncUnit(
+        key="backend/functions/report",
+        target_basename="report",
+        cwd=cwd,
+        pddrc_path=governing / ".pddrc",  # ancestor of cwd
+        context=None,
+        prompts_dir=cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/functions/report"],
+        dep_graph={"backend/functions/report": []},
+        sync_options={},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/functions/report": cwd},
+        module_targets={"backend/functions/report": "report"},
+        module_units={"backend/functions/report": unit},
+    )
+    prefixes = {p.as_posix() for p in runner._allowed_metadata_prefixes("backend/functions/report")}
+    assert "backend/.pdd/meta" in prefixes, prefixes  # the governing .pddrc parent
+    # the correctly-anchored ancestor metadata file is NOT flagged unsafe
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/report_python.json"]
+    ) == []
+    # but a wrong-name file under that same dir is still rejected
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/other_python.json"]
+    ) == ["backend/.pdd/meta/other_python.json"]

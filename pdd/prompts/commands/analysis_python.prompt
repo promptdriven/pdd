@@ -10,7 +10,7 @@
      - Standard mode:
        - Validate `>= 2` positional files (last is `change_file`, preceding are prompt files).
        - Call `detect_change_main(ctx=..., prompt_files=..., change_file=..., output=...)`.
-       - Option: `--output`.
+       - Option: `--output`; help text must say it is not supported with `--stories` and point story-mode users to `--evidence` for machine-readable run evidence.
      - User story validation mode (`--stories`):
        - Disallow positional file arguments in this mode (raise `click.UsageError`).
        - Disallow `--output` in this mode (raise `click.UsageError`).
@@ -20,7 +20,9 @@
          - `include_llm_prompts=include_llm`
          - `fail_fast=fail_fast`
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
+       - If `passed` is false, write any requested evidence first. For direct command invocation with no parent result callback, raise `click.exceptions.Exit(1)`. For top-level CLI invocation, return the result tuple so the summary still includes cost/model; the core result callback must then exit non-zero when it sees `{"passed": False, ...}`.
        - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
+     - For handled non-Click exceptions, mark `ctx.obj["_command_failed"] = True` before calling `handle_error(...)` and returning `None`, so the core result callback exits non-zero even when Click chain mode supplies an empty results list.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
      - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=..., timeout_adder=..., use_github_state=..., clean_restart=...)`.

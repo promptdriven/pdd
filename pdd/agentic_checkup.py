@@ -6,6 +6,7 @@ project context (architecture.json, .pddrc), then dispatches the multi-step
 orchestrator that explores the project, identifies problems, and optionally
 fixes them — one step per LLM call for reliability.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,6 +29,8 @@ from .agentic_change import (
 from .agentic_checkup_orchestrator import (
     STEP5_SHELL_EVIDENCE_FILENAME,
     STEP5_SHELL_EVIDENCE_SCHEMA,
+    _is_provider_failure,
+    _is_step_timeout_failure,
     _load_step5_shell_evidence_from_memory,
     run_agentic_checkup_orchestrator,
 )
@@ -153,26 +156,31 @@ def _post_checkup_comment(
 
     body = "\n".join(body_lines)
 
-    _run_gh_command([
-        "api",
-        f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-        "-X", "POST",
-        "-f", f"body={body}",
-    ])
+    _run_gh_command(
+        [
+            "api",
+            f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+            "-X",
+            "POST",
+            "-f",
+            f"body={body}",
+        ]
+    )
 
 
 def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) -> None:
     """Post an error comment on the GitHub issue."""
-    body = (
-        "## PDD Checkup - Error\n\n"
-        f"```\n{message[:1000]}\n```\n"
+    body = "## PDD Checkup - Error\n\n" f"```\n{message[:1000]}\n```\n"
+    _run_gh_command(
+        [
+            "api",
+            f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+            "-X",
+            "POST",
+            "-f",
+            f"body={body}",
+        ]
     )
-    _run_gh_command([
-        "api",
-        f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-        "-X", "POST",
-        "-f", f"body={body}",
-    ])
 
 
 def _fetch_pr_context(owner: str, repo: str, pr_number: int) -> str:
@@ -232,9 +240,7 @@ def _fetch_pr_changed_files(owner: str, repo: str, pr_number: int) -> str:
         patch_hint = ""
         if patch:
             patch_hint = " | patch excerpt: " + _one_line(patch, 500)
-        lines.append(
-            f"- {filename} ({status}, +{additions}/-{deletions}){patch_hint}"
-        )
+        lines.append(f"- {filename} ({status}, +{additions}/-{deletions}){patch_hint}")
     return "\n".join(lines) if lines else "No changed files reported."
 
 
@@ -359,6 +365,8 @@ def _classify_layer1_failure_category(message: str) -> str:
     """
     text = (message or "").lower()
     if (
+        _layer1_failure_is_provider_or_timeout(message)
+        or
         "verdict json could not be parsed" in text
         or "empty step 7 output" in text
         or "could not be parsed" in text
@@ -374,7 +382,8 @@ def _classify_layer1_failure_category(message: str) -> str:
     if (
         "full suite not run" in text
         or "full-suite/ci re-run" in text
-        or "full suite (" in text and "not run" in text
+        or "full suite (" in text
+        and "not run" in text
         or "verification scope: targeted" in text
     ):
         return FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION
@@ -397,8 +406,7 @@ def _format_github_checks_gate_failure_report(
 ) -> str:
     """Render a parseable final-gate failure report before Layer 2 starts."""
     finding = _markdown_table_cell(
-        "GitHub checks gate failed before Layer 2: "
-        f"{github_checks_message}"
+        "GitHub checks gate failed before Layer 2: " f"{github_checks_message}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -469,8 +477,7 @@ def _format_layer1_failure_report(
     if len(payload_reason) > 4000:
         payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
     finding = _markdown_table_cell(
-        "Layer 1 checkup failed before Layer 2: "
-        f"{payload_reason}"
+        "Layer 1 checkup failed before Layer 2: " f"{payload_reason}"
     )
     issue_line = issue_url or "none"
     issue_aligned = "unknown" if issue_url else "n/a"
@@ -511,9 +518,7 @@ def _format_layer1_failure_report(
             "",
             "### Summary",
             "",
-            (
-                "Layer 1 PR checkup failed before Layer 2 review loop could run."
-            ),
+            ("Layer 1 PR checkup failed before Layer 2 review loop could run."),
             "",
             "### Machine Verdict",
             "",
@@ -604,7 +609,11 @@ def _review_loop_ship_verdict(
     # ``active_reviewer`` must be a real string key; a non-string (or empty)
     # value is a malformed verdict — fail closed instead of raising on the
     # unhashable ``dict.get`` lookup below.
-    if not isinstance(reviewer_status, dict) or not isinstance(active, str) or not active:
+    if (
+        not isinstance(reviewer_status, dict)
+        or not isinstance(active, str)
+        or not active
+    ):
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
@@ -630,6 +639,17 @@ def _review_loop_ship_verdict(
 
 
 _LAYER1_STEP5_ACTIONABLE_STATUSES = {"failed", "error", "timeout_partial"}
+
+
+def _layer1_failure_is_provider_or_timeout(message: str) -> bool:
+    """Return True when Layer 1 failed before producing a trustworthy verdict."""
+    text = message or ""
+    lowered = text.lower()
+    return (
+        _is_provider_failure(text)
+        or _is_step_timeout_failure(text)
+        or "agent providers unavailable" in lowered
+    )
 
 
 def _load_layer1_step5_evidence(
@@ -663,14 +683,21 @@ def _load_layer1_step5_evidence(
 
 def _layer1_step5_evidence_is_actionable(
     evidence: Optional[Dict[str, Any]],
+    *,
+    layer1_succeeded: bool = False,
+    layer1_message: str = "",
 ) -> bool:
     """Return True when shell-first Step 5 evidence should drive Layer 2."""
     if not isinstance(evidence, dict):
         return False
-    return (
-        str(evidence.get("status", "")).strip().lower()
-        in _LAYER1_STEP5_ACTIONABLE_STATUSES
-    )
+    if not layer1_succeeded and _layer1_failure_is_provider_or_timeout(layer1_message):
+        return False
+    status = str(evidence.get("status", "")).strip().lower()
+    if status not in _LAYER1_STEP5_ACTIONABLE_STATUSES:
+        return False
+    if layer1_succeeded and status == "timeout_partial":
+        return False
+    return True
 
 
 def _layer1_step5_evidence_for_review(
@@ -720,6 +747,7 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    allow_same_reviewer_fixer: bool = False,
     enable_gates: bool = True,
     gate_timeout: float = 60.0,
     gate_allow: Tuple[str, ...] = (),
@@ -770,6 +798,9 @@ def run_agentic_checkup(
             primary fixer cannot address the reviewer's findings (e.g. a
             subscription-tier credential is exhausted). Must differ from
             both the primary fixer and the active reviewer.
+        allow_same_reviewer_fixer: Explicitly allow the same role to act as
+            reviewer and fixer in the review loop. Off by default so the
+            independent reviewer/fixer contract remains the normal mode.
         start_step_override: Optional recovery override for the legacy
             orchestrator resume point. Used to start from a later step when
             cached state already contains earlier step outputs.
@@ -888,7 +919,9 @@ def run_agentic_checkup(
     # Uses the full pdd.prompt_source_set_report.v1 structured report as the
     # repair oracle (not just lint), then re-verifies before the orchestrator runs.
     if prompt_repair != "off":
-        from .checkup_prompt_main import build_prompt_source_set_report  # pylint: disable=import-outside-toplevel
+        from .checkup_prompt_main import (
+            build_prompt_source_set_report,
+        )  # pylint: disable=import-outside-toplevel
 
         repair_config = PromptRepairConfig(
             mode=prompt_repair,
@@ -921,8 +954,12 @@ def run_agentic_checkup(
                 continue  # no repair needed for this prompt
             # Step 2: repair using the structured report + issue context as oracle
             repair_context = dict(issue_context)
-            repair_context["source_set_report"] = json.dumps(src_report.as_dict(), indent=2)
-            repair_context["recommended_actions"] = "\n".join(src_report.recommended_actions())
+            repair_context["source_set_report"] = json.dumps(
+                src_report.as_dict(), indent=2
+            )
+            repair_context["recommended_actions"] = "\n".join(
+                src_report.recommended_actions()
+            )
             repair_result = run_prompt_repair_loop(
                 prompt_path,
                 repair_config,
@@ -1014,6 +1051,7 @@ def run_agentic_checkup(
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,
+            allow_same_reviewer_fixer=allow_same_reviewer_fixer,
             enable_gates=enable_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
@@ -1124,28 +1162,33 @@ def run_agentic_checkup(
     # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
     #    plain checkup run).
     try:
-        orch_success, orch_message, orch_cost, orch_model = run_agentic_checkup_orchestrator(
-            issue_url=effective_issue_url,
-            issue_content=full_content,
-            repo_owner=owner,
-            repo_name=repo,
-            issue_number=issue_number,
-            issue_title=title,
-            architecture_json=arch_json_str,
-            pddrc_content=pddrc_content,
-            cwd=project_root,
-            verbose=verbose,
-            quiet=quiet,
-            no_fix=no_fix,
-            timeout_adder=timeout_adder,
-            use_github_state=use_github_state,
-            reasoning_time=reasoning_time,
-            pr_url=pr_url,
-            pr_owner=pr_owner,
-            pr_repo=pr_repo,
-            pr_number=pr_number,
-            test_scope=test_scope,
-            start_step_override=start_step_override,
+        orch_success, orch_message, orch_cost, orch_model = (
+            run_agentic_checkup_orchestrator(
+                issue_url=effective_issue_url,
+                issue_content=full_content,
+                repo_owner=owner,
+                repo_name=repo,
+                issue_number=issue_number,
+                issue_title=title,
+                architecture_json=arch_json_str,
+                pddrc_content=pddrc_content,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                no_fix=no_fix,
+                timeout_adder=timeout_adder,
+                use_github_state=use_github_state,
+                reasoning_time=reasoning_time,
+                pr_url=pr_url,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                test_scope=test_scope,
+                defer_step5_to_github_checks=(
+                    final_gate and full_suite_source == "github-checks"
+                ),
+                start_step_override=start_step_override,
+            )
         )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"
@@ -1159,13 +1202,19 @@ def run_agentic_checkup(
     )
     layer1_step5_evidence_for_review = (
         _layer1_step5_evidence_for_review(layer1_step5_evidence)
-        if _layer1_step5_evidence_is_actionable(layer1_step5_evidence)
+        if _layer1_step5_evidence_is_actionable(
+            layer1_step5_evidence,
+            layer1_succeeded=orch_success,
+            layer1_message=orch_message,
+        )
         else ""
     )
 
     if not orch_success:
         if final_gate:
-            assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            assert (
+                pr_owner is not None and pr_repo is not None and pr_number is not None
+            )
             if layer1_step5_evidence_for_review:
                 clear_final_state(project_root, issue_number, pr_number)
                 if load_final_state(project_root, issue_number, pr_number) is not None:
@@ -1184,9 +1233,11 @@ def run_agentic_checkup(
                         "[bold]Final gate Layer 1 found Step 5 shell test failures; "
                         "running Layer 2 fixer with that evidence...[/bold]"
                     )
-                loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
-                    pr_content=final_gate_pr_content,
-                    layer1_step5_evidence=layer1_step5_evidence_for_review,
+                loop_success, loop_message, loop_cost, loop_model = (
+                    _run_review_loop_layer(
+                        pr_content=final_gate_pr_content,
+                        layer1_step5_evidence=layer1_step5_evidence_for_review,
+                    )
                 )
                 ship = _review_loop_ship_verdict(
                     load_final_state(project_root, issue_number, pr_number),
@@ -1239,15 +1290,22 @@ def run_agentic_checkup(
         # fail-closed). ``issue_number`` is the PR number when no issue was
         # given; in that mode the issue-alignment gate is skipped.
         github_checks_message: Optional[str] = None
-        if full_suite_source == "github-checks" and not layer1_step5_evidence_for_review:
-            assert pr_owner is not None and pr_repo is not None and pr_number is not None
-            github_success, github_checks_message, _github_head = run_github_checks_gate(
-                project_root,
-                pr_owner,
-                pr_repo,
-                pr_number,
-                quiet=quiet,
-                required_only=False,
+        if (
+            full_suite_source == "github-checks"
+            and not layer1_step5_evidence_for_review
+        ):
+            assert (
+                pr_owner is not None and pr_repo is not None and pr_number is not None
+            )
+            github_success, github_checks_message, _github_head = (
+                run_github_checks_gate(
+                    project_root,
+                    pr_owner,
+                    pr_repo,
+                    pr_number,
+                    quiet=quiet,
+                    required_only=False,
+                )
             )
             if not github_success:
                 report = _format_github_checks_gate_failure_report(

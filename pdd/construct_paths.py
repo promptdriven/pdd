@@ -12,9 +12,9 @@ import warnings
 
 import click
 import yaml
-from rich.console import Console
 from rich.theme import Theme
 
+from .cli_theme import get_console
 from .get_extension import get_extension
 from .get_language import get_language
 from .generate_output_paths import EXAMPLES_DIR, generate_output_paths
@@ -52,7 +52,7 @@ def _default_examples_project_root(pddrc_path: Optional[Path]) -> Path:
 # Add csv import for the new helper function
 import csv
 
-console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+console = get_console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
 def _extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
     """Extract the path suffix after the 'prompts' segment in a prompts_dir value.
@@ -128,8 +128,9 @@ def _find_nearest_pddrc_for_file(
 
 # Schema for .pddrc validation — see issue #1198.
 # Unknown keys at any level emit a UserWarning rather than being silently ignored.
-_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup"}
+_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup", "ci"}
 _PDDRC_CHECKUP_KEYS = {"prompt_gate"}
+_PDDRC_CI_KEYS = {"external_setup_fail_open", "manual_trigger_comment", "manual_triggers"}
 _PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
 _PDDRC_DEFAULTS_KEYS = {
     "generate_output_path",
@@ -149,6 +150,9 @@ _PDDRC_DEFAULTS_KEYS = {
     "compress_examples",
     "compress_test_context",
     "compression_fallback",
+    "test_token_budget",
+    "test_ranking_weights",
+    "test_dedup_threshold",
 }
 
 
@@ -179,6 +183,12 @@ def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
         for key in checkup.keys():
             if key not in _PDDRC_CHECKUP_KEYS:
                 _warn_unknown_pddrc_key(key, f"checkup.{key}")
+
+    ci_config = config.get("ci", {})
+    if isinstance(ci_config, dict):
+        for key in ci_config.keys():
+            if key not in _PDDRC_CI_KEYS:
+                _warn_unknown_pddrc_key(key, f"ci.{key}")
 
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):
@@ -556,6 +566,9 @@ def _resolve_config_hierarchy(
         'compress_examples': 'PDD_COMPRESS_EXAMPLES',
         'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
         'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
+        'test_token_budget': 'PDD_TEST_TOKEN_BUDGET',
+        'test_ranking_weights': 'PDD_TEST_RANKING_WEIGHTS',
+        'test_dedup_threshold': 'PDD_TEST_DEDUP_THRESHOLD',
     }
 
     for config_key, env_var in config_keys.items():

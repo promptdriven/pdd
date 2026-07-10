@@ -473,8 +473,11 @@ def detect_drift(
 
             if original_op in ("auto-deps", "generate"):
                 if code_in_changes and prompt_in_changes:
-                    op = "example"
-                    reason = "Code and prompt changed together; only example refresh remains"
+                    op = "conflict"
+                    reason = (
+                        "Code and prompt changed together; manual conflict "
+                        "resolution required"
+                    )
                 elif prompt_in_changes and not code_in_changes:
                     op = "example"
                     reason = "Prompt changed without code changes; only example refresh remains"
@@ -901,13 +904,110 @@ def _healed_module_name(module: Any) -> str:
     return str(basename)
 
 
-def _healed_module_metadata_relpaths(module: Any) -> List[str]:
+def _module_paths_for_metadata(module: Any) -> Dict[str, Path]:
+    """Return path hints used by operation-log metadata path resolution."""
+    paths: Dict[str, Path] = {}
+    for attr, key in (
+        ("prompt_path", "prompt"),
+        ("code_path", "code"),
+        ("example_path", "example"),
+    ):
+        value = getattr(module, attr, None)
+        if not value:
+            continue
+        try:
+            paths[key] = Path(str(value))
+        except TypeError:
+            continue
+    return paths
+
+
+def _resolved_metadata_relpaths(
+    basename: str,
+    language: str,
+    module: Any,
+    repo_root: Path,
+) -> List[str]:
+    """Return operation-log metadata paths, honoring module-specific .pddrc roots."""
+    relpaths: List[str] = []
+    paths = _module_paths_for_metadata(module)
+    if paths:
+        try:
+            from pdd.operation_log import get_fingerprint_path, get_run_report_path
+
+            for path in (
+                get_fingerprint_path(basename, language, paths=paths),
+                get_run_report_path(basename, language, paths=paths),
+            ):
+                relpaths.extend(sorted(_git_relative_path_candidates(path, repo_root)))
+        except Exception:
+            pass
+
+    relpaths.extend(_operation_log_metadata_relpaths(basename, language))
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for rel in relpaths:
+        if rel not in seen:
+            seen.add(rel)
+            deduped.append(rel)
+    return deduped
+
+
+def _healed_module_metadata_relpaths(
+    module: Any,
+    repo_root: Optional[Path] = None,
+) -> List[str]:
     """Return metadata relpaths owned by one healed module, if language is known."""
     basename = getattr(module, "basename", None)
     language = getattr(module, "language", None)
     if not basename or not language:
         return []
-    return _operation_log_metadata_relpaths(str(basename), str(language))
+    return _resolved_metadata_relpaths(
+        str(basename),
+        str(language),
+        module,
+        repo_root or _repo_root(),
+    )
+
+
+def _finalized_fingerprint_candidate_groups(
+    finalized_modules: Sequence[Tuple[str, str]],
+    healed_modules: Sequence[Any],
+    repo_root: Path,
+) -> List[Tuple[str, List[str]]]:
+    """Return acceptable staged fingerprint path candidates per finalized module."""
+    by_key: Dict[Tuple[str, str], Any] = {}
+    for module in healed_modules:
+        basename = getattr(module, "basename", None)
+        language = getattr(module, "language", None)
+        if basename and language:
+            by_key[(str(basename), str(language))] = module
+
+    groups: List[Tuple[str, List[str]]] = []
+    for basename, language in finalized_modules:
+        module = by_key.get((str(basename), str(language)))
+        candidates: List[str] = []
+        if module is not None:
+            paths = _module_paths_for_metadata(module)
+            if paths:
+                try:
+                    from pdd.operation_log import get_fingerprint_path
+
+                    path = get_fingerprint_path(str(basename), str(language), paths=paths)
+                    candidates.extend(sorted(_git_relative_path_candidates(path, repo_root)))
+                except Exception:
+                    pass
+        legacy = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+        candidates.append(legacy)
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for rel in candidates:
+            if rel not in seen:
+                seen.add(rel)
+                deduped.append(rel)
+        groups.append((legacy, deduped))
+    return groups
 
 
 def _healed_module_file_relpaths(module: Any, repo_root: Path) -> List[str]:
@@ -1106,6 +1206,29 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
     return True
 
 
+def _gitignored_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> Set[str]:
+    """Return pathspecs ignored by Git, best-effort."""
+    if not pathspecs:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--", *pathspecs],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        return set()
+    if getattr(result, "returncode", 1) not in (0, 1):
+        return set()
+    return {
+        line.strip()
+        for line in (getattr(result, "stdout", "") or "").splitlines()
+        if line.strip()
+    }
+
+
 def _stage_heal_changes(healed_modules: Sequence[Any]) -> bool:
     """Stage tracked updates plus explicit new files owned by healed modules.
 
@@ -1138,7 +1261,7 @@ def _stage_heal_changes(healed_modules: Sequence[Any]) -> bool:
     seen: Set[str] = set()
     for module in healed_modules:
         for rel in (
-            _healed_module_metadata_relpaths(module)
+            _healed_module_metadata_relpaths(module, repo_root)
             + _healed_module_file_relpaths(module, repo_root)
         ):
             if rel not in seen:
@@ -1509,24 +1632,48 @@ def commit_and_push(
     if not _stage_heal_changes(healed_modules):
         return False
 
+    repo_root = _repo_root()
+    fingerprint_candidate_groups = _finalized_fingerprint_candidate_groups(
+        finalized_modules or [],
+        healed_modules,
+        repo_root,
+    )
+    fingerprint_candidates = [
+        candidate
+        for _label, candidates in fingerprint_candidate_groups
+        for candidate in candidates
+    ]
+    if fingerprint_candidates and not _git_add_pathspecs(
+        fingerprint_candidates,
+        cwd=repo_root,
+    ):
+        return False
+
     # Detect whether there's anything staged.
     try:
         diff = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
+            cwd=repo_root,
             capture_output=True,
             text=True,
+            check=False,
         )
     except Exception as exc:
         console.print(f"[red]git diff --cached failed: {exc}[/red]")
         return False
     if diff.returncode == 0:
-        if finalized_modules:
-            for basename, language in finalized_modules:
-                expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+        if fingerprint_candidate_groups:
+            ignored = _gitignored_pathspecs(fingerprint_candidates, cwd=repo_root)
+            all_ignored = True
+            for expected, candidates in fingerprint_candidate_groups:
+                stageable = [candidate for candidate in candidates if candidate not in ignored]
+                if not stageable:
+                    continue
+                all_ignored = False
                 console.print(
                     f"[red]metadata staging verification failed: missing {expected}[/red]"
                 )
-            return False
+            return all_ignored
         # Nothing staged.
         return True
 
@@ -1535,12 +1682,14 @@ def commit_and_push(
     # otherwise the commit could ship without the updated fingerprint
     # (Issue #1006). The fingerprint JSON includes a fresh timestamp on every
     # write, so a real finalization always produces a staged change.
-    if finalized_modules:
+    if fingerprint_candidate_groups:
         try:
             names = subprocess.run(
                 ["git", "diff", "--cached", "--name-only"],
+                cwd=repo_root,
                 capture_output=True,
                 text=True,
+                check=False,
             )
         except Exception as exc:
             console.print(f"[red]git diff --cached --name-only failed: {exc}[/red]")
@@ -1553,10 +1702,13 @@ def commit_and_push(
             return False
         stdout = getattr(names, "stdout", "") or ""
         staged_paths = {line.strip() for line in stdout.splitlines() if line.strip()}
+        ignored = _gitignored_pathspecs(fingerprint_candidates, cwd=repo_root)
         missing: List[str] = []
-        for basename, language in finalized_modules:
-            expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
-            if expected not in staged_paths:
+        for expected, candidates in fingerprint_candidate_groups:
+            stageable = [candidate for candidate in candidates if candidate not in ignored]
+            if not stageable:
+                continue
+            if not any(candidate in staged_paths for candidate in stageable):
                 missing.append(expected)
         if missing:
             for path in missing:
@@ -1573,7 +1725,13 @@ def commit_and_push(
         msg_args.extend(["-m", _AUTO_HEAL_SUCCESS_TRAILER])
 
     try:
-        r = subprocess.run(msg_args, capture_output=True, text=True)
+        r = subprocess.run(
+            msg_args,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except Exception as exc:
         console.print(f"[red]git commit failed: {exc}[/red]")
         return False
@@ -1585,7 +1743,13 @@ def commit_and_push(
         return False
 
     try:
-        r = subprocess.run(["git", "push"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "push"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except Exception as exc:
         console.print(f"[red]git push failed: {exc}[/red]")
         return False
@@ -1638,6 +1802,8 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--budget-cap", type=float, default=None)
     parser.add_argument("--skip-ci", action="store_true")
     parser.add_argument("--diff-base", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--json", action="store_true", dest="as_json")
 
     ns = parser.parse_args(argv)
     if ns.modules is not None:
@@ -1655,8 +1821,28 @@ def main(
     budget_cap: Optional[float] = None,
     skip_ci: bool = False,
     diff_base: Optional[str] = None,
+    dry_run: bool = False,
+    as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    if dry_run:
+        from pdd.continuous_sync import build_report
+        import json as _json
+
+        report = build_report(consumer="ci-heal", modules=modules)
+        if as_json:
+            print(_json.dumps(report, indent=2, sort_keys=True))
+        else:
+            summary = report["summary"]
+            console.print(
+                "dry-run: "
+                f"metadata_stale={summary['metadata_stale']} "
+                f"conflicts={summary['conflicts']} "
+                f"unbaselined={summary['unbaselined']} "
+                f"failures={summary['failures']}"
+            )
+        return 0 if report["ok"] else 1
+
     # PR auto-heal scope guard (#1403): in PR mode (no --skip-ci), suppress
     # coverage-driven test_extend so a narrow fix PR is never re-bloated with
     # unrelated generated tests. The flag is set on os.environ only for the
@@ -1807,4 +1993,6 @@ if __name__ == "__main__":
         budget_cap=ns.budget_cap,
         skip_ci=ns.skip_ci,
         diff_base=ns.diff_base,
+        dry_run=ns.dry_run,
+        as_json=ns.as_json,
     ))

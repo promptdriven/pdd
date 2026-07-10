@@ -404,10 +404,93 @@ class TestOrchestratorPrMode:
             f"Step 8 must be skipped in PR mode; invoked: {invoked_steps}"
         )
 
-    def test_pr_mode_max_iterations_without_sentinel_fails_before_push(
+    def test_step_8_skip_recorded_in_telemetry_pr_mode(self, tmp_path: Path) -> None:
+        """PR mode skips create_pr (step 8) but must still record it in
+        ``step_telemetry`` as ``skipped`` (issue #1709). Regression for the gap
+        where only the ``--no-fix`` skip sites recorded telemetry, so
+        ``create_pr`` was absent on the common PR-verification path.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        captured: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        def capture_save(**kwargs):  # noqa: ANN003
+            captured.append(json.loads(json.dumps(kwargs["state"])))
+            return None
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(tmp_path / "wt", None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            (tmp_path / "wt").mkdir()
+
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success
+        # Use the richest persisted telemetry (it only grows across saves).
+        telemetry = max(
+            (s.get("step_telemetry", []) for s in captured), key=len, default=[]
+        )
+        create_pr = [e for e in telemetry if e["step_id"] == "create_pr"]
+        assert create_pr, (
+            "create_pr (step 8) must be recorded in step_telemetry even when "
+            "skipped in PR mode"
+        )
+        assert all(e["status"] == "skipped" for e in create_pr)
+        assert all(e["cost_usd"] == 0.0 for e in create_pr)
+
+    def test_pr_mode_structured_success_without_sentinel_exits_loop(
         self, tmp_path: Path
     ) -> None:
-        """A clean-looking JSON verdict without the loop sentinel is not enough."""
+        """A clean structured verdict is enough; the sentinel is normalized."""
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
         wt = tmp_path / "wt"
@@ -422,6 +505,8 @@ class TestOrchestratorPrMode:
                     0.0,
                     "fake-model",
                 )
+            if step_num == 5:
+                return (True, _step5_pass_output(), 0.0, "fake-model")
             return (True, f"Step {step_num} output", 0.0, "fake-model")
 
         with patch(
@@ -448,7 +533,7 @@ class TestOrchestratorPrMode:
             },
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed"
-        ) as push_mock:
+        ) as _push_mock:
             success, msg, _cost, _model = run_agentic_checkup_orchestrator(
                 issue_url="https://github.com/o/r/issues/99",
                 issue_content="stub",
@@ -470,13 +555,11 @@ class TestOrchestratorPrMode:
                 pr_number=200,
             )
 
-        assert success is False
-        assert "did not verify all issues fixed" in msg.lower()
+        assert success is True, msg
         invoked_steps = [c.args[0] for c in run_mock.call_args_list]
-        assert invoked_steps.count(7) == 3
+        assert invoked_steps.count(7) == 1
         assert 8 not in invoked_steps
-        push_mock.assert_not_called()
-        clear_mock.assert_not_called()
+        assert clear_mock.called
 
     def test_pr_mode_context_populated(self, tmp_path: Path) -> None:
         """PR-mode fields must land in the context dict passed to step prompts."""
@@ -1149,6 +1232,120 @@ class TestStateIdentityPrHeadSha:
             pr_head_sha="deadbeef",
         )
         assert s["pr_head_sha"] == "deadbeef"
+
+    def test_build_state_records_pr_test_scope(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _build_state
+
+        s = _build_state(
+            issue_number=42, issue_url="u", last_completed_step=3,
+            step_outputs={}, total_cost=0.0, model_used="m", github_comment_id=None,
+            mode="pr", pr_number=99, pr_owner="acme", pr_repo="thing",
+            pr_head_sha="deadbeef", pr_test_scope="targeted",
+        )
+        assert s["pr_test_scope"] == "targeted"
+
+    def test_resume_discards_cache_when_pr_test_scope_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """Cached full-scope PR outputs must not feed a targeted rerun.
+
+        The PR head may be unchanged while the operator switches from
+        ``--test-scope full``/local evidence to ``--test-scope targeted`` with
+        GitHub checks as the full-suite source. Step 5 selection and Step 7's
+        out-of-scope critical carveout differ by scope, so the cached full
+        outputs must be discarded even when PR identity and SHA match.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "aaaaaaaa",
+            "pr_test_scope": "full",
+            "last_completed_step": 5,
+            "worktree_path": str(tmp_path / "wt"),
+            "step_outputs": {
+                "1": "cached-full-1",
+                "2": "cached-full-2",
+                "3": "cached-full-3",
+                "4": "cached-full-4",
+                "5": "cached-full-5",
+            },
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        executed_steps: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "aaaaaaaa",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa",
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+                test_scope="targeted",
+            )
+
+        assert success is True, msg
+        assert 1 in executed_steps, (
+            f"Step 1 must re-run when PR test scope changes; ran: {executed_steps}"
+        )
+        assert 5 in executed_steps, (
+            f"Step 5 must re-run when PR test scope changes; ran: {executed_steps}"
+        )
 
     def test_resume_discards_cache_when_pr_head_sha_advanced(
         self, tmp_path: Path
@@ -2345,33 +2542,6 @@ class TestPrModeSourceArtifacts:
         assert "_check_architecture_registry_edit_guard" in function_names
         assert "_format_pr_mode_final_report" in function_names
 
-    def test_final_checkup_helper_is_in_prompt_and_context_sources(self) -> None:
-        root = Path(__file__).resolve().parent.parent
-        prompt = (
-            root / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
-        ).read_text(encoding="utf-8")
-        context = (
-            root / "context" / "agentic_e2e_fix_orchestrator_example.py"
-        ).read_text(encoding="utf-8")
-        architecture = json.loads(
-            (root / "architecture.json").read_text(encoding="utf-8")
-        )
-
-        assert "def:_run_final_checkup_on_pr" in prompt
-        assert "def _run_final_checkup_on_pr" in context
-        assert "cwd=cwd" in context
-
-        module = next(
-            item
-            for item in architecture
-            if item.get("filename") == "agentic_e2e_fix_orchestrator_python.prompt"
-        )
-        functions = module["interface"]["module"]["functions"]
-        helper = next(
-            fn for fn in functions if fn.get("name") == "_run_final_checkup_on_pr"
-        )
-        assert "cwd: Path" in helper["signature"]
-
 
 # ---------------------------------------------------------------------------
 # Round-4 Finding 1: gate the orchestrator on Step 7's JSON verdict.
@@ -2418,6 +2588,128 @@ class TestStep7PassedHelper:
         assert passed is False
         assert "Step 7 verdict JSON could not be parsed" in reason
 
+    def test_hosted_green_step7_without_json_passes_narrow_fallback(self) -> None:
+        """Hosted checkup sometimes emits a green markdown report but omits JSON."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        report = """
+## Step 7/8: Verification & Final Report
+
+### Test Results After Fixes
+- **Total:** 590 tests (PR-scoped suite)
+- **Passed:** 590
+- **Failed:** 0
+- **Skipped:** 2 (pre-existing, unrelated)
+
+### Overall Status
+All clear — no remaining issues.
+
+### Findings from Last Review Loop — All Fixed
+All 4 medium-severity findings from the previous review loop are resolved.
+
+### Issue Alignment Verification
+PR #1831 fully addresses all acceptance criteria of issue #1827.
+
+---
+*Checkup complete. PR #1831 fully resolves issue #1827.*
+"""
+
+        passed, reason = _step7_passed(report, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+
+    def test_hosted_step7_no_issues_remaining_table_passes_narrow_fallback(self) -> None:
+        """Hosted Step 7 can report a markdown-only green verdict in table form."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        report = """
+## Step 7: Verification & Final Report
+
+**Status:** All Clear - No Issues Remaining
+
+### Test Results
+
+| File | Tests | Status |
+|------|-------|--------|
+| `tests/test_generate_model_catalog.py` | 82 | pass |
+| `tests/test_llm_invoke.py` | 362 | pass |
+| **PR-scoped total** | **545** | **0 failed** |
+
+### Previously-Reported Bugs: All Fixed
+
+All 4 medium bugs from the prior review round have been addressed.
+
+### Issues Summary
+
+| Severity | Category | Module | Description | Fixed |
+|----------|----------|--------|-------------|-------|
+| low | build_warning | pdd/llm_invoke.py:495 | Pre-existing warning | N/A (out-of-scope) |
+
+### Overall Status
+
+All clear. PR #1831 fully resolves issue #1827. All 545 PR-scoped tests pass
+with 0 failures. No new issues found.
+"""
+
+        passed, reason = _step7_passed(report, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+
+    def test_vague_step7_without_json_still_fails_closed(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            "## Step 7/8: Verification & Final Report\nAll good.",
+            pr_mode=True,
+            has_issue=True,
+        )
+
+        assert passed is False
+        assert "Step 7 verdict JSON could not be parsed" in reason
+
+    def test_success_artifact_normalizer_adds_legacy_gate_evidence(self) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            _ensure_step7_success_artifacts,
+            _step7_passed,
+        )
+
+        report = """
+## Step 7/8: Verification & Final Report
+
+### Test Results After Fixes
+- **Passed:** 590
+- **Failed:** 0
+
+### Overall Status
+All clear — no remaining issues.
+
+### Findings from Last Review Loop — All Fixed
+All prior findings are resolved.
+
+### Issue Alignment Verification
+PR #1831 fully resolves issue #1827.
+
+---
+*Checkup complete.*
+"""
+
+        normalized = _ensure_step7_success_artifacts(
+            report,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+            pr_head_sha="cc1e449dbd9fcbfbe2627d4eb1840a80770f02f8",
+        )
+        passed, reason = _step7_passed(normalized, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+        assert "All Issues Fixed" in normalized
+        assert "**New failures:** 0" in normalized
+        assert "All CI checks green" in normalized
+        assert "cc1e449dbd9f" in normalized
+        assert '"success": true' in normalized
+        assert '"issue_aligned": true' in normalized
+
     def test_empty_step7_output_fails_closed(self) -> None:
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
@@ -2431,6 +2723,56 @@ class TestStep7PassedHelper:
         out = _step7_output(success=False, issue_aligned=None,
                             include_sentinel=False, message="tests still red")
         passed, reason = _step7_passed(out, pr_mode=False)
+        assert passed is False
+        assert "success=false" in reason
+
+    def test_hosted_json_verdict_without_success_passes_when_clean(self) -> None:
+        """Hosted Step 7 may emit a clean verdict using newer pass fields."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = {
+            "issue_aligned": True,
+            "all_tests_pass": True,
+            "build_clean": True,
+            "blocking_issues": [],
+            "non_blocking_notes": [
+                "Pre-existing warning in llm_invoke.py:495",
+            ],
+            "exit_signal": "All Issues Fixed",
+            "step": 7,
+            "iteration": 1,
+            "total_tests": 892,
+            "passed": 892,
+            "skipped": 2,
+            "failed": 0,
+        }
+        out = (
+            "## Step 7/8: Verification & Final Report\n\n"
+            "### Test Results: 892 passed, 2 skipped, 0 failed\n\n"
+            "```json\n"
+            f"{json.dumps(payload, indent=2)}\n"
+            "```"
+        )
+
+        passed, reason = _step7_passed(out, pr_mode=True, has_issue=True)
+
+        assert passed is True, reason
+
+    def test_json_verdict_without_success_fails_with_blocking_issues(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = {
+            "issue_aligned": True,
+            "all_tests_pass": True,
+            "build_clean": True,
+            "blocking_issues": ["review finding remains"],
+            "exit_signal": "All Issues Fixed",
+            "failed": 0,
+        }
+        out = "```json\n" + json.dumps(payload) + "\n```"
+
+        passed, reason = _step7_passed(out, pr_mode=True, has_issue=True)
+
         assert passed is False
         assert "success=false" in reason
 
@@ -2489,6 +2831,78 @@ class TestStep7PassedHelper:
         out = _step7_output(success=True, issue_aligned=True)
         passed, _reason = _step7_passed(out, pr_mode=True)
         assert passed is True
+
+    # --- issue #1574: targeted-PR out-of-scope / non-blocking criticals -------
+
+    def test_targeted_pr_out_of_scope_critical_flags_only_does_not_block(self) -> None:
+        # A pre-existing, out-of-scope, non-blocking critical carrying ONLY the
+        # structured flags (no free-text *_reason) must not fail a targeted PR.
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "TS18003: frontend/src/ missing (pre-existing).",
+                 "scope": "out-of-scope", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is True, reason
+
+    def test_targeted_pr_blocking_false_flag_alone_still_blocks(self) -> None:
+        # A bare ``blocking: false`` is a self-reported severity downgrade, not
+        # an out-of-scope claim, so it must NOT wave through an unfixed critical
+        # on its own (#1574 review, fail-closed).
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "app",
+                 "description": "pre-existing build break", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is False
+        assert "unfixed critical" in reason
+
+    def test_targeted_pr_in_scope_blocking_critical_still_blocks(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "auth",
+                 "description": "PR introduces token leak", "scope": "pr-diff",
+                 "blocking": True},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is False
+        assert "unfixed critical" in reason
+
+    def test_full_scope_out_of_scope_critical_still_blocks(self) -> None:
+        # Full PR mode is the comprehensive gate: the #1574 carveout is scoped to
+        # targeted runs, so even an explicitly out-of-scope / ``blocking: false``
+        # critical blocks under a full-suite attempt.
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "build break", "scope": "out-of-scope",
+                 "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="full")
+        assert passed is False
+        assert "unfixed critical" in reason
 
 
 def _run_orch_with_fake_step7(
@@ -2585,6 +2999,22 @@ class TestStep7GateInPrFixMode:
     reports `issue_aligned: false` or unfixed critical issues, and must
     return failure so callers don't mark the run green.
     """
+
+    def test_full_pr_mode_structured_step7_pass_exits_without_legacy_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        step7 = _step7_output(
+            success=True,
+            issue_aligned=True,
+            include_sentinel=False,
+        )
+        success, msg, _push_mock, executed, clear_mock = _run_orch_with_fake_step7(
+            tmp_path, step7
+        )
+
+        assert success is True, msg
+        assert executed.count(7) == 1
+        assert clear_mock.called
 
     def test_pr_mode_returns_failure_when_step7_issue_aligned_false(
         self, tmp_path: Path

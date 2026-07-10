@@ -20,8 +20,14 @@ from ..auto_update import auto_update
 from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
-from .errors import console, handle_error, clear_core_dump_errors
+from .errors import console, handle_error, clear_core_dump_errors, apply_color_preference
+from ..cli_status import GLYPHS as _STATUS_GLYPHS, Status as _Status
 from .utils import _first_pending_command, _should_show_onboarding_reminder
+
+# Shared status glyphs (EPIC #1540, workstream 2) so the per-step execution
+# summary speaks the same SUCCESS/FAILURE vocabulary as every other command.
+_OK_GLYPH = _STATUS_GLYPHS[_Status.SUCCESS]   # ✓
+_FAIL_GLYPH = _STATUS_GLYPHS[_Status.FAILURE]  # ✗
 from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
@@ -548,6 +554,14 @@ class PDDCLI(click.Group):
     help="Decrease output verbosity for minimal information.",
 )
 @click.option(
+    "--color/--no-color",
+    "color",
+    default=None,
+    help="Force or disable colored output across all commands. "
+    "Default: auto (color on a TTY, off when piped or when NO_COLOR is set). "
+    "--no-color disables it everywhere; --color forces it even through a pipe.",
+)
+@click.option(
     "--output-cost",
     type=click.Path(dir_okay=False, writable=True),
     default=None,
@@ -633,26 +647,27 @@ class PDDCLI(click.Group):
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
-    ctx: click.Context,
-    force: bool,
-    strength: float,
-    temperature: float,
-    verbose: bool,
-    quiet: bool,
-    output_cost: Optional[str],
-    estimate: bool,
-    estimate_json: bool,
-    review_examples: bool,
-    local: bool,
-    time: Optional[float], # Type hint is Optional[float]
-    context_override: Optional[str],
-    list_contexts: bool,
-    core_dump: bool,
-    keep_core_dumps: int,
-    compress_examples: Optional[bool],
-    compress_test_context: Optional[bool],
-    context_compression: Optional[str],
-    compression_fallback: Optional[str],
+    ctx: Optional[click.Context] = None,
+    force: bool = False,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    color: Optional[bool] = None,
+    output_cost: Optional[str] = None,
+    estimate: bool = False,
+    estimate_json: bool = False,
+    review_examples: bool = False,
+    local: bool = False,
+    time: Optional[float] = None, # Type hint is Optional[float]
+    context_override: Optional[str] = None,
+    list_contexts: bool = False,
+    core_dump: bool = True,
+    keep_core_dumps: int = 10,
+    compress_examples: Optional[bool] = None,
+    compress_test_context: Optional[bool] = None,
+    context_compression: Optional[str] = None,
+    compression_fallback: Optional[str] = None,
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -699,6 +714,11 @@ def cli(
         os.environ["PDD_QUIET"] = "1"
     else:
         os.environ.pop("PDD_QUIET", None)
+    # Color is the default (auto-detected); --color/--no-color lets the user force
+    # or disable it across every command. Apply it before any console output below
+    # so the choice covers the whole run, including later-constructed consoles.
+    ctx.obj["color"] = color
+    ctx.call_on_close(apply_color_preference(color))
     ctx.obj["estimate"] = estimate_mode
     ctx.obj["estimate_json"] = bool(estimate_json)
     ctx.obj["estimate_results"] = []
@@ -758,7 +778,15 @@ def cli(
     ctx.obj["review_examples"] = review_examples
     if review_examples:
         ctx.obj["grounding_review_decisions"] = []
-    ctx.obj["local"] = bool(local or estimate_mode)
+    # PDD_FORCE_LOCAL env must behave like --local: the per-step cloud
+    # dispatchers (generateCode/crashCode/verifyCode/fixCode) gate on
+    # ctx.obj["local"], not on the env var, so an env-only force-local
+    # previously still attempted PDD-cloud auth — including an interactive
+    # GitHub device-flow hang outside CI. Truthy set matches sync_main.
+    env_force_local = os.environ.get(
+        "PDD_FORCE_LOCAL", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    ctx.obj["local"] = bool(local or estimate_mode or env_force_local)
     # Propagate --local flag to environment for llm_invoke cloud detection
     if local or estimate_mode:
         os.environ['PDD_FORCE_LOCAL'] = '1'
@@ -922,10 +950,33 @@ def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bo
     return not any(r is None for r in normalized_results)
 
 
+def _normalized_results_should_exit_nonzero(
+    normalized_results: List[Any], invoked_subcommands: List[str]
+) -> bool:
+    """Return True when normalized command results represent process failure."""
+    for i, result in enumerate(normalized_results):
+        command_name = (
+            invoked_subcommands[i]
+            if i < len(invoked_subcommands)
+            else f"Unknown Command {i + 1}"
+        )
+        if result is None and command_name != "install_completion":
+            return True
+        if isinstance(result, tuple) and len(result) == 3:
+            result_data = result[0]
+            if isinstance(result_data, dict) and result_data.get("passed") is False:
+                return True
+    return False
+
+
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
-def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float, str]]], **kwargs):
+def process_commands(
+    ctx: Optional[click.Context] = None,
+    results: Optional[List[Optional[Tuple[Any, float, str]]]] = None,
+    **kwargs,
+):
     """
     Processes results returned by executed commands and prints a summary.
     Receives a list of tuples, typically (result, cost, model_name),
@@ -986,16 +1037,16 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Check if it was install_completion (which normally returns None)
                 if command_name == "install_completion":
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                    console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 # If command name is unknown, and it might be install_completion which prints its own status
                 elif command_name.startswith("Unknown Command"):
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command executed (see output above for status details).")
                 # Check if it was preprocess (which returns a dummy tuple on success)
                 # This case handles actual failure for preprocess
                 elif command_name == "preprocess":
-                    console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+                    console.print(f"  [error]{_FAIL_GLYPH}[/error] [error]Step {i+1} ({command_name}):[/error] Command failed.")
                 else:
-                    console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+                    console.print(f"  [error]{_FAIL_GLYPH}[/error] [error]Step {i+1} ({command_name}):[/error] Command failed.")
         # Check if the result is the expected tuple structure from @track_cost or preprocess success
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             result_data, cost, model_name = result_tuple
@@ -1004,7 +1055,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
+                    console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
                 else:
                     # Generic output using potentially "Unknown Command" name.
                     # Suppress the Model: segment when no model was used (zero-cost
@@ -1013,9 +1064,9 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     # blank "Model: " label (#1103).
                     model_repr = (model_name or "").strip()
                     if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
                     else:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
+                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
                 
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):
@@ -1028,7 +1079,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
         elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
             if not ctx.obj.get("quiet") and not suppress_result_summary:
-                console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 console.print("    Examples used:")
                 for ex in result_tuple["examplesUsed"]:
                     slug = ex.get("slug", "unknown")
@@ -1063,5 +1114,10 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     if not (isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_core_dump")):
         _write_result_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
-    if fatal:
+    command_failed = (
+        ctx.obj.get("_command_failed") if isinstance(ctx.obj, dict) else None
+    )
+    if fatal or command_failed or _normalized_results_should_exit_nonzero(
+        normalized_results, invoked_subcommands
+    ):
         ctx.exit(1)

@@ -148,6 +148,47 @@ def create_run_report_file(path: Path, data: dict):
     with open(path, 'w') as f:
         json.dump(data, f)
 
+
+def _write_complete_unit_with_fingerprint(tmp_path: Path) -> dict:
+    """Create a complete synced Python unit and return its paths."""
+    paths = {
+        "prompt": tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        "code": tmp_path / f"{BASENAME}.py",
+        "example": tmp_path / "examples" / f"{BASENAME}_example.py",
+        "test": tmp_path / "tests" / f"test_{BASENAME}.py",
+    }
+    prompt_hash = create_file(paths["prompt"], "Generate a simple function.\n")
+    code_hash = create_file(paths["code"], "def value():\n    return 1\n")
+    example_hash = create_file(paths["example"], "from test_unit import value\nprint(value())\n")
+    test_hash = create_file(paths["test"], "from test_unit import value\n\ndef test_value():\n    assert value() == 1\n")
+    create_fingerprint_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json",
+        {
+            "pdd_version": "test",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "command": "fix",
+            "prompt_hash": prompt_hash,
+            "code_hash": code_hash,
+            "example_hash": example_hash,
+            "test_hash": test_hash,
+            "test_files": {paths["test"].name: test_hash},
+            "include_deps": {},
+        },
+    )
+    create_run_report_file(
+        get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json",
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "exit_code": 0,
+            "tests_passed": 1,
+            "tests_failed": 0,
+            "coverage": 100.0,
+            "test_hash": test_hash,
+            "test_files": {paths["test"].name: test_hash},
+        },
+    )
+    return paths
+
 # --- Part 1: Core Components & Helper Functions ---
 
 class TestSyncLock:
@@ -945,7 +986,7 @@ def test_decision_update_on_code_change(mock_construct, pdd_test_environment):
 
 @patch('sync_determine_operation.construct_paths')
 def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_environment):
-    """When both prompt and derived files changed, fingerprint should be deleted and sync restarts fresh."""
+    """When prompt and derived files changed, sync must return an explicit conflict."""
     prompts_dir = pdd_test_environment / "prompts"
     create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "modified prompt")
     create_file(pdd_test_environment / f"{BASENAME}.py", "modified code")
@@ -968,11 +1009,10 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
     })
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
-    # Should restart fresh (generate) instead of returning analyze_conflict
-    assert decision.operation == 'generate'
-    # Fingerprint file should have been deleted (re-analysis treats it as new module)
-    assert not fp_path.exists(), "Fingerprint file should be deleted on conflict"
-    assert decision.details.get('fingerprint_found') == False
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
+    assert decision.details.get('changed_files') == ['prompt', 'code']
+    assert fp_path.exists(), "Conflict classification must not delete metadata"
 
 
 @patch('sync_determine_operation.construct_paths')
@@ -1009,21 +1049,16 @@ def test_log_mode_conflict_analysis_keeps_metadata(mock_construct, pdd_test_envi
         log_mode=True,
     )
 
-    assert decision.operation == 'generate'
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
     assert decision.details.get('read_only') is True
     assert fp_path.exists()
     assert rr_path.exists()
 
 
 @patch('sync_determine_operation.construct_paths')
-def test_conflict_deletes_fingerprint_and_run_report(mock_construct, pdd_test_environment):
-    """When both prompt and derived files changed (no run_report), fingerprint is deleted and sync restarts fresh.
-
-    Note: When a run_report exists alongside a fingerprint, prompt changes are caught
-    by an earlier code path (line ~1298) that returns 'generate' directly without
-    reaching the conflict detection. The conflict+deletion path is reached when
-    there is no run_report (e.g., after a generate that didn't run tests yet).
-    """
+def test_conflict_preserves_fingerprint_and_run_report(mock_construct, pdd_test_environment):
+    """Prompt+derived co-edits must not delete metadata or pick a winner."""
     prompts_dir = pdd_test_environment / "prompts"
     create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "modified prompt")
     create_file(pdd_test_environment / f"{BASENAME}.py", "modified code")
@@ -1058,11 +1093,34 @@ def test_conflict_deletes_fingerprint_and_run_report(mock_construct, pdd_test_en
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, prompts_dir=str(prompts_dir))
 
-    # When run_report exists, the early prompt-change check (line ~1298) catches this
-    # and returns 'generate' directly — the conflict path is not reached.
-    # Either way, the result should be 'generate' (not 'analyze_conflict').
-    assert decision.operation == 'generate'
+    assert decision.operation == 'fail_and_request_manual_merge'
+    assert decision.details.get('classification') == 'CONFLICT'
     assert decision.operation != 'analyze_conflict'
+    assert fp_path.exists()
+    assert rr_path.exists()
+
+
+def test_prompt_code_coedit_conflict_with_real_paths_preserves_metadata(pdd_test_environment):
+    """Critical #1932/#1929 closure: prompt+code co-edit is CONFLICT, not deletion."""
+    paths = _write_complete_unit_with_fingerprint(pdd_test_environment)
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    before_fp = fp_path.read_text(encoding="utf-8")
+
+    paths["prompt"].write_text("Generate a changed function.\n", encoding="utf-8")
+    paths["code"].write_text("def value():\n    return 2\n", encoding="utf-8")
+
+    decision = sync_determine_operation(
+        BASENAME,
+        LANGUAGE,
+        TARGET_COVERAGE,
+        prompts_dir=str(pdd_test_environment / "prompts"),
+    )
+
+    assert decision.operation == "fail_and_request_manual_merge"
+    assert decision.details["classification"] == "CONFLICT"
+    assert set(decision.details["changed_files"]) == {"prompt", "code"}
+    assert fp_path.read_text(encoding="utf-8") == before_fp
+    assert paths["prompt"].read_text(encoding="utf-8") == "Generate a changed function.\n"
 
 
 # --- Part 3: `analyze_conflict_with_llm` ---
@@ -2626,21 +2684,19 @@ def test_get_pdd_file_paths_respects_pddrc_with_PDD_PATH(pdd_test_environment, m
 
 
 def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, monkeypatch):
-    """When config paths end with /, files go directly into configured directory.
+    """A path-qualified basename keeps its subdirectory under the configured dir (#1677).
 
-    For basename='core/cloud' with .pddrc paths ending in /:
-    - generate_output_path: pdd/ → code: pdd/cloud.py
-    - test_output_path: tests/ → test: tests/test_cloud.py
-    - example_output_path: examples/ → example: examples/cloud_example.py
+    For basename='core/cloud' with no architecture entry and .pddrc paths ending in /:
+    - generate_output_path: pdd/ → code: pdd/core/cloud.py
+    - test_output_path: tests/ → test: tests/core/test_cloud.py
+    - example_output_path: examples/ → example: examples/core/cloud_example.py
 
-    Note: When config paths explicitly end with /, they are treated as COMPLETE
-    directories. The dir_prefix from basename is NOT added because the config
-    already specifies the exact directory. This prevents double-pathing bugs
-    like 'backend/functions/utils/backend/utils/file.py'.
-
-    If you WANT subdirectory structure, either:
-    1. Don't end config paths with / (e.g., 'pdd' instead of 'pdd/')
-    2. Use template-based paths with {dir_prefix} placeholder
+    Issue #1677: the basename's directory (`core/`) is preserved so two modules sharing
+    a leaf (`core/cloud`, `aws/cloud`) don't collapse onto one `pdd/cloud.py`. Any
+    segment the configured directory already provides is de-duplicated (it is NOT
+    re-prefixed to `pdd/pdd/...`). A context whose prompts_dir already maps the
+    directory keeps using its generate_output_path directly (see
+    test_explicit_output_paths).
     """
     _write_pddrc_here()
 
@@ -2654,19 +2710,17 @@ def test_get_pdd_file_paths_with_subdirectory_basename(pdd_test_environment, mon
 
     paths = get_pdd_file_paths(basename="core/cloud", language="python", prompts_dir="prompts")
 
-    # When config paths end with /, files go directly into that directory
-    # The dir_prefix (core/) is NOT added because explicit paths are used
+    # The basename's subdirectory (core/) is preserved under each configured dir.
     code_path = paths["code"].as_posix()
     test_path = paths["test"].as_posix()
     example_path = paths["example"].as_posix()
 
-    # Files go directly into configured directories (no dir_prefix added)
-    assert code_path.endswith("pdd/cloud.py"), \
-        f"Expected path ending with 'pdd/cloud.py', got {code_path}"
-    assert test_path.endswith("tests/test_cloud.py"), \
-        f"Expected path ending with 'tests/test_cloud.py', got {test_path}"
-    assert example_path.endswith("examples/cloud_example.py"), \
-        f"Expected path ending with 'examples/cloud_example.py', got {example_path}"
+    assert code_path.endswith("pdd/core/cloud.py"), \
+        f"Expected path ending with 'pdd/core/cloud.py', got {code_path}"
+    assert test_path.endswith("tests/core/test_cloud.py"), \
+        f"Expected path ending with 'tests/core/test_cloud.py', got {test_path}"
+    assert example_path.endswith("examples/core/cloud_example.py"), \
+        f"Expected path ending with 'examples/core/cloud_example.py', got {example_path}"
 
 
 def test_get_pdd_file_paths_no_path_duplication_with_deep_prompts_dir(tmp_path, monkeypatch):
@@ -3439,6 +3493,13 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
     prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
     new_prompt_hash = create_file(prompt_path, "NEW PROMPT CONTENT - changed!")
 
+    # Create code/example/test files first so the fingerprint represents a
+    # prompt-only change rather than a prompt+derived conflict.
+    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+    code_hash = create_file(paths['code'], "def add(a, b): return a + b")
+    example_hash = create_file(paths['example'], "print(add(1, 2))")
+    test_hash = create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
+
     # Create fingerprint with OLD prompt hash and command='crash'
     old_prompt_hash = "old_hash_that_differs_from_current"
     fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
@@ -3447,9 +3508,9 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         "timestamp": "2025-01-01T00:00:00Z",
         "command": "crash",  # Previous command was crash
         "prompt_hash": old_prompt_hash,  # Different from current!
-        "code_hash": "c_hash",
-        "example_hash": "e_hash",
-        "test_hash": "t_hash"
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
     })
 
     # Create run report showing crash fix succeeded
@@ -3461,12 +3522,6 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         "tests_failed": 0,
         "coverage": 95.0
     })
-
-    # Create code/example/test files so they exist
-    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
-    create_file(paths['code'], "def add(a, b): return a + b")
-    create_file(paths['example'], "print(add(1, 2))")
-    create_file(paths['test'], "def test_add(): assert add(1, 2) == 3")
 
     decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
 

@@ -139,9 +139,12 @@ def test_validator_invalid_path_type(validator):
     """Test handling of invalid inputs (though type hinting says str/Path)."""
     # If we pass something that Path() constructor hates, or causes other errors
     # e.g. null bytes in older python versions, or just general exceptions
-    # We must patch the Path class imported in the module under test
-    with patch("pdd.server.security.Path", side_effect=Exception("Boom")):
-        with pytest.raises(SecurityError) as excinfo:
+    # We must patch the Path class imported in the module under test. Use the
+    # bound method globals so this remains stable when other server tests reload
+    # pdd.server.security during collection.
+    validate_globals = validator.validate.__func__.__globals__
+    with patch.dict(validate_globals, {"Path": MagicMock(side_effect=Exception("Boom"))}):
+        with pytest.raises(validate_globals["SecurityError"]) as excinfo:
             validator.validate("anything")
         assert excinfo.value.code == "INVALID_PATH"
 
@@ -242,8 +245,11 @@ async def test_security_logging_middleware():
         response.status_code = 200
         return response
     
-    # We patch console.print to verify logging without cluttering stdout
-    with patch("pdd.server.security.console.print") as mock_print:
+    # Patch the dispatch function's console so this remains stable when other
+    # server tests reload pdd.server.security during collection.
+    with patch.object(
+        SecurityLoggingMiddleware.dispatch.__globals__["console"], "print"
+    ) as mock_print:
         response = await middleware.dispatch(request, call_next)
         
         assert response.status_code == 200
