@@ -350,6 +350,12 @@ def _write_result_core_dump(
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Reserve ``sync certify`` as the global certificate command spelling."""
+        if len(args) >= 2 and args[0:2] == ["sync", "certify"]:
+            args = ["certify", *args[2:]]
+        return super().parse_args(ctx, args)
+
     def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         self.format_usage(ctx, formatter)
         formatter.write_text(PDD_FULL_TAGLINE)
