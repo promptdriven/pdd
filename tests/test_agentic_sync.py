@@ -5692,3 +5692,281 @@ class TestPddChangedModulesFastPath:
         # The posted comment carries the real oversize reason.
         posted_msg = mock_post_error.call_args.args[3]
         assert "input_too_large" in posted_msg
+
+
+class TestBranchDiffIssueScopeReconciliation:
+    """Issue #1980: the branch-diff fast path must reconcile its scope with the
+    modules the issue explicitly names.
+
+    Repro (epic PR #1868 E2E validation): the issue explicitly asks to sync
+    ``greeter`` and ``textutil``; the work-branch diff only touches ``greeter``.
+    The fast path synced only ``greeter``, dropped the greeter -> textutil
+    dependency edge with a yellow warning, and reported Success. The chosen
+    semantics: deterministically extract explicitly-named known modules from the
+    issue title/body and UNION any that are missing into the diff-detected
+    scope — still zero LLM calls.
+    """
+
+    _ARCH = [
+        {"filename": "textutil_python.prompt", "dependencies": []},
+        {"filename": "greeter_python.prompt", "dependencies": ["textutil_python.prompt"]},
+    ]
+
+    @staticmethod
+    def _issue(body: str) -> Dict[str, Any]:
+        return {"title": "Sync the greeter feature", "body": body, "comments_url": ""}
+
+    # ------------------------------------------------------------------
+    # Helper-level unit tests (deterministic extraction)
+    # ------------------------------------------------------------------
+
+    def test_extracts_backticked_known_modules(self):
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Sync the greeter feature",
+            "Please sync `greeter` and `textutil` together.",
+            self._ARCH,
+        )
+        assert named == ["greeter", "textutil"]
+
+    def test_extracts_prompt_file_paths(self):
+        """FILES_MODIFIED-style prompt paths resolve to known basenames."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Sync the greeter feature",
+            "FILES_MODIFIED:\n"
+            "- prompts/greeter_python.prompt\n"
+            "- prompts/textutil_python.prompt\n",
+            self._ARCH,
+        )
+        assert named == ["greeter", "textutil"]
+
+    def test_prose_word_matching_single_word_module_is_not_extracted(self):
+        """A module named like an ordinary prose word (e.g. ``python``) must not
+        be pulled into scope just because the word appears in the issue text."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = self._ARCH + [{"filename": "python_python.prompt", "dependencies": []}]
+        named = _extract_issue_named_modules(
+            "Fix the greeting",
+            "The `greeter` module is written in python and should say hi.",
+            arch,
+        )
+        assert named == ["greeter"]
+
+    def test_underscored_module_name_in_prose_is_extracted(self):
+        """Multi-word (underscored) basenames cannot be ordinary prose words, so a
+        bare word-boundary mention counts as an explicit reference."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = [{"filename": "ci_validation_python.prompt", "dependencies": []}]
+        named = _extract_issue_named_modules(
+            "CI fails", "Update ci_validation to handle the new matrix.", arch
+        )
+        assert named == ["ci_validation"]
+
+    def test_underscored_name_inside_longer_token_is_not_extracted(self):
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = [{"filename": "ci_validation_python.prompt", "dependencies": []}]
+        named = _extract_issue_named_modules(
+            "CI fails", "See ci_validation_extra and prompts/ci_validation_python_old.py.", arch
+        )
+        assert named == []
+
+    def test_runtime_llm_templates_never_extracted(self):
+        """#1396 boundary: runtime ``*_LLM.prompt`` mentions add nothing."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = self._ARCH + [
+            {"filename": "agentic_sync_identify_modules_LLM.prompt", "dependencies": []}
+        ]
+        named = _extract_issue_named_modules(
+            "Tweak templates",
+            "Edit `agentic_sync_identify_modules_LLM` and "
+            "prompts/agentic_sync_identify_modules_LLM.prompt.",
+            arch,
+        )
+        assert named == []
+
+    def test_no_architecture_extracts_nothing(self):
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        assert _extract_issue_named_modules("t", "sync `greeter`", None) == []
+        assert _extract_issue_named_modules("t", "sync `greeter`", []) == []
+
+    # ------------------------------------------------------------------
+    # run_agentic_sync integration tests (the actual issue shape)
+    # ------------------------------------------------------------------
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult(
+            {"greeter": ["textutil"], "textutil": []}, []
+        ),
+    )
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=["greeter"])
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_union_issue_named_modules_missing_from_diff(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Issue names ``greeter`` and ``textutil``; diff touches only greeter →
+        the final scope must include BOTH, with zero LLM calls."""
+        mock_gh_cmd.return_value = (
+            True,
+            json.dumps(self._issue("Please sync `greeter` and `textutil` together.")),
+        )
+        mock_load_arch.return_value = (list(self._ARCH), Path("/tmp/architecture.json"))
+        mock_dry_run.return_value = (
+            True,
+            {"greeter": Path("/tmp"), "textutil": Path("/tmp")},
+            {"greeter": "greeter", "textutil": "textutil"},
+            [],
+            0.0,
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1980", quiet=True
+        )
+
+        assert success is True
+        # The fast path stays free: no identify LLM call.
+        mock_agentic_task.assert_not_called()
+        # Both the diff-detected and the issue-named module reach dry-run.
+        mock_dry_run.assert_called_once()
+        dry_run_modules = mock_dry_run.call_args.kwargs.get(
+            "modules",
+            mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
+        )
+        assert sorted(dry_run_modules) == ["greeter", "textutil"]
+        # ...and the runner.
+        runner_kwargs = mock_runner_cls.call_args[1]
+        assert sorted(runner_kwargs["basenames"]) == ["greeter", "textutil"]
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult(
+            {"greeter": ["textutil"], "textutil": []}, []
+        ),
+    )
+    @patch(
+        "pdd.agentic_sync._detect_modules_from_branch_diff",
+        return_value=["greeter", "textutil"],
+    )
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_diff_superset_of_issue_names_is_unchanged(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Diff scope already covers the issue-named module → behavior unchanged
+        (same scope, no LLM call)."""
+        mock_gh_cmd.return_value = (
+            True,
+            json.dumps(self._issue("Only `greeter` needs an update.")),
+        )
+        mock_load_arch.return_value = (list(self._ARCH), Path("/tmp/architecture.json"))
+        mock_dry_run.return_value = (
+            True,
+            {"greeter": Path("/tmp"), "textutil": Path("/tmp")},
+            {"greeter": "greeter", "textutil": "textutil"},
+            [],
+            0.0,
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1980", quiet=True
+        )
+
+        assert success is True
+        mock_agentic_task.assert_not_called()
+        dry_run_modules = mock_dry_run.call_args.kwargs.get(
+            "modules",
+            mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
+        )
+        assert dry_run_modules == ["greeter", "textutil"]
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult(
+            {"greeter": ["textutil"], "textutil": [], "python": []}, []
+        ),
+    )
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=["greeter"])
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_prose_non_module_words_do_not_inflate_scope(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Prose mentioning a word that happens to be a module name (``python``)
+        must not inflate the diff-detected scope."""
+        mock_gh_cmd.return_value = (
+            True,
+            json.dumps(
+                self._issue("The greeting is wrong; it is written in python and says bye.")
+            ),
+        )
+        arch = list(self._ARCH) + [{"filename": "python_python.prompt", "dependencies": []}]
+        mock_load_arch.return_value = (arch, Path("/tmp/architecture.json"))
+        mock_dry_run.return_value = (
+            True, {"greeter": Path("/tmp")}, {"greeter": "greeter"}, [], 0.0
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1980", quiet=True
+        )
+
+        assert success is True
+        mock_agentic_task.assert_not_called()
+        dry_run_modules = mock_dry_run.call_args.kwargs.get(
+            "modules",
+            mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
+        )
+        assert dry_run_modules == ["greeter"]
