@@ -149,7 +149,7 @@ def _prepare_hosted_agentic_artifact(
         blockers=["Current hosted checkup invocation has not produced a verdict."],
         no_fix=True,
     )
-    if written_path != artifact_path:
+    if written_path is None or Path(written_path).resolve() != path.resolve():
         return False
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))

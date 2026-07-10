@@ -788,6 +788,17 @@ class TestRunAgenticCheckup:
         assert payload["authority"] == "canonical_unknown_agentic_fallback_blocking"
         assert payload["verdict"]["decision"] == "block"
 
+    def test_prepare_hosted_artifact_accepts_equivalent_normalized_path(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+
+        assert _prepare_hosted_agentic_artifact("./agentic.json") is True
+
+        payload = json.loads((tmp_path / "agentic.json").read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+
     def test_prepare_hosted_artifact_fails_when_stale_pass_cannot_be_replaced(
         self, tmp_path
     ):
