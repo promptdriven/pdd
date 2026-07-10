@@ -10,6 +10,8 @@ Convention: the #1677 AmbiguousModuleError handler and the agentic/global dispat
 helpers in the same command raise `click.exceptions.Exit(1)` on failure.
 """
 
+import csv
+
 import pytest
 from click.testing import CliRunner
 
@@ -113,3 +115,60 @@ def test_cli_sync_failure_still_writes_evidence_manifest(tmp_path, monkeypatch):
     assert result.exit_code != 0, result.output
     assert len(calls) == 1, "evidence manifest must still be written on failure"
     assert calls[0]["result"]["overall_success"] is False
+
+
+def _enable_cost_csv(tmp_path, monkeypatch):
+    """Route the track_cost CSV row to a temp file and neutralise the guards that
+    key off PYTEST_CURRENT_TEST (track_cost skips row-writing under pytest; the
+    duplicate-run guard and auto-update activate without it)."""
+    csv_path = tmp_path / "cost.csv"
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("PDD_OUTPUT_COST_PATH", str(csv_path))
+    monkeypatch.setenv("PDD_DISABLE_DUPLICATE_GUARD", "1")
+    monkeypatch.setenv("PDD_AUTO_UPDATE", "false")
+    return csv_path
+
+
+def _read_cost_rows(csv_path):
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def test_cli_sync_failure_still_writes_cost_csv_row(tmp_path, monkeypatch):
+    """Codex review of PR #1982: the failure exit must NOT skip the track_cost
+    CSV row. The agentic runner sets PDD_OUTPUT_COST_PATH for child syncs
+    (pdd/agentic_sync_runner.py ~2398) and parses the row to accumulate cost and
+    enforce --budget, so failed attempts must still record their cost."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "pdd.commands.maintenance.sync_main", _fake_sync_main(overall_success=False)
+    )
+    csv_path = _enable_cost_csv(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(real_cli, ["--no-core-dump", "sync", "my_module"])
+
+    assert result.exit_code != 0, result.output
+    assert csv_path.is_file(), "failed sync must still write the cost CSV row"
+    rows = _read_cost_rows(csv_path)
+    assert len(rows) == 1, rows
+    assert rows[0]["command"] == "sync"
+    assert rows[0]["model"] == "test-model"
+    assert float(rows[0]["cost"]) == pytest.approx(0.0123)
+
+
+def test_cli_sync_success_writes_exactly_one_cost_csv_row(tmp_path, monkeypatch):
+    """Successful syncs must keep writing exactly ONE cost row (no double-write
+    from the failure-path plumbing)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "pdd.commands.maintenance.sync_main", _fake_sync_main(overall_success=True)
+    )
+    csv_path = _enable_cost_csv(tmp_path, monkeypatch)
+
+    result = CliRunner().invoke(real_cli, ["--no-core-dump", "sync", "my_module"])
+
+    assert result.exit_code == 0, result.output
+    rows = _read_cost_rows(csv_path)
+    assert len(rows) == 1, rows
+    assert rows[0]["command"] == "sync"
+    assert float(rows[0]["cost"]) == pytest.approx(0.0123)
