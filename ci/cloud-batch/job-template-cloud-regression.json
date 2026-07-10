@@ -13,7 +13,7 @@
                                 "VERTEX_PROJECT": "{{PROJECT_ID}}",
                                 "PDD_TEST_HEADLESS": "1",
                                 "GCS_BUCKET_NAME": "litellm_cache",
-                                "SKIP_INDEXES": "54,68,69,70,71,72,73,74,75",
+                                "TASK_INDEX_OFFSET": "68",
                                 "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
                                 "PDD_ENV": "staging",
                                 "PDD_CLOUD_TIMEOUT": "1200",
@@ -45,7 +45,7 @@
                         "mountPath": "/mnt/disks/source"
                     }
                 ],
-                "maxRetryCount": 3,
+                "maxRetryCount": 2,
                 "maxRunDuration": "5400s",
                 "lifecyclePolicies": [
                     {
@@ -56,8 +56,8 @@
                     }
                 ]
             },
-            "taskCount": "68",
-            "parallelism": "68"
+            "taskCount": "8",
+            "parallelism": "1"
         }
     ],
     "allocationPolicy": {
@@ -65,7 +65,7 @@
             {
                 "policy": {
                     "machineType": "e2-standard-8",
-                    "provisioningModel": "{{SPOT_PROVISIONING_MODEL}}"
+                    "provisioningModel": "STANDARD"
                 }
             }
         ],

@@ -476,21 +476,26 @@ class TestDuplicateDetection:
     def test_update_flag_allows_overwrite(
         self, runner: CliRunner, tmp_path: Path
     ) -> None:
-        """--update allows overwriting an existing story slug."""
-        stories_dir = tmp_path / "user_stories"
-        stories_dir.mkdir(parents=True, exist_ok=True)
-        existing = stories_dir / "story__my_feature.md"
-        existing.write_text("old content\n", encoding="utf-8")
+        """--update on an existing story slug relinks it and exits 0.
 
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            with patch("pdd.commands.story.generate_user_story") as mock_gen:
-                mock_gen.return_value = (
+        The story must exist in the *resolved* stories dir (the isolated cwd),
+        so the update takes the relink path (cache_story_prompt_links) rather
+        than falling through to fresh LLM generation (#1889 Bug 3).
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            existing = stories_dir / "story__my_feature.md"
+            existing.write_text("old content\n", encoding="utf-8")
+
+            with patch("pdd.commands.story.cache_story_prompt_links") as mock_link, \
+                 patch("pdd.commands.story.generate_user_story") as mock_gen:
+                mock_link.return_value = (
                     True,
-                    f"Updated story file: {existing}. Story prompt metadata linked.",
-                    0.03,
-                    "claude-sonnet-4-6",
-                    str(existing),
-                    ["commands/x_python.prompt"],
+                    "Story prompt metadata linked.",
+                    0.0,
+                    "",
+                    ["prompts/x_python.prompt"],
                 )
                 result = runner.invoke(
                     story,
@@ -504,6 +509,8 @@ class TestDuplicateDetection:
                     obj={"quiet": True, "verbose": False},
                 )
         assert result.exit_code == 0, result.output
+        mock_link.assert_called_once()
+        mock_gen.assert_not_called()
 
     def test_update_existing_title_merges_metadata_without_regenerating(
         self, runner: CliRunner, tmp_path: Path
@@ -538,6 +545,39 @@ class TestDuplicateDetection:
         assert result.exit_code == 0, result.output
         mock_link.assert_called_once()
         mock_gen.assert_not_called()
+
+    def test_update_missing_slug_exits_nonzero_without_llm(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Bug #1889: `story add --update <missing-slug>` must fail fast, no LLM.
+
+        Previously --update on a slug with no existing story file fell through to
+        fresh LLM generation (which hangs on interactive device-auth offline)
+        instead of erroring. It must raise a clean ClickException before any LLM
+        call and exit nonzero.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            stories_dir = Path(fs) / "user_stories"
+            stories_dir.mkdir(parents=True, exist_ok=True)
+            # No story__my_feature.md exists.
+            with patch("pdd.commands.story.generate_user_story") as mock_gen, \
+                 patch("pdd.commands.story.cache_story_prompt_links") as mock_link:
+                result = runner.invoke(
+                    story,
+                    [
+                        "add",
+                        "https://github.com/promptdriven/pdd/issues/1768",
+                        "--title", "My Feature",
+                        "--prompt", "prompts/x_python.prompt",
+                        "--update",
+                    ],
+                    obj={"quiet": True, "verbose": False},
+                )
+
+        assert result.exit_code != 0, result.output
+        assert "update" in result.output.lower()
+        mock_gen.assert_not_called()
+        mock_link.assert_not_called()
 
     def test_case_insensitive_slug_collision_detected(
         self, runner: CliRunner, tmp_path: Path
@@ -850,3 +890,269 @@ class TestStoryLink:
             obj={"quiet": True, "verbose": False},
         )
         assert result.exit_code != 0
+
+    def test_link_missing_prompt_exits_nonzero_and_preserves_metadata(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """Bug #1889: `story link --prompt <missing>` must fail without mutating.
+
+        A nonexistent explicit --prompt path was never existence-checked, so the
+        story's existing valid <!-- pdd-story-prompts: ... --> metadata was
+        re-resolved against the (missing-only) explicit pool, dropping the valid
+        link and writing a dangling basename -- while still exiting 0.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            prompt_file = root / "prompts" / "calc_python.prompt"
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
+            prompt_file.write_text("% calc prompt\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            original = (
+                "## Story\nAs a user, I want to add numbers.\n\n"
+                "<!-- pdd-story-prompts: prompts/calc_python.prompt -->\n"
+            )
+            story_file.write_text(original, encoding="utf-8")
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompt", "prompts/does_not_exist.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+            # Fails non-zero and names the missing prompt.
+            assert result.exit_code != 0, result.output
+            assert "does_not_exist.prompt" in result.output
+            # The story metadata is left completely untouched on failure.
+            assert story_file.read_text(encoding="utf-8") == original
+
+    def test_link_valid_new_prompt_preserves_existing_refs(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """A successful relink with a new valid prompt keeps already-valid refs."""
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            calc = root / "prompts" / "calc_python.prompt"
+            calc.parent.mkdir(parents=True, exist_ok=True)
+            calc.write_text("% calc prompt\n", encoding="utf-8")
+            adder = root / "prompts" / "adder_python.prompt"
+            adder.write_text("% adder prompt\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            story_file.write_text(
+                "## Story\nAs a user, I want to add numbers.\n\n"
+                "<!-- pdd-story-prompts: prompts/calc_python.prompt -->\n",
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompt", "prompts/adder_python.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        content = story_file.read_text(encoding="utf-8")
+        # Both the pre-existing valid ref and the newly linked one survive.
+        assert "calc_python.prompt" in content
+        assert "adder_python.prompt" in content
+
+    def test_link_with_prompts_dir_preserves_basename_ref(
+        self, runner: CliRunner, tmp_path: Path
+    ) -> None:
+        """pdd#1951: relinking with ``--prompts-dir`` must not drop an existing
+        link stored as a *basename* relative to that prompts root.
+
+        Metadata written under ``--prompts-dir prompts`` stores refs like
+        ``calc_python.prompt`` (not ``prompts/calc_python.prompt``). The
+        preservation fallback previously only kept refs that were files relative
+        to the run CWD, so a bare basename resolved to nothing and the valid link
+        was silently destroyed on relink -- the exact data loss this PR hardens.
+        """
+        with runner.isolated_filesystem(temp_dir=tmp_path) as fs:
+            root = Path(fs)
+            (root / "prompts").mkdir(parents=True, exist_ok=True)
+            (root / "prompts" / "calc_python.prompt").write_text("% calc\n", encoding="utf-8")
+            (root / "prompts" / "adder_python.prompt").write_text("% adder\n", encoding="utf-8")
+
+            story_file = root / "user_stories" / "story__calc.md"
+            story_file.parent.mkdir(parents=True, exist_ok=True)
+            # Basename ref, as written when metadata was created with --prompts-dir.
+            story_file.write_text(
+                "## Story\n\n<!-- pdd-story-prompts: calc_python.prompt -->\n",
+                encoding="utf-8",
+            )
+
+            result = runner.invoke(
+                story,
+                [
+                    "link",
+                    str(story_file),
+                    "--prompts-dir", "prompts",
+                    "--prompt", "prompts/adder_python.prompt",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+            assert result.exit_code == 0, result.output
+            content = story_file.read_text(encoding="utf-8")
+            # The pre-existing basename link survives alongside the new one.
+            assert "calc_python.prompt" in content, (
+                f"existing --prompts-dir link dropped on relink: {content!r}"
+            )
+            assert "adder_python.prompt" in content, content
+
+
+# ---------------------------------------------------------------------------
+# Scenario 8b: --with-regression-status honesty + project-root resolution (#1889)
+# ---------------------------------------------------------------------------
+
+class TestStoryListRegressionHonesty:
+    """`pdd story list --with-regression-status` must resolve the *project's*
+    tests dir (cwd), report a presence-honest term (never 'passing'), and make
+    'stale' reachable when a linked test records a mismatched story hash.
+    """
+
+    def _story(self, root: Path) -> Path:
+        story_path = root / "user_stories" / "story__widget.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: widget\n\nA widget renders on the page.\n", encoding="utf-8"
+        )
+        return story_path
+
+    def test_present_test_reports_honest_term_not_passing(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A linked regression test in the PROJECT tests dir is found (not
+        'missing' -> proves cwd resolution, not pdd's own suite) and reported
+        with a presence-honest term rather than the overclaiming 'passing'."""
+        self._story(tmp_path)
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        out = result.output.lower()
+        assert "widget" in out
+        assert "missing" not in out, (
+            f"project test not found -> dir resolved to pdd install, not cwd: {result.output!r}"
+        )
+        assert "passing" not in out, (
+            f"'passing' overclaims: gate never executes the test: {result.output!r}"
+        )
+        assert "has-test" in out, f"expected presence-honest term, got: {result.output!r}"
+
+    def test_stale_is_reachable(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A linked test recording a mismatched story hash must render 'stale'
+        (previously unreachable: only 'passing'/'missing' were emitted)."""
+        self._story(tmp_path)
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            'STORY_HASH = "0000000000000000"\n\n'
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        assert "stale" in result.output.lower(), (
+            f"'stale' must be reachable, got: {result.output!r}"
+        )
+
+    def test_custom_stories_dir_resolves_sibling_tests(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """With a non-``user_stories`` ``--stories-dir``, the tests dir must
+        resolve to the stories-dir's sibling ``tests/`` (project root), not
+        ``cwd/tests`` -- so a run from a subdirectory still finds the test."""
+        story_path = tmp_path / "specs" / "story__widget.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: widget\n\nA widget renders on the page.\n", encoding="utf-8"
+        )
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_widget.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="widget")\n'
+            "def test_story_widget():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        # Run from an unrelated subdirectory so a cwd-based resolver would miss.
+        subdir = tmp_path / "sub" / "here"
+        subdir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(subdir)
+        result = runner.invoke(
+            story,
+            ["list", "--stories-dir", str(tmp_path / "specs"), "--with-regression-status"],
+            obj={"quiet": True},
+        )
+        assert result.exit_code == 0, result.output
+        assert "widget" in result.output.lower()
+        assert "missing" not in result.output.lower(), (
+            f"custom stories-dir test not found -> resolved to cwd, not project root: {result.output!r}"
+        )
+        assert "has-test" in result.output.lower(), result.output
+
+    def test_nested_story_resolves_project_tests_dir(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A *nested* story (``user_stories/<sub>/story__*.md``) must anchor back
+        to the project ``tests/`` dir, not the story's own parent (which would
+        scan a spurious ``user_stories/<sub>/tests`` and report a false
+        'missing'). Regression for pdd#1951.
+        """
+        story_path = tmp_path / "user_stories" / "nested" / "story__baz.md"
+        story_path.parent.mkdir(parents=True, exist_ok=True)
+        story_path.write_text(
+            "# Story: baz\n\n## Story\n\nBaz works.\n", encoding="utf-8"
+        )
+        test_file = tmp_path / "tests" / "story_regression" / "test_story_baz.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "import pytest\n\n"
+            '@pytest.mark.story(story_id="baz")\n'
+            "def test_baz():\n"
+            "    assert True\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            story, ["list", "--with-regression-status"], obj={"quiet": True}
+        )
+        assert result.exit_code == 0, result.output
+        out = result.output.lower()
+        assert "baz" in out
+        assert "missing" not in out, (
+            f"nested story resolved to per-parent tests dir, not project root: {result.output!r}"
+        )
+        assert "has-test" in out, f"expected 'has-test' for nested story, got: {result.output!r}"

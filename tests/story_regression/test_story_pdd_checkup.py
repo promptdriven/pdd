@@ -5,7 +5,7 @@ from pdd.commands.checkup import checkup
 
 
 PDD_STORY_ID = "pdd_checkup"
-PDD_STORY_HASH = "213cefce7c9bb9de"
+PDD_STORY_HASH = "c182aa91b22551eb"
 
 
 @pytest.mark.story(story_id=PDD_STORY_ID)

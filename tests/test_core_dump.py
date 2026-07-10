@@ -1210,3 +1210,53 @@ def test_gc_runs_even_with_no_core_dump_issue_231(
     call_args = mock_gc.call_args_list[0]
     assert call_args.kwargs.get('keep') == 10 or call_args.args == (10,), \
         "Issue #231: GC should be called with keep=10 by default"
+
+
+# ---------------------------------------------------------------------------
+# C-F8 (pdd#1889): a deliberate click.ClickException must NOT write a core dump
+# ---------------------------------------------------------------------------
+
+@patch('pdd.core.cli.auto_update')
+@patch(
+    'pdd.commands.generate.code_generator_main',
+    side_effect=click.ClickException("deliberate user-facing error"),
+)
+def test_click_exception_writes_no_core_dump(
+    mock_main, mock_auto_update, runner, create_dummy_files, tmp_path, monkeypatch
+):
+    """A ClickException is a deliberate, user-facing error (a usage mistake),
+    not a reportable crash — it must not litter .pdd/core_dumps nor advertise a
+    debug snapshot to attach when reporting bugs."""
+    files = create_dummy_files("test_click_exc.prompt")
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(
+        cli.cli,
+        ["--core-dump", "generate", str(files["test_click_exc.prompt"])],
+    )
+    mock_main.assert_called_once()
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert core_dumps == [], (
+        f"ClickException must not write a core dump, found: {core_dumps}"
+    )
+    assert "attach when reporting bugs" not in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch(
+    'pdd.commands.generate.code_generator_main',
+    side_effect=RuntimeError("genuinely unexpected crash"),
+)
+def test_unexpected_exception_still_writes_core_dump(
+    mock_main, mock_auto_update, runner, create_dummy_files, tmp_path, monkeypatch
+):
+    """Control for C-F8: a genuinely unexpected exception still writes a core
+    dump so real bugs remain debuggable."""
+    files = create_dummy_files("test_unexpected_exc.prompt")
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(
+        cli.cli,
+        ["--core-dump", "generate", str(files["test_unexpected_exc.prompt"])],
+    )
+    mock_main.assert_called_once()
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    assert len(core_dumps) == 1, "an unexpected exception must still write a core dump"
