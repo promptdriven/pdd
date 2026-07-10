@@ -5970,3 +5970,244 @@ class TestBranchDiffIssueScopeReconciliation:
             mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
         )
         assert dry_run_modules == ["greeter"]
+
+    # ------------------------------------------------------------------
+    # Round-2 review regressions (PR #1983 Codex findings)
+    # ------------------------------------------------------------------
+
+    _DUP_TAIL_ARCH = [
+        {"filename": "extensions/a/src/page_python.prompt", "dependencies": []},
+        {"filename": "extensions/b/src/page_python.prompt", "dependencies": []},
+    ]
+
+    def test_extracts_modules_from_filtered_comments(self):
+        """P1a: FILES_MODIFIED markers arrive as issue comments; extraction must
+        cover the same filtered comment content the identify path uses."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        comments = [
+            {"user": {"login": "app-bot"}, "body": (
+                "FILES_MODIFIED:\n- prompts/textutil_python.prompt\n"
+            )},
+        ]
+        named = _extract_issue_named_modules(
+            "Sync the greeter feature",
+            "The greeting is wrong.",
+            self._ARCH,
+            comments=comments,
+        )
+        assert named == ["textutil"]
+
+    def test_low_signal_style_comment_content_not_required(self):
+        """Comments param is optional: omitting it keeps title/body behavior."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Sync", "Fix `greeter`.", self._ARCH
+        )
+        assert named == ["greeter"]
+
+    def test_prompt_path_tokens_preserve_path_qualification(self):
+        """P1b(i): a nested prompt path must resolve to its path-qualified module
+        key, not collapse to an (ambiguous) bare filename basename."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Fix page",
+            "FILES_MODIFIED:\n- extensions/b/prompts/src/page_python.prompt\n",
+            self._DUP_TAIL_ARCH,
+        )
+        assert named == ["extensions/b/src/page"]
+
+    def test_backticked_path_qualified_key_resolves_exactly(self):
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Fix page",
+            "Please fix `extensions/b/src/page` only.",
+            self._DUP_TAIL_ARCH,
+        )
+        assert named == ["extensions/b/src/page"]
+
+    def test_duplicate_tail_does_not_mask_missing_issue_module(self):
+        """P1b(ii): a diff touching extensions/a's ``page`` must not mask an
+        explicit request for extensions/b's ``page``."""
+        from pdd.agentic_sync import _issue_modules_missing_from_scope
+
+        missing = _issue_modules_missing_from_scope(
+            ["extensions/a/src/page"],
+            ["extensions/b/src/page"],
+            self._DUP_TAIL_ARCH,
+        )
+        assert missing == ["extensions/b/src/page"]
+
+    def test_unambiguous_tail_still_covers_bare_issue_module(self):
+        """Tail-based coverage stays for globally-unambiguous tails so diff keys
+        that are more qualified than architecture basenames do not re-add."""
+        from pdd.agentic_sync import _issue_modules_missing_from_scope
+
+        missing = _issue_modules_missing_from_scope(
+            ["extensions/proj/src/greeter"],
+            ["greeter"],
+            self._ARCH,
+        )
+        assert missing == []
+
+    def test_exact_scope_key_always_covers(self):
+        from pdd.agentic_sync import _issue_modules_missing_from_scope
+
+        missing = _issue_modules_missing_from_scope(
+            ["extensions/b/src/page"],
+            ["extensions/b/src/page"],
+            self._DUP_TAIL_ARCH,
+        )
+        assert missing == []
+
+    def test_hyphenated_module_name_in_prose_is_extracted(self):
+        """P2: hyphenated identifier-like basenames (e.g. ``check-run``) cannot
+        be ordinary prose words either; a bare word-boundary mention counts."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = [{"filename": "check-run_python.prompt", "dependencies": []}]
+        named = _extract_issue_named_modules(
+            "CI checks", "Update check-run so the checks pass.", arch
+        )
+        assert named == ["check-run"]
+
+    def test_hyphenated_name_inside_longer_token_is_not_extracted(self):
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        arch = [{"filename": "check-run_python.prompt", "dependencies": []}]
+        named = _extract_issue_named_modules(
+            "CI checks", "See double-check-run and check-run-extra.", arch
+        )
+        assert named == []
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult(
+            {"greeter": ["textutil"], "textutil": []}, []
+        ),
+    )
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=["greeter"])
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_union_from_comment_only_files_modified(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """P1a integration: only an issue COMMENT names the second module via a
+        FILES_MODIFIED marker → the fast path must still union it."""
+        issue = {
+            "title": "Sync the greeter feature",
+            "body": "The greeting is wrong.",
+            "comments_url": "https://api.github.com/repos/o/r/issues/1980/comments",
+        }
+        comments = [
+            {"user": {"login": "app-bot"}, "body": (
+                "FILES_MODIFIED:\n- prompts/textutil_python.prompt\n"
+            )},
+        ]
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps(issue)),
+            (True, json.dumps(comments)),
+        ]
+        mock_load_arch.return_value = (list(self._ARCH), Path("/tmp/architecture.json"))
+        mock_dry_run.return_value = (
+            True,
+            {"greeter": Path("/tmp"), "textutil": Path("/tmp")},
+            {"greeter": "greeter", "textutil": "textutil"},
+            [],
+            0.0,
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1980", quiet=True
+        )
+
+        assert success is True
+        mock_agentic_task.assert_not_called()
+        dry_run_modules = mock_dry_run.call_args.kwargs.get(
+            "modules",
+            mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
+        )
+        assert sorted(dry_run_modules) == ["greeter", "textutil"]
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult(
+            {"extensions/a/src/page": [], "extensions/b/src/page": []}, []
+        ),
+    )
+    @patch(
+        "pdd.agentic_sync._detect_modules_from_branch_diff",
+        return_value=["extensions/a/src/page"],
+    )
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_union_path_qualified_duplicate_tail_not_masked(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """P1b integration: diff touches extensions/a's ``page``; issue names
+        extensions/b's ``page`` path-qualified → both must be in scope."""
+        mock_gh_cmd.return_value = (
+            True,
+            json.dumps({
+                "title": "Fix page",
+                "body": "Please fix `extensions/b/src/page` as requested.",
+                "comments_url": "",
+            }),
+        )
+        mock_load_arch.return_value = (
+            list(self._DUP_TAIL_ARCH), Path("/tmp/architecture.json")
+        )
+        mock_dry_run.return_value = (
+            True,
+            {"extensions/a/src/page": Path("/tmp"), "extensions/b/src/page": Path("/tmp")},
+            {"extensions/a/src/page": "page", "extensions/b/src/page": "page"},
+            [],
+            0.0,
+        )
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1980", quiet=True
+        )
+
+        assert success is True
+        mock_agentic_task.assert_not_called()
+        dry_run_modules = mock_dry_run.call_args.kwargs.get(
+            "modules",
+            mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
+        )
+        assert sorted(dry_run_modules) == [
+            "extensions/a/src/page", "extensions/b/src/page",
+        ]
