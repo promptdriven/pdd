@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.086233+00:00",
+  "command": "fix",
+  "prompt_hash": "cdfcedf57ee76527c398fbda65c5ee8050c523b3dcafb7c8ec8d0d65ea452422",
+  "code_hash": "8b05a311e2ad2ef499eb6c97b4f68308f659f87976770181eb0b946a41012266",
+  "example_hash": "d235c7a2fad154663ce3016baa1babd45a1b5fa5041ba130024dbe88ab791a28",
+  "test_hash": "38af3c6838c75f99f3a8082116b8a2f0e771ba915be87fcf9bb377b5f57e8b76",
+  "test_files": {
+    "test_sessions.py": "38af3c6838c75f99f3a8082116b8a2f0e771ba915be87fcf9bb377b5f57e8b76"
+  },
+  "include_deps": {
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/remote_session_example.py": "ebcf3626cc73386164ac48e804e2e7973cb9783892ac88cda49779cf158389c5"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.107456+00:00",
+  "command": "fix",
+  "prompt_hash": "25d5bc7ab8ea0cc23287232060cb5d9d13b5523dcd5c2facaa84ac60d7d8fee1",
+  "code_hash": "ea5831e4bafe49e056cc2d7e18be7b632f8de5752004bf08e66ebc4c82688c14",
+  "example_hash": "77c3de786f31392540ec609d4b3942e98e996ae14c4014f5018cf2b05a560df4",
+  "test_hash": "96a066f4b0dfdc29fb7f28b51edfb0621e61de3167ddd9972fbc41eda92f4d9c",
+  "test_files": {
+    "test_context_generator_main.py": "96a066f4b0dfdc29fb7f28b51edfb0621e61de3167ddd9972fbc41eda92f4d9c"
+  },
+  "include_deps": {
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/change/15/README.md": "1fc1b1dc45e3f0178c7dc607c7b2ac723fd990d2277e384defd8956221183abe",
+    "context/change/15/initial_cli.py": "b607c3e67702ad3bc5e61cc40ce85571e4ff09015de96016c8d7d56eb78b8c74",
+    "context/change/19/context_generator.py": "046c50404d58d06586c6acb481acbd2e20042de7155b5f7eaffab5ebebceda0a",
+    "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
+    "context/context_generator_example.py": "277b54ee71ffc836d9db9ad4d4fc0b3fee365ce6f5691222acad11b58461923b",
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56"
+  }
+}

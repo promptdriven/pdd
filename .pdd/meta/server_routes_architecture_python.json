@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.242130+00:00",
+  "command": "fix",
+  "prompt_hash": "a768e3fc89c1c6f5aa261492547c841a9239893662727f682404d6b749752d37",
+  "code_hash": "67df73835b6282fde848c0ab558f3fa18c108b2b27b20aec8cf23f2f1a291446",
+  "example_hash": "6adddc3703c575ef7eaa12c58df0067e438c2fe328e5037fb69856595e862bf8",
+  "test_hash": "46e1daefed9b370ac235b49d9ec762bf27f945d37d31176dceb196606ed2e3fd",
+  "test_files": {
+    "test_architecture.py": "46e1daefed9b370ac235b49d9ec762bf27f945d37d31176dceb196606ed2e3fd"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
+    "context/fastapi_example.py": "4b3d64175b8f46b48a4387e9cf98ed4024fd74a57413bd2f8a55c5d9c3dd0108",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

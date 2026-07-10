@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.243453+00:00",
+  "command": "fix",
+  "prompt_hash": "c5ed12c3a857e38d8431cafd7a817c18642693b62bc746681efd7be9c5c0460f",
+  "code_hash": "0964f8ca62a4b95d114f8938c5afd5cf5ec480a350b7bd442fa4fc62ef200eb3",
+  "example_hash": "8d6c5e1e858f07440184c0ae1b7f98ffa53a57233031513fa6566131404ceab5",
+  "test_hash": "701217ca61602e22b3dfe34efce69d732857292b5ee21057b65a474627e682d3",
+  "test_files": {
+    "test_auth.py": "701217ca61602e22b3dfe34efce69d732857292b5ee21057b65a474627e682d3"
+  },
+  "include_deps": {
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/get_jwt_token_example.py": "76a87c8257cb1f4cfdc2edff6225c752432afb3a5e352fcb016d08d8eae16e01",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

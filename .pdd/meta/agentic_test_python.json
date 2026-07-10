@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:17.986351+00:00",
+  "command": "fix",
+  "prompt_hash": "ddab846232bad2745161f117a908bb88f9050878fe61f944e7e18dece79dad61",
+  "code_hash": "e9834cc73b9d125bc46354b262a9b17067150f044055edda5529adb695a0b372",
+  "example_hash": "1d8b490a2b0ff53a8b786c6c95faeecc4efd0becf837b35273508bae19fac3ab",
+  "test_hash": "03163284790ecd0c014d9df0311a75a03243f4355430dcaf8080bfaaa6b321d4",
+  "test_files": {
+    "test_agentic_test.py": "03163284790ecd0c014d9df0311a75a03243f4355430dcaf8080bfaaa6b321d4",
+    "test_agentic_test_generate.py": "29a887349d31f0a1233ae1375be56dd4530bf8d9d1ca8c38917091f105fc1024",
+    "test_agentic_test_orchestrator.py": "b352fb8c22880f5c95e74f3b2b7a89251fd13e6563ff2ec550f8e4f5e34807dd"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
+    "context/cmd_test_main_example.py": "0774984ee29f70407429f1eff4a1b76287715b7ddd6adf2bc149e874c9b844bb",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

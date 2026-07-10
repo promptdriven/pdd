@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.121318+00:00",
+  "command": "fix",
+  "prompt_hash": "f041d7a7d8825a0f61eba4f523cfe32cd71089dfeb4db7831b1b8e99280b7451",
+  "code_hash": "26ff24c97640c5818897f00cc5648708ffc719d6d7f113d24551662b9d724141",
+  "example_hash": "947ec40a9a778e302a6d217b16ce7e65df82cda777c3361915cc635ba106de83",
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {
+    "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
+    "context/architecture_registry_example.py": "5eff404eddcfb9d898df972d703013b7124d352e5fe898a1977d7986ef17ed1e",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "pdd/architecture_registry.py": "5722225846b9cc8189b410a78e5714b4f2916d5748271d27f6f738692429c309"
+  }
+}

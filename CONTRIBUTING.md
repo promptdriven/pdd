@@ -13,6 +13,7 @@ Thank you for considering contributing to PDD CLI! This guide summarizes how we 
 - Keep spec/README, prompts, code, examples, and tests in sync.
 - Tests accumulate: append tests; don’t regenerate or remove them.
 - Modular prompt graph: prompts compose via includes.
+- Coding agents follow the same rules; see `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. The #1 doctrine anti‑pattern is Prompt Drift (`docs/prompt-driven-development-doctrine.md`, “Anti‑Patterns”).
 
 ## The “Dev Unit”
 Each complete change ideally includes four elements:
@@ -20,6 +21,23 @@ Each complete change ideally includes four elements:
 - Code: generated/updated implementation.
 - Example interface: usage examples that enable prompt composability.
 - Tests: appended to relevant test files to reproduce bugs or validate features.
+
+## Fingerprints (`.pdd/meta`)
+Every dev unit has a committed fingerprint in `.pdd/meta/<unit>_<lang>.json` recording the
+SHA-256 of its prompt (plus `<include>` deps), code, example, and tests. This committed set is
+the oracle `pdd sync` trusts to decide whether a unit changed — a stale or missing fingerprint
+makes sync see phantom drift and regenerate a mature module. So:
+
+- **Never hand-edit `.pdd/meta`.** Regenerate the whole set with the stamper:
+  ```bash
+  python scripts/stamp_fingerprints.py          # restamp every unit
+  python scripts/stamp_fingerprints.py --check   # verify (what CI runs; exits non-zero on drift)
+  ```
+- **All** dev units are tracked (no `.gitignore` allowlist). If you add or change a prompt/code
+  file, run the stamper and commit the updated `.pdd/meta/*.json`. CI's `--check` gate fails
+  otherwise.
+- A unit that `pdd sync` genuinely cannot fingerprint (ambiguous module identity, or no code file
+  on disk) is listed with a justification in `scripts/fingerprint_waivers.json`.
 
 ## Contribution Workflow
 1) Get set up
@@ -38,7 +56,7 @@ Each complete change ideally includes four elements:
 
 4) Implement
 - Prefer using PDD to regenerate code from prompts.
-- If editing code directly, run `pdd update` to sync changes back into prompts (until all prompts are public, maintainers may help sync).
+- If editing code directly, run `pdd update --sync-metadata` to sync changes back into prompts and re‑stamp the fingerprint / reconcile `architecture.json` before opening the PR (until all prompts are public, maintainers may help sync). Never hand‑edit `.pdd/meta/*.json` or `architecture.json`; use `pdd sync-architecture` or the fingerprint stamper (`scripts/stamp_fingerprints.py`).
 - Keep example interfaces updated to reflect new/changed behavior.
 - Useful prompt tags when needed: `<include>`, `<pdv>`, `<shell>`, `<web>`.
 

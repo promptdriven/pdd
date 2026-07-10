@@ -1,0 +1,16 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.152694+00:00",
+  "command": "fix",
+  "prompt_hash": "5495f47b8ca32f768f25b4864a4a6bd59daae7ac21544c4ae75363e0ca6d2ee4",
+  "code_hash": "e341e6bda871ddc5ba92cf05e9d554d49bc5e4afebf5b4f1482971edf557063d",
+  "example_hash": null,
+  "test_hash": "3c43a5554ef2810db0466cc388f4d6a144399005613422787997777e99ea4270",
+  "test_files": {
+    "test_fix_focus.py": "3c43a5554ef2810db0466cc388f4d6a144399005613422787997777e99ea4270"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/prompts/llm_invoke_python.prompt": "88face96e298219fba7448186eb71f1586a676888a827a04d326882df8e4f41e"
+  }
+}

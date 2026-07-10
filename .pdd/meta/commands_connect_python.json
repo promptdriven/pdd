@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.067162+00:00",
+  "command": "fix",
+  "prompt_hash": "a881214405113719a1009a1bd4ec2c340fbce3fa764c7d50a5e6965a7b5ef3b2",
+  "code_hash": "f3a2c8d66a2f2555188a61a4828a5114bf1b99e6c2ebf19f84aef2b7da39cc5e",
+  "example_hash": "d2bcda4ae1e9de22d1b657c28045a0b122dc1ef22a77e4d670f41229779a6083",
+  "test_hash": "fad9177f084c4ce574ce11a468f55206bcd45dc7602601775f800bc39272252e",
+  "test_files": {
+    "test_connect.py": "fad9177f084c4ce574ce11a468f55206bcd45dc7602601775f800bc39272252e"
+  },
+  "include_deps": {
+    "context/commands/__init___example.py": "cc6e0de7d94b1dddda35d9c8ecb800710263d928191f1d4cb2400bae36c31cb4",
+    "context/commands/misc_example.py": "7d7985d21dd7b962257856cb92d13e26c016bc09ce14aaac4c68baaead97dc4b",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/remote_session_example.py": "ebcf3626cc73386164ac48e804e2e7973cb9783892ac88cda49779cf158389c5",
+    "context/server/app_example.py": "554bb0307f2f7a0dc79ef86f8a4fd42e5017225d0c56379ad99d2939f3c1087a"
+  }
+}

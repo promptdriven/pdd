@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:17.966064+00:00",
+  "command": "fix",
+  "prompt_hash": "2aa547410ad5be7b47e1e69dcbfad7abb844b621a432730f24886a1e5014f350",
+  "code_hash": "10fad4819034f9b2553c2fc584d2e977f490b1de43533219545a71ae19904179",
+  "example_hash": "407a024fcba9402e00b401477725ae72b1de718ab59bea29b69509a0b15f621f",
+  "test_hash": "635df7c7b087344d3c138b16af299aa878a0cb9d958d7ac22a91915fa64735ba",
+  "test_files": {
+    "test_agentic_fix.py": "635df7c7b087344d3c138b16af299aa878a0cb9d958d7ac22a91915fa64735ba"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/get_run_command_example.py": "4d187e844adb255c2738274556f4828728d0d73d84ebf8bda885d51d4be9414f",
+    "context/llm_invoke_example.py": "3e66413118ec2f8e8940e7a835932920309aeeb775d23ce728d78299fb99e2ec",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f"
+  }
+}

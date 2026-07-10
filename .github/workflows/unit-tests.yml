@@ -61,6 +61,9 @@ jobs:
       - name: Validate architecture vs prompt includes (repo, non-sample trees)
         run: pdd checkup --validate-arch-includes
 
+      - name: Architecture completeness gate (module <-> architecture.json bijection)
+        run: pytest tests/test_architecture_completeness.py -q --no-header
+
       - name: Run unit tests
         run: >
           pytest tests/
@@ -75,6 +78,9 @@ jobs:
           --ignore=tests/test_llm_invoke.py
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
+
+      - name: Check .pdd/meta fingerprints are current
+        run: python scripts/stamp_fingerprints.py --check
 
   public-cli-regression:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true

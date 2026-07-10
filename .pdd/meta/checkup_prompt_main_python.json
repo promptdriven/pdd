@@ -1,0 +1,24 @@
+{
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.280957+00:00",
+  "command": "fix",
+  "prompt_hash": "e7423a67b6bfc98b14bd442622701daf3a9d875eafa9912a70d6b167fbf3f81a",
+  "code_hash": "538367ba6b7fa74d9f86ba6d1235219598f7a124c58cf00ad0abf6cf027526dc",
+  "example_hash": "04845b3c70203df3ce51d3c3a1aaac61bcb0089d2af3f7d92af73b7f923ab32c",
+  "test_hash": "81f5c4befae10e8f4f1078f2e772db1646dd43c1bd24c541e8687a4659e760af",
+  "test_files": {
+    "test_checkup_prompt_main.py": "81f5c4befae10e8f4f1078f2e772db1646dd43c1bd24c541e8687a4659e760af"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/construct_paths.py": "7b42a002e4ecc27be4d517cbc07f1fc9425e795d4918714f382d2ed5ddd00eab",
+    "pdd/context_snapshot_policy.py": "a292f02584ff67ef491d97d914d8282db4e6694aed97e140480064851953760e",
+    "pdd/contract_check.py": "5c168f2c45b6754acce9b7fd50730c1832053df160b5de88f064061333b84f1a",
+    "pdd/coverage_contracts.py": "dc209452c683697866e133c5673a2caba1828c9e4836e012f277e0250a643c0c",
+    "pdd/evidence_store.py": "eccc499c6f076b52e4b481a07904b9390120e52c49cb2479adbdf5eb433df14c",
+    "pdd/gate_main.py": "8281d282d9ad62dc01c92c4f520ea0be70e5fba50281d18fd4111445ebfd613a",
+    "pdd/prompt_lint.py": "df85f363082925c714e23be8d7b2e941d62a8542a3370a2581d16780cef1474e",
+    "pdd/source_set_model.py": "72465c576d85e606d557e602ea78c8dc58646455a429a8dfa4e7b66da22210fa",
+    "pdd/user_story_tests.py": "48a1597e9b7cd409ab62e9ef6b005f5fdb29699207c24f640b149f7e79adf79b"
+  }
+}

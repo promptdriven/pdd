@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.042730+00:00",
+  "command": "fix",
+  "prompt_hash": "6627ace940bcffc3b9cd754c83014635f2949a11c32f6b133e6f209ddc908d3b",
+  "code_hash": "01935b7b312fcbc3a1812290f6d69fe5d65ddf3530f546c8da729bb8d6a3aeae",
+  "example_hash": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
+  "test_hash": "c68f729059f3bf0409b5e7f797b2fcf61fc463502e07d8c4db79b10be6a7fb7f",
+  "test_files": {
+    "test_ci_validation.py": "c68f729059f3bf0409b5e7f797b2fcf61fc463502e07d8c4db79b10be6a7fb7f"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

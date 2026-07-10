@@ -10,7 +10,13 @@ from typing import Optional
 
 import click
 
-from ..continuous_sync import build_report, project_root
+from ..continuous_sync import (
+    CheckResult,
+    build_report,
+    project_root,
+    resolve_units,
+    run_check,
+)
 
 
 def _pre_commit_hook_path(root: Path) -> Path:
@@ -49,21 +55,59 @@ def _emit_report(report: dict, as_json: bool) -> None:
         click.echo(json.dumps(report, indent=2, sort_keys=True))
         return
     summary = report["summary"]
+    parts = [
+        f"metadata_stale={summary['metadata_stale']}",
+        f"conflicts={summary['conflicts']}",
+        f"unbaselined={summary['unbaselined']}",
+        f"failures={summary['failures']}",
+    ]
+    if report.get("stamped"):
+        parts.append(f"stamped={len(report['stamped'])}")
+    click.echo(" ".join(parts))
+
+
+def _emit_check(result: CheckResult, as_json: bool) -> None:
+    """Render a ``--check`` verification result (parity with the CI stamper)."""
+    if as_json:
+        payload = {
+            "ok": result.ok,
+            "stampable": result.stampable,
+            "ignored": result.ignored,
+            "waived": result.waived,
+            "missing": result.missing,
+            "stale": [{"basename": b, "fields": f} for b, f in result.stale],
+            "no_code": result.no_code,
+        }
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
     click.echo(
-        f"metadata_stale={summary['metadata_stale']} "
-        f"conflicts={summary['conflicts']} "
-        f"unbaselined={summary['unbaselined']} "
-        f"failures={summary['failures']}"
+        f"checked {result.stampable} stampable units; "
+        f"ignored={result.ignored} waived={result.waived}"
     )
+    for name in result.no_code:
+        click.echo(f"  no code file (add a waiver): {name}", err=True)
+    for name in result.missing:
+        click.echo(f"  missing fingerprint: {name}", err=True)
+    for name, fields in result.stale:
+        click.echo(f"  stale: {name}: {', '.join(fields)}", err=True)
+    if result.ok:
+        click.echo("all fingerprints current")
 
 
 @click.command("reconcile")
+@click.argument("basename", required=False)
 @click.option(
     "--json",
     "as_json",
     is_flag=True,
     default=False,
     help="Emit machine-readable JSON.",
+)
+@click.option(
+    "--check",
+    is_flag=True,
+    default=False,
+    help="Verify fingerprints are current; exit non-zero on drift (no writes).",
 )
 @click.option(
     "--strict",
@@ -75,7 +119,20 @@ def _emit_report(report: dict, as_json: bool) -> None:
     "--heal",
     is_flag=True,
     default=False,
-    help="Refresh valid stale fingerprints without LLM calls.",
+    help="Stamp single-sided drift to the current tree (no LLM, no regen).",
+)
+@click.option(
+    "--accept-current",
+    "accept_current",
+    is_flag=True,
+    default=False,
+    help="Stamp CONFLICT units, accepting the current tree as the agreed baseline.",
+)
+@click.option(
+    "--backfill",
+    is_flag=True,
+    default=False,
+    help="Stamp UNBASELINED units (missing/invalid fingerprint) to set a baseline.",
 )
 @click.option(
     "--ledger",
@@ -87,27 +144,59 @@ def _emit_report(report: dict, as_json: bool) -> None:
     "--module",
     "module_name",
     default=None,
-    help="Limit reconciliation to one module basename.",
+    help="Alias for the BASENAME argument (limit to one unit).",
 )
 @click.pass_context
 def reconcile(
     ctx: click.Context,
+    basename: Optional[str],
     as_json: bool,
+    check: bool,
     strict: bool,
     heal: bool,
+    accept_current: bool,
+    backfill: bool,
     ledger: bool,
     module_name: Optional[str],
 ) -> None:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
-    """Classify and optionally reconcile PDD fingerprint drift."""
+    """Classify PDD fingerprint drift and stamp the safe cases (no LLM).
+
+    With no flags, reports each unit's status without writing. ``--heal`` stamps
+    single-sided drift; ``--accept-current`` additionally stamps CONFLICT units;
+    ``--backfill`` additionally stamps UNBASELINED units. ``--check`` is a
+    read-only verification (same contract as the CI stamper) that exits non-zero
+    on any non-current unit. BASENAME (or ``--module``) limits the run to one unit.
+    """
     ctx.ensure_object(dict)
     if as_json:
         ctx.obj["_suppress_result_summary"] = True
+    target = basename or module_name
+    modules = [target] if target else None
+
+    # A targeted run that matches no unit must fail loudly, not silently pass with
+    # 0 units (#1969 review pass 2 finding 3: a typo'd basename would otherwise
+    # exit 0 / ok:true and skip the intended unit in CI/runbook checks).
+    if target is not None and not resolve_units(project_root(), modules=modules):
+        raise click.ClickException(
+            f"No PDD unit matches '{target}'. Run `pdd reconcile` (no argument) to "
+            "verify all units, or check the basename / --module spelling."
+        )
+
+    if check:
+        result = run_check(modules=modules)
+        _emit_check(result, as_json)
+        if not result.ok:
+            raise click.exceptions.Exit(1)
+        return
+
     report = build_report(
         consumer="reconcile",
-        modules=[module_name] if module_name else None,
+        modules=modules,
         heal=heal,
         ledger=ledger,
+        accept_current=accept_current,
+        backfill=backfill,
     )
     _emit_report(report, as_json)
     if strict and not report["ok"]:

@@ -4,61 +4,52 @@
 Write the pdd/agentic_test_generate.py module.
 
 % Role & Scope
-Agentic test generation for non-Python languages. Instead of using a single LLM
-call (which often produces incorrect test file extensions or doesn't follow the
-correct framework), this module delegates to an agentic CLI that can:
-1. Explore the project structure
-2. Discover test frameworks (Jest, JUnit, Go test, Cargo test, etc.)
-3. Generate tests
-4. Run them to verify they pass
+Provides agentic test generation for non-Python languages. Instead of a single LLM call, this module delegates to an agentic CLI to explore the project, discover test frameworks, generate tests, and run them.
 
 % Entry Point
-`run_agentic_test_generate(prompt_file, code_file, output_test_file, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None)`
+`run_agentic_test_generate(prompt_file: Path, code_file: Path, output_test_file: Path, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None) -> TestResult`
 
-Returns: `tuple[str, float, str, bool, str]` → `(generated_content, cost, model_name, success, error_message)`
-- generated_content: The content of the generated test file
-- cost: Estimated LLM cost
-- model_name: Model/provider used (formatted as "agentic-{provider}")
-- success: Whether the agentic test generation succeeded (tests passed)
-- error_message: Empty string on success; on failure, the error/message from run_agentic_task
+Returns: `TestResult` (imported from `.test_result` containing `content`, `cost`, `model`, `agentic_success`, and `error_message`).
+- `content`: Generated test file content (empty string if none)
+- `cost`: Estimated LLM cost
+- `model`: Formatted as `"agentic-{provider}"` or `"agentic-cli"` (fallback)
+- `agentic_success`: True if tests passed, False if failed, None if early error
+- `error_message`: Empty string on success, else the error/failure message
 
 % LLM Prompt Template
-Uses `agentic_test_generate_LLM` (loaded via load_prompt_template).
-
-Template placeholders:
-- `{prompt_path}`: Absolute path to prompt file
-- `{code_path}`: Absolute path to code file
-- `{test_path}`: Absolute path to output test file
-- `{project_root}`: Absolute path to project root
-- `{prompt_content}`: Content of prompt file
-- `{code_content}`: Content of code file
+Uses template `agentic_test_generate_LLM` (loaded via `load_prompt_template`).
+Template placeholders to format:
+- `prompt_path`: Absolute path to prompt file
+- `code_path`: Absolute path to code file
+- `test_path`: Absolute path to output test file
+- `project_root`: Absolute path to project root
+- `prompt_content`: Content of prompt file (augmented with repair_directive if present)
+- `code_content`: Content of code file
 
 % Requirements
-1. Single-pass agentic execution (no retry loops)
-2. Record file mtimes before agent runs, detect changes after
-3. Agent writes the test file directly; module reads it back for return value
-4. If expected output file doesn't exist, check changed_files for any new test/spec files. When the agent wrote to such an alternate path (e.g. `__tests__/foo.test.ts` instead of the canonical `output_test_file`), the OUTER churn check in `cmd_test_main` compares the alt-path's NEW content against the CANONICAL path's pre-existing content (empty when canonical didn't exist), letting a 20-test alt file shrink to 1 without tripping `TestChurnError`. To close that gap, BEFORE running the agent take a working-tree content snapshot of every existing file matching `_is_test_output_path` under `project_root` via `_snapshot_pre_test_contents(project_root, mtimes_before.keys()) -> dict[Path, str]`; this captures tracked-clean, tracked-dirty, AND untracked files alike (so neither an untracked alt-path test nor uncommitted local edits get treated as first-time generation, and a restore-on-failure never silently discards dirty work). Bound per-file at ~1 MiB to keep snapshot memory predictable; files above the cap fall through to first-time-generation behavior. Lazy-import `_is_test_output_path` from `code_generator_main` to avoid a circular dependency. AFTER the agent runs, when the alt-path fallback fires, look up the alt path's prior content from this snapshot (NOT from `git show HEAD:<rel>` — that would miss untracked alt files entirely and on restore would clobber the user's local dirty edits with HEAD) and call `_verify_test_churn(existing_code=prior, generated_code=alt_content, prompt_name=prompt_file.name, output_path=str(alt_path), prompt_content=prompt_content)`. On `TestChurnError`: set `total_cost`/`model_name` on the exception, RESTORE the alt path's snapshotted pre-run content to disk (so the repair loop sees the actual pre-sync working-tree state), then re-raise. Lazy-import `_verify_test_churn`/`TestChurnError` from `code_generator_main`.
-5. Parse JSON from agent output to get success/message metadata
-6. Return empty string for content if no test file was generated
-7. **Repair-directive injection via explicit kwarg** (#1012, F-A / F-H): `run_agentic_test_generate` accepts a `repair_directive: str | None = None` keyword-only parameter. After reading `prompt_content` from the prompt file on disk and BEFORE passing it into the agent instruction template format, if `repair_directive` is non-empty (after stripping) append a `<test_repair_directive>...</test_repair_directive>` block to `prompt_content` containing the stripped directive. This mirrors the `<architecture_repair_directive>` injection in `code_generator_main` and the native-path injection in `cmd_test_main`, so test-op retries from `sync_orchestration._run_test_op_with_churn_retry` actually see a different prompt on the second attempt. **`run_agentic_test_generate` MUST NOT read `PDD_REPAIR_DIRECTIVE` from `os.environ`**: a stale outer value would otherwise contaminate direct invocations that have no active retry context. The retry helpers source the directive from their loop-local state and pass it explicitly through `cmd_test_main(..., repair_directive=...)` which forwards it here. Do NOT mutate the on-disk prompt file — only the in-process `prompt_content` flowing into `template.format(...)` is augmented.
+1. **Agent and Template Loading**: Check available agents via `get_available_agents()`. If empty, return `TestResult` with `success=False` and a clear error message. Load the prompt template; if it fails, return `TestResult` with `success=False` and error.
+2. **Repair Directive Injection**: Accepts a `repair_directive` kwarg. If non-empty, append it to `prompt_content` wrapped in a `<test_repair_directive>` block before formatting. Do NOT read `PDD_REPAIR_DIRECTIVE` from the environment or mutate the on-disk file.
+3. **Mtime Recording**: Before running the agent, record file mtimes across the project root using `_get_file_mtimes(root: Path)`. Ignore `.git`, `__pycache__`, `.venv`, `venv`, `node_modules`, `.idea`, `.vscode`, `.pdd`.
+4. **Pre-test Snapshotted Contents**: Before the run, snapshot the contents of existing test-like files under `project_root` via `_snapshot_pre_test_contents` (for files in candidate paths matching `_is_test_output_path` and sized <= 1 MiB). Lazy-import `_is_test_output_path` from `code_generator_main` to avoid a circular dependency.
+5. **Agent Task Execution**: Execute the task via `run_agentic_task(instruction=instruction, cwd=project_root, verbose=verbose, quiet=quiet, label="test-generate", timeout=AGENTIC_STEP_TIMEOUT_SECONDS, max_retries=DEFAULT_MAX_RETRIES)`.
+6. **Output Parsing**:
+   - Detect changed files using mtimes comparison.
+   - Read the canonical test file via `_read_generated_test_file`.
+   - Parse JSON metadata from agent output using `_extract_json_from_text` (handles raw JSON and markdown blocks). If missing JSON but agent succeeded and generated a test file, infer success and set a default message.
+7. **Test Churn Sweep**:
+   - Skip sweep if env flags (`PDD_SKIP_TEST_CHURN_GATE`, `PDD_SKIP_CONFORMANCE`) are enabled or if the prompt allows churn.
+   - Otherwise, iterate through all pre-run snapshotted files:
+     - **Deletion**: If a snapshotted file was deleted, treat as maximal churn (`churn_ratio=1.0`), restore all snapshotted files from pre-test contents, and raise `TestChurnError` with cost, model, and a specific repair directive.
+     - **Rewrite**: If a snapshotted file was changed, verify churn using `_verify_test_churn(existing_code, generated_code, prompt_name, output_path, prompt_content)`. On `TestChurnError`, set its cost/model, restore all snapshotted files, and raise/re-raise.
+     - Lazy-import `_verify_test_churn`, `TestChurnError`, `_get_test_churn_threshold`, `_prompt_allows_test_churn`, and `_env_flag_enabled` from `code_generator_main`.
+8. **Alternative Path Fallback**: If the expected canonical test file doesn't exist but changed files contain test/spec files, read the first match as the generated content.
 
 % Helper Functions
-
-### `_get_file_mtimes(root: Path) -> dict[Path, float]`
-Recursively scan directory to record file modification times.
-Ignores: .git, __pycache__, .venv, venv, node_modules, .idea, .vscode, .pdd
-
-### `_extract_json_from_text(text: str) -> dict[str, Any] | None`
-Extract JSON object from text (handles markdown code blocks and raw JSON).
-
-### `_read_generated_test_file(test_file: Path) -> str`
-Read the generated test file content if it exists, empty string otherwise.
-
-### `_snapshot_pre_test_contents(project_root: Path, candidate_paths: Iterable[Path]) -> dict[Path, str]`
-Read the on-disk content of every file in `candidate_paths` that lives under `project_root` and matches `_is_test_output_path`. Skips files >1 MiB and silently drops paths that fail `OSError`. Used to capture the alt-path churn baseline BEFORE the agent runs, so tracked-clean / tracked-dirty / untracked test files are all covered uniformly. The dict's later `.get(alt_path, "")` lookup and restore-on-failure step give the repair loop the real pre-sync working-tree content instead of HEAD.
-
-### `_detect_changed_files(before, after, project_root) -> list[str]`
-Detect which files changed between two mtime snapshots (new, modified, deleted).
+- `_get_file_mtimes(root: Path) -> dict[Path, float]`: Scans root recursively and returns modification times, ignoring hidden/venv/node_modules directories.
+- `_extract_json_from_text(text: str) -> dict[str, Any] | None`: Extracts and decodes JSON from text or markdown blocks.
+- `_snapshot_pre_test_contents(project_root: Path, candidate_paths: Iterable[Path]) -> dict[Path, str]`: Reads and returns the content of candidate files under project_root matching `_is_test_output_path` and under 1 MiB.
+- `_read_generated_test_file(test_file: Path) -> str`: Reads and returns the test file content, or empty string on error/nonexistence.
+- `_detect_changed_files(before: dict[Path, float], after: dict[Path, float], project_root: Path) -> list[str]`: Compares pre- and post-run snapshots to return relative paths of added, modified, or deleted files.
 
 % Dependencies
 <module_dependencies>

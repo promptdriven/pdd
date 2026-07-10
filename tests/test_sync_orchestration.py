@@ -1394,9 +1394,63 @@ def test_dry_run_mode(orchestration_fixture):
     assert not extra_kwargs, f"unexpected extra kwargs: {extra_kwargs!r}"
 
     assert result == mock_log_display.return_value
-    # Ensure main workflow components were not touched
+    # Ensure the main workflow (locking, execution) was not touched.
     orchestration_fixture['SyncLock'].assert_not_called()
-    orchestration_fixture['sync_determine_operation'].assert_not_called()
+    # #1929: dry-run now also computes the CURRENT decision read-only so a pending
+    # CONFLICT surfaces (see test_dry_run_surfaces_conflict). This is analysis
+    # only — read_only=True / log_mode=True — so no metadata is mutated.
+    determine_calls = orchestration_fixture['sync_determine_operation'].call_args_list
+    assert len(determine_calls) == 1
+    assert determine_calls[0].kwargs.get('read_only') is True
+    assert determine_calls[0].kwargs.get('log_mode') is True
+
+def test_dry_run_surfaces_conflict_without_side_effects(tmp_path, monkeypatch, capsys):
+    """#1929: `pdd sync <unit> --dry-run` reports a pending CONFLICT and mutates nothing.
+
+    Runs the real (unmocked) dry-run path over an on-disk unit whose prompt AND
+    code both changed since the fingerprint. The current-analysis line must name
+    the CONFLICT and the `pdd resolve` command, and the fingerprint must be byte
+    identical afterwards.
+    """
+    from datetime import datetime, timezone
+    from pdd.sync_determine_operation import calculate_sha256
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+
+    def _w(path, content):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return calculate_sha256(path)
+
+    prompt_hash = _w(tmp_path / "prompts" / "widget_python.prompt", "Generate a simple function.\n")
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    code_hash = _w(Path(paths["code"]), "def value():\n    return 1\n")
+    example_hash = _w(Path(paths["example"]), "print(1)\n")
+    test_hash = _w(Path(paths["test"]), "def test_v():\n    assert True\n")
+    fp_path = tmp_path / ".pdd" / "meta" / "widget_python.json"
+    fp_path.write_text(json.dumps({
+        "pdd_version": "t", "timestamp": datetime.now(timezone.utc).isoformat(),
+        "command": "fix", "prompt_hash": prompt_hash, "code_hash": code_hash,
+        "example_hash": example_hash, "test_hash": test_hash,
+        "test_files": {Path(paths["test"]).name: test_hash}, "include_deps": {},
+    }), encoding="utf-8")
+    # Co-edit prompt + code -> both-changed CONFLICT.
+    _w(tmp_path / "prompts" / "widget_python.prompt", "Generate a CHANGED function.\n")
+    _w(Path(paths["code"]), "def value():\n    return 2\n")
+    fp_before = fp_path.read_text(encoding="utf-8")
+
+    result = sync_orchestration(basename="widget", language="python", dry_run=True)
+
+    out = capsys.readouterr().out
+    assert "CONFLICT" in out
+    assert "pdd resolve widget --accept-current" in out
+    # Strictly read-only: the fingerprint is untouched.
+    assert fp_path.read_text(encoding="utf-8") == fp_before
+    assert result is not None
+
 
 def test_skip_verify_flag(orchestration_fixture):
     """
@@ -1456,6 +1510,33 @@ def test_manual_merge_request(orchestration_fixture):
     assert result['success'] is False
     assert 'Manual merge required' in result['errors'][0]
     assert not result['operations_completed']
+
+
+def test_conflict_reason_surfaces_actionable_resolve_command(orchestration_fixture):
+    """#1929: the actionable CONFLICT reason reaches the user's error summary.
+
+    Orchestration must not swallow a CONFLICT into a silent success: it surfaces
+    the decision reason verbatim, including the exact `pdd resolve` command, so a
+    non-interactive/CI run reports how to resolve rather than healing the unit.
+    """
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.return_value = SyncDecision(
+        operation='fail_and_request_manual_merge',
+        reason=(
+            "CONFLICT: 'calculator' — prompt and code changed since the last sync, "
+            "so pdd will not auto-pick a winner (that would discard your edits). "
+            "Resolve with `pdd resolve calculator --accept-current` (keep the current "
+            "files as the new baseline)."
+        ),
+        details={'classification': 'CONFLICT'},
+    )
+
+    result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is False
+    assert not result['operations_completed']
+    assert 'pdd resolve calculator --accept-current' in result['errors'][0]
+
 
 def test_unexpected_exception_handling(orchestration_fixture):
     """
@@ -9500,3 +9581,58 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1938 (Pillar A): surgical regeneration for mature modules.
+#
+# For a mature module (existing non-empty code) with a small prompt delta,
+# `pdd sync` regeneration must be edit-shaped, not rebirth-shaped, so declared
+# symbols are preserved instead of dropped by a full "big change" regen. The
+# generate operation therefore drives `code_generator_main` with
+# `force_incremental_flag=True` by DEFAULT (surgical/edit-shaped), and only with
+# `force_incremental_flag=False` (today's full-regeneration behavior) when the
+# operator opts in via `pdd sync --fresh`. The `code_generator_main` layer keeps
+# the existing safety nets: a new/empty module or an undeterminable original
+# prompt still falls back to full generation, and a repair directive still
+# forces full regeneration.
+# ---------------------------------------------------------------------------
+def _capture_force_incremental(orchestration_fixture):
+    """Run a single generate op and return the force_incremental_flag kwarg
+    passed to code_generator_main."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='Prompt changed'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    captured = {}
+
+    def fake_codegen(*_args, **_kwargs):
+        captured['force_incremental_flag'] = _kwargs.get('force_incremental_flag')
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("class Calculator:\n    pass\n")
+        return ("class Calculator:\n    pass\n", True, 0.10, "model")
+
+    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
+    return captured
+
+
+def test_generate_defaults_to_surgical_force_incremental(orchestration_fixture):
+    """Default sync must request edit-shaped (surgical) generation:
+    code_generator_main receives force_incremental_flag=True."""
+    captured = _capture_force_incremental(orchestration_fixture)
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    assert captured['force_incremental_flag'] is True
+
+
+def test_generate_fresh_flag_forces_full_regeneration(orchestration_fixture):
+    """`pdd sync --fresh` (fresh=True) must restore full-regeneration behavior:
+    code_generator_main receives force_incremental_flag=False."""
+    captured = _capture_force_incremental(orchestration_fixture)
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0, fresh=True)
+
+    assert captured['force_incremental_flag'] is False

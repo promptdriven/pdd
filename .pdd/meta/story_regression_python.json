@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-09T22:54:16.570565+00:00",
+  "command": "fix",
+  "prompt_hash": "8103e5b2755bf50a484a5f5cf420f2bb0e593c1f0d56d750573c99db81a85f77",
+  "code_hash": "1d921a6c4c8aefb97e4b5e5ce563c45273e14d8ca243ac147275d12d7b4aa94d",
+  "example_hash": "90aa347c0d78ae8e7e951cf390836da3778d7d9c70d7bd9407b7b1a1764c66f1",
+  "test_hash": "ea383b00fd2d08c7a0298f533d0d28b7d83bb1f0f5484da54c60514dcde8f045",
+  "test_files": {
+    "test_story_regression.py": "ea383b00fd2d08c7a0298f533d0d28b7d83bb1f0f5484da54c60514dcde8f045",
+    "test_story_regression_gate.py": "514ae8c1ebf5ccef73caa0aa521b49e2995e10c33ed3e6cc3723bea0576ce7e8"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/user_story_tests_example.py": "53214544b7af564ee41f178b9cbabc5162c9c6648638366f609a2ec5a46398d3"
+  }
+}

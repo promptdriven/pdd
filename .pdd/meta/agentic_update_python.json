@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:17.989161+00:00",
+  "command": "fix",
+  "prompt_hash": "3f8ff49dcf8a62526143f7d4c06c0780cc0180351c1da693eeb28e3b37d3aa0c",
+  "code_hash": "f0bd8afbbb4cbbc8dcde8116061a09fdd7a888daa540b48eb46b360153a5c6a4",
+  "example_hash": "967254cd1c636ac5ba09afa0446312ffc1f28d3041ed453a4c6588c931f722c4",
+  "test_hash": "45d00c80b59d0037dbb148b706fe758a789fa9a5fce1129a675cee1b4dfc99bd",
+  "test_files": {
+    "test_agentic_update.py": "45d00c80b59d0037dbb148b706fe758a789fa9a5fce1129a675cee1b4dfc99bd"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/agentic_common.py": "7b9b57eac64bac2b4fd18d4eea3d2feb3c7d99ff43f0ca1961a0bfd22a9576da",
+    "pdd/sync_order.py": "6cdaed3b56d9cc12f38ee5ac93b8623899372ea2d177c4f131ec258edb94d0dd",
+    "prompts/agentic_update_LLM.prompt": "0fe3ff3c55d39cd68d3f4d1105e156a608c8668a27c3d81efea5289b2430ba17"
+  }
+}

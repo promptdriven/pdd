@@ -1889,6 +1889,50 @@ def _create_mock_context(**kwargs) -> click.Context:
     return ctx
 
 
+def _display_dry_run_decision(
+    basename: str,
+    language: str,
+    target_coverage: float,
+    prompts_dir: str,
+    skip_tests: bool,
+    skip_verify: bool,
+    context_override: Optional[str],
+    quiet: bool,
+) -> Optional[SyncDecision]:
+    """Print the current read-only sync decision for a ``--dry-run`` (#1929).
+
+    A dry-run otherwise only replays the operation log, so a freshly-created
+    CONFLICT (prompt AND a derived artifact both changed since the fingerprint)
+    is invisible until a real sync runs. This computes the current decision in
+    ``read_only``/``log_mode`` — no lock, no fingerprint or metadata mutation —
+    and surfaces it, giving a pending CONFLICT its actionable resolution message
+    without any side effects. Best-effort: any analysis error is swallowed so the
+    log replay below still runs.
+    """
+    try:
+        decision = sync_determine_operation(
+            basename,
+            language,
+            target_coverage,
+            prompts_dir=prompts_dir,
+            skip_tests=skip_tests,
+            skip_verify=skip_verify,
+            context_override=context_override,
+            log_mode=True,
+            read_only=True,
+        )
+    except Exception:  # pylint: disable=broad-except
+        return None
+    if decision is None or quiet:
+        return decision
+    classification = (decision.details or {}).get('classification')
+    if classification == 'CONFLICT':
+        print(f"Current analysis: CONFLICT — {decision.reason}")
+    else:
+        print(f"Current analysis: {decision.operation} — {decision.reason}")
+    return decision
+
+
 def _display_sync_log(
     basename: str,
     language: str,
@@ -2003,12 +2047,22 @@ def sync_orchestration(
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
     compress: bool = False,
+    fresh: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
+
+    ``fresh`` (issue #1938 Pillar A): when False (the default), the generate
+    operation regenerates mature modules surgically (edit-shaped) by driving
+    ``code_generator_main`` with ``force_incremental_flag=True`` so declared
+    public symbols are preserved instead of being dropped by a full "rebirth"
+    regeneration. Pass ``fresh=True`` (``pdd sync --fresh``) to restore full
+    regeneration. ``code_generator_main`` still falls back to full generation
+    for new/empty modules or when the original prompt cannot be determined, and
+    conformance repair retries still force full regeneration.
     """
     # Handle None values from CLI (Issue #194) - defense in depth
     if target_coverage is None:
@@ -2046,6 +2100,19 @@ def sync_orchestration(
             raise
         except Exception:
             _dry_paths = None
+        # #1929: surface the CURRENT decision (especially a pending CONFLICT) so a
+        # dry-run reports what sync WOULD do, not just past log entries. Read-only:
+        # no lock, fingerprint, or metadata mutation.
+        _display_dry_run_decision(
+            basename,
+            language,
+            target_coverage,
+            prompts_dir,
+            skip_tests,
+            skip_verify,
+            context_override,
+            quiet,
+        )
         if _dry_paths:
             return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
@@ -2746,7 +2813,7 @@ def sync_orchestration(
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=not fresh, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
                                             last_conform_exc = None
                                             break
                                         except (

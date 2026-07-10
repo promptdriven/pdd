@@ -1,11 +1,28 @@
 {
-  "pdd_version": "0.0.257",
-  "timestamp": "2026-06-02T05:32:50.786435+00:00",
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.147757+00:00",
   "command": "example",
-  "prompt_hash": null,
-  "code_hash": null,
-  "example_hash": null,
-  "test_hash": null,
-  "test_files": null,
-  "include_deps": null
+  "prompt_hash": "ae052bd412593cd6bf368c6aa753852f19b7698162713431ca0e054e0b7d9c3f",
+  "code_hash": "8454d9d818cbc14e80f15b8d79fd790279bcdfb31bbb68b84a0611b99396c0c6",
+  "example_hash": "a86435e82357bc671ac6dadee6df22c163d27a30cbdba102e9cbe3bc3121fc43",
+  "test_hash": "6190aeff914edf5b7929874866480d44a2805956a2917afaa1fd14975c5606ae",
+  "test_files": {
+    "test_fix_error_loop.py": "6190aeff914edf5b7929874866480d44a2805956a2917afaa1fd14975c5606ae",
+    "test_fix_error_loop_failure_aware.py": "07cc0a1fa6055d0e27b0a01dd73883e215cb7e5c329bbe870cf97c13e3d40e1b",
+    "test_fix_error_loop_prompt_contract.py": "57f50dae4378256814c37cc875032e829288f9fb34687aa53b68dea39175cbca",
+    "test_fix_error_loop_sync_e2e.py": "a838021d92b7b0e3d2042957c82542aa8aabbb2ddc9c67d1f601817bfc397e9e"
+  },
+  "include_deps": {
+    "context/agentic_fix_example.py": "407a024fcba9402e00b401477725ae72b1de718ab59bea29b69509a0b15f621f",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/fix_errors_from_unit_tests_example.py": "df6c93b3ae585af13827cf3edb398e7c0da75648b34ff0477044b659df85a117",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/pytest_example.py": "f13c02d911d386ac5bab8e3d4aae64a768e4a7e960803c80fcac14e9ba5975cb",
+    "context/python_env_detector_example.py": "65619b3e8bad0509f1ccf54d81b5c3760f423b6fc1925c932fc7968da78a172e",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/failure_classification.py": "0675857d23f52e447f15ace22ec37c2f003a61d3c810254c8547129c29d697ff",
+    "pdd/fix_focus.py": "e341e6bda871ddc5ba92cf05e9d554d49bc5e4afebf5b4f1482971edf557063d",
+    "pdd/test_context_packer.py": "27c7d14747d38df8edf24c8ef2ce1b7ca21d8f2eea38aec02ba06042ee144c0b"
+  }
 }

@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.299",
+  "timestamp": "2026-07-09T20:41:18.252037+00:00",
+  "command": "fix",
+  "prompt_hash": "5a129d5e7110839ed03cde6337526e04fd63eec16ab5e6385e999f28ab589f4b",
+  "code_hash": "b49c7a2072243f6d1b3bbe762e1f023d890fbbdccf4c57f882df3de04f7a971f",
+  "example_hash": "0c143874f91ca038a84580bd829fccf6adbe8bedfd33517089cc2bee6b7a04e1",
+  "test_hash": "7096ca56eb33b8d62a18e3327eac88fdaa702b7b205e22a8a946273c840fcd66",
+  "test_files": {
+    "test_prompts.py": "7096ca56eb33b8d62a18e3327eac88fdaa702b7b205e22a8a946273c840fcd66"
+  },
+  "include_deps": {
+    "context/code_generator_main_example.py": "4b66f24a1e2ac4195255738566b0cccdac0971523a245d3a8b78ad45d9e1a872",
+    "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
+    "context/fastapi_example.py": "4b3d64175b8f46b48a4387e9cf98ed4024fd74a57413bd2f8a55c5d9c3dd0108",
+    "context/llm_invoke_example.py": "3e66413118ec2f8e8940e7a835932920309aeeb775d23ce728d78299fb99e2ec",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/server/security_example.py": "dc4f3dc06455ba6180f4536aa67ce4e9a5efd52e0e9cd7702c3f2ec6ef96aac9",
+    "context/sync_determine_operation_example.py": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5"
+  }
+}
