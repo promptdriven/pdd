@@ -15,6 +15,7 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
+from pdd.sync_core.runner import pytest_validator_config_digest
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_python.prompt"), "python")
@@ -39,14 +40,15 @@ def _repository(tmp_path: Path, test_content: str) -> tuple[Path, str]:
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _profile() -> VerificationProfile:
+def _profile(root: Path, ref: str) -> VerificationProfile:
+    paths = (PurePosixPath("tests/test_widget.py"),)
     obligation = VerificationObligation(
         "pytest",
         "test",
         "pytest",
-        "pytest-v1",
+        pytest_validator_config_digest(root, ref, paths),
         ("REQ-1",),
-        (PurePosixPath("tests/test_widget.py"),),
+        paths,
     )
     return VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
 
@@ -54,7 +56,7 @@ def _profile() -> VerificationProfile:
 def _run(root: Path, base: str, head: str):
     return run_profile(
         root,
-        _profile(),
+        _profile(root, base),
         RunBinding("snapshot-v1", base, head),
         AttestationIssue(
             AttestationSigner("trusted-ci", b"v" * 32),
@@ -114,8 +116,8 @@ def test_candidate_modified_conftest_cannot_self_certify(tmp_path) -> None:
     _git(root, "commit", "-q", "-m", "candidate fixture")
     head = _git(root, "rev-parse", "HEAD")
     _envelope, executions = _run(root, base, head)
-    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
-    assert "tests/conftest.py" in executions[0].detail
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "config digest" in executions[0].detail
 
 
 def test_untracked_conftest_cannot_influence_checked_sha(tmp_path) -> None:

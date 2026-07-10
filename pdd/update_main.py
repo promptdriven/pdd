@@ -1199,6 +1199,9 @@ def _finalize_single_file_fingerprint(
             model=model,
         )
     except Exception as exc:
+        from .sync_core.finalize import CanonicalFinalizationError
+        if isinstance(exc, CanonicalFinalizationError):
+            raise
         if not quiet:
             rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
 
@@ -1462,7 +1465,10 @@ def update_main(
                                         cost=result.get("cost", 0.0),
                                         model=result.get("model", "unknown"),
                                     )
-                                except Exception:
+                                except Exception as exc:
+                                    from .sync_core.finalize import CanonicalFinalizationError
+                                    if isinstance(exc, CanonicalFinalizationError):
+                                        raise
                                     pass  # Best-effort; don't fail the update
                 else:
                     if "Success" in result.get("status", ""):

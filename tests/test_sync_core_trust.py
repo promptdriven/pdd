@@ -1,5 +1,8 @@
 """Adversarial tests for trusted semantic evidence issuance."""
 
+import base64
+import json
+import subprocess
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -14,9 +17,11 @@ from pdd.sync_core import (
     AttestationTrustPolicy,
     EvidenceOutcome,
     FileReplayStore,
+    RemoteAttestationSigner,
     UnitId,
 )
 from pdd.sync_core.trust import ValidationEvidence
+from pdd.sync_core.finalize import attestation_signer_from_environment
 from pdd.sync_core.types import ObligationEvidence
 
 
@@ -65,6 +70,55 @@ def test_valid_attestation_produces_sealed_evidence() -> None:
     assert evidence.attestation_id == "attestation-1"
 
 
+def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None:
+    request = AttestationRequest(
+        "remote-attestation",
+        _binding(),
+        (ObligationEvidence("test", EvidenceOutcome.PASS),),
+        "remote-nonce",
+        NOW,
+    )
+
+    def remote_sign(command, *, input, capture_output, check):
+        assert command == ("protected-attestation-sign",)
+        assert capture_output is True and check is False
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=SIGNER.sign_bytes(input).encode("ascii"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr("pdd.sync_core.trust.subprocess.run", remote_sign)
+    signer = RemoteAttestationSigner(
+        SIGNER.issuer, SIGNER.public_key_bytes(), ("protected-attestation-sign",)
+    )
+    envelope = signer.issue(request)
+    evidence = AttestationTrustPolicy(
+        {SIGNER.issuer: SIGNER.public_key_bytes()}
+    ).verify(envelope, request.binding, now=NOW)
+    assert evidence.attestation_id == request.attestation_id
+
+
+def test_attestation_environment_forbids_local_private_key(monkeypatch) -> None:
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNING_KEY", "candidate-secret")
+    with pytest.raises(ValueError, match="local attestation signing keys are forbidden"):
+        attestation_signer_from_environment()
+
+
+def test_attestation_environment_builds_remote_authority(monkeypatch) -> None:
+    monkeypatch.setenv("PDD_ATTESTATION_ISSUER", SIGNER.issuer)
+    monkeypatch.setenv(
+        "PDD_ATTESTATION_PUBLIC_KEY",
+        base64.b64encode(SIGNER.public_key_bytes()).decode("ascii"),
+    )
+    monkeypatch.setenv(
+        "PDD_ATTESTATION_SIGNER_COMMAND",
+        json.dumps(["protected-attestation-sign"]),
+    )
+    assert isinstance(attestation_signer_from_environment(), RemoteAttestationSigner)
+
+
 def test_evidence_cannot_be_caller_asserted() -> None:
     with pytest.raises(TypeError, match="AttestationTrustPolicy"):
         ValidationEvidence(
@@ -91,7 +145,7 @@ def test_expired_attestation_is_rejected() -> None:
 
 
 def test_overlong_attestation_lifetime_is_rejected() -> None:
-    envelope = _envelope(nonce="nonce-long", lifetime=timedelta(hours=2))
+    envelope = _envelope(nonce="nonce-long", lifetime=timedelta(days=9))
     with pytest.raises(AttestationError, match="exceeds policy"):
         _verify(AttestationTrustPolicy({"trusted-ci": PUBLIC_KEY}), envelope)
 
@@ -125,12 +179,12 @@ def test_nonce_reuse_by_different_attestation_is_rejected() -> None:
         _verify(policy, second)
 
 
-def test_exact_signed_statement_replay_is_rejected() -> None:
+def test_exact_signed_statement_recheck_is_idempotent() -> None:
     policy = AttestationTrustPolicy({"trusted-ci": PUBLIC_KEY})
     envelope = _envelope()
-    _verify(policy, envelope)
-    with pytest.raises(AttestationError, match="replayed"):
-        _verify(policy, envelope)
+    first = _verify(policy, envelope)
+    second = _verify(policy, envelope)
+    assert first.attestation_id == second.attestation_id == "attestation-1"
 
 
 def test_durable_nonce_collision_is_rejected_across_policy_instances(tmp_path) -> None:
@@ -155,6 +209,19 @@ def test_durable_nonce_collision_is_rejected_across_policy_instances(tmp_path) -
     with pytest.raises(AttestationError, match="replayed"):
         _verify(second, conflicting)
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_durable_exact_statement_recheck_is_idempotent(tmp_path) -> None:
+    path = tmp_path / "external/replay.json"
+    envelope = _envelope()
+    first = AttestationTrustPolicy(
+        {"trusted-ci": PUBLIC_KEY}, replay_store=FileReplayStore(path)
+    )
+    second = AttestationTrustPolicy(
+        {"trusted-ci": PUBLIC_KEY}, replay_store=FileReplayStore(path)
+    )
+    _verify(first, envelope)
+    assert _verify(second, envelope).attestation_id == envelope.attestation_id
 
 
 @pytest.mark.parametrize(

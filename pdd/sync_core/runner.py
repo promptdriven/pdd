@@ -18,9 +18,11 @@ from pathlib import Path, PurePosixPath
 from .trust import (
     AttestationBinding,
     AttestationEnvelope,
+    AttestationIssuer,
     AttestationRequest,
-    AttestationSigner,
 )
+from .isolation import SECRET_ENV_MARKERS
+from .git_io import read_git_blob
 from .types import (
     EvidenceOutcome,
     ObligationEvidence,
@@ -70,20 +72,10 @@ class RunBinding:
 class AttestationIssue:
     """Trusted signer and unique issuance fields for one profile run."""
 
-    signer: AttestationSigner
+    signer: AttestationIssuer
     attestation_id: str
     nonce: str
     issued_at: datetime
-
-
-def _git_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
-    result = subprocess.run(
-        ["git", "show", f"{ref}:{path.as_posix()}"],
-        cwd=root,
-        capture_output=True,
-        check=False,
-    )
-    return result.stdout if result.returncode == 0 else None
 
 
 def _local_module_paths(
@@ -125,7 +117,9 @@ def _local_module_paths(
             module_path.with_suffix(".py"),
             module_path / "__init__.py",
         )
-        resolved.update(path for path in candidates if _git_blob(root, ref, path) is not None)
+        resolved.update(
+            path for path in candidates if read_git_blob(root, ref, path) is not None
+        )
     return resolved
 
 
@@ -133,33 +127,77 @@ def _pytest_support_closure(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Return config, conftest, and transitive local-import blobs for pytest."""
-    pending = list(test_paths)
-    paths = {path for path in PYTEST_CONFIG_PATHS if _git_blob(root, ref, path) is not None}
+    config_paths = _pytest_config_paths(root, ref, test_paths)
+    return _transitive_support_blobs(
+        root,
+        ref,
+        pending=tuple(test_paths) + tuple(config_paths),
+        included=config_paths,
+    )
+
+
+def _pytest_config_paths(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> set[PurePosixPath]:
+    """Return protected pytest config and governing conftest paths."""
+    paths = {
+        path for path in PYTEST_CONFIG_PATHS
+        if read_git_blob(root, ref, path) is not None
+    }
     for test_path in test_paths:
         parent = test_path.parent
         while parent != PurePosixPath("."):
             candidate = parent / "conftest.py"
-            if _git_blob(root, ref, candidate) is not None:
+            if read_git_blob(root, ref, candidate) is not None:
                 paths.add(candidate)
             parent = parent.parent
         root_conftest = PurePosixPath("conftest.py")
-        if _git_blob(root, ref, root_conftest) is not None:
+        if read_git_blob(root, ref, root_conftest) is not None:
             paths.add(root_conftest)
-    pending.extend(paths)
+    return paths
+
+
+def _transitive_support_blobs(
+    root: Path,
+    ref: str,
+    *,
+    pending: tuple[PurePosixPath, ...],
+    included: set[PurePosixPath],
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Resolve local Python imports from protected runner support paths."""
+    paths = set(included)
+    remaining = list(pending)
     visited: set[PurePosixPath] = set()
-    while pending:
-        path = pending.pop()
+    while remaining:
+        path = remaining.pop()
         if path in visited:
             continue
         visited.add(path)
-        source = _git_blob(root, ref, path)
+        source = read_git_blob(root, ref, path)
         if source is None or path.suffix != ".py":
             continue
         discovered = _local_module_paths(root, ref, path, source) - visited
         paths.update(discovered)
-        pending.extend(discovered)
-    blobs = ((path, _git_blob(root, ref, path)) for path in sorted(paths))
+        remaining.extend(discovered)
+    blobs = ((path, read_git_blob(root, ref, path)) for path in sorted(paths))
     return tuple((path, blob) for path, blob in blobs if blob is not None)
+
+
+def pytest_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> str:
+    """Hash the actual pytest config/conftest closure declared by a profile."""
+    config_paths = _pytest_config_paths(root, ref, test_paths)
+    closure = _transitive_support_blobs(
+        root,
+        ref,
+        pending=tuple(config_paths),
+        included=config_paths,
+    )
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
 
 
 def _support_digest(
@@ -182,7 +220,7 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
     """Reject repository-configured plugins until profiles bind plugin identities."""
     pattern = re.compile(r"(?:^|[\s\"'])-p(?:[=\s]+)[A-Za-z0-9_.-]+")
     for path in PYTEST_CONFIG_PATHS:
-        content = _git_blob(root, ref, path)
+        content = read_git_blob(root, ref, path)
         if content is None:
             continue
         try:
@@ -315,16 +353,7 @@ def _pytest_environment() -> dict[str, str]:
     return {
         key: value
         for key, value in os.environ.items()
-        if not any(
-            marker in key.upper()
-            for marker in (
-                "CREDENTIAL",
-                "PASSWORD",
-                "SECRET",
-                "SIGNING_KEY",
-                "TOKEN",
-            )
-        )
+        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
         and key not in {"PYTEST_ADDOPTS", "PYTHONPATH"}
     } | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1"}
 
@@ -558,6 +587,17 @@ def _obligation_preflight(
             EvidenceOutcome.NOT_COLLECTED,
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
+        )
+    expected_config_digests = {
+        pytest_validator_config_digest(root, ref, obligation.artifact_paths)
+        for ref in (base_sha, head_sha)
+    }
+    if expected_config_digests != {obligation.validator_config_digest}:
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "declared validator config digest does not match protected closure",
         )
     if _config_loads_plugin(root, base_sha) or _config_loads_plugin(root, head_sha):
         return RunnerExecution(

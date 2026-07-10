@@ -11,7 +11,7 @@ import datetime
 import subprocess
 import re
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
 import tempfile
@@ -682,6 +682,34 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
+    from .continuous_sync import canonical_sync_enabled, repository_root
+
+    start = Path(paths.get("prompt") or Path.cwd())
+    if canonical_sync_enabled(start):
+        from .sync_core import (
+            attestation_signer_from_environment,
+            finalize_unit,
+        )
+
+        root = repository_root(start)
+        protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
+        if not protected_base:
+            raise RuntimeError(
+                "canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA"
+            )
+        prompt_path = Path(paths["prompt"]).resolve()
+        try:
+            module = PurePosixPath(prompt_path.relative_to(root).as_posix())
+        except ValueError as exc:
+            raise RuntimeError("canonical prompt path escapes project root") from exc
+        finalize_unit(
+            root,
+            module,
+            base_ref=protected_base,
+            head_ref="HEAD",
+            signer=attestation_signer_from_environment(),
+        )
+        return
     if atomic_state:
         # Buffer for atomic write
         from datetime import datetime, timezone
@@ -2645,6 +2673,25 @@ def sync_orchestration(
                     test_output_excerpt: Optional[str] = None
                     operation_rollback = None
 
+                    from .continuous_sync import canonical_sync_enabled, project_root
+
+                    operation_root = project_root(pdd_files.get("prompt") or Path.cwd())
+                    if canonical_sync_enabled(operation_root):
+                        rollback_paths = []
+                        for value in pdd_files.values():
+                            if isinstance(value, Path):
+                                rollback_paths.append(value)
+                            elif isinstance(value, list):
+                                rollback_paths.extend(
+                                    item for item in value if isinstance(item, Path)
+                                )
+                        for shared in (
+                            operation_root / "architecture.json",
+                            operation_root / "project_dependencies.csv",
+                        ):
+                            rollback_paths.append(shared)
+                        operation_rollback = OperationFileRollback(rollback_paths)
+
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
                     # Drop any stale LLM trace for this operation key so failure paths only
@@ -2656,10 +2703,11 @@ def sync_orchestration(
                         try:
                             if operation == 'auto-deps':
                                 temp_output = Path(str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt'))
-                                operation_rollback = _build_auto_deps_rollback(
-                                    pdd_files['prompt'],
-                                    temp_output,
-                                )
+                                if operation_rollback is None:
+                                    operation_rollback = _build_auto_deps_rollback(
+                                        pdd_files['prompt'],
+                                        temp_output,
+                                    )
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                                 # Issue #522: Capture include deps BEFORE auto-deps may strip tags
                                 from .sync_determine_operation import extract_include_deps

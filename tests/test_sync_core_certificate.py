@@ -1,5 +1,6 @@
 """Tests for the signed cross-repository certificate predicate."""
 
+import base64
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -11,9 +12,11 @@ from pdd.sync_core import (
     CheckerIdentity,
     GlobalCertificateOptions,
     LifecycleResult,
+    NightlyObservation,
     RepositoryTarget,
     build_global_certificate,
     count_vendored_sync_semantics,
+    signer_from_environment,
     verify_global_certificate,
 )
 from pdd.sync_core.lifecycle import _isolated_lifecycle_environment
@@ -25,6 +28,7 @@ CHECKER = CheckerIdentity(
     "refs/tags/v-test-checker",
     "promptdriven/pdd/.github/workflows/global-sync.yml@refs/tags/v-test-checker",
 )
+OBSERVATION = NightlyObservation(True, True, 0, True, "BLOCKED", 0)
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +70,7 @@ def _report(name):
     }
 
 
-def _nightly(path, signer, count=7):
+def _nightly(path, signer, count=7, *, include_observation=True):
     start = datetime(2026, 7, 3, tzinfo=timezone.utc)
     rows = []
     for index in range(count):
@@ -94,6 +98,7 @@ def _nightly(path, signer, count=7):
             "required_nightly_streak": 7,
             "verification_profile_coverage": 100,
             "trusted_current_evidence_coverage": 100,
+            "nightly_observation_complete": 1,
         }
         lifecycle = {
             "lifecycle_matrix_failed": 0,
@@ -114,6 +119,8 @@ def _nightly(path, signer, count=7):
             "scan_ok": True,
             "ok": index >= 7,
         }
+        if include_observation:
+            body["nightly_observation"] = OBSERVATION.payload()
         rows.append(
             {
                 **body,
@@ -151,6 +158,38 @@ def test_lifecycle_child_environment_excludes_all_signing_material(
     assert environment["HOME"] == str(tmp_path / "isolated-home")
 
 
+def test_certificate_signing_uses_remote_verified_authority(
+    monkeypatch,
+) -> None:
+    authority = AttestationSigner("certificate-kms", b"k" * 32)
+    monkeypatch.setenv("PDD_CERTIFICATE_ISSUER", authority.issuer)
+    monkeypatch.setenv(
+        "PDD_CERTIFICATE_PUBLIC_KEY",
+        base64.b64encode(authority.public_key_bytes()).decode("ascii"),
+    )
+    monkeypatch.setenv(
+        "PDD_CERTIFICATE_SIGNER_COMMAND", json.dumps(["protected-kms-sign"])
+    )
+
+    def remote_sign(command, *, input, capture_output, check):
+        assert command == ("protected-kms-sign",)
+        assert capture_output is True and check is False
+        signature = authority.sign_bytes(input).encode("ascii")
+        return subprocess.CompletedProcess(command, 0, stdout=signature, stderr=b"")
+
+    monkeypatch.setattr("pdd.sync_core.certificate.subprocess.run", remote_sign)
+    signer = signer_from_environment()
+    assert signer.sign_bytes(b"canonical certificate") == authority.sign_bytes(
+        b"canonical certificate"
+    )
+
+
+def test_local_certificate_private_key_is_forbidden(monkeypatch) -> None:
+    monkeypatch.setenv("PDD_CERTIFICATE_SIGNING_KEY", "candidate-secret")
+    with pytest.raises(ValueError, match="local certificate signing keys are forbidden"):
+        signer_from_environment()
+
+
 def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatch) -> None:
     pdd = tmp_path / "pdd"
     cloud = tmp_path / "pdd_cloud"
@@ -176,7 +215,11 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
             RepositoryTarget("pdd_cloud", cloud),
         ),
         GlobalCertificateOptions(
-            tmp_path / "replay", lifecycle, nightly, checker_identity=CHECKER
+            tmp_path / "replay",
+            lifecycle,
+            nightly,
+            checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
         ),
         signer=signer,
     )
@@ -230,7 +273,11 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
             RepositoryTarget("pdd_cloud", tmp_path / "pdd_cloud"),
         ),
         GlobalCertificateOptions(
-            tmp_path / "replay", lifecycle, nightly, checker_identity=CHECKER
+            tmp_path / "replay",
+            lifecycle,
+            nightly,
+            checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
         ),
         signer=signer,
     )
@@ -278,6 +325,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
             LifecycleResult(0, 0, 0, 0, 0, 0),
             nightly,
             checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
         ),
         signer=signer,
     )
@@ -422,11 +470,48 @@ def test_unsigned_nightly_rows_cannot_fabricate_temporal_proof(
             LifecycleResult(0, 0, 0, 0, 0, 0),
             nightly,
             checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
         ),
         signer=AttestationSigner("certificate-ci", b"g" * 32),
     )
     assert certificate["counts"]["nightly_streak"] == 0
     assert certificate["scan_ok"] is True
+    assert certificate["ok"] is False
+
+
+def test_signed_nightly_rows_without_observations_do_not_extend_streak(
+    tmp_path, monkeypatch
+) -> None:
+    for name in ("pdd", "pdd_cloud"):
+        (tmp_path / name).mkdir()
+    signer = AttestationSigner("certificate-ci", b"g" * 32)
+    nightly = tmp_path / "nightly.jsonl"
+    _nightly(nightly, signer, include_observation=False)
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate.build_canonical_report",
+        lambda root, _options: _report(str(root)),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate._validate_target", lambda target: target
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
+    )
+    certificate = build_global_certificate(
+        (
+            RepositoryTarget("pdd", tmp_path / "pdd"),
+            RepositoryTarget("pdd_cloud", tmp_path / "pdd_cloud"),
+        ),
+        GlobalCertificateOptions(
+            tmp_path / "replay",
+            LifecycleResult(0, 0, 0, 0, 0, 0),
+            nightly,
+            checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
+        ),
+        signer=signer,
+    )
+    assert certificate["counts"]["nightly_streak"] == 0
     assert certificate["ok"] is False
 
 

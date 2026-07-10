@@ -123,6 +123,23 @@ def test_later_corrupt_blob_is_detected_before_first_install(tmp_path) -> None:
     assert not (tmp_path / ".pdd/evidence/widget.json").exists()
 
 
+def test_later_corrupt_rollback_blob_is_detected_before_first_install(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src/widget.py"
+    target.write_text("value = 1\n")
+    evidence = tmp_path / ".pdd/evidence/widget.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("old evidence\n")
+    manager = TransactionManager(tmp_path)
+    manager.prepare("tx-rollback-corrupt", _writes())
+    transaction = tmp_path / ".pdd/transactions/tx-rollback-corrupt"
+    (transaction / "rollback-1.blob").write_bytes(b"attacker bytes\n")
+    with pytest.raises(TransactionError, match="rollback transaction blob is corrupt"):
+        manager.commit("tx-rollback-corrupt")
+    assert target.read_text() == "value = 1\n"
+    assert evidence.read_text() == "old evidence\n"
+
+
 def test_recovery_rolls_back_partial_install_when_later_blob_is_corrupt(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     target = tmp_path / "src/widget.py"

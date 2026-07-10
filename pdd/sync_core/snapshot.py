@@ -61,7 +61,7 @@ def build_unit_snapshot(
     return UnitSnapshot(
         unit.unit_id,
         tuple(sorted(artifacts.values())),
-        manifest.digest(),
+        manifest.unit_digest(unit),
         closure.digest(),
         profile.profile_digest,
         closure.has_nondeterministic_query,

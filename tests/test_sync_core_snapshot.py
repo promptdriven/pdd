@@ -41,6 +41,21 @@ def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
     (root / "src/widget.py").write_text("value = 1\n")
     (root / "tests/test_widget.py").write_text("def test_widget(): pass\n")
     (root / "tests/test_widget_e2e.py").write_text("def test_e2e(): pass\n")
+    (root / "notes.md").write_text("Human-owned release notes\n")
+    (root / ".pdd/sync-ownership.json").write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "pattern": "notes.md",
+                        "inventory": "HUMAN_OWNED",
+                        "role": "documentation",
+                        "owner": "docs@example.com",
+                    }
+                ]
+            }
+        )
+    )
     os.chmod(root / "tests/test_widget_e2e.py", 0o755)
     (root / "architecture.json").write_text(
         json.dumps(
@@ -60,7 +75,7 @@ def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
                                 "obligation_id": "tests",
                                 "kind": "test",
                                 "validator_id": "pytest",
-                                "validator_config_digest": "pytest-v1",
+                                "validator_config_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                                 "requirement_ids": ["REQ-1"],
                                 "artifact_paths": [
                                     "tests/test_widget.py",
@@ -103,3 +118,26 @@ def test_query_expansion_cannot_receive_trusted_verified_status(tmp_path) -> Non
     profile = load_verification_profiles(root, manifest).profiles[0]
     snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
     assert snapshot.nondeterministic_inputs is True
+
+
+def test_unrelated_human_owned_change_does_not_invalidate_unit_snapshot(tmp_path) -> None:
+    root, base = _repository(tmp_path)
+    first_manifest = build_unit_manifest(root, base_ref=base, head_ref=base)
+    first_profile = load_verification_profiles(root, first_manifest).profiles[0]
+    first = build_unit_snapshot(
+        root, first_manifest, first_manifest.managed_units[0], first_profile
+    )
+
+    (root / "notes.md").write_text("Unrelated human-owned update\n")
+    _git(root, "add", "notes.md")
+    _git(root, "commit", "-q", "-m", "update release notes")
+    head = _git(root, "rev-parse", "HEAD")
+    second_manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    second_profile = load_verification_profiles(root, second_manifest).profiles[0]
+    second = build_unit_snapshot(
+        root, second_manifest, second_manifest.managed_units[0], second_profile
+    )
+
+    assert first_manifest.digest() != second_manifest.digest()
+    assert first.manifest_digest == second.manifest_digest
+    assert first.digest() == second.digest()

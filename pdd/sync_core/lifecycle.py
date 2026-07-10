@@ -11,17 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .certificate import LifecycleResult
+from .isolation import SECRET_ENV_MARKERS
 from .scenario_contract import REQUIRED_SCENARIOS
-
-
-_SECRET_ENV_MARKERS = (
-    "API_KEY",
-    "CREDENTIAL",
-    "PASSWORD",
-    "SECRET",
-    "SIGNING_KEY",
-    "TOKEN",
-)
 
 
 def _isolated_lifecycle_environment(home: Path) -> dict[str, str]:
@@ -29,7 +20,7 @@ def _isolated_lifecycle_environment(home: Path) -> dict[str, str]:
     environment = {
         key: value
         for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in _SECRET_ENV_MARKERS)
+        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
         and key not in {"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
     }
     environment["HOME"] = str(home)
@@ -85,9 +76,44 @@ def _normalized_results(payload: Any) -> dict[str, dict[str, Any]]:
     return results
 
 
+def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path | None:
+    """Install the exact candidate wheel in a separate isolated environment."""
+    environment = temporary / "candidate-venv"
+    isolated = _isolated_lifecycle_environment(home)
+    created = subprocess.run(
+        [sys.executable, "-m", "venv", "--system-site-packages", str(environment)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=isolated,
+    )
+    candidate_python = environment / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    if created.returncode != 0:
+        return None
+    installed = subprocess.run(
+        [
+            str(candidate_python),
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--force-reinstall",
+            str(wheel.resolve()),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=isolated,
+    )
+    return candidate_python if installed.returncode == 0 else None
+
+
 def run_lifecycle_matrix(
     root: Path,
     *,
+    candidate_wheel: Path | None = None,
     cloud_root: Path | None = None,
     cloud_base_ref: str | None = None,
     cloud_head_ref: str | None = None,
@@ -96,13 +122,23 @@ def run_lifecycle_matrix(
     # pylint: disable=too-many-arguments
     """Run only the scenario harness installed with the released checker."""
     del root  # Candidate repository tests are never lifecycle evidence.
-    if cloud_root is None or cloud_base_ref is None or cloud_head_ref is None:
+    if (
+        candidate_wheel is None
+        or not Path(candidate_wheel).is_file()
+        or cloud_root is None
+        or cloud_base_ref is None
+        or cloud_head_ref is None
+    ):
         return _failed_result()
     with tempfile.TemporaryDirectory(prefix="pdd-released-lifecycle-") as directory:
         temporary = Path(directory)
         output = temporary / "result.json"
-        home = temporary / "home"
-        home.mkdir(mode=0o700)
+        (temporary / "home").mkdir(mode=0o700)
+        candidate_python = _install_candidate_wheel(
+            temporary, temporary / "home", Path(candidate_wheel)
+        )
+        if candidate_python is None:
+            return _failed_result()
         command = [
             sys.executable,
             "-I",
@@ -116,6 +152,8 @@ def run_lifecycle_matrix(
             cloud_base_ref,
             "--cloud-head-ref",
             cloud_head_ref,
+            "--candidate-python",
+            str(candidate_python),
         ]
         try:
             completed = subprocess.run(
@@ -124,7 +162,7 @@ def run_lifecycle_matrix(
                 text=True,
                 check=False,
                 timeout=timeout_seconds,
-                env=_isolated_lifecycle_environment(home),
+                env=_isolated_lifecycle_environment(temporary / "home"),
             )
         except subprocess.TimeoutExpired:
             return _failed_result(timeout=True)

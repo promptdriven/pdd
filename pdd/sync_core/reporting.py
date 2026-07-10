@@ -16,6 +16,7 @@ from .evidence_store import (
     load_trust_policy,
 )
 from .fingerprint_store import CorruptFingerprintError, FingerprintStore
+from .git_io import resolve_git_commit
 from .manifest import ManifestUnit, UnitManifest, build_unit_manifest
 from .snapshot import SnapshotError, build_unit_snapshot
 from .runner import TRUSTED_RUNNER_VERSION, runner_identity_digest
@@ -113,19 +114,6 @@ class CanonicalReportOptions:
     modules: tuple[str, ...] = ()
     replay_ledger_path: Path | None = None
     now: datetime | None = None
-
-
-def _git_sha(root: Path, ref: str) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise ValueError(f"cannot resolve Git commit: {ref}")
-    return result.stdout.strip()
 
 
 def _error_verdict(unit: ManifestUnit, baseline: BaselineStatus, reason: str) -> SyncVerdict:
@@ -268,8 +256,8 @@ def _report_context(
     options: CanonicalReportOptions,
 ) -> tuple[ReportContext, list[str], tuple[str, ...]]:
     """Resolve protected inputs, trust policy, store, and recovery state."""
-    base_sha = _git_sha(root, options.base_ref)
-    head_sha = _git_sha(root, options.head_ref)
+    base_sha = resolve_git_commit(root, options.base_ref)
+    head_sha = resolve_git_commit(root, options.head_ref)
     manifest = build_unit_manifest(root, base_ref=base_sha, head_ref=head_sha)
     profiles = load_verification_profiles(root, manifest)
     now = options.now or datetime.now(timezone.utc)

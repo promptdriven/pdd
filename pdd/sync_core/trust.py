@@ -6,11 +6,12 @@ import base64
 import json
 import os
 import stat
+import subprocess
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -28,11 +29,23 @@ class AttestationError(ValueError):
     """Raised when semantic evidence fails protected trust policy."""
 
 
+class AttestationIssuer(Protocol):
+    """Signer surface accepted by the trusted runner."""
+
+    issuer: str
+
+    def public_key_bytes(self) -> bytes:
+        """Return the expected Ed25519 public key."""
+
+    def issue(self, request: "AttestationRequest") -> "AttestationEnvelope":
+        """Issue one signed attestation envelope."""
+
+
 class ReplayStore:
     """Interface for atomic cross-verifier attestation nonce consumption."""
 
     def consume(self, issuer: str, nonce: str, attestation_id: str) -> None:
-        """Record a nonce exactly once or raise AttestationError."""
+        """Bind a nonce to one attestation ID, allowing idempotent rechecks."""
         raise NotImplementedError
 
     def is_durable(self) -> bool:
@@ -51,6 +64,8 @@ class InMemoryReplayStore(ReplayStore):
         key = (issuer, nonce)
         previous = self._seen.get(key)
         if previous is not None:
+            if previous == attestation_id:
+                return
             raise AttestationError("attestation nonce was replayed")
         self._seen[key] = attestation_id
 
@@ -114,10 +129,11 @@ class FileReplayStore(ReplayStore):
             records = self._load()
             key = base64.b64encode(f"{issuer}\0{nonce}".encode()).decode("ascii")
             previous = records.get(key)
-            if previous is not None:
+            if previous is not None and previous != attestation_id:
                 raise AttestationError("attestation nonce was replayed")
-            records[key] = attestation_id
-            self._write(records)
+            if previous is None:
+                records[key] = attestation_id
+                self._write(records)
         if stat.S_IMODE(self.path.stat().st_mode) != 0o600:
             raise AttestationError("replay ledger permissions are unsafe")
 
@@ -218,7 +234,7 @@ class AttestationRequest:
     results: tuple[ObligationEvidence, ...]
     nonce: str
     issued_at: Optional[datetime] = None
-    lifetime: timedelta = timedelta(hours=1)
+    lifetime: timedelta = timedelta(days=8)
 
 
 @dataclass(frozen=True)
@@ -299,21 +315,63 @@ class AttestationSigner:
 
     def issue(self, request: AttestationRequest) -> AttestationEnvelope:
         """Create a signed envelope bound to one checked commit and base."""
-        issued = request.issued_at or datetime.now(timezone.utc)
-        validity = AttestationValidity(
-            _timestamp(issued),
-            _timestamp(issued + request.lifetime),
-            request.nonce,
+        return self.sign(_unsigned_envelope(self.issuer, request))
+
+
+def _unsigned_envelope(
+    issuer: str, request: AttestationRequest
+) -> AttestationEnvelope:
+    """Build the canonical unsigned statement sent to a signing authority."""
+    issued = request.issued_at or datetime.now(timezone.utc)
+    validity = AttestationValidity(
+        _timestamp(issued),
+        _timestamp(issued + request.lifetime),
+        request.nonce,
+    )
+    return AttestationEnvelope(
+        request.attestation_id,
+        issuer,
+        request.binding,
+        request.results,
+        validity,
+    )
+
+
+class RemoteAttestationSigner:
+    """Issue evidence through a protected signer command and verify its response."""
+
+    def __init__(self, issuer: str, public_key: bytes, command: tuple[str, ...]) -> None:
+        if not issuer or len(public_key) != 32 or not command:
+            raise ValueError("remote attestation signer configuration is invalid")
+        self.issuer = issuer
+        self._public_key = public_key
+        self._command = command
+
+    def public_key_bytes(self) -> bytes:
+        """Return the protected expected public key."""
+        return self._public_key
+
+    def issue(self, request: AttestationRequest) -> AttestationEnvelope:
+        """Send canonical claims to the remote authority and verify its signature."""
+        envelope = _unsigned_envelope(self.issuer, request)
+        result = subprocess.run(
+            self._command,
+            input=envelope.payload(),
+            capture_output=True,
+            check=False,
         )
-        return self.sign(
-            AttestationEnvelope(
-                request.attestation_id,
-                self.issuer,
-                request.binding,
-                request.results,
-                validity,
+        if result.returncode != 0:
+            raise AttestationError("remote attestation signer rejected the request")
+        try:
+            signature = base64.b64decode(result.stdout.strip(), validate=True)
+            Ed25519PublicKey.from_public_bytes(self._public_key).verify(
+                signature, envelope.payload()
             )
-        )
+        except (ValueError, InvalidSignature) as exc:
+            raise AttestationError(
+                "remote attestation signer returned an invalid signature"
+            ) from exc
+        return replace(envelope, signature=base64.b64encode(signature).decode("ascii"))
 
 
 class AttestationTrustPolicy:
@@ -326,7 +384,7 @@ class AttestationTrustPolicy:
         revoked_issuers: frozenset[str] = frozenset(),
         revoked_attestations: frozenset[str] = frozenset(),
         clock_skew: timedelta = timedelta(minutes=5),
-        maximum_lifetime: timedelta = timedelta(hours=1),
+        maximum_lifetime: timedelta = timedelta(days=8),
         replay_store: ReplayStore | None = None,
     ) -> None:
         # pylint: disable=too-many-arguments

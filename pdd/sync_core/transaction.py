@@ -360,6 +360,22 @@ class TransactionManager:
                 raise TransactionError(f"prepared transaction blob is unsafe: {relpath}")
             if _digest(prepared.read_bytes()) != str(item["desired_digest"]):
                 raise TransactionError(f"prepared transaction blob is corrupt: {relpath}")
+            precondition = item.get("precondition")
+            if not isinstance(precondition, dict):
+                raise TransactionError("transaction precondition is malformed")
+            before = _parse_state(precondition)
+            rollback_name = item.get("rollback_blob")
+            if not before.exists:
+                if rollback_name is not None:
+                    raise TransactionError(
+                        f"unexpected rollback transaction blob: {relpath}"
+                    )
+                continue
+            rollback = transaction_dir / str(rollback_name)
+            if rollback.is_symlink() or not rollback.is_file():
+                raise TransactionError(f"rollback transaction blob is unsafe: {relpath}")
+            if _digest(rollback.read_bytes()) != before.digest:
+                raise TransactionError(f"rollback transaction blob is corrupt: {relpath}")
 
     def _restore_entries(
         self, transaction_dir: Path, entries: list[object]
