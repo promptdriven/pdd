@@ -2033,12 +2033,19 @@ def _describe_conflict_artifacts(changes: List[str]) -> str:
 
 
 def _conflict_resolution_commands(basename: str, language: str) -> Dict[str, str]:
-    """Exact `pdd resolve` commands offered for a CONFLICT unit."""
+    """Exact commands offered for a CONFLICT unit — all runnable today.
+
+    ``accept_current`` finalizes a hand-merge deterministically; ``prompt_wins`` /
+    ``code_wins`` are the real LLM commands (``pdd sync`` / ``pdd update``) that let
+    one side win. (The ``pdd resolve --prompt-wins`` / ``--code-wins`` flags are
+    only non-automated previews of these, so the message points at the real
+    commands rather than the preview stubs.)
+    """
     suffix = _conflict_command_suffix(language)
     return {
         "accept_current": f"pdd resolve {basename}{suffix} --accept-current",
-        "prompt_wins": f"pdd resolve {basename}{suffix} --prompt-wins",
-        "code_wins": f"pdd resolve {basename}{suffix} --code-wins",
+        "prompt_wins": f"pdd sync {basename}{suffix}",
+        "code_wins": f"pdd update {basename}{suffix}",
     }
 
 
@@ -2071,11 +2078,12 @@ def _prompt_derived_conflict_decision(
     moved = _describe_conflict_artifacts(changes)
     reason = (
         f"CONFLICT: '{basename}' — {moved} changed since the last sync, so pdd "
-        f"will not auto-pick a winner (that would discard your edits). Resolve with "
-        f"`{resolution_commands['accept_current']}` (keep the current files as the new "
-        f"baseline), `{resolution_commands['prompt_wins']}` (regenerate code from the "
-        f"prompt), or `{resolution_commands['code_wins']}` (back-propagate the code "
-        f"into the prompt)."
+        f"will not auto-pick a winner (that would discard your edits). After hand-"
+        f"merging, run `{resolution_commands['accept_current']}` to record the current "
+        f"files as the new baseline. To let one side win instead, run "
+        f"`{resolution_commands['code_wins']}` (back-propagate the code into the "
+        f"prompt) or `{resolution_commands['prompt_wins']}` (regenerate the code from "
+        f"the prompt)."
     )
     return SyncDecision(
         operation='fail_and_request_manual_merge',

@@ -99,6 +99,15 @@
       "python_env_detector": "Host Python env detector; TODO add tests/test_python_env_detector.py.",
       "test_result": "shared test-command return type; TODO add tests/test_test_result.py.",
       "validate_prompt_includes": "<include> validation/cleanup; TODO add tests/test_validate_prompt_includes.py."
+    },
+    "commands_without_prompt": {
+      "_README": "Informational: pdd/commands/*.py CLI wrappers that are hand-written (no generating prompt), consistent with each other. Not enforced by the module<->entry bijection (that gate is scoped to top-level pdd/*.py). Listed so the gap is explicit, not silent (#1969 review nit).",
+      "resolve": "`pdd resolve` CONFLICT-finalization command; hand-written wrapper over sync_determine_operation/operation_log primitives, no generating prompt.",
+      "reconcile": "`pdd reconcile` deterministic fingerprint stamper; hand-written wrapper over continuous_sync, no generating prompt.",
+      "drift": "`pdd checkup drift` command wrapper; hand-written, no prompt.",
+      "coverage": "`pdd coverage` command wrapper; hand-written, no prompt.",
+      "extracts": "`pdd extracts` command wrapper; hand-written, no prompt.",
+      "checkup_snapshot": "`pdd checkup snapshot` command wrapper; hand-written, no prompt."
     }
   }
 }

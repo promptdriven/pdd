@@ -1143,15 +1143,19 @@ def test_conflict_message_is_actionable(pdd_test_environment):
     assert BASENAME in decision.reason
     assert "prompt" in decision.reason and "code" in decision.reason
     assert f"pdd resolve {BASENAME} --accept-current" in decision.reason
-    assert f"pdd resolve {BASENAME} --prompt-wins" in decision.reason
-    assert f"pdd resolve {BASENAME} --code-wins" in decision.reason
+    # The message points at the REAL runnable commands, not the preview stubs
+    # (#1969 review finding 3: --prompt-wins/--code-wins are non-automated stubs).
+    assert f"pdd sync {BASENAME}" in decision.reason
+    assert f"pdd update {BASENAME}" in decision.reason
+    assert "--prompt-wins" not in decision.reason
+    assert "--code-wins" not in decision.reason
     # Structured details for machine consumers (CI summaries, drift ledger).
     assert decision.details["basename"] == BASENAME
     assert decision.details["language"] == LANGUAGE
     commands = decision.details["resolution_commands"]
     assert commands["accept_current"] == f"pdd resolve {BASENAME} --accept-current"
-    assert commands["prompt_wins"] == f"pdd resolve {BASENAME} --prompt-wins"
-    assert commands["code_wins"] == f"pdd resolve {BASENAME} --code-wins"
+    assert commands["prompt_wins"] == f"pdd sync {BASENAME}"
+    assert commands["code_wins"] == f"pdd update {BASENAME}"
 
 
 def test_conflict_decision_helper_formats_language_suffix_and_artifacts():
@@ -1166,7 +1170,7 @@ def test_conflict_decision_helper_formats_language_suffix_and_artifacts():
     )
     commands = decision.details["resolution_commands"]
     assert commands["accept_current"] == "pdd resolve parser --language javascript --accept-current"
-    assert commands["code_wins"] == "pdd resolve parser --language javascript --code-wins"
+    assert commands["code_wins"] == "pdd update parser --language javascript"
     assert "prompt, code, and test changed" in decision.reason
     assert decision.details["read_only"] is True
     # Non-destructive contract holds regardless of language.

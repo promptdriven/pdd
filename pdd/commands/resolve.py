@@ -84,14 +84,66 @@ def _accept_current(
     paths: Dict[str, Path],
     as_json: bool,
     quiet: bool,
+    force: bool = False,
 ) -> int:
     """Stamp the current tree as the agreed baseline for the unit.
+
+    Only a CONFLICT (prompt AND a derived artifact both changed) is stampable by
+    default: ``--accept-current`` is a CONFLICT-resolution tool, not a general
+    drift silencer. Single-sided drift (code-only / prompt-only) must go through
+    ``pdd update`` / ``pdd sync`` so the stale side is actually reconciled, not
+    silently baselined away; ``--force`` overrides for the rare "accept current as
+    truth" case.
 
     Transactional at the command level: it re-fingerprints, then re-classifies and
     only reports success when the unit lands IN_SYNC. Any other post-state is
     surfaced as a failure rather than a silent partial stamp.
     """
     before_fp, before_changes, before_class = _classify(basename, language, paths)
+    if before_class == "IN_SYNC":
+        if as_json:
+            click.echo(json.dumps({
+                "basename": basename,
+                "language": language,
+                "strategy": "accept-current",
+                "before": "IN_SYNC",
+                "after": "IN_SYNC",
+                "changed_files": [],
+                "resolved": True,
+            }, indent=2, sort_keys=True))
+        elif not quiet:
+            click.echo(f"'{basename}' ({language}) is already in sync; nothing to resolve.")
+        return 0
+    if before_class != "CONFLICT" and not force:
+        moved = ", ".join(before_changes) or "no tracked artifacts"
+        suffix = "" if language.lower() == "python" else f" --language {language}"
+        if before_class == "UNBASELINED":
+            guidance = f"`pdd reconcile {basename}{suffix} --backfill` to baseline it"
+        else:  # DRIFT — single-sided (code-only or prompt-only)
+            guidance = (
+                f"`pdd update {basename}{suffix}` (back-propagate code->prompt) or "
+                f"`pdd sync {basename}{suffix}` (regenerate) to reconcile the stale "
+                f"side, or `pdd reconcile {basename}{suffix} --heal` to stamp only"
+            )
+        if as_json:
+            click.echo(json.dumps({
+                "basename": basename,
+                "language": language,
+                "strategy": "accept-current",
+                "before": before_class,
+                "changed_files": before_changes,
+                "resolved": False,
+                "error": "not-a-conflict",
+            }, indent=2, sort_keys=True))
+        elif not quiet:
+            click.echo(
+                f"'{basename}' ({language}) is {before_class} ({moved}), not a CONFLICT. "
+                "--accept-current only resolves CONFLICTs (prompt AND code both changed "
+                f"since the last sync). Run {guidance}. Pass --force to stamp the current "
+                "tree as the baseline anyway.",
+                err=True,
+            )
+        return 2
     command = (
         before_fp.command
         if before_fp is not None and before_fp.command in _SETTLED_COMMANDS
@@ -182,6 +234,13 @@ def _preview_llm_strategy(basename: str, language: str, strategy: str) -> int:
     help="[preview] Back-propagate code into the prompt (not yet automated).",
 )
 @click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Allow --accept-current on non-CONFLICT (single-sided) drift, stamping "
+    "the current tree as truth without reconciling the stale side.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -196,6 +255,7 @@ def resolve(
     accept_current: bool,
     prompt_wins: bool,
     code_wins: bool,
+    force: bool,
     as_json: bool,
 ) -> None:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -242,5 +302,5 @@ def resolve(
             f"Run `pdd sync` to see tracked units."
         )
     raise click.exceptions.Exit(
-        _accept_current(basename, language, paths, as_json, quiet)
+        _accept_current(basename, language, paths, as_json, quiet, force)
     )

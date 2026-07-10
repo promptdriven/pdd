@@ -77,6 +77,65 @@ def _make_conflict_unit(base: Path) -> Tuple[str, str, Path]:
     return BASENAME, LANGUAGE, fp_path
 
 
+def _make_code_only_drift_unit(base: Path) -> Tuple[str, str, Path]:
+    """Create a synced unit then edit ONLY the code -> single-sided DRIFT (not CONFLICT)."""
+    _make_conflict_unit(base)
+    fp_path = base / ".pdd" / "meta" / f"{BASENAME}_{LANGUAGE}.json"
+    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+    # Re-sync by stamping current, then edit only the code so the prompt is unchanged.
+    runner = CliRunner()
+    runner.invoke(resolve, [BASENAME, "--accept-current"], obj={})
+    _write(Path(paths["code"]), "def value():\n    return 99\n")
+    return BASENAME, LANGUAGE, fp_path
+
+
+def test_accept_current_refuses_code_only_drift(tmp_path):
+    """#1969 review finding 2: --accept-current must NOT silently baseline single-sided
+    drift; it directs the user to pdd update / pdd sync instead and does not stamp."""
+    runner = CliRunner()
+    with runner.isolated_filesystem() as tmp:
+        base = Path(tmp)
+        _make_code_only_drift_unit(base)
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        before = read_fingerprint(BASENAME, LANGUAGE, paths=paths)
+
+        result = runner.invoke(resolve, [BASENAME, "--accept-current"], obj={})
+
+        assert result.exit_code == 2, result.output
+        assert "not a CONFLICT" in result.output
+        assert "pdd update" in result.output and "pdd sync" in result.output
+        # Fingerprint is NOT changed by the refused resolve.
+        after = read_fingerprint(BASENAME, LANGUAGE, paths=paths)
+        assert after.code_hash == before.code_hash
+
+
+def test_force_stamps_code_only_drift(tmp_path):
+    """--force is the explicit escape hatch to accept current-as-truth on drift."""
+    runner = CliRunner()
+    with runner.isolated_filesystem() as tmp:
+        base = Path(tmp)
+        _make_code_only_drift_unit(base)
+        paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir="prompts")
+        current = calculate_sha256(Path(paths["code"]))
+
+        result = runner.invoke(resolve, [BASENAME, "--accept-current", "--force"], obj={})
+
+        assert result.exit_code == 0, result.output
+        after = read_fingerprint(BASENAME, LANGUAGE, paths=paths)
+        assert after.code_hash == current
+
+
+def test_accept_current_noop_when_already_in_sync(tmp_path):
+    runner = CliRunner()
+    with runner.isolated_filesystem() as tmp:
+        base = Path(tmp)
+        _make_conflict_unit(base)
+        runner.invoke(resolve, [BASENAME, "--accept-current"], obj={})  # -> IN_SYNC
+        result = runner.invoke(resolve, [BASENAME, "--accept-current"], obj={})
+        assert result.exit_code == 0, result.output
+        assert "already in sync" in result.output
+
+
 def test_accept_current_resolves_conflict_to_in_sync():
     runner = CliRunner()
     with runner.isolated_filesystem() as tmp:
