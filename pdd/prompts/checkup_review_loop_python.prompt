@@ -27,9 +27,6 @@
 </pdd-interface>
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
-<pdd-dependency>agentic_change_python.prompt</pdd-dependency>
-<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
-<pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
@@ -309,6 +306,14 @@ The #1063 prompt-source guard (`_check_prompt_source_guard`) deterministically r
 2047-F. **Canonical short-circuit fallback artifact.** Export a public helper `write_final_gate_fallback_artifact(*, artifact_path: Optional[str], pr_owner: str = "", pr_repo: str = "", pr_number: int = 0, head_sha: str = "", canonical_status: str = "fail", blockers: Optional[Sequence[str]] = None, no_fix: bool = False) -> Optional[str]`. The canonical final gate can FAIL before the review loop (Layer 2) ever runs — a non-actionable Layer 1 failure or a GitHub-checks gate failure — and those short-circuit paths never reach `_maybe_write_agentic_artifact`, so hosted pdd_cloud consumers (`PDD_CHECKUP_FALLBACK_MIRROR=1`) would otherwise get no structured artifact and have to scrape comments. This helper writes a minimal `pdd.checkup.agentic.v1` artifact for that case: return `None` immediately when `artifact_path` is falsy; otherwise build the artifact via `build_agentic_v1_artifact` from `pdd.checkup_agentic_artifact` using lightweight `SimpleNamespace` stand-ins for `context` (pr_owner/pr_repo/repo_owner/repo_name/pr_number), `config` (`no_fix`, `review_only=False`), and `loop_state` (`reviewed_head_sha=head_sha`), plus a `final_gate_report = {"layer1_status": canonical_status or "fail", "blockers": [<non-empty str blockers>]}`. Create parent directories, write pretty JSON of `artifact.model_dump()`, print the `Wrote agentic checkup artifact: <path>` marker to stderr, and return the written path. A canonical failure is authoritative on its own and the agentic mirror never ran, so the artifact's authority resolves to `canonical_fail_agentic_not_authoritative`. Best-effort: catch all exceptions, emit a static stderr warning with no exception text, and return `None` — never expose raw exception text, rely on best-effort redaction at a log sink, raise, or break the gate. The canonical final-gate caller in `agentic_checkup.py` invokes this on its Layer 1 and GitHub-checks short-circuit paths.
 
 % Dependencies
+
+The three orchestrator modules below provide selected low-level compatibility
+helpers, but they are intentionally not architecture ownership dependencies.
+Those orchestrators depend on the canonical review loop; adding reverse
+`pdd-dependency` edges here creates cycles that make architecture ordering
+invalid. Keep the selected includes for generation context without reintroducing
+reverse graph edges.
+
 <pdd.agentic_common><include select="def:run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>

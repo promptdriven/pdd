@@ -14114,6 +14114,31 @@ def test_review_loop_config_agentic_fields_default_off():
     assert cfg.agentic_artifact_path is None
 
 
+def test_review_loop_architecture_metadata_is_synced_and_acyclic():
+    """Helper-only orchestrator includes must not create reverse graph edges."""
+    from pdd.architecture_sync import sync_prompts_to_architecture
+
+    project_root = Path(__file__).resolve().parents[1]
+    result = sync_prompts_to_architecture(
+        filenames=[
+            "checkup_review_loop_python.prompt",
+            "agentic_checkup_orchestrator_python.prompt",
+        ],
+        prompts_dir=project_root / "prompts",
+        architecture_path=project_root / "architecture.json",
+        dry_run=True,
+    )
+
+    assert result["updated_count"] == 0
+    review_loop_cycles = [
+        error
+        for error in result["validation"]["errors"]
+        if error.get("type") == "circular_dependency"
+        and "checkup_review_loop_python.prompt" in error.get("modules", [])
+    ]
+    assert review_loop_cycles == []
+
+
 # ---------------------------------------------------------------------------
 # Fresh final review role override + agentic artifact write (issue #1788)
 # ---------------------------------------------------------------------------
