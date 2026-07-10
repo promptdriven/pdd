@@ -1,4 +1,4 @@
-<!-- pdd-story-contract derived-from-story="../story__pdd_change.md" story-hash="<auto>" issue-ref="https://github.com/promptdriven/pdd/pull/1501#issuecomment-4662232582" -->
+<!-- pdd-story-contract derived-from-story="../story__pdd_change.md" story-hash="3d3e24afdcf4ac7e" issue-ref="https://github.com/promptdriven/pdd/pull/1501#issuecomment-4662232582" -->
 
 # Contract: pdd change
 

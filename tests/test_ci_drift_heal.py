@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,6 +18,7 @@ from pdd.ci_drift_heal import (
     _git_add_pathspecs,
     _git_relative_path_candidates,
     _has_symlinked_ancestor,
+    _has_non_eol_whitespace_git_diff,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -311,6 +313,18 @@ class TestGetGitChangedFiles:
         assert "prompts/auth_python.prompt" in candidates
         assert "pdd/prompts/auth_python.prompt" in candidates
 
+    def test_non_eol_whitespace_git_diff_false_for_ignored_diff(self):
+        mock_result = MagicMock(returncode=0)
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as run:
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is False
+        assert "--ignore-space-at-eol" in run.call_args.args[0]
+
+    def test_non_eol_whitespace_git_diff_true_for_real_diff_or_error(self):
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=MagicMock(returncode=1)):
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is True
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=MagicMock(returncode=128)):
+            assert _has_non_eol_whitespace_git_diff("origin/main", "pdd/auth.py") is True
+
 
 # ---------------------------------------------------------------------------
 # _has_symlinked_ancestor / _git_add_pathspecs symlink-staging tests
@@ -548,7 +562,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
@@ -557,8 +572,8 @@ class TestDetectDriftWithDiffBase:
         assert prompt_drifts[0].code_path == "pdd/auth.py"
         assert len(example_drifts) == 0
 
-    def test_auto_deps_with_code_and_prompt_changed_reclassified_as_example(self):
-        """When both code and prompt changed, clean-CI auto-deps drift is example-only."""
+    def test_auto_deps_with_code_and_prompt_changed_reclassified_as_conflict(self):
+        """When both code and prompt changed, clean-CI auto-deps drift is a conflict."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
         # Git reports prompt files via their canonical path (`pdd/prompts/...`)
@@ -571,14 +586,34 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
-        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].operation == "conflict"
         assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
         assert example_drifts[0].code_path == "pdd/auth.py"
+
+    def test_auto_deps_with_prompt_and_eol_whitespace_code_change_is_example(self):
+        """Whitespace-only code cleanup must not force manual conflict handling."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py", "pdd/prompts/auth_python.prompt"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=False):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main")
+
+        assert prompt_drifts == []
+        assert len(example_drifts) == 1
+        assert example_drifts[0].operation == "example"
 
     def test_auto_deps_without_code_or_prompt_change_is_skipped(self):
         """Clean-CI auto-deps false positives should not fan out to every module."""
@@ -595,7 +630,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert prompt_drifts == []
@@ -614,7 +650,8 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
@@ -666,20 +703,16 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 1
         assert prompt_drifts[0].operation == "update"
         assert len(example_drifts) == 0
 
-    def test_generate_with_code_and_prompt_changed_reclassified_as_example(self):
-        """When both code and prompt changed, clean-CI generate drift is example-only.
-
-        In a checkout without fingerprints, sync_determine_operation can report
-        "generate" even when the PR already updated both sides. Auto-heal should
-        refresh the example without invoking full code generation again.
-        """
+    def test_generate_with_code_and_prompt_changed_reclassified_as_conflict(self):
+        """When both code and prompt changed, clean-CI generate drift is a conflict."""
         decision = MagicMock(operation="generate", reason="New prompt ready for code generation")
         files, infer, sync = self._setup_mocks({"api": decision})
         changed_files = {"pdd/api.py", "pdd/prompts/api_python.prompt"}
@@ -689,12 +722,13 @@ class TestDetectDriftWithDiffBase:
              patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
              patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
-             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files), \
+             patch("pdd.ci_drift_heal._has_non_eol_whitespace_git_diff", return_value=True):
             prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
-        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].operation == "conflict"
         assert example_drifts[0].prompt_path == "prompts/api_python.prompt"
         assert example_drifts[0].code_path == "pdd/api.py"
 
@@ -1910,6 +1944,31 @@ class TestMain:
             result = main()
         assert result == 1
 
+    def test_plain_dry_run_reports_without_healing_or_pushing(self, capsys):
+        """--dry-run is non-mutating even without --json."""
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 1,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+
+        with patch("pdd.continuous_sync.build_report", return_value=report) as mock_report, \
+             patch("pdd.ci_drift_heal.detect_drift") as mock_detect, \
+             patch("pdd.ci_drift_heal.heal_module") as mock_heal, \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit:
+            result = main(modules=["auth"], dry_run=True, as_json=False)
+
+        assert result == 1
+        mock_report.assert_called_once_with(consumer="ci-heal", modules=["auth"])
+        mock_detect.assert_not_called()
+        mock_heal.assert_not_called()
+        mock_commit.assert_not_called()
+        assert "dry-run: metadata_stale=1" in capsys.readouterr().out
+
     def test_pr_mode_restores_test_extend_env_even_when_detection_raises(self):
         """#1403: the in-process guard flag must be restored to its prior value
         on every path, including when detect_drift raises."""
@@ -1959,13 +2018,13 @@ class TestMain:
                 skip_ci=False,
             )
 
-        assert result == 0
-        mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
-        mock_heal.assert_called_once()
-        assert detection_guard_values == ["1"]
-        assert heal_guard_values == ["1"]
-        # The in-process flag must not leak past main() (restored in finally).
-        assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
+            assert result == 0
+            mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
+            mock_heal.assert_called_once()
+            assert detection_guard_values == ["1"]
+            assert heal_guard_values == ["1"]
+            # The in-process flag must not leak past main() (restored in finally).
+            assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
 
     def test_push_to_main_keeps_test_extend_enabled_even_with_diff_base(self):
         """#1403 regression guard: push-to-main uses --skip-ci, so diff_base alone
@@ -2393,10 +2452,7 @@ class TestMain:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(
             ["git", "commit", "-m", "initial"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
+            cwd=repo, check=True, capture_output=True, text=True,
         )
 
         monkeypatch.chdir(repo)
@@ -3056,7 +3112,9 @@ class TestStructuralInvariants:
         ), patch(
             "pdd.ci_drift_heal.Path.read_text",
             return_value=post_content,
-        ), patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+        ), patch(
+            "pdd.ci_drift_heal.subprocess.run",
+        ) as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             result = _enforce_structural_invariants(self._make_drift())
 
@@ -3170,14 +3228,11 @@ class TestRunMetadataSyncSafe:
         assert "does not exist" in capsys.readouterr().out
 
     def test_returns_false_when_metadata_sync_module_import_fails(self, tmp_path, capsys):
-        # Fail-closed on ImportError: a missing orchestrator must not be
-        # confused with a successful no-op. Was silently returning True
-        # pre-fix, which let the heal path checkpoint as if sync ran.
+        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
         import sys as _sys
         from pdd.ci_drift_heal import _run_metadata_sync_safe
         prompt = tmp_path / "foo_python.prompt"
         prompt.write_text("body")
-        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
         with patch.dict(_sys.modules, {"pdd.metadata_sync": None}):
             assert _run_metadata_sync_safe(str(prompt), None) is False
         assert "metadata_sync unavailable" in capsys.readouterr().out
@@ -3236,7 +3291,6 @@ class TestRunMetadataSyncSafe:
              patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), str(code)) is True
         mock_save.assert_called_once()
-        # paths must be built directly from prompt/code args (not get_pdd_file_paths)
         saved_paths = mock_save.call_args.kwargs["paths"]
         assert saved_paths["prompt"] == prompt
         assert saved_paths["code"] == code
@@ -3281,7 +3335,6 @@ class TestSubprojectRootFor:
         sub = tmp_path / "myapp"
         sub.mkdir()
         (sub / ".pddrc").write_text("")
-        # prompt is in a directory with no .pddrc (but code is in the subproject)
         prompt_dir = tmp_path / "prompts"
         prompt_dir.mkdir()
         prompt = prompt_dir / "foo_python.prompt"
@@ -3329,11 +3382,9 @@ class TestSubprojectRootFor:
         )
 
         snapshot = _snapshot_metadata_state_for(drift)
-        # Fingerprint bytes captured from the subproject .pdd/meta
         assert ".pdd/meta/foo_python.json" in snapshot
         assert snapshot[".pdd/meta/foo_python.json"] == b'{"version":1}'
 
-        # Wipe the file, then restore — should write back under subproject
         fp_file.unlink()
         assert not fp_file.exists()
         _restore_metadata_state_for(snapshot, sub)
@@ -3391,14 +3442,10 @@ class TestHealModuleInvokesMetadataSync:
         assert result is False
         assert drift.metadata_finalization_failed is True
         assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
-        # The pre-sync snapshot MUST be taken before run_metadata_sync runs
-        # so the per-module rollback has bytes to restore from.
         assert mock_snap.called, (
             "_snapshot_metadata_state_for must run before metadata_sync so "
             "a per-module rollback is possible"
         )
-        # And restore MUST receive the captured snapshot (NOT a global
-        # git restore that would wipe other modules' successful writes).
         assert mock_restore.called, (
             "_restore_metadata_state_for must run on sync failure to revert "
             "this module's architecture/fingerprint writes without touching "
@@ -3423,8 +3470,6 @@ class TestHealModuleInvokesMetadataSync:
 
         repo = tmp_path
         (repo / ".pdd" / "meta").mkdir(parents=True)
-        # State at the moment we're about to heal module B:
-        # architecture.json already contains module A's healed writes.
         arch = repo / "architecture.json"
         arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}')
 
@@ -3437,25 +3482,16 @@ class TestHealModuleInvokesMetadataSync:
         with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
             snapshot_b = _snapshot_metadata_state_for(drift_b)
 
-            # Simulate B's run_metadata_sync writing partial state before
-            # failing: corrupt architecture.json (overwriting A) and
-            # create a partial fingerprint for B.
             arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"WIPED"},'
                              b'{"name":"b","fingerprint":"PARTIAL"}]}')
             (repo / ".pdd" / "meta" / "b_python.json").write_bytes(b"partial")
 
             _restore_metadata_state_for(snapshot_b, repo)
 
-        # After restore: architecture.json is back to its pre-B-sync state,
-        # which CONTAINS module A's NEW_A write. The repo-wide
-        # `git restore architecture.json` approach (the previous fix)
-        # would have wiped NEW_A back to HEAD.
         assert arch.read_bytes() == b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}', (
             "Module-scoped restore must preserve other modules' successful "
             "writes (here, module A's NEW_A fingerprint must survive)."
         )
-        # B's partial fingerprint must be removed (it did not exist
-        # pre-snapshot, so restore deletes the file).
         assert not (repo / ".pdd" / "meta" / "b_python.json").exists()
 
     def test_per_module_snapshot_uses_subdir_safe_metadata_paths(self, tmp_path):
@@ -3952,10 +3988,7 @@ class TestMetadataFinalizationBoundary:
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
         subprocess.run(
             ["git", "commit", "-m", "initial"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-            text=True,
+            cwd=repo, check=True, capture_output=True, text=True,
         )
 
         monkeypatch.chdir(repo)
@@ -3971,7 +4004,7 @@ class TestMetadataFinalizationBoundary:
                 return True
             raise AssertionError(f"Unexpected command: {cmd}")
 
-        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])) as mock_detect, \
              patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False):
             result = main(skip_ci=True)
@@ -4061,6 +4094,161 @@ class TestMetadataFinalizationBoundary:
             cwd=repo, check=True, capture_output=True, text=True,
         )
         assert ".pdd/meta/auth_python.json" in log.stdout
+
+    def test_commit_and_push_accepts_resolved_subproject_fingerprint(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Finalized metadata verification must honor the module's .pddrc root.
+
+        This reproduces the PR auto-heal failure mode where the operation-log
+        resolver writes a fingerprint somewhere other than root `.pdd/meta`,
+        but commit-time verification still required only the legacy root path.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        TestMain._init_git_repo(repo)
+        app = repo / "app"
+        prompt_path = app / "prompts" / "auth_python.prompt"
+        code_path = app / "auth.py"
+        meta_path = app / ".pdd" / "meta" / "auth_python.json"
+
+        prompt_path.parent.mkdir(parents=True)
+        meta_path.parent.mkdir(parents=True)
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+        prompt_path.write_text("% Goal\ninitial prompt\n", encoding="utf-8")
+        (app / ".pddrc").write_text("prompts_dir: prompts\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "old"}', encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        monkeypatch.chdir(repo)
+        prompt_path.write_text("% Goal\nupdated prompt\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "new"}', encoding="utf-8")
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            prompt_path=str(prompt_path),
+            code_path=str(code_path),
+        )
+
+        original_run = subprocess.run
+
+        def patched_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd == ["git", "push"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=patched_run):
+            assert commit_and_push(
+                [drift],
+                skip_ci=True,
+                finalized_modules=[("auth", "python")],
+            )
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--name-only", "--pretty="],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        committed_paths = {line.strip() for line in log.stdout.splitlines() if line.strip()}
+        assert "app/.pdd/meta/auth_python.json" in committed_paths
+        assert ".pdd/meta/auth_python.json" not in committed_paths
+
+    def test_commit_and_push_verifies_staged_metadata_from_repo_root(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Metadata verification must compare repo-root-relative paths.
+
+        Git reports `diff --cached --name-only` paths relative to the current
+        working directory. When CI launches auto-heal from a package subdir,
+        staged root metadata appears as `../.pdd/...` unless the command runs
+        from the repo root, which made the verifier miss a correctly staged
+        fingerprint.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        TestMain._init_git_repo(repo)
+
+        package_dir = repo / "pdd"
+        prompt_path = package_dir / "prompts" / "auth_python.prompt"
+        code_path = package_dir / "auth.py"
+        meta_path = repo / ".pdd" / "meta" / "auth_python.json"
+        prompt_path.parent.mkdir(parents=True)
+        meta_path.parent.mkdir(parents=True)
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+        prompt_path.write_text("% Goal\ninitial prompt\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "old"}', encoding="utf-8")
+
+        subprocess.run(
+            ["git", "add", "-A"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        prompt_path.write_text("% Goal\nupdated prompt\n", encoding="utf-8")
+        meta_path.write_text('{"timestamp": "new"}', encoding="utf-8")
+        monkeypatch.chdir(package_dir)
+
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            prompt_path=str(prompt_path),
+            code_path=str(code_path),
+        )
+        original_run = subprocess.run
+
+        def patched_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd == ["git", "push"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=patched_run):
+            assert commit_and_push(
+                [drift],
+                skip_ci=True,
+                finalized_modules=[("auth", "python")],
+            )
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--name-only", "--pretty="],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        committed_paths = {
+            line.strip()
+            for line in log.stdout.splitlines()
+            if line.strip()
+        }
+        assert ".pdd/meta/auth_python.json" in committed_paths
+        assert "pdd/prompts/auth_python.prompt" in committed_paths
 
 
 # ---------------------------------------------------------------------------
@@ -4157,3 +4345,78 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
             "must remain so that tracked metadata/source updates are "
             f"still committed. Got: {[c[0][0] for c in add_calls]}"
         )
+
+
+class TestMainDryRunJson:
+    def test_dry_run_json_outputs_report(self, capsys):
+        """--dry-run with --json prints the report as JSON and exits based on ok."""
+        report = {
+            "ok": True,
+            "summary": {
+                "metadata_stale": 0,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+        assert result == 0
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed == report
+
+    def test_dry_run_json_returns_one_when_not_ok(self, capsys):
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 2,
+                "conflicts": 1,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+        assert result == 1
+
+
+class TestHealModuleConflict:
+    def test_conflict_operation_returns_false(self):
+        """conflict is not a healable operation; heal_module must refuse."""
+        drift = DriftInfo(
+            "auth", "python", "conflict",
+            "Code and prompt changed together; manual conflict resolution required",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, {"PDD_FORCE": "1"})
+        assert result is False
+        mock_run.assert_not_called()
+
+
+class TestCommitAndPushMessage:
+    def test_multi_module_message_lists_all_basenames(self):
+        """Commit headline includes every module basename joined by comma."""
+        def mock_run(cmd, **kwargs):
+            r = MagicMock(stdout="", stderr="")
+            r.returncode = 1 if cmd == ["git", "diff", "--cached", "--quiet"] else 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as m, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True):
+            commit_and_push(
+                [
+                    DriftInfo("auth", "python", "update", ""),
+                    DriftInfo("api", "python", "update", ""),
+                    DriftInfo("utils", "python", "update", ""),
+                ],
+                skip_ci=True,
+            )
+
+        commit_cmds = [c[0][0] for c in m.call_args_list if c[0][0][:2] == ["git", "commit"]]
+        assert commit_cmds
+        msg = commit_cmds[0][3]
+        assert "auth" in msg and "api" in msg and "utils" in msg
+        assert msg.startswith("[skip ci]")

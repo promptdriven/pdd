@@ -171,6 +171,11 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
         "traceback": "".join(
             traceback.format_exception(type(exception), exception, exception.__traceback__)
         ),
+        # A click.ClickException is a deliberate, user-facing error (a usage
+        # mistake, e.g. `pdd story link` on a missing file), not a reportable
+        # crash. Tag it so the core-dump writer can skip the auto-snapshot for
+        # it while still snapshotting genuinely unexpected faults (pdd#1889 C-F8).
+        "deliberate": isinstance(exception, click.ClickException),
     }
 
     # For KeyboardInterrupt, enrich with agentic progress context if available
@@ -220,6 +225,16 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             )
             # Print the error message safely escaped
             console.print(escape(str(exception)))
+        elif isinstance(exception, click.ClickException):
+            # A ClickException is a deliberate, user-facing error raised by a
+            # command (e.g. `pdd story link` on a missing file). It is not an
+            # internal fault, so report it plainly rather than as an
+            # "unexpected error". (UsageError, a ClickException subclass, is
+            # handled above and re-raised for its exit-code-2 semantics.)
+            console.print(
+                f"  [error]Error:[/error] {escape(exception.format_message())}",
+                style="error",
+            )
         elif isinstance(exception, KeyboardInterrupt):
             reason = error_record.get("reason")
             if reason:

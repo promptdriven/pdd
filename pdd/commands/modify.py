@@ -236,6 +236,8 @@ def split(
     default=False,
     help="With --interactive: write approved low-risk repairs to the prompt files.",
 )
+@click.option("--preflight", is_flag=True, default=False, help="Run deterministic drift preflight only.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable preflight JSON.")
 @click.pass_context
 @track_cost
 def change(
@@ -253,6 +255,8 @@ def change(
     no_prompt_checkup: bool,
     interactive: bool,
     apply: bool,
+    preflight: bool,
+    as_json: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -268,6 +272,28 @@ def change(
     ctx.obj["no_prompt_checkup"] = no_prompt_checkup
     ctx.obj["interactive"] = interactive
     ctx.obj["apply"] = apply
+
+    if preflight:
+        from ..continuous_sync import build_report
+        import json as _json
+
+        if as_json:
+            ctx.obj["_suppress_result_summary"] = True
+            click.echo(
+                _json.dumps(
+                    build_report(consumer="change-preflight"),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            report = build_report(consumer="change-preflight")
+            summary = report["summary"]
+            click.echo(
+                "metadata_stale={metadata_stale} conflicts={conflicts} "
+                "unbaselined={unbaselined} failures={failures}".format(**summary)
+            )
+        return None
 
     if clean_restart and manual:
         raise click.UsageError(
@@ -453,6 +479,7 @@ def change(
     default=False,
     help="Repository-wide only: show which prompts would be updated without calling the LLM or writing outputs.",
 )
+@click.option("--json", "as_json", is_flag=True, default=False, help="Emit machine-readable dry-run JSON.")
 @click.option(
     "--sync-metadata",
     is_flag=True,
@@ -474,6 +501,7 @@ def update(
     base_branch: str,
     budget: Optional[float],
     dry_run: bool,
+    as_json: bool,
     sync_metadata: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
@@ -540,6 +568,8 @@ def update(
                 raise click.UsageError(
                     "Cannot use --output in repository-wide mode"
                 )
+            if as_json and not dry_run:
+                raise click.UsageError("--json is only supported with update --all --dry-run.")
         else:
             # File modes: --extensions, --directory, and --base-branch are not allowed
             if extensions:
@@ -558,10 +588,23 @@ def update(
                 raise click.UsageError(
                     "--dry-run is only valid in repository-wide mode (no file arguments, or use --all)."
                 )
+            if as_json:
+                raise click.UsageError(
+                    "--json is only valid in repository-wide dry-run mode."
+                )
             if budget is not None:
                 raise click.UsageError(
                     "--budget is only valid in repository-wide mode (no file arguments, or use --all)."
                 )
+
+        if is_repo_mode and dry_run and as_json:
+            from ..continuous_sync import build_report
+            import json as _json
+
+            ctx.obj["_suppress_result_summary"] = True
+            report = build_report(consumer="update-dry-run")
+            click.echo(_json.dumps(report, indent=2, sort_keys=True))
+            return None
 
         # Call update_main with correct parameters
         ret = update_main(

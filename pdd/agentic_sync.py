@@ -1956,7 +1956,7 @@ def _build_targeted_dep_graph(
 
 
 def _run_single_dry_run(
-    basename: str, cwd: Path, quiet: bool = False
+    basename: str, cwd: Path, quiet: bool = False, local: bool = False
 ) -> Tuple[bool, str]:
     """Run pdd sync <basename> --dry-run from the given cwd.
 
@@ -1969,7 +1969,14 @@ def _run_single_dry_run(
     else:
         cmd = [sys.executable, "-m", "pdd"]
 
-    cmd.extend(["--force", "sync", basename, "--dry-run", "--agentic", "--no-steer"])
+    cmd.append("--force")
+    if local:
+        cmd.append("--local")
+    cmd.extend(["sync", basename, "--dry-run", "--agentic", "--no-steer"])
+
+    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    if local:
+        env["PDD_FORCE_LOCAL"] = "1"
 
     try:
         result = subprocess.run(
@@ -1978,7 +1985,7 @@ def _run_single_dry_run(
             capture_output=True,
             text=True,
             timeout=60,
-            env={**os.environ, "PDD_FORCE": "1", "CI": "1"},
+            env=env,
         )
         if result.returncode == 0:
             return True, ""
@@ -1996,6 +2003,7 @@ def _llm_fix_dry_run_failure(
     quiet: bool = False,
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
+    local: bool = False,
 ) -> Tuple[bool, Optional[Path], float, str]:
     """Ask the LLM to suggest the correct cwd/command when dry-run fails.
 
@@ -2080,6 +2088,9 @@ def _llm_fix_dry_run_failure(
 
     # Run the suggested command directly via shell from project root.
     # This handles relative cd paths, chained cd's, etc. naturally.
+    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    if local:
+        env["PDD_FORCE_LOCAL"] = "1"
     try:
         result = subprocess.run(
             augmented_cmd,
@@ -2088,7 +2099,7 @@ def _llm_fix_dry_run_failure(
             capture_output=True,
             text=True,
             timeout=60,
-            env={**os.environ, "PDD_FORCE": "1", "CI": "1"},
+            env=env,
         )
     except subprocess.TimeoutExpired:
         return False, None, llm_cost, f"LLM suggested command timed out: {suggested_cmd}"
@@ -2132,6 +2143,7 @@ def _run_dry_run_validation(
     quiet: bool = False,
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
+    local: bool = False,
 ) -> Tuple[bool, Dict[str, Path], Dict[str, str], List[str], float]:
     """Run dry-run validation for each module with LLM fallback.
 
@@ -2174,7 +2186,9 @@ def _run_dry_run_validation(
             continue
 
         # 2. Run dry-run with the resolved target from the owning cwd.
-        ok, err_output = _run_single_dry_run(target, cwd, quiet=quiet)
+        ok, err_output = _run_single_dry_run(
+            target, cwd, quiet=quiet, local=local
+        )
 
         if ok:
             contract_errors = _prompt_contract_errors_for_module(
@@ -2204,6 +2218,7 @@ def _run_dry_run_validation(
             quiet=quiet,
             verbose=verbose,
             reasoning_time=reasoning_time,
+            local=local,
         )
         total_llm_cost += llm_cost
 
@@ -2630,6 +2645,7 @@ def run_agentic_sync(
     temperature: Optional[float] = None,
     context_override: Optional[str] = None,
     compressed_context: bool = False,
+    local: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -3013,6 +3029,7 @@ def run_agentic_sync(
             quiet=quiet,
             verbose=verbose,
             reasoning_time=reasoning_time,
+            local=local,
         )
     )
     llm_cost += dry_run_cost
@@ -3072,6 +3089,10 @@ def run_agentic_sync(
         "temperature": temperature,
         "context": context_override,
         "compressed_context": compressed_context,
+        # Forward --local so child syncs skip PDD-cloud dispatch on argv, not
+        # just via the inherited PDD_FORCE_LOCAL env (run_global_sync already
+        # forwards this; the issue-URL path previously dropped it).
+        "local": local,
     }
 
     github_info = {

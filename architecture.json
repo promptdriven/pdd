@@ -1,5 +1,51 @@
 [
   {
+    "reason": "Computes story-regression metrics over the executable `-m story` suite and emits a machine-readable evidence artifact (#1704), reusing the #833 evidence-path conventions without owning them.",
+    "description": "Deterministic (no-LLM) emitter that collects the executable @pytest.mark.story regression suite via pytest --collect-only, joins it with story->test traceability (#1699) and gate pass/stale verdicts (#1702), computes story count, story-backed test count, coverage %, and pass-rate with zero-story guards, and writes a schema-versioned JSON artifact under .pdd/evidence/stories/ (latest + per-run snapshot), degrading to status=not_applicable when upstream pieces are absent.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "user_story_tests_python.prompt",
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "story_coverage_python.prompt",
+    "filepath": "pdd/story_coverage.py",
+    "tags": [
+      "story",
+      "evidence",
+      "checkup",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "compute_story_coverage",
+            "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> StoryCoverage",
+            "returns": "StoryCoverage"
+          },
+          {
+            "name": "write_story_coverage",
+            "signature": "(coverage: StoryCoverage, project_root: Path, *, run_id: Optional[str] = None) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "format_summary_line",
+            "signature": "(coverage: StoryCoverage) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "emit_story_coverage",
+            "signature": "(project_root: Path, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None, run_id: Optional[str] = None) -> StoryCoverage",
+            "returns": "StoryCoverage"
+          }
+        ]
+      }
+    },
+    "position": null
+  },
+  {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
@@ -3548,7 +3594,7 @@
           {
             "name": "comment_line",
             "signature": "(code_line, comment_characters)",
-            "returns": "None",
+            "returns": "str",
             "sideEffects": [
               "None"
             ]
@@ -9769,7 +9815,7 @@
     }
   },
   {
-    "reason": "Parses prompt contract sections into a deterministic IR.",
+    "reason": "Parses contract-related sections from prompt files into a structured intermediate representation.",
     "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
     "dependencies": [],
     "priority": 239,
@@ -9806,8 +9852,14 @@
           },
           {
             "name": "iter_covers_refs",
-            "signature": "(story_text: str) -> \"Iterator[str]\"",
-            "returns": "Iterator[str]"
+            "signature": "(covers_text: str) -> list[CoversRef]",
+            "returns": "list[CoversRef]"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CoversRef",
+            "kind": "dataclass"
           }
         ]
       }
@@ -9815,6 +9867,273 @@
     "position": {
       "x": 0,
       "y": 0
+    }
+  },
+  {
+    "reason": "LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.",
+    "description": "Discovers story files, validates them against prompts via detect_change, generates LLM-authored story markdown from GitHub issues, and applies prompt fixes. Provides cross-unit story traceability via parse_story_dev_unit_metadata, story_is_cross_unit, get_cross_unit_stories_for_prompt, and get_all_dev_units_for_story.",
+    "dependencies": [
+      "contract_ir_python.prompt",
+      "detect_change_python.prompt",
+      "change_main_python.prompt",
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "user_story_tests_python.prompt",
+    "filepath": "pdd/user_story_tests.py",
+    "tags": [
+      "module",
+      "python",
+      "stories",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "STORY_DEV_UNITS_METADATA_KEY",
+            "value": "pdd-story-dev-units"
+          }
+        ],
+        "functions": [
+          {
+            "name": "story_id",
+            "signature": "(path: str | Path)",
+            "returns": "str"
+          },
+          {
+            "name": "discover_story_files",
+            "signature": "(stories_dir: Optional[str] = None)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "discover_prompt_files",
+            "signature": "(...)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "run_user_story_tests",
+            "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]",
+            "returns": "Tuple[bool, List[Dict], float, str]"
+          },
+          {
+            "name": "run_user_story_fix",
+            "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "generate_user_story",
+            "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, str, List[str]]"
+          },
+          {
+            "name": "cache_story_prompt_links",
+            "signature": "(...) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "parse_story_dev_unit_metadata",
+            "signature": "(story_text: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "story_is_cross_unit",
+            "signature": "(story_text: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_cross_unit_stories_for_prompt",
+            "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]",
+            "returns": "list[dict]"
+          },
+          {
+            "name": "get_all_dev_units_for_story",
+            "signature": "(story_text: str) -> list[str]",
+            "returns": "list[str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Builds deterministic contract coverage matrix for prompt rules against story and test evidence.",
+    "description": "Static deterministic rule-to-evidence matrix builder for PDD prompt files. Classifies each contract rule as checked, story-only, test-only, waived, failed, or unchecked based on linked story and test evidence. Supports cross-unit story attribution and deduplication in directory scans.",
+    "dependencies": [
+      "contract_ir_python.prompt",
+      "user_story_tests_python.prompt",
+      "story_regression_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "coverage_contracts_python.prompt",
+    "filepath": "pdd/coverage_contracts.py",
+    "tags": [
+      "module",
+      "python",
+      "contracts",
+      "coverage"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "RuleCoverage",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CoverageResult",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_coverage",
+            "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult",
+            "returns": "CoverageResult"
+          },
+          {
+            "name": "build_coverage_directory",
+            "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]",
+            "returns": "list[CoverageResult]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R7": {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_R7_broken_syntax"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [
+            "test_receipt_failed.py: syntax error on line 4"
+          ]
+        },
+        "R8": {
+          "rule_id": "R8",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_covers_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        }
+      }
     }
   },
   {
@@ -11037,6 +11356,90 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Deterministic, marker-traceable pytest oracle linking user stories to the regression tests that claim them.",
+    "description": "Collection-only (pytest --collect-only) story<->test traceability: builds a bidirectional story_id<->nodeid map from @pytest.mark.story markers and exposes tests_for_story, story_for_test, has_regression_test, and the shared story_id helper. Never runs an LLM or executes test bodies.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_regression_python.prompt",
+    "filepath": "pdd/story_regression.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "story_id",
+            "signature": "(path: str | Path)",
+            "returns": "str"
+          },
+          {
+            "name": "tests_for_story",
+            "signature": "(story_id: str)",
+            "returns": "set[str]"
+          },
+          {
+            "name": "story_for_test",
+            "signature": "(nodeid: str)",
+            "returns": "str | set[str] | None"
+          },
+          {
+            "name": "has_regression_test",
+            "signature": "(story_id: str)",
+            "returns": "bool"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 800,
+      "y": 3600
+    }
+  },
+  {
+    "reason": "Implements the `pdd story` CLI group (add, list, link) as thin wrappers over pdd.user_story_tests.",
+    "description": "Implements pdd story add (create user story from issue/file/text), pdd story list (show stories with regression status), and pdd story link (add prompt link to existing story) as a @click.group wrapping pdd.user_story_tests.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "commands/story_python.prompt",
+    "filepath": "pdd/commands/story.py",
+    "tags": [
+      "module",
+      "python",
+      "commands",
+      "story"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "story add",
+            "description": "Create a user story file from an issue URL, number, or local file, linked to one or more dev units or prompts"
+          },
+          {
+            "name": "story list",
+            "description": "List all user stories with their linked prompts and regression status"
+          },
+          {
+            "name": "story link",
+            "description": "Add a prompt link to an existing story file without regenerating the story body"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     },
     "contract_summary": {
       "rules": [
@@ -11047,7 +11450,9 @@
         "R5",
         "R6",
         "R7",
-        "R8"
+        "R8",
+        "R9",
+        "R10"
       ],
       "critical": [],
       "stories": [],
@@ -11055,7 +11460,9 @@
       "coverage_status": "partial",
       "evidence_status": "missing",
       "waived": [],
-      "unchecked": [],
+      "unchecked": [
+        "R10"
+      ],
       "rules_detail": {
         "R1": {
           "rule_id": "R1",
@@ -11162,7 +11569,112 @@
           "waiver_status": null,
           "waiver_expires": null,
           "failures": []
+        },
+        "R9": {
+          "rule_id": "R9",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_guard_refuses_uppercase_pdd_prefix_bypass",
+            "test_rule_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R10": {
+          "rule_id": "R10",
+          "status": "unchecked",
+          "stories": [],
+          "tests": [],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
         }
+      }
+    }
+  },
+  {
+    "reason": "Deterministic public-safe CI gate enforcing that user stories have passing, non-stale story regression tests.",
+    "description": "AST-scans @pytest.mark.story(story_id=..., story_hash=...) markers, compares marker story_hash values to the canonical user-story content hash, reports story-regression-missing/story-regression-stale statuses, and resolves off/warn/strict gate mode from config without LLM or network calls.",
+    "dependencies": [
+      "user_story_tests_python.prompt",
+      "story_regression_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_regression_gate_python.prompt",
+    "filepath": "pdd/story_regression_gate.py",
+    "tags": [
+      "module",
+      "python",
+      "story",
+      "gate"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "discover_story_markers",
+            "signature": "(tests_dir) -> dict[str, StoryMarker]",
+            "returns": "dict[str, StoryMarker]"
+          },
+          {
+            "name": "classify_story",
+            "signature": "(story_path, markers, *, story_text=None) -> StoryRegressionResult",
+            "returns": "StoryRegressionResult"
+          },
+          {
+            "name": "evaluate_stories",
+            "signature": "(*, stories_dir=None, tests_dir=None, only_story_ids=None) -> list[StoryRegressionResult]",
+            "returns": "list[StoryRegressionResult]"
+          },
+          {
+            "name": "run_story_regression_gate",
+            "signature": "(*, project_root, mode=None, base_ref=None, stories_dir=None, tests_dir=None, scope_to_diff=True) -> StoryRegressionGateResult",
+            "returns": "StoryRegressionGateResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Deterministically compiles user story contracts into public-safe pytest regression tests.",
+    "description": "Resolves a story contract, parses Entry Point/Seams/Covers/Oracle/Negative Cases, emits stable pytest tests tagged with @pytest.mark.story(story_id=..., story_hash=...), and backs pdd test --from-story without LLM or runtime cloud calls.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 6,
+    "filename": "story_test_generator_python.prompt",
+    "filepath": "pdd/story_test_generator.py",
+    "tags": [
+      "module",
+      "python",
+      "story",
+      "test"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_story_test_spec",
+            "signature": "(story_path: Path) -> StoryTestSpec",
+            "returns": "StoryTestSpec"
+          },
+          {
+            "name": "render_story_test",
+            "signature": "(spec: StoryTestSpec) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "generate_story_test",
+            "signature": "(story_path: Path, output: Optional[Path] = None) -> StoryTestGenerationResult",
+            "returns": "StoryTestGenerationResult"
+          }
+        ]
       }
     }
   }

@@ -1,0 +1,131 @@
+# Kernel-level egress lockdown for pilot runs (design §8.1.1 hard tier).
+#
+# Three network namespaces, so the agent is isolated from the gateway at the
+# kernel level — NOT by env-var convention (the previous single-netns design
+# let the agent-subprocess reach the gateway directly and bypass recording):
+#
+#   rb-sandbox      — internal: true. The agent container and the runner sit
+#                     here. This is the ONLY network the agent joins, so the
+#                     only host it can address is the runner (recording proxy).
+#   rb-proxy-egress — internal: true. The runner and the gateway sit here.
+#                     The agent has NO interface on it, so it kernel-cannot
+#                     address the gateway.
+#   rb-egress       — ordinary NAT bridge; ONLY the gateway sits here.
+#
+#   agent   [rb-sandbox only]              runs ONLY the pinned Codex CLI under
+#                                          the §8.1.1 frozen env; its sole
+#                                          reachable peer is the recording
+#                                          proxy (OPENAI_BASE_URL=runner:<port>).
+#                                          A small worker loop receives launch
+#                                          requests from the runner via a
+#                                          shared volume and executes the real
+#                                          agent process here. No route to the
+#                                          gateway or outside.
+#   runner  [rb-sandbox + rb-proxy-egress] runs the harness + in-process
+#                                          RecordingProxy (bound to 0.0.0.0 via
+#                                          RunConfig.proxy_host, advertised as
+#                                          `http://runner:<port>`). It — not
+#                                          the agent — forwards recorded
+#                                          traffic to the gateway (HTTPS_PROXY
+#                                          set in the RUNNER env only).
+#   gateway [rb-proxy-egress + rb-egress]  tinyproxy, ACL-pinned: CONNECT to
+#                                          api.openai.com:443 and nothing else;
+#                                          Allow restricted to the proxy-egress
+#                                          subnet.
+#
+# Bring-up + no-billing verification:
+#   docker compose build
+#   docker compose up -d agent
+#   docker compose run --rm --use-aliases runner python3 harness/runner/container/egress_check.py --role runner
+#   docker compose run --rm --use-aliases runner python3 -m harness.runner.container.integration_check
+# The integration check launches the real command arm inside the AGENT's
+# namespace, runs the agent-role egress check against the live advertised
+# recording-proxy endpoint, verifies the gateway remains unreachable, and can
+# see the shared frozen-home/report artifacts. Pilot cells then run in `runner`
+# with agent_command dispatched into the `agent` service (see README.md).
+
+networks:
+  rb-sandbox:
+    internal: true
+  rb-proxy-egress:
+    internal: true
+  rb-egress: {}
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    volumes:
+      - ./tinyproxy.conf:/etc/tinyproxy/tinyproxy.conf:ro
+      - ./filter:/etc/tinyproxy/filter:ro
+    networks:
+      - rb-proxy-egress
+      - rb-egress
+    restart: unless-stopped
+
+  runner:
+    build:
+      context: ../../..
+      dockerfile: harness/runner/container/Dockerfile
+    working_dir: /bench
+    environment:
+      # Runner-only egress: its in-process RecordingProxy forwards through the
+      # gateway. The agent env never sees these (frozen env black-holes proxy
+      # vars, and the agent runs in a different container anyway).
+      HTTPS_PROXY: http://gateway:8888
+      HTTP_PROXY: http://gateway:8888
+      NO_PROXY: 127.0.0.1,localhost,agent,runner
+      RB_PROXY_HOST: 0.0.0.0
+      RB_PROXY_ADVERTISED_HOST: runner
+      RB_AGENT_LAUNCHER: container_worker
+      RB_AGENT_REQUEST_DIR: /bench/agent-requests
+      # The single permitted secret; set in the host shell only for the
+      # calibration run and the pilot itself, never for egress_check.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ../../..:/bench
+      - rb-reports:/bench/reports
+      - rb-work:/bench/work
+      - rb-agent-requests:/bench/agent-requests
+    networks:
+      - rb-sandbox
+      - rb-proxy-egress
+    depends_on:
+      - gateway
+
+  agent:
+    build:
+      context: ../../..
+      dockerfile: harness/runner/container/Dockerfile
+    working_dir: /bench
+    # No proxy vars, no secret by default: the agent reaches the provider ONLY
+    # via the recording proxy on the runner, and reaches nothing else.
+    environment:
+      NO_PROXY: 127.0.0.1,localhost
+    # Docker always runs its embedded resolver at 127.0.0.11 inside a container
+    # on an internal user-defined network — it cannot be removed without giving
+    # the agent NET_ADMIN, which would defeat the kernel isolation. Pinning its
+    # upstream to a dead loopback keeps `runner` service-name resolution working
+    # while making any *external*-name lookup SERVFAIL, so nothing exfiltrates
+    # via DNS. `egress_check --role agent` verifies this empirically: it asserts
+    # 127.0.0.11 does not RESOLVE an external name (not merely that it is
+    # silent, which Docker's embedded resolver never is).
+    dns:
+      - 127.0.0.1
+    volumes:
+      - ../../..:/bench
+      - rb-reports:/bench/reports
+      - rb-work:/bench/work
+      - rb-agent-requests:/bench/agent-requests
+    networks:
+      - rb-sandbox
+    # Do not depend on the runner service. The live recording proxy is hosted by
+    # the one-off `docker compose run --use-aliases runner ...` process; starting
+    # an idle runner service here can steal or mask the `runner` DNS alias.
+    command: ["python3", "-m", "harness.runner.container.agent_worker"]
+
+volumes:
+  rb-reports: {}
+  rb-work: {}
+  rb-agent-requests: {}

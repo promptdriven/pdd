@@ -495,21 +495,125 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+# Per-story outcome tallies for the story regression lane (``pytest -m story``).
+# Keyed by story id; each value is a {"passed"/"failed"/"skipped": count} bucket.
+# Populated in ``pytest_runtest_makereport`` and rendered by
+# ``pytest_terminal_summary``. Only meaningful when the lane runs without xdist
+# (the story lane in ``tests/story_regression.sh`` runs single-process so this
+# module-level state is shared across the whole session).
+_STORY_RESULTS: dict[str, dict[str, int]] = {}
+
+
+def _story_id(item: pytest.Item, marker: pytest.Mark) -> str:
+    """Resolve a human-readable story identifier from the ``story`` marker.
+
+    Accepts ``@pytest.mark.story("checkout")``, ``@pytest.mark.story(story_id=...)``
+    (the form every generated story test actually uses), ``name=...``, or
+    ``id=...``; falls back to the test's file path so a bare ``@pytest.mark.story``
+    still groups sensibly per module. Without ``story_id`` the summary silently
+    counted files instead of stories (pdd#1889 V-F4).
+    """
+    if marker.args:
+        return str(marker.args[0])
+    if "story_id" in marker.kwargs:
+        return str(marker.kwargs["story_id"])
+    if "name" in marker.kwargs:
+        return str(marker.kwargs["name"])
+    if "id" in marker.kwargs:
+        return str(marker.kwargs["id"])
+    return item.nodeid.split("::", 1)[0]
+
+
+def _story_report_counts(report) -> bool:
+    """Whether *report* should contribute to the per-story tally.
+
+    Counts the ``call`` phase normally, plus a skip that happens during the
+    ``setup`` phase — a ``@pytest.mark.skip``-decorated story emits only a setup
+    skip and no ``call`` report, so without this it would vanish from the summary
+    entirely (pdd#1889 V-F4). A normal (non-skipped) setup phase is not counted,
+    so passing tests are never double-counted.
+    """
+    if report.when == "call":
+        return True
+    return report.when == "setup" and getattr(report, "skipped", False)
+
+
+def _story_summary_status(counts: dict) -> str:
+    """Render the PASS/FAIL/SKIP verdict for a story's outcome bucket.
+
+    A story that only skipped is SKIP, not PASS — reporting a skip-only story as
+    ``[PASS] ...: 0 passed, 1 skipped`` overstated coverage (pdd#1889 V-F4).
+    """
+    failed = counts.get("failed", 0)
+    passed = counts.get("passed", 0)
+    skipped = counts.get("skipped", 0)
+    if failed:
+        return "FAIL"
+    if passed == 0 and skipped:
+        return "SKIP"
+    return "PASS"
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call):
-    """Convert InsufficientCreditsError failures to skips.
+    """Convert InsufficientCreditsError failures to skips and tally stories.
 
     The cloud batch test account may run out of credits, causing tests that call
     the production LLM endpoint to fail with InsufficientCreditsError. These are
     infrastructure failures, not code bugs — convert to skip rather than fail.
+
+    Story-marked tests are additionally tallied per story so the story
+    regression lane can emit a per-story pass/fail summary (issue #1701).
     """
     outcome = yield
     report = outcome.get_result()
     if report.when == "call" and report.failed and call.excinfo is not None:
-        if call.excinfo.errisinstance(InsufficientCreditsError):
+        exc_type_name = type(call.excinfo.value).__name__
+        exc_text = str(call.excinfo.value)
+        if call.excinfo.errisinstance(InsufficientCreditsError) or (
+            exc_type_name in {"UsageError", "RuntimeError"}
+            and "Insufficient credits" in exc_text
+        ):
             report.outcome = "skipped"
             report.wasxfail = ""
             report.longrepr = f"Skipped: Insufficient credits for cloud LLM call"
+
+    if _story_report_counts(report):
+        marker = item.get_closest_marker("story")
+        if marker is not None:
+            bucket = _STORY_RESULTS.setdefault(
+                _story_id(item, marker),
+                {"passed": 0, "failed": 0, "skipped": 0},
+            )
+            bucket[report.outcome] = bucket.get(report.outcome, 0) + 1
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Emit a per-story pass/fail summary for the story regression lane.
+
+    Only renders when story-marked tests actually ran, so the regular unit-test
+    run is unaffected. Reports the number of stories, the total number of story
+    regression tests, and a PASS/FAIL line per story (issue #1701).
+    """
+    if not _STORY_RESULTS:
+        return
+
+    total_tests = sum(sum(counts.values()) for counts in _STORY_RESULTS.values())
+    terminalreporter.write_sep("=", "Story Regression Summary")
+    terminalreporter.write_line(
+        f"Stories: {len(_STORY_RESULTS)}    "
+        f"Story regression tests: {total_tests}"
+    )
+    for story in sorted(_STORY_RESULTS):
+        counts = _STORY_RESULTS[story]
+        failed = counts.get("failed", 0)
+        status = _story_summary_status(counts)
+        detail = f"{counts.get('passed', 0)} passed"
+        if failed:
+            detail += f", {failed} failed"
+        if counts.get("skipped", 0):
+            detail += f", {counts['skipped']} skipped"
+        terminalreporter.write_line(f"  [{status}] {story}: {detail}")
 
 
 # Ignore non-suite assets under tests/ during collection.

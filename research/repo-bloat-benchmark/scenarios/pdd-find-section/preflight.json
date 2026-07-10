@@ -1,0 +1,9 @@
+{
+  "scenario_dir": "scenarios/pdd-find-section",
+  "distractors_dir": "distractors/pdd-find-section",
+  "reports_dir": "reports/pdd-find-section",
+  "work_root": "/tmp/rb-preflight-find-section",
+  "arm": "mock",
+  "sizes": [1, 2, 5, 10, 20, 50],
+  "trials": 1
+}
