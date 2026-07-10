@@ -7855,6 +7855,7 @@
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt",
+      "ci_validation_python.prompt",
       "prompt_repair_python.prompt"
     ],
     "priority": 217,
@@ -10593,6 +10594,7 @@
     "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
     "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal. It also detects and adopts a single existing runner-collected co-located test for issue #1903. Caller-influenced module/candidate paths are reduced to the trusted working-tree root and sanitized component-by-component with os.path.basename before any filesystem operation, then canonicalized and checked for symlink escape; traversal, outside absolute paths, and malformed paths safely produce no adoption.",
     "dependencies": [
+      "context/python_preamble.prompt",
       "pytest_slicer_python.prompt",
       "api_contract_slicer_python.prompt"
     ],
@@ -10609,7 +10611,7 @@
         "functions": [
           {
             "name": "ContentSelector.select",
-            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
+            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)",
             "returns": "str"
           }
         ]
