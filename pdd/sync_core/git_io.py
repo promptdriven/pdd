@@ -13,3 +13,17 @@ def read_git_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         check=False,
     )
     return result.stdout if result.returncode == 0 else None
+
+
+def resolve_git_commit(root: Path, ref: str) -> str:
+    """Resolve one exact commit or fail closed."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise ValueError(f"cannot resolve Git commit: {ref}")
+    return result.stdout.strip()

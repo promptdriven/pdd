@@ -11,6 +11,8 @@ REQUIRED_SCENARIOS = frozenset(
         "transactional-canonical-report",
         "merge-group-base-movement-and-stale-repair",
         "built-wheel-clean-environment",
+        "candidate-wheel-public-report",
+        "candidate-wheel-transaction-recovery",
         "pdd-cloud-real-consumer-canary",
         "released-checker-owned-scenario-harness",
     }

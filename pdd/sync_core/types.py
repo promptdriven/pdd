@@ -226,7 +226,18 @@ class VerificationProfile:
             for item in required_obligations
             for requirement_id in item.requirement_ids
         }
-        return set(self.required_requirement_ids).issubset(covered)
+        required = set(self.required_requirement_ids)
+        if covered != required:
+            return False
+        opaque = {item for item in required if item.startswith("CONTRACT-SHA256:")}
+        human_covered = {
+            requirement_id
+            for item in required_obligations
+            if item.kind == "human-attestation"
+            and item.validator_id == "threshold-ed25519"
+            for requirement_id in item.requirement_ids
+        }
+        return opaque.issubset(human_covered)
 
 
 @dataclass(frozen=True, order=True)

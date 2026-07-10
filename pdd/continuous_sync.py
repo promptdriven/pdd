@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +14,6 @@ from .operation_log import (
     _safe_basename,
     get_fingerprint_path,
     infer_module_identity,
-    save_fingerprint,
 )
 from .sync_determine_operation import (
     Fingerprint,
@@ -22,6 +22,7 @@ from .sync_determine_operation import (
     get_pdd_file_paths,
     read_fingerprint,
 )
+from .sync_core import CanonicalReportOptions, build_canonical_report
 
 
 DRIFT_CLASSIFICATIONS = {
@@ -68,6 +69,62 @@ def project_root(start: Optional[Path] = None) -> Path:
     except OSError:
         pass
     return current
+
+
+def repository_root(start: Optional[Path] = None) -> Path:
+    """Return the enclosing Git repository root independently of `.pddrc`."""
+    current = (start or Path.cwd()).resolve()
+    if not current.is_dir():
+        current = current.parent
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=current,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return current
+    return Path(result.stdout.strip()).resolve()
+
+
+def canonical_sync_enabled(root: Path) -> bool:
+    """Return whether protected committed policy activates canonical sync."""
+    protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
+    candidate = Path(root).resolve()
+    if not candidate.is_dir():
+        candidate = candidate.parent
+    if protected_ref is None and not any(
+        (parent / ".pdd/sync-policy.json").is_file()
+        for parent in (candidate, *candidate.parents)
+    ):
+        return False
+    root = repository_root(candidate)
+    protected_ref = protected_ref or "HEAD"
+    identity = subprocess.run(
+        ["git", "cat-file", "-e", f"{protected_ref}:.pdd/repository-id"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if identity.returncode != 0:
+        return False
+    policy = subprocess.run(
+        ["git", "show", f"{protected_ref}:.pdd/sync-policy.json"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if policy.returncode != 0:
+        return False
+    try:
+        payload = json.loads(policy.stdout)
+    except json.JSONDecodeError:
+        return False
+    return payload == {"schema_version": 1, "enforcement": "active"}
 
 
 def _prompts_dir_for(prompt_path: Path) -> Path:
@@ -281,13 +338,16 @@ def discover_units(
             units.append(unit)
         return units
 
-    if not metadata_identities:
-        return prompt_units
-
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
     for identity in metadata_identities:
         unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
+        dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        units.append(unit)
+    for unit in prompt_units:
         dedupe_key = (unit.basename, unit.language, unit.prompt_path)
         if dedupe_key in seen:
             continue
@@ -663,32 +723,6 @@ def _append_ledger(
     return str(ledger_path) if wrote else None
 
 
-def _heal_units(
-    units: List[SyncUnit],
-    classified: List[Dict[str, Any]],
-) -> List[str]:
-    healed: List[str] = []
-    by_key = {(unit.basename, unit.language): unit for unit in units}
-    for item in classified:
-        if item["classification"] not in DRIFT_CLASSIFICATIONS:
-            continue
-        unit = by_key.get((item["basename"], item["language"]))
-        if unit is None:
-            continue
-        paths = get_pdd_file_paths(
-            unit.basename,
-            unit.language,
-            prompts_dir=str(unit.prompts_dir),
-        )
-        fingerprint = read_fingerprint(unit.basename, unit.language, paths=paths)
-        operation = "fix"
-        if fingerprint and fingerprint.command in {"verify", "test", "fix", "update"}:
-            operation = fingerprint.command
-        save_fingerprint(unit.basename, unit.language, operation, paths, 0.0, "reconcile")
-        healed.append(unit.basename)
-    return healed
-
-
 def build_report(
     *,
     consumer: str,
@@ -698,16 +732,25 @@ def build_report(
     ledger: bool = False,
 ) -> Dict[str, Any]:
     """Build a shared continuous-sync JSON report."""
+    if heal:
+        raise ValueError(
+            "blind fingerprint healing is disabled; use an explicit repair or "
+            "reviewed baseline workflow"
+        )
     base = project_root(root)
+    if canonical_sync_enabled(base):
+        if ledger:
+            raise ValueError(
+                "canonical read-only reporting cannot append a repository ledger"
+            )
+        return _canonical_compatibility_report(base, consumer, modules)
     units = discover_units(base, modules=modules)
     classified = [classify_unit(unit, base) for unit in units]
-    healed = _heal_units(units, classified) if heal else []
-    if healed:
-        classified = [classify_unit(unit, base) for unit in units]
     summary = _build_summary(classified)
     ledger_path = _append_ledger(base, consumer, classified) if ledger else None
     ok = (
-        summary["metadata_stale"] == 0
+        summary["total"] > 0
+        and summary["metadata_stale"] == 0
         and summary["conflicts"] == 0
         and summary["unbaselined"] == 0
         and summary["failures"] == 0
@@ -739,8 +782,86 @@ def build_report(
             for unit in classified
             if unit["classification"] == FAILURE_CLASSIFICATION
         ],
-        "healed": healed,
+        "healed": [],
     }
     if ledger_path:
         report["ledger_path"] = ledger_path
     return report
+
+
+def _canonical_compatibility_report(
+    root: Path,
+    consumer: str,
+    modules: Optional[Iterable[str]],
+) -> Dict[str, Any]:
+    """Project the trusted canonical report into the legacy consumer schema."""
+    canonical = build_canonical_report(
+        root,
+        CanonicalReportOptions(modules=tuple(modules or ())),
+    )
+    projected = []
+    for unit in canonical["units"]:
+        baseline = unit["baseline"]
+        semantic = unit["semantic"]
+        if unit["in_sync"]:
+            classification = "IN_SYNC"
+        elif baseline == "UNBASELINED":
+            classification = UNBASELINED_CLASSIFICATION
+        elif semantic == "CONFLICT":
+            classification = CONFLICT_CLASSIFICATION
+        elif baseline == "DRIFTED":
+            classification = "DERIVED_CHANGED"
+        else:
+            classification = FAILURE_CLASSIFICATION
+        projected.append(
+            {
+                "basename": Path(unit["subject"]).stem.rsplit("_", 1)[0],
+                "language": Path(unit["subject"]).stem.rsplit("_", 1)[-1],
+                "classification": classification,
+                "operation": "none",
+                "reason": unit["reason"],
+                "changed_files": unit["changed_roles"],
+                "metadata_valid": baseline not in {"UNBASELINED", "CORRUPT"},
+                "subject": unit["subject"],
+            }
+        )
+    summary = _build_summary(projected)
+    counts = canonical["counts"]
+    summary["metadata_stale"] = counts["drifted"]
+    summary["conflicts"] = counts["conflict"]
+    summary["unbaselined"] = counts["unbaselined"]
+    summary["failures"] = (
+        counts["corrupt"] + counts["unknown"] + counts["failed"] + counts["invalid"]
+    )
+    summary["synced"] = counts["trusted_in_sync"]
+    summary["total"] = counts["managed_units"]
+    return {
+        "ok": canonical["ok"],
+        "consumer": consumer,
+        "project_root": str(root),
+        "summary": summary,
+        "metadata_stale": summary["metadata_stale"],
+        "units": projected,
+        "drift": [
+            unit
+            for unit in projected
+            if unit["classification"] in DRIFT_CLASSIFICATIONS
+        ],
+        "conflicts": [
+            unit
+            for unit in projected
+            if unit["classification"] == CONFLICT_CLASSIFICATION
+        ],
+        "unbaselined": [
+            unit
+            for unit in projected
+            if unit["classification"] == UNBASELINED_CLASSIFICATION
+        ],
+        "failures": [
+            unit
+            for unit in projected
+            if unit["classification"] == FAILURE_CLASSIFICATION
+        ],
+        "healed": [],
+        "canonical": canonical,
+    }

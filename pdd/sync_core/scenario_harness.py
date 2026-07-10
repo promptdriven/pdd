@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -18,7 +18,6 @@ from .certificate import count_vendored_sync_semantics
 from .classifier import classify
 from .identity import initialize_repository_identity
 from .manifest import build_unit_manifest
-from .reporting import CanonicalReportOptions, build_canonical_report
 from .runner import AttestationIssue, RunBinding, RunnerConfig, run_profile
 from .scenario_contract import REQUIRED_SCENARIOS
 from .transaction import PlannedWrite, TransactionConflict, TransactionManager
@@ -64,7 +63,7 @@ def _profile(unit: UnitId) -> VerificationProfile:
         "tests",
         "test",
         "pytest",
-        "checker-owned-config",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         ("REQ-1",),
         (PurePosixPath("tests/test_widget.py"),),
     )
@@ -129,6 +128,28 @@ def _git(root: Path, *arguments: str) -> str:
     if completed.returncode != 0:
         raise AssertionError(completed.stderr.strip() or "Git fixture command failed")
     return completed.stdout.strip()
+
+
+def _candidate(
+    arguments: argparse.Namespace, root: Path, *command: str
+) -> subprocess.CompletedProcess[str]:
+    """Run one public command from the separately installed candidate wheel."""
+    return subprocess.run(
+        [arguments.candidate_python, "-I", "-m", "pdd.cli", *command],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if not any(
+                marker in key.upper()
+                for marker in ("API_KEY", "CREDENTIAL", "PASSWORD", "SECRET", "TOKEN")
+            )
+            and key not in {"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
+        },
+    )
 
 
 def _git_fixture(root: Path) -> None:
@@ -372,8 +393,20 @@ def _evidence_guards(_arguments: argparse.Namespace) -> ScenarioResult:
     )
     policy = AttestationTrustPolicy({"checker-fixture": signer.public_key_bytes()})
     policy.verify(envelope, binding, now=now)
+    policy.verify(envelope, binding, now=now)
+    replayed = signer.issue(
+        AttestationRequest(
+            "rebound-attestation",
+            binding,
+            envelope.results,
+            "nonce",
+            now,
+        )
+    )
+    forged = replace(envelope, signature="Zm9yZ2Vk")
     for candidate, expected in (
-        (envelope, binding),
+        (replayed, binding),
+        (forged, binding),
         (
             signer.issue(
                 AttestationRequest(
@@ -555,10 +588,136 @@ def _transactional_report(_arguments: argparse.Namespace) -> ScenarioResult:
     )
 
 
-def _built_wheel(_arguments: argparse.Namespace) -> ScenarioResult:
+def _built_wheel(arguments: argparse.Namespace) -> ScenarioResult:
     if "site-packages" not in Path(__file__).resolve().parts:
         raise AssertionError("scenario harness is not running from an installed wheel")
+    probe = subprocess.run(
+        [
+            arguments.candidate_python,
+            "-I",
+            "-c",
+            "import pathlib,pdd; print(pathlib.Path(pdd.__file__).resolve())",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate_environment = Path(arguments.candidate_python).absolute().parents[1].resolve()
+    try:
+        Path(probe.stdout.strip()).resolve().relative_to(candidate_environment)
+    except ValueError as exc:
+        raise AssertionError("candidate package was not imported from its wheel venv") from exc
+    if probe.returncode != 0 or "site-packages" not in probe.stdout:
+        raise AssertionError("candidate wheel import probe failed")
     return ScenarioResult("built-wheel-clean-environment", "PASS")
+
+
+def _candidate_public_report(arguments: argparse.Namespace) -> ScenarioResult:
+    with tempfile.TemporaryDirectory(prefix="pdd-candidate-report-") as directory:
+        root = Path(directory)
+        _git_fixture(root)
+        initialize_repository_identity(
+            root, "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
+        )
+        (root / "prompts").mkdir()
+        (root / "src").mkdir()
+        (root / "tests").mkdir()
+        (root / "prompts/widget_python.prompt").write_text("REQ-1: widget\n")
+        (root / "src/widget.py").write_text("value = 1\n")
+        (root / "tests/test_widget.py").write_text("def test_widget(): assert True\n")
+        (root / "architecture.json").write_text(
+            '[{"filename":"widget_python.prompt","filepath":"src/widget.py"}]\n'
+        )
+        (root / ".pdd/verification-profiles.json").write_text(
+            json.dumps(
+                {
+                    "profiles": [
+                        {
+                            "prompt_path": "prompts/widget_python.prompt",
+                            "language_id": "python",
+                            "required_requirement_ids": ["REQ-1"],
+                            "obligations": [
+                                {
+                                    "obligation_id": "pytest",
+                                    "kind": "test",
+                                    "validator_id": "pytest",
+                                    "validator_config_digest": (
+                                        "e3b0c44298fc1c149afbf4c8996fb924"
+                                        "27ae41e4649b934ca495991b7852b855"
+                                    ),
+                                    "requirement_ids": ["REQ-1"],
+                                    "artifact_paths": ["tests/test_widget.py"],
+                                }
+                            ],
+                        }
+                    ]
+                }
+            )
+        )
+        commit = _commit(root, "candidate report fixture")
+        output = root / "candidate-report.json"
+        result = _candidate(
+            arguments,
+            root,
+            "sync",
+            "certify",
+            "--base-ref",
+            commit,
+            "--head-ref",
+            commit,
+            "--replay-ledger",
+            str(root.parent / "candidate-replay.json"),
+            "--output",
+            str(output),
+        )
+        report = json.loads(output.read_text(encoding="utf-8"))
+        if result.returncode != 1:
+            raise AssertionError("unbaselined candidate report did not fail closed")
+        if report.get("counts", {}).get("unbaselined") != 1:
+            raise AssertionError("candidate report omitted unbaselined managed unit")
+    return ScenarioResult("candidate-wheel-public-report", "PASS")
+
+
+def _candidate_transaction_recovery(arguments: argparse.Namespace) -> ScenarioResult:
+    writes = (
+        PlannedWrite(PurePosixPath("src/widget.py"), b"new\n", "100644"),
+        PlannedWrite(PurePosixPath(".pdd/evidence/widget.json"), b"{}\n", "100644"),
+    )
+    with tempfile.TemporaryDirectory(prefix="pdd-candidate-recovery-") as directory:
+        root = Path(directory)
+        (root / "src").mkdir()
+        (root / "src/widget.py").write_text("old\n")
+        manager = TransactionManager(root)
+        manager.prepare("candidate-recovery", writes)
+
+        def crash(event: str) -> None:
+            if event == "after_install:0":
+                raise SystemExit("injected process death")
+
+        try:
+            manager.commit("candidate-recovery", crash_hook=crash)
+        except SystemExit:
+            pass
+        result = _candidate(
+            arguments,
+            root,
+            "recover",
+            "--transaction",
+            "candidate-recovery",
+        )
+        if result.returncode != 0:
+            raise AssertionError("candidate public recovery command failed")
+        json_start = result.stdout.find("{")
+        if json_start < 0:
+            raise AssertionError("candidate recovery emitted no machine result")
+        payload, _end = json.JSONDecoder().raw_decode(result.stdout[json_start:])
+        if payload.get("phase") != "COMMITTED":
+            raise AssertionError("candidate recovery did not commit the journal")
+        if (root / "src/widget.py").read_text() != "new\n":
+            raise AssertionError("candidate recovery left old artifact bytes")
+        if (root / ".pdd/evidence/widget.json").read_text() != "{}\n":
+            raise AssertionError("candidate recovery left partial evidence state")
+    return ScenarioResult("candidate-wheel-transaction-recovery", "PASS")
 
 
 def _cloud_canary(arguments: argparse.Namespace) -> ScenarioResult:
@@ -568,15 +727,34 @@ def _cloud_canary(arguments: argparse.Namespace) -> ScenarioResult:
     )
     if count:
         raise AssertionError(f"pdd_cloud retains {count} vendored sync semantics")
+    before = _git(cloud, "status", "--porcelain", "--untracked-files=all")
     with tempfile.TemporaryDirectory(prefix="pdd-cloud-canary-") as directory:
-        report = build_canonical_report(
+        temporary = Path(directory)
+        output = temporary / "report.json"
+        candidate = _candidate(
+            arguments,
             cloud,
-            CanonicalReportOptions(
-                base_ref=arguments.cloud_base_ref,
-                head_ref=arguments.cloud_head_ref,
-                replay_ledger_path=Path(directory) / "replay.json",
-            ),
+            "sync",
+            "certify",
+            "--base-ref",
+            arguments.cloud_base_ref,
+            "--head-ref",
+            arguments.cloud_head_ref,
+            "--replay-ledger",
+            str(temporary / "replay.json"),
+            "--output",
+            str(output),
         )
+        report = json.loads(output.read_text(encoding="utf-8"))
+    after = _git(cloud, "status", "--porcelain", "--untracked-files=all")
+    if candidate.returncode != 0:
+        counts = report.get("counts", {})
+        raise AssertionError(
+            "pdd_cloud candidate command is red: "
+            + json.dumps(counts, sort_keys=True, separators=(",", ":"))
+        )
+    if before != after:
+        raise AssertionError("pdd_cloud candidate canary mutated the checkout")
     if report.get("ok") is not True:
         counts = report.get("counts", {})
         raise AssertionError(
@@ -606,6 +784,8 @@ SCENARIOS: dict[str, Callable[[argparse.Namespace], ScenarioResult]] = {
     "transactional-canonical-report": _transactional_report,
     "merge-group-base-movement-and-stale-repair": _merge_base_movement,
     "built-wheel-clean-environment": _built_wheel,
+    "candidate-wheel-public-report": _candidate_public_report,
+    "candidate-wheel-transaction-recovery": _candidate_transaction_recovery,
     "pdd-cloud-real-consumer-canary": _cloud_canary,
     "released-checker-owned-scenario-harness": _owned_harness,
 }
@@ -635,6 +815,7 @@ def main() -> None:
     parser.add_argument("--cloud-root", required=True)
     parser.add_argument("--cloud-base-ref", required=True)
     parser.add_argument("--cloud-head-ref", required=True)
+    parser.add_argument("--candidate-python", required=True)
     arguments = parser.parse_args()
     results = run_scenarios(arguments)
     payload = {

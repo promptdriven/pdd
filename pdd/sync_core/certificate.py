@@ -12,13 +12,56 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from .reporting import CanonicalReportOptions, build_canonical_report
-from .trust import AttestationSigner
+
+
+class CertificateSigner(Protocol):
+    """Minimal signer surface implemented by protected remote authorities."""
+
+    issuer: str
+
+    def public_key_bytes(self) -> bytes:
+        """Return the pinned Ed25519 public key."""
+
+    def sign_bytes(self, payload: bytes) -> str:
+        """Return a base64 Ed25519 signature from the remote authority."""
+
+
+class RemoteCertificateSigner:
+    """Invoke a protected KMS/keyless signer without loading private key bytes."""
+
+    def __init__(self, issuer: str, public_key: bytes, command: tuple[str, ...]) -> None:
+        if not issuer or len(public_key) != 32 or not command:
+            raise ValueError("remote certificate signer configuration is invalid")
+        self.issuer = issuer
+        self._public_key = public_key
+        self._command = command
+
+    def public_key_bytes(self) -> bytes:
+        """Return the protected expected public key."""
+        return self._public_key
+
+    def sign_bytes(self, payload: bytes) -> str:
+        """Sign canonical bytes remotely and verify the response locally."""
+        result = subprocess.run(
+            self._command,
+            input=payload,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise ValueError("remote certificate signer rejected the request")
+        try:
+            signature = base64.b64decode(result.stdout.strip(), validate=True)
+            Ed25519PublicKey.from_public_bytes(self._public_key).verify(signature, payload)
+        except (ValueError, InvalidSignature) as exc:
+            raise ValueError("remote certificate signer returned an invalid signature") from exc
+        return base64.b64encode(signature).decode("ascii")
 
 
 @dataclass(frozen=True)
@@ -71,6 +114,29 @@ class CheckerIdentity:
 
 
 @dataclass(frozen=True)
+class NightlyObservation:
+    """Externally observed temporal checks bound into a signed nightly row."""
+
+    complete_scan: bool
+    ledgers_deleted_before_scan: bool
+    normal_scan_writes: int
+    injected_canary_detected: bool
+    injected_canary_outcome: str
+    post_canary_rerun_writes: int
+
+    def payload(self) -> dict[str, bool | int | str]:
+        """Return the canonical signed observation payload."""
+        return {
+            "complete_scan": self.complete_scan,
+            "ledgers_deleted_before_scan": self.ledgers_deleted_before_scan,
+            "normal_scan_writes": self.normal_scan_writes,
+            "injected_canary_detected": self.injected_canary_detected,
+            "injected_canary_outcome": self.injected_canary_outcome,
+            "post_canary_rerun_writes": self.post_canary_rerun_writes,
+        }
+
+
+@dataclass(frozen=True)
 class GlobalCertificateOptions:
     """Trust and external evidence inputs for global certification."""
 
@@ -79,6 +145,7 @@ class GlobalCertificateOptions:
     nightly_ledger: Path
     required_nightly_streak: int = 7
     checker_identity: CheckerIdentity | None = None
+    nightly_observation: NightlyObservation | None = None
 
 
 def _canonical_bytes(payload: dict[str, Any]) -> bytes:
@@ -330,11 +397,28 @@ def _complete_nightly(
     return (
         required_counts <= counts.keys()
         and required_lifecycle <= lifecycle.keys()
+        and _nightly_observation_complete(row.get("nightly_observation"))
         and row.get("checker") == checker_identity.payload()
         and _nightly_lineage(row, targets)
         and _verify_certificate_integrity(
             row, public_key, expected_issuer=expected_issuer
         )
+    )
+
+
+def _nightly_observation_complete(payload: Any) -> bool:
+    """Validate the signed observations required for one temporal row."""
+    if not isinstance(payload, dict):
+        return False
+    return (
+        payload.get("complete_scan") is True
+        and payload.get("ledgers_deleted_before_scan") is True
+        and payload.get("normal_scan_writes") == 0
+        and not isinstance(payload.get("normal_scan_writes"), bool)
+        and payload.get("injected_canary_detected") is True
+        and payload.get("injected_canary_outcome") in {"REPAIRED", "BLOCKED"}
+        and payload.get("post_canary_rerun_writes") == 0
+        and not isinstance(payload.get("post_canary_rerun_writes"), bool)
     )
 
 
@@ -435,6 +519,7 @@ def _scan_predicate(
         and extra["pdd_cloud_vendored_sync_semantics"] == 0
         and lifecycle.post_repair_second_run_writes == 0
         and lifecycle.post_merge_tree_changes == 0
+        and extra["nightly_observation_complete"] == 1
     )
 
 
@@ -568,6 +653,7 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         "pdd_cloud_vendored_sync_semantics",
         "nightly_streak",
         "required_nightly_streak",
+        "nightly_observation_complete",
     }
     if any(
         not isinstance(counts_payload.get(name), int)
@@ -577,6 +663,10 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
     ):
         return False, False
     extra = {name: counts_payload[name] for name in extra_names}
+    if extra["nightly_observation_complete"] != int(
+        _nightly_observation_complete(body.get("nightly_observation"))
+    ):
+        return False, False
     expected_profile_coverage = (
         100
         if aggregate["managed_units"] > 0
@@ -605,7 +695,7 @@ def _build_global_certificate_from_targets(
     targets: tuple[RepositoryTarget, ...],
     options: GlobalCertificateOptions,
     *,
-    signer: AttestationSigner,
+    signer: CertificateSigner,
 ) -> dict[str, Any]:
     """Build and sign the complete cross-repository machine predicate."""
     if not targets:
@@ -641,12 +731,21 @@ def _build_global_certificate_from_targets(
             options.checker_identity,
         ),
         "required_nightly_streak": options.required_nightly_streak,
+        "nightly_observation_complete": int(
+            options.nightly_observation is not None
+            and _nightly_observation_complete(options.nightly_observation.payload())
+        ),
     }
     lifecycle = options.lifecycle_result
     body: dict[str, Any] = {
         "schema_version": 2,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checker": options.checker_identity.payload(),
+        "nightly_observation": (
+            options.nightly_observation.payload()
+            if options.nightly_observation is not None
+            else None
+        ),
         "repositories": reports,
         "counts": {
             **counts,
@@ -694,7 +793,7 @@ def build_global_certificate(
     targets: tuple[RepositoryTarget, ...],
     options: GlobalCertificateOptions,
     *,
-    signer: AttestationSigner,
+    signer: CertificateSigner,
 ) -> dict[str, Any]:
     """Build from independent exact-SHA clones and revalidate before signing."""
     if not targets:
@@ -791,17 +890,25 @@ def verify_global_certificate(
     )
 
 
-def signer_from_environment() -> AttestationSigner:
-    """Load certificate signing identity from protected runner environment."""
-    encoded = os.environ.get("PDD_CERTIFICATE_SIGNING_KEY")
-    issuer = os.environ.get("PDD_CERTIFICATE_ISSUER", "global-sync-checker")
-    if not encoded:
-        raise ValueError("PDD_CERTIFICATE_SIGNING_KEY is required")
+def signer_from_environment() -> CertificateSigner:
+    """Load a remote signing authority without accepting local private keys."""
+    if os.environ.get("PDD_CERTIFICATE_SIGNING_KEY"):
+        raise ValueError("local certificate signing keys are forbidden")
+    encoded = os.environ.get("PDD_CERTIFICATE_PUBLIC_KEY")
+    issuer = os.environ.get("PDD_CERTIFICATE_ISSUER", "")
+    command_raw = os.environ.get("PDD_CERTIFICATE_SIGNER_COMMAND", "")
+    if not encoded or not issuer or not command_raw:
+        raise ValueError("protected remote certificate signer is required")
     try:
-        key = base64.b64decode(encoded, validate=True)
-    except ValueError as exc:
-        raise ValueError("PDD_CERTIFICATE_SIGNING_KEY is malformed") from exc
-    return AttestationSigner(issuer, key)
+        public_key = base64.b64decode(encoded, validate=True)
+        command_payload = json.loads(command_raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("remote certificate signer configuration is malformed") from exc
+    if not isinstance(command_payload, list) or not all(
+        isinstance(item, str) and item for item in command_payload
+    ):
+        raise ValueError("remote certificate signer command is malformed")
+    return RemoteCertificateSigner(issuer, public_key, tuple(command_payload))
 
 
 def checker_identity_from_environment(

@@ -7,14 +7,13 @@ Implements fingerprint-based state analysis and deterministic operation selectio
 """
 
 import os
-import re
 import sys
 import glob
 import json
 import hashlib
 import subprocess
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -45,7 +44,6 @@ from pdd.construct_paths import (
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
-from pdd.get_language import get_language
 from pdd.template_expander import expand_template
 from pdd.architecture_registry import extract_modules
 from pdd.sync_order import extract_module_from_include
@@ -1728,58 +1726,57 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-_INCLUDE_PATTERN = re.compile(r'<include\b[^>]*>(.*?)</include>')
-_BACKTICK_INCLUDE_PATTERN = re.compile(r'```<([^>]*?)>```')
-
-
-def _resolve_include_path(include_ref: str, prompt_dir: Path) -> Optional[Path]:
-    """Resolve an <include> reference to an absolute Path."""
-    p = Path(include_ref)
-    if p.is_absolute() and p.exists():
-        return p
-    candidate = prompt_dir / include_ref
-    if candidate.exists():
-        return candidate
-    candidate = Path.cwd() / include_ref
-    if candidate.exists():
-        return candidate
-    return None
-
-
 def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
     Only includes dependencies that exist on disk.
     """
-    if not prompt_path.exists():
-        return {}
+    from pdd.continuous_sync import canonical_sync_enabled, repository_root
+    from pdd.sync_core.includes import (
+        IncludeGraphError,
+        build_include_closure,
+        parse_include_references,
+    )
+    from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
-    try:
-        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
-    except (IOError, OSError):
-        return {}
-
-    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
-    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
-
-    if not include_refs:
-        return {}
-
-    deps = {}
-    prompt_dir = prompt_path.parent
-    for ref in sorted(set(r.strip() for r in include_refs)):
-        dep_path = _resolve_include_path(ref, prompt_dir)
-        if dep_path and dep_path.exists():
-            dep_hash = calculate_sha256(dep_path)
-            if dep_hash:
+    if not canonical_sync_enabled(prompt_path):
+        if not prompt_path.exists():
+            return {}
+        try:
+            content = prompt_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return {}
+        dependencies: Dict[str, str] = {}
+        for reference in parse_include_references(content):
+            declared = Path(reference.path)
+            candidates = (
+                (declared,)
+                if declared.is_absolute()
+                else (prompt_path.parent / declared, Path.cwd() / declared)
+            )
+            dependency = next((item for item in candidates if item.is_file()), None)
+            if dependency is None:
+                continue
+            digest = calculate_sha256(dependency)
+            if digest:
                 try:
-                    rel_path = dep_path.relative_to(Path.cwd())
+                    key = str(dependency.relative_to(Path.cwd()))
                 except ValueError:
-                    rel_path = dep_path
-                deps[str(rel_path)] = dep_hash
-
-    return deps
+                    key = str(dependency)
+                dependencies[key] = digest
+        return dependencies
+    canonical_root = repository_root(prompt_path)
+    if not prompt_path.exists():
+        raise FileNotFoundError(prompt_path)
+    try:
+        prompt_relpath = prompt_path.resolve().relative_to(canonical_root)
+        closure = build_include_closure(
+            PurePosixPath(prompt_relpath.as_posix()), PathPolicy(canonical_root)
+        )
+    except (ValueError, IncludeGraphError, PathPolicyError) as exc:
+        raise ValueError(f"canonical include closure failed: {prompt_path}") from exc
+    return {item.relpath.as_posix(): item.digest for item in closure.artifacts}
 
 
 def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -1801,48 +1798,33 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
         return None
 
     try:
-        prompt_content = prompt_path.read_text(encoding='utf-8', errors='ignore')
-    except (IOError, OSError):
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+    except (IOError, OSError, UnicodeDecodeError):
         return None
+    from pdd.sync_core.includes import parse_include_references
 
-    # Try to find include refs in current prompt content
-    include_refs = _INCLUDE_PATTERN.findall(prompt_content)
-    include_refs += _BACKTICK_INCLUDE_PATTERN.findall(prompt_content)
-
-    # Resolve to actual paths
-    prompt_dir = prompt_path.parent
-    dep_paths = []
-    if include_refs:
-        for ref in sorted(set(r.strip() for r in include_refs)):
-            dep_path = _resolve_include_path(ref, prompt_dir)
-            if dep_path and dep_path.exists():
-                dep_paths.append(dep_path)
-    elif stored_deps:
-        # No include tags in prompt — use stored dependency paths from fingerprint
-        for dep_path_str in sorted(stored_deps.keys()):
-            dep_path = Path(dep_path_str)
-            if dep_path.exists():
-                dep_paths.append(dep_path)
-
-    if not dep_paths:
-        return calculate_sha256(prompt_path)
-
-    # Build composite hash: prompt bytes + sorted dependency contents
-    hasher = hashlib.sha256()
-    try:
-        with open(prompt_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hasher.update(chunk)
-    except (IOError, OSError):
-        return None
-
-    for dep_path in dep_paths:
+    references = parse_include_references(prompt_content)
+    if references:
         try:
-            with open(dep_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hasher.update(chunk)
-        except (IOError, OSError):
-            pass
+            dependencies = extract_include_deps(prompt_path)
+        except (FileNotFoundError, ValueError):
+            return None
+    else:
+        dependencies = dict(stored_deps or {})
+        for path, expected_digest in dependencies.items():
+            candidate = Path(path)
+            if not candidate.is_absolute():
+                candidate = Path.cwd() / candidate
+            if calculate_sha256(candidate) != expected_digest:
+                if not candidate.is_file():
+                    return None
+                dependencies[path] = calculate_sha256(candidate) or ""
+
+    hasher = hashlib.sha256()
+    hasher.update(prompt_path.read_bytes())
+    for path, digest in sorted(dependencies.items()):
+        hasher.update(path.encode("utf-8"))
+        hasher.update(digest.encode("ascii"))
 
     return hasher.hexdigest()
 

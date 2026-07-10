@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import os
 import re
@@ -299,25 +300,29 @@ def _discover_modules() -> List[Tuple[str, str, Any]]:
     """Discover (basename, language, prompt_path) tuples."""
     try:
         from pdd.user_story_tests import discover_prompt_files
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import prompt discovery") from exc
     try:
         prompt_files = discover_prompt_files()
-    except Exception:
-        return []
+    except Exception as exc:
+        raise RuntimeError("prompt discovery failed") from exc
 
     try:
         from pdd.operation_log import infer_module_identity
-    except ImportError:
-        return []
+    except ImportError as exc:
+        raise RuntimeError("cannot import canonical module identity") from exc
 
     out: List[Tuple[str, str, Any]] = []
+    failures: List[str] = []
     for entry in prompt_files:
         try:
             basename, language = infer_module_identity(str(entry))
-        except Exception:
+        except Exception as exc:
+            failures.append(f"{entry}: {exc}")
             continue
         out.append((basename, language, entry))
+    if failures:
+        raise RuntimeError("module identity failed: " + "; ".join(failures))
     return out
 
 
@@ -412,6 +417,8 @@ def detect_drift(
         changed_files = _get_git_changed_files(diff_base)
 
     discovered = _discover_modules()
+    if not discovered and parsed is None:
+        raise RuntimeError("no synchronization units were discovered")
     if parsed is not None:
         wanted = set(parsed)
         discovered = [t for t in discovered if t[0] in wanted]
@@ -459,8 +466,10 @@ def detect_drift(
             decision = sync_determine_operation(
                 basename, language, target_coverage=90.0, log_mode=True
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError(
+                f"classification failed for {basename}/{language}: {exc}"
+            ) from exc
 
         op = _extract_op(decision)
         if not op or op in ("nothing", "synced"):
@@ -1848,6 +1857,37 @@ def main(
     as_json: bool = False,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    from pdd.continuous_sync import canonical_sync_enabled
+
+    if canonical_sync_enabled(Path.cwd()) and not dry_run:
+        from pdd.sync_core import CanonicalReportOptions, build_canonical_report
+
+        base_ref = (
+            diff_base.split("...", 1)[0]
+            if diff_base and "..." in diff_base
+            else "HEAD"
+        )
+        try:
+            canonical = build_canonical_report(
+                _repo_root(),
+                CanonicalReportOptions(
+                    base_ref=base_ref,
+                    head_ref="HEAD",
+                    modules=tuple(modules or ()),
+                ),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            console.print(f"[red]canonical sync check failed: {exc}[/red]")
+            return 1
+        if not canonical["ok"]:
+            if as_json:
+                print(json.dumps(canonical, indent=2, sort_keys=True))
+            else:
+                console.print("[red]canonical sync predicate failed[/red]")
+                for error in canonical.get("errors", []):
+                    console.print(f"[red]- {error}[/red]")
+            return 1
+        return 0
     if dry_run:
         from pdd.continuous_sync import build_report
         import json as _json

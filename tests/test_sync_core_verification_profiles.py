@@ -145,7 +145,7 @@ def test_profile_cannot_invent_smaller_requirement_universe(tmp_path) -> None:
     assert profiles.coverage == 0.0
 
 
-def test_prompt_without_explicit_ids_uses_full_contract_digest(tmp_path) -> None:
+def test_prompt_without_explicit_ids_requires_human_attestation(tmp_path) -> None:
     root = _repository(tmp_path)
     prompt = root / "prompts/widget_python.prompt"
     prompt.write_text("Build a widget with validated input.\n")
@@ -157,5 +157,15 @@ def test_prompt_without_explicit_ids_uses_full_contract_digest(tmp_path) -> None
     (root / ".pdd/verification-profiles.json").write_text(json.dumps(profile))
     commit = _commit(root, "contract digest")
     profiles = load_verification_profiles(root, _manifest(root, commit, commit))
-    assert profiles.invalid_reasons == ()
-    assert profiles.coverage == 1.0
+    assert any("profile is incomplete" in item for item in profiles.invalid_reasons)
+    assert profiles.coverage == 0.0
+
+
+def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
+    root = _repository(tmp_path)
+    base = _commit(root, "unprofiled base")
+    (root / ".pdd/verification-profiles.json").write_text(json.dumps(_profile()))
+    head = _commit(root, "candidate profile")
+    profiles = load_verification_profiles(root, _manifest(root, base, head))
+    assert profiles.coverage == 0.0
+    assert any("lacks protected approval" in item for item in profiles.invalid_reasons)

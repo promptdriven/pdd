@@ -13,6 +13,11 @@ from typing import Optional
 
 import yaml
 
+from .decommission import (
+    DecommissionTombstone,
+    load_expected_registry,
+    load_tombstones,
+)
 from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id
 from .git_io import read_git_blob
 from .language import LanguageRegistry, LanguageRegistryError
@@ -66,17 +71,6 @@ class ManifestRefs:
 
     base: str
     head: str
-
-
-@dataclass(frozen=True)
-class DecommissionTombstone:
-    """Protected proof that a synchronized unit was deliberately removed."""
-
-    prompt_path: PurePosixPath
-    artifact_paths: tuple[PurePosixPath, ...]
-    rationale: str
-    owner: str
-    baseline_status: str
 
 
 @dataclass(frozen=True, order=True)
@@ -189,6 +183,50 @@ class UnitManifest:
             "expected_managed": [_unit_payload(item) for item in self.expected_managed],
             "invalid_reasons": self.invalid_reasons,
             "unaccounted": [path.as_posix() for path in self.unaccounted_tracked_paths],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def unit_digest(self, unit: ManifestUnit) -> str:
+        """Bind one unit to its own manifest slice and relevant policy."""
+        if unit not in self.units:
+            raise ValueError("unit is not part of this manifest")
+        owned_paths = {unit.unit_id.prompt_relpath, *unit.artifact_paths}
+        candidates = [
+            item
+            for item in self.candidates
+            if not _is_dynamic_canonical_state(item.candidate_id.artifact_relpath)
+            and (
+                item.unit_id == unit.unit_id
+                or item.candidate_id.artifact_relpath in owned_paths
+            )
+        ]
+        payload = {
+            "repository_id": self.repository_id,
+            "language_registry_digest": self.language_registry_digest,
+            "unit": {
+                "id": _unit_payload(unit.unit_id),
+                "present_in_base": unit.present_in_base,
+                "present_in_head": unit.present_in_head,
+                "artifact_paths": [path.as_posix() for path in unit.artifact_paths],
+                "tombstoned": unit.tombstoned,
+            },
+            "candidates": [
+                {
+                    "path": item.candidate_id.artifact_relpath.as_posix(),
+                    "role": item.candidate_id.role,
+                    "inventory": item.inventory.value,
+                    "in_base": item.in_base,
+                    "in_head": item.in_head,
+                    "provenance": item.ownership_provenance,
+                    "base_object_id": item.base_object_id,
+                    "base_git_mode": item.base_git_mode,
+                    "head_object_id": item.head_object_id,
+                    "head_git_mode": item.head_git_mode,
+                    "unit": _unit_payload(item.unit_id),
+                }
+                for item in candidates
+            ],
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
@@ -530,50 +568,6 @@ def _map_architecture_modules(
     return outputs, invalid
 
 
-def _tombstones(
-    root: Path,
-    ref: str,
-    entries: dict[PurePosixPath, GitTreeEntry],
-) -> dict[PurePosixPath, DecommissionTombstone]:
-    path = PurePosixPath(".pdd/sync-tombstones.json")
-    if path not in entries:
-        return {}
-    try:
-        payload = json.loads(_blob(root, ref, path))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ManifestError("protected sync tombstones are malformed") from exc
-    if not isinstance(payload, list):
-        raise ManifestError("protected sync tombstones must be a list")
-    tombstones: dict[PurePosixPath, DecommissionTombstone] = {}
-    for item in payload:
-        if not isinstance(item, dict):
-            raise ManifestError("each sync tombstone must be an object")
-        try:
-            prompt_path = PurePosixPath(item["prompt_path"])
-            artifacts = tuple(sorted(PurePosixPath(value) for value in item["artifact_paths"]))
-            tombstone = DecommissionTombstone(
-                prompt_path,
-                artifacts,
-                item["rationale"],
-                item["owner"],
-                item["baseline_status"],
-            )
-        except (KeyError, TypeError) as exc:
-            raise ManifestError("sync tombstone is missing required fields") from exc
-        if (
-            prompt_path.is_absolute()
-            or ".." in prompt_path.parts
-            or any(path.is_absolute() or ".." in path.parts for path in artifacts)
-            or not tombstone.rationale
-            or not tombstone.owner
-        ):
-            raise ManifestError("sync tombstone contains invalid protected fields")
-        if prompt_path in tombstones:
-            raise ManifestError("duplicate sync tombstone prompt identity")
-        tombstones[prompt_path] = tombstone
-    return tombstones
-
-
 def _manifest_unit(
     prompt_path: PurePosixPath,
     sources: _UnitSources,
@@ -601,8 +595,11 @@ def _manifest_unit(
             f"{head_ref}:{prompt_path.as_posix()}: removed managed unit lacks "
             "a complete IN_SYNC tombstone"
         )
-    elif tombstone and not removed:
-        reason = f"{head_ref}:{prompt_path.as_posix()}: tombstone targets a present unit"
+    elif tombstone and (
+        set(tombstone.artifact_paths) != base_artifacts | {prompt_path}
+        or tombstone.baseline_status != "IN_SYNC"
+    ):
+        reason = f"{head_ref}:{prompt_path.as_posix()}: decommission authorization is incomplete"
     unit = ManifestUnit(
         unit_id,
         prompt_path in sources.base_units,
@@ -617,6 +614,7 @@ def _manifest_units(
     sources: _UnitSources,
     tombstones: dict[PurePosixPath, DecommissionTombstone],
     head_ref: str,
+    registry_paths: set[PurePosixPath],
 ) -> tuple[list[ManifestUnit], list[str]]:
     """Assemble units and validate protected decommission transitions."""
     units: list[ManifestUnit] = []
@@ -629,7 +627,7 @@ def _manifest_units(
         units.append(unit)
         if reason:
             invalid.append(reason)
-    unknown = set(tombstones) - set(sources.base_units)
+    unknown = set(tombstones) - set(sources.base_units) - registry_paths
     invalid.extend(
         f"{head_ref}:{path.as_posix()}: tombstone has no base unit"
         for path in sorted(unknown)
@@ -712,6 +710,8 @@ def _is_protected_control(path: PurePosixPath) -> bool:
         or path
         in {
             PurePosixPath(".pdd/repository-id"),
+            PurePosixPath(".pdd/expected-managed.json"),
+            PurePosixPath(".pdd/sync-policy.json"),
             PurePosixPath(".pdd/verification-profiles.json"),
             PurePosixPath(".pdd/attestation-trust.json"),
             PurePosixPath(".pdd/sync-ownership.json"),
@@ -844,21 +844,65 @@ def _tree_manifest(
     )
 
 
+def _protected_expected_units(
+    units: list[ManifestUnit],
+    tombstones: dict[PurePosixPath, DecommissionTombstone],
+    registry: set[UnitId] | None,
+) -> tuple[set[UnitId], list[str]]:
+    """Apply the protected denominator and authorized removal transitions."""
+    discovered = {unit.unit_id for unit in units}
+    if registry is None:
+        return discovered, []
+    missing_registry = {
+        unit.unit_id
+        for unit in units
+        if unit.present_in_base and unit.unit_id not in registry
+    }
+    authorized_removed = {
+        item
+        for item in registry
+        if item.prompt_relpath in tombstones
+        and not any(unit.unit_id == item and unit.present_in_head for unit in units)
+    }
+    head_additions = {
+        unit.unit_id
+        for unit in units
+        if unit.present_in_head and not unit.present_in_base
+    }
+    expected = (registry - authorized_removed) | head_additions
+    unresolved = registry - discovered - authorized_removed
+    invalid = [
+        *(
+            f"{item.prompt_relpath}: protected expected-managed registry omits base unit"
+            for item in sorted(missing_registry)
+        ),
+        *(
+            f"{item.prompt_relpath}: expected managed unit is absent without authorization"
+            for item in sorted(unresolved)
+        ),
+    ]
+    return expected, invalid
+
+
 def _assemble_manifest(
     repository_id: str,
     language_registry_digest: str,
     base: _TreeManifest,
     head: _TreeManifest,
     tombstones: dict[PurePosixPath, DecommissionTombstone],
+    expected_registry: set[UnitId] | None,
     ownership_rules: tuple[OwnershipRule, ...],
 ) -> UnitManifest:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Combine parsed trees into the final candidate and unit partition."""
     invalid = list(base.invalid_reasons + head.invalid_reasons)
-    sources = _UnitSources(base.units, head.units, base.outputs, head.outputs)
-    units, tombstone_invalid = _manifest_units(sources, tombstones, head.ref)
+    units, tombstone_invalid = _manifest_units(
+        _UnitSources(base.units, head.units, base.outputs, head.outputs),
+        tombstones,
+        head.ref,
+        {item.prompt_relpath for item in (expected_registry or set())},
+    )
     invalid.extend(tombstone_invalid)
-    all_paths = set(base.entries) | set(head.entries)
     candidates, accounted, ownership_invalid = _candidate_records(
         _CandidateSources(
             repository_id,
@@ -870,15 +914,19 @@ def _assemble_manifest(
         )
     )
     invalid.extend(ownership_invalid)
+    expected, expected_invalid = _protected_expected_units(
+        units, tombstones, expected_registry
+    )
+    invalid.extend(expected_invalid)
     return UnitManifest(
         repository_id,
         language_registry_digest,
         ManifestRefs(base.ref, head.ref),
         tuple(candidates),
         tuple(sorted(units)),
-        tuple(sorted(unit.unit_id for unit in units)),
+        tuple(sorted(expected)),
         tuple(sorted(invalid)),
-        tuple(sorted(all_paths - accounted)),
+        tuple(sorted((set(base.entries) | set(head.entries)) - accounted)),
     )
 
 
@@ -918,12 +966,21 @@ def build_unit_manifest(
         ownership,
         set(base.entries),
     )
-    tombstones = _tombstones(repository_root, head_ref, head.entries)
+    try:
+        tombstones = load_tombstones(repository_root, base_ref)
+        load_tombstones(repository_root, head_ref)
+        expected_registry = load_expected_registry(
+            repository_root, base_ref, repository_id
+        )
+        load_expected_registry(repository_root, head_ref, repository_id)
+    except ValueError as exc:
+        raise ManifestError(str(exc)) from exc
     return _assemble_manifest(
         repository_id,
         language_registry.digest(),
         base,
         head,
         tombstones,
+        expected_registry,
         ownership,
     )

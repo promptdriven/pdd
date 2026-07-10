@@ -243,20 +243,19 @@ class TestDetectDrift:
         mock_sync.assert_not_called()
 
     def test_infer_identity_error_skips_module(self):
-        """Modules that fail identity inference are skipped gracefully."""
+        """Modules that fail identity inference fail closed."""
         mock_files = [Path("prompts/bad_python.prompt")]
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=ValueError("bad")), \
              patch("pdd.sync_determine_operation.sync_determine_operation") as mock_sync:
-            prompt_drifts, example_drifts = detect_drift()
+            with pytest.raises(RuntimeError, match="module identity failed"):
+                detect_drift()
 
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
         mock_sync.assert_not_called()
 
-    def test_sync_determine_error_skips_module(self):
-        """Modules that fail sync_determine_operation are skipped."""
+    def test_sync_determine_error_fails_closed(self):
+        """Modules that fail sync_determine_operation block CI."""
         mock_files = [Path("prompts/mod_python.prompt")]
 
         def fake_infer(path):
@@ -265,10 +264,8 @@ class TestDetectDrift:
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=mock_files), \
              patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
              patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=RuntimeError("fail")):
-            prompt_drifts, example_drifts = detect_drift()
-
-        assert len(prompt_drifts) == 0
-        assert len(example_drifts) == 0
+            with pytest.raises(RuntimeError, match="classification failed"):
+                detect_drift()
 
 
 # ---------------------------------------------------------------------------

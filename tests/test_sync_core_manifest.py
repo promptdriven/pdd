@@ -91,8 +91,7 @@ def test_removed_prompt_remains_expected_and_requires_tombstone(tmp_path) -> Non
 
 def test_protected_tombstone_accounts_for_removed_unit(tmp_path) -> None:
     root = _repository(tmp_path)
-    base = _commit(root, "base")
-    (root / "prompts/widget_python.prompt").unlink()
+    _commit(root, "base")
     tombstone = root / ".pdd/sync-tombstones.json"
     tombstone.write_text(
         json.dumps(
@@ -110,6 +109,8 @@ def test_protected_tombstone_accounts_for_removed_unit(tmp_path) -> None:
             ]
         )
     )
+    base = _commit(root, "authorize decommission")
+    (root / "prompts/widget_python.prompt").unlink()
     head = _commit(root, "decommission widget")
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
     assert not any("lacks a complete" in reason for reason in manifest.invalid_reasons)
@@ -119,8 +120,7 @@ def test_protected_tombstone_accounts_for_removed_unit(tmp_path) -> None:
 
 def test_incomplete_tombstone_cannot_reduce_expected_managed(tmp_path) -> None:
     root = _repository(tmp_path)
-    base = _commit(root, "base")
-    (root / "prompts/widget_python.prompt").unlink()
+    _commit(root, "base")
     (root / ".pdd/sync-tombstones.json").write_text(
         json.dumps(
             [
@@ -134,10 +134,60 @@ def test_incomplete_tombstone_cannot_reduce_expected_managed(tmp_path) -> None:
             ]
         )
     )
+    base = _commit(root, "attempt decommission authorization")
+    (root / "prompts/widget_python.prompt").unlink()
     head = _commit(root, "incomplete tombstone")
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
     assert len(manifest.expected_managed) == 1
     assert any("complete IN_SYNC tombstone" in item for item in manifest.invalid_reasons)
+
+
+def test_protected_registry_preserves_and_authorizes_denominator_transition(
+    tmp_path,
+) -> None:
+    root = _repository(tmp_path)
+    _commit(root, "base")
+    (root / ".pdd/expected-managed.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "units": [
+                    {
+                        "prompt_path": "prompts/widget_python.prompt",
+                        "language_id": "python",
+                    }
+                ],
+            }
+        )
+    )
+    (root / ".pdd/sync-tombstones.json").write_text(
+        json.dumps(
+            [
+                {
+                    "prompt_path": "prompts/widget_python.prompt",
+                    "artifact_paths": [
+                        "prompts/widget_python.prompt",
+                        "src/widget.py",
+                    ],
+                    "rationale": "Widget was deliberately retired",
+                    "owner": "sync-owner@example.com",
+                    "baseline_status": "IN_SYNC",
+                }
+            ]
+        )
+    )
+    authorized = _commit(root, "protect decommission authorization")
+    (root / "prompts/widget_python.prompt").unlink()
+    (root / "src/widget.py").unlink()
+    (root / "architecture.json").write_text("[]\n")
+    removed = _commit(root, "remove authorized widget")
+
+    transition = build_unit_manifest(root, base_ref=authorized, head_ref=removed)
+    stable = build_unit_manifest(root, base_ref=removed, head_ref=removed)
+    assert transition.expected_managed == ()
+    assert stable.expected_managed == ()
+    assert transition.invalid_reasons == ()
+    assert stable.invalid_reasons == ()
 
 
 def test_architecture_mapping_prefers_project_prompt_root_over_duplicate_leaf(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import subprocess
 import uuid
@@ -18,6 +19,7 @@ from .evidence_store import (
     load_trust_policy,
 )
 from .fingerprint_store import FingerprintStore, encode_fingerprint
+from .git_io import resolve_git_commit
 from .manifest import build_unit_manifest
 from .runner import (
     TRUSTED_RUNNER_VERSION,
@@ -35,7 +37,7 @@ from .transaction import (
     TransactionPhase,
     TransactionResult,
 )
-from .trust import AttestationBinding, AttestationSigner
+from .trust import AttestationBinding, AttestationIssuer, RemoteAttestationSigner
 from .types import (
     EvidenceOutcome,
     FingerprintProvenance,
@@ -64,8 +66,9 @@ def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     from ..continuous_sync import canonical_sync_enabled, repository_root
 
     start = Path(paths.get("prompt", Path.cwd())) if paths else Path.cwd()
-    root = repository_root(start)
-    return root if canonical_sync_enabled(root) else None
+    if not canonical_sync_enabled(start):
+        return None
+    return repository_root(start)
 
 
 def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
@@ -95,30 +98,25 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
     return True
 
 
-def _git_sha(root: Path, ref: str) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise ValueError(f"cannot resolve Git commit: {ref}")
-    return result.stdout.strip()
-
-
-def attestation_signer_from_environment() -> AttestationSigner:
-    """Load the protected semantic-evidence signing identity."""
-    encoded = os.environ.get("PDD_ATTESTATION_SIGNING_KEY")
-    issuer = os.environ.get("PDD_ATTESTATION_ISSUER", "trusted-sync-runner")
-    if not encoded:
-        raise ValueError("PDD_ATTESTATION_SIGNING_KEY is required")
+def attestation_signer_from_environment() -> AttestationIssuer:
+    """Load a remote evidence authority without accepting local private keys."""
+    if os.environ.get("PDD_ATTESTATION_SIGNING_KEY"):
+        raise ValueError("local attestation signing keys are forbidden")
+    encoded = os.environ.get("PDD_ATTESTATION_PUBLIC_KEY")
+    issuer = os.environ.get("PDD_ATTESTATION_ISSUER", "")
+    command_raw = os.environ.get("PDD_ATTESTATION_SIGNER_COMMAND", "")
+    if not encoded or not issuer or not command_raw:
+        raise ValueError("protected remote attestation signer is required")
     try:
-        key = base64.b64decode(encoded, validate=True)
-    except ValueError as exc:
-        raise ValueError("PDD_ATTESTATION_SIGNING_KEY is malformed") from exc
-    return AttestationSigner(issuer, key)
+        public_key = base64.b64decode(encoded, validate=True)
+        command_payload = json.loads(command_raw)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("remote attestation signer configuration is malformed") from exc
+    if not isinstance(command_payload, list) or not all(
+        isinstance(item, str) and item for item in command_payload
+    ):
+        raise ValueError("remote attestation signer command is malformed")
+    return RemoteAttestationSigner(issuer, public_key, tuple(command_payload))
 
 
 def _artifact_writes(root: Path, snapshot) -> tuple[PlannedWrite, ...]:
@@ -222,16 +220,16 @@ def finalize_unit(
     *,
     base_ref: str,
     head_ref: str,
-    signer: AttestationSigner,
+    signer: AttestationIssuer,
     config: RunnerConfig = RunnerConfig(),
     replay_ledger_path: Path | None = None,
 ) -> FinalizeResult:
     # pylint: disable=too-many-arguments,too-many-locals
     """Validate one complete unit and atomically finalize all trusted state."""
     repository_root = Path(root).resolve()
-    base_sha = _git_sha(repository_root, base_ref)
-    head_sha = _git_sha(repository_root, head_ref)
-    if _git_sha(repository_root, "HEAD") != head_sha:
+    base_sha = resolve_git_commit(repository_root, base_ref)
+    head_sha = resolve_git_commit(repository_root, head_ref)
+    if resolve_git_commit(repository_root, "HEAD") != head_sha:
         raise ValueError("canonical finalization requires HEAD at the checked SHA")
     manifest = build_unit_manifest(
         repository_root, base_ref=base_sha, head_ref=head_sha

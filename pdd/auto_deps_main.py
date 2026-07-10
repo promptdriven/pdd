@@ -254,12 +254,18 @@ def auto_deps_main(
                             model=model_name,
                         )
                     except Exception as fp_exc:
+                        from .sync_core.finalize import CanonicalFinalizationError
+                        if isinstance(fp_exc, CanonicalFinalizationError):
+                            raise
                         if not quiet:
                             console.print(
                                 f"[yellow]Warning: Failed to save fingerprint for "
                                 f"{basename}_{language}: {fp_exc}[/yellow]"
                             )
             except Exception as meta_exc:
+                from .sync_core.finalize import CanonicalFinalizationError
+                if isinstance(meta_exc, CanonicalFinalizationError):
+                    raise
                 # Never mask a successful auto-deps result on metadata errors
                 if not quiet:
                     console.print(
@@ -272,6 +278,9 @@ def auto_deps_main(
         # Re-raise to allow orchestrators (e.g. pdd sync) to stop the loop
         raise
     except Exception as exc:
+        from .sync_core.finalize import CanonicalFinalizationError
+        if isinstance(exc, CanonicalFinalizationError):
+            raise
         if not quiet:
             console.print(f"[red]Error in auto-deps: {exc}[/red]")
         return "", 0.0, f"Error: {exc}"

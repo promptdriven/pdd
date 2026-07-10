@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +18,7 @@ from ..sync_core import (
     FingerprintRecord,
     FingerprintStore,
     GlobalCertificateOptions,
+    NightlyObservation,
     PlannedWrite,
     RepositoryTarget,
     SemanticStatus,
@@ -35,6 +35,7 @@ from ..sync_core import (
     run_lifecycle_matrix,
     signer_from_environment,
 )
+from ..sync_core.git_io import resolve_git_commit
 from .. import __version__
 
 
@@ -93,17 +94,48 @@ def _global_targets(
     return tuple(targets)
 
 
-def _head_sha(root: Path) -> str:
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
+def _load_nightly_observation(path: Path | None) -> NightlyObservation | None:
+    """Load protected workflow observations without accepting schema drift."""
+    if path is None:
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "complete_scan",
+        "ledgers_deleted_before_scan",
+        "normal_scan_writes",
+        "injected_canary_detected",
+        "injected_canary_outcome",
+        "post_canary_rerun_writes",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ValueError("nightly observation schema is invalid")
+    if (
+        not all(
+            isinstance(payload[name], bool)
+            for name in (
+                "complete_scan",
+                "ledgers_deleted_before_scan",
+                "injected_canary_detected",
+            )
+        )
+        or not all(
+            isinstance(payload[name], int)
+            and not isinstance(payload[name], bool)
+            and payload[name] >= 0
+            for name in ("normal_scan_writes", "post_canary_rerun_writes")
+        )
+        or payload["injected_canary_outcome"] not in {"REPAIRED", "BLOCKED"}
+    ):
+        raise ValueError("nightly observation types are invalid")
+    observation = NightlyObservation(
+        payload["complete_scan"],
+        payload["ledgers_deleted_before_scan"],
+        payload["normal_scan_writes"],
+        payload["injected_canary_detected"],
+        payload["injected_canary_outcome"],
+        payload["post_canary_rerun_writes"],
     )
-    if result.returncode != 0 or not result.stdout.strip():
-        raise ValueError("cannot resolve repository HEAD")
-    return result.stdout.strip()
+    return observation
 
 
 @click.command("certify")
@@ -124,6 +156,11 @@ def _head_sha(root: Path) -> str:
     "--nightly-ledger",
     type=click.Path(path_type=Path, dir_okay=False),
     envvar="PDD_NIGHTLY_CERTIFICATE_LEDGER",
+)
+@click.option(
+    "--nightly-observation",
+    type=click.Path(path_type=Path, dir_okay=False),
+    envvar="PDD_NIGHTLY_OBSERVATION",
 )
 @click.option("--output", type=click.Path(path_type=Path, dir_okay=False))
 @click.pass_context
@@ -175,6 +212,11 @@ def certify(
                     replay_ledger_root=replay_ledger,
                     lifecycle_result=run_lifecycle_matrix(
                         targets[0].path,
+                        candidate_wheel=(
+                            Path(os.environ["PDD_CANDIDATE_WHEEL"])
+                            if "PDD_CANDIDATE_WHEEL" in os.environ
+                            else None
+                        ),
                         cloud_root=targets[1].path,
                         cloud_base_ref=targets[1].base_ref,
                         cloud_head_ref=targets[1].head_ref,
@@ -186,6 +228,9 @@ def certify(
                     ),
                     required_nightly_streak=int(options["require_nightly_streak"]),
                     checker_identity=checker_identity_from_environment(),
+                    nightly_observation=_load_nightly_observation(
+                        options.get("nightly_observation")
+                    ),
                 ),
                 signer=signer_from_environment(),
             )
@@ -241,7 +286,7 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     """Record reviewed current bytes as CURRENT plus semantic UNKNOWN."""
     ctx.ensure_object(dict)
     root = Path.cwd().resolve()
-    head = _head_sha(root)
+    head = resolve_git_commit(root, "HEAD")
     manifest = build_unit_manifest(root, base_ref=head, head_ref=head)
     wanted = PurePosixPath(module)
     matches = [

@@ -98,6 +98,9 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
             }
         )
     )
+    (root / ".pdd/sync-policy.json").write_text(
+        json.dumps({"schema_version": 1, "enforcement": "active"})
+    )
     (root / ".pdd/verification-profiles.json").write_text(
         json.dumps(
             {
@@ -111,7 +114,7 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
                                 "obligation_id": "pytest",
                                 "kind": "test",
                                 "validator_id": "pytest",
-                                "validator_config_digest": "pytest-v1",
+                                "validator_config_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                                 "requirement_ids": ["REQ-1"],
                                 "artifact_paths": ["tests/test_widget.py"],
                             }
@@ -319,6 +322,18 @@ def test_nested_config_cannot_bypass_repository_canonical_finalizer(
         head_ref="HEAD",
         signer=signer,
     )
+
+
+def test_repository_identity_does_not_activate_enforcement_without_policy(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    policy = root / ".pdd/sync-policy.json"
+    policy.unlink()
+    _git(root, "add", "-u", ".pdd/sync-policy.json")
+    _git(root, "commit", "-q", "-m", "remove activation policy")
+
+    assert canonical_sync_enabled(root) is False
 
 
 def test_code_drift_cannot_reuse_old_attestation(tmp_path) -> None:

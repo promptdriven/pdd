@@ -190,6 +190,11 @@ def _effective_profile(
     head: _ProfileInput | None,
 ) -> tuple[VerificationProfile, list[str]]:
     invalid: list[str] = []
+    if base is None and head is not None:
+        invalid.append(
+            f"{unit_id.prompt_relpath}: candidate-only profile lacks protected approval"
+        )
+        head = None
     base_requirements = set(base.requirements if base else ())
     head_requirements = set(head.requirements if head else ())
     if base_requirements - head_requirements:

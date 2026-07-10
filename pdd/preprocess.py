@@ -6,13 +6,15 @@ import base64
 import subprocess
 from typing import Any, List, Optional, Tuple, Union
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from rich.console import Console
 from rich.panel import Panel
 from rich.markup import escape
 from rich.traceback import install
 from .firecrawl_cache import get_firecrawl_cache
 from pdd.path_resolution import get_default_resolver
+from pdd.sync_core.includes import include_paths
+from pdd.sync_core.path_policy import PathPolicy
 
 install()
 console = Console()
@@ -278,33 +280,7 @@ def compute_user_intent_paths(text: str) -> set:
     `compute_user_intent_paths(original_prompt)` with the result of
     `compute_user_intent_paths(_expand_vars(original_prompt, env_vars))`.
     """
-    paths: set = set()
-    if not text:
-        return paths
-    # Match the full `<include>` grammar that `process_include_tags` accepts —
-    # body form (with optional attrs) and self-closing form. Both forms can
-    # carry a `path="..."` attribute, which takes precedence over body content.
-    include_pattern = (
-        r'<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>'
-        r'|<include(?P<attrs_self>\s[^>]*?)/>'
-    )
-    for m in re.finditer(include_pattern, text, flags=re.DOTALL):
-        attrs = _parse_attrs(m.group('attrs') or m.group('attrs_self') or "")
-        path_attr = attrs.get('path')
-        body = m.group('content') if m.group('content') is not None else ""
-        p = (path_attr or body).strip()
-        if p:
-            paths.add(p)
-    for m in re.finditer(r'<include-many(?:\s[^>]*+)?>(.*?)</include-many>', text, flags=re.DOTALL):
-        inner = m.group(1)
-        for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
-            if raw:
-                paths.add(raw)
-    for m in re.finditer(r"```<([^>]*+)>```", text):
-        p = m.group(1).strip()
-        if p:
-            paths.add(p)
-    return paths
+    return include_paths(text)
 
 
 def preprocess(
@@ -456,9 +432,16 @@ def preprocess(
 
 def get_file_path(file_name: str) -> str:
     resolver = get_default_resolver()
-    resolved = resolver.resolve_include(file_name)
-    if not Path(file_name).is_absolute() and resolved == resolver.cwd / file_name:
-        return os.path.join("./", file_name)
+    project_root = resolver.resolve_project_root()
+    relpath = Path(file_name)
+    if relpath.is_absolute():
+        raise ValueError(f"absolute include path is not allowed: {file_name}")
+    normalized = PurePosixPath(os.path.normpath(file_name).replace(os.sep, "/"))
+    resolved = PathPolicy(project_root).resolve(
+        normalized, allow_missing=True
+    ).canonical_path
+    if project_root.resolve() == Path.cwd().resolve():
+        return os.path.join("./", normalized.as_posix())
     return str(resolved)
 
 
