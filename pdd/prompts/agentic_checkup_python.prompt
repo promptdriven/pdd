@@ -63,6 +63,7 @@ Entry point for the agentic checkup workflow. Accepts an optional GitHub issue U
 
 12. Otherwise dispatch to `run_agentic_checkup_orchestrator()` with all gathered context. Pass the effective issue URL (the real URL when `has_issue`, else `""`), the issue content/title (empty strings in no-issue mode), and `repo_owner`/`repo_name`/`issue_number` (aliased to the PR in no-issue mode). Include `pr_url`/`pr_owner`/`pr_repo`/`pr_number` when in PR mode (else `None`) and `start_step_override` when supplied. When loading local context, use the explicit `cwd` argument if provided, otherwise fall back to `Path.cwd()`.
 13. Post error comment on GitHub issue if the legacy orchestrator raises an exception
+14. Generated examples MUST treat the returned `message` as potentially sensitive provider/GitHub diagnostic data. Bind it to an intentionally unused name such as `_message` and never print or log its contents; result summaries may emit a static `"Message: omitted from logs"` marker instead.
 
 % Helper Functions
 - `_extract_json_from_text(text: str) -> Optional[Dict[str, Any]]`: extract the LAST top-level JSON object from agent output. Use `json.JSONDecoder.raw_decode` starting at every `{` and keep the LAST successfully-parsed dict. This honors the Step 7 prompt contract ("The JSON report MUST be the last output") so earlier intermediate-reasoning blocks — fenced or unfenced — never mask the final verdict. Returning the FIRST JSON block silently bypassed the PR-mode gate when an interior summary block looked clean (round-5 Finding 2).

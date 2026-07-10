@@ -2212,9 +2212,12 @@ def _maybe_run_fresh_final_review_override(
             f"Fresh final reviewer {role} raised and could not complete: "
             f"{scrubbed_exc}"
         )
+        # Do not emit exception text here. Provider exceptions can contain
+        # credentials, and custom scrubbers are not a security boundary for
+        # process logs. The scrubbed detail remains available in loop state.
         print(
-            f"Warning: fresh final review override ({role}) failed: "
-            f"{scrubbed_exc}",
+            "Warning: fresh final review override failed; "
+            "exception details omitted from stderr.",
             file=sys.stderr,
         )
 
@@ -2372,10 +2375,13 @@ def _maybe_write_agentic_artifact(
         )
         print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
         return str(out_path)
-    except Exception as exc:  # pragma: no cover - defensive: never break the loop
-        scrubbed_exc = _scrub_secrets(str(exc))
+    except Exception:  # pragma: no cover - defensive: never break the loop
+        # Exception strings from artifact libraries or paths can contain
+        # credentials. Keep stderr content static instead of relying on a
+        # best-effort scrubber at the logging sink.
         print(
-            f"Warning: failed to write agentic checkup artifact: {scrubbed_exc}",
+            "Warning: failed to write agentic checkup artifact; "
+            "exception details omitted from stderr.",
             file=sys.stderr,
         )
         return None
@@ -2438,11 +2444,12 @@ def write_final_gate_fallback_artifact(
         )
         print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
         return str(out_path)
-    except Exception as exc:  # pragma: no cover - defensive: never break the gate
-        scrubbed_exc = _scrub_secrets(str(exc))
+    except Exception:  # pragma: no cover - defensive: never break the gate
+        # This path is commonly reached from hosted configuration. Never send
+        # exception text to process logs, even after best-effort redaction.
         print(
-            "Warning: failed to write agentic checkup fallback artifact: "
-            f"{scrubbed_exc}",
+            "Warning: failed to write agentic checkup fallback artifact; "
+            "exception details omitted from stderr.",
             file=sys.stderr,
         )
         return None

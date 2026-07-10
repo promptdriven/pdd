@@ -14361,7 +14361,9 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys)
     assert artifact.verdict.decision == "block"
 
     captured = capsys.readouterr()
-    assert "provider exploded" in captured.err
+    assert "provider exploded" in state.stop_reason
+    assert "provider exploded" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
 
 
 def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
@@ -14396,6 +14398,8 @@ def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
     assert secret not in state.stop_reason
     assert secret not in captured.err
     assert "REDACTED" in state.stop_reason
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
 
 
 def test_agentic_artifact_writer_exceptions_scrub_secrets(
@@ -14421,7 +14425,8 @@ def test_agentic_artifact_writer_exceptions_scrub_secrets(
 
     captured = capsys.readouterr()
     assert secret not in captured.err
-    assert "REDACTED" in captured.err
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
 
 
 def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
@@ -14438,7 +14443,8 @@ def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert secret not in captured.err
-    assert "REDACTED" in captured.err
+    assert "REDACTED" not in captured.err
+    assert "exception details omitted from stderr" in captured.err
 
 
 def _step5_failed_evidence():

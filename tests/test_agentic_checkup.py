@@ -94,7 +94,6 @@ class TestHostedAgenticReviewers:
         )
 
         assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
-
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         assert (
             _hosted_agentic_reviewers("codex,claude")
@@ -118,6 +117,23 @@ class TestHostedAgenticReviewers:
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini,codex")
 
         assert _hosted_agentic_reviewers("codex,claude") == "codex,claude"
+
+
+@pytest.mark.parametrize(
+    "example_path",
+    [
+        Path("context/agentic_checkup_example.py"),
+        Path("examples/agentic_checkup_example.py"),
+    ],
+)
+def test_agentic_checkup_examples_do_not_log_returned_message(example_path):
+    """Returned diagnostics may contain credentials and must stay out of logs."""
+    source = example_path.read_text(encoding="utf-8")
+    print_lines = [line for line in source.splitlines() if "print(" in line]
+
+    assert all("{message}" not in line for line in print_lines)
+    assert all("{_message}" not in line for line in print_lines)
+    assert 'print("Message    : omitted from logs")' in source
 
 
 # ---------------------------------------------------------------------------
