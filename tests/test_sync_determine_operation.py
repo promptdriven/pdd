@@ -1602,6 +1602,32 @@ def _write_nested_architecture_project(
     )
 
 
+def test_get_pdd_file_paths_matches_prompt_root_symlink_alias(tmp_path, monkeypatch):
+    """A trusted prompt-root symlink keeps architecture ownership identity."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="pdd/prompts",
+        architecture_filename="credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    try:
+        (tmp_path / "prompts").symlink_to("pdd/prompts", target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    ).resolve(strict=False)
+
+
 def test_get_pdd_file_paths_architecture_filepath_with_custom_prompt_root_and_outputs(
     tmp_path,
     monkeypatch,

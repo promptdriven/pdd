@@ -928,15 +928,28 @@ def _get_filepath_from_architecture(
                 # Canonical filepath-derived names need not exist physically as
                 # prompt paths, so absence of an owner remains eligible.
                 return True
+            # ``owners`` were obtained by contained directory walks above. Map
+            # the prompt's validated root-relative identity across trusted roots
+            # so aliases such as ``prompts -> pdd/prompts`` compare correctly.
+            # Keep this lexical: resolving caller-influenced ``prompt_path``
+            # here would turn it into a filesystem sink.
             try:
-                expected = os.path.normcase(str(prompt_path.resolve(strict=False)))
-                owner_keys = {
-                    os.path.normcase(str(owner.resolve(strict=False)))
-                    for owner in owners
-                }
-            except (OSError, RuntimeError):
+                relative_prompt = prompt_path.relative_to(prompts_root)
+            except ValueError:
                 return False
-            return owner_keys == {expected}
+            if relative_prompt.is_absolute() or ".." in relative_prompt.parts:
+                return False
+            expected_keys = {
+                os.path.normcase(
+                    os.path.abspath(os.path.normpath(root.joinpath(relative_prompt)))
+                )
+                for root in roots
+            }
+            owner_keys = {
+                os.path.normcase(os.path.abspath(os.path.normpath(owner)))
+                for owner in owners
+            }
+            return owner_keys.issubset(expected_keys)
 
         # Try exact filename match first
         for module in modules:
