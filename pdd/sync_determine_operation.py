@@ -46,6 +46,7 @@ from pdd.construct_paths import (
 from pdd.content_selector import (
     _contained_in_root,
     _pins_test_output_location,
+    _validated_project_path,
     configured_test_output_pinned,
     resolve_test_output_path,
 )
@@ -1792,16 +1793,23 @@ def _adopt_collocated_test(result: Dict[str, Path], *, user_pinned: bool) -> Dic
         adopted = resolve_test_output_path(
             code_path, derived_test, user_pinned=user_pinned
         )
-        adopted_resolved = Path(adopted).resolve()
+        root_resolved = Path.cwd().resolve()
+        adopted_resolved = _validated_project_path(adopted, root=root_resolved)
+        if adopted_resolved is None:
+            return result
         # Defense in depth (CWE-022, PR #1914 CodeQL): the adopted path becomes
         # the generated-test WRITE target (result['test']/['test_files']); only
         # accept it when it stays inside the working tree.
-        if not _contained_in_root(adopted_resolved, Path.cwd().resolve()):
+        if not _contained_in_root(adopted_resolved, root_resolved):
             return result
-        if adopted_resolved == Path(derived_test).resolve():
+        derived_resolved = _validated_project_path(
+            derived_test,
+            root=root_resolved,
+        )
+        if derived_resolved is not None and adopted_resolved == derived_resolved:
             return result
-        result['test'] = adopted
-        result['test_files'] = [adopted]
+        result['test'] = adopted_resolved
+        result['test_files'] = [adopted_resolved]
         return result
     except Exception:  # pylint: disable=broad-except
         return result
