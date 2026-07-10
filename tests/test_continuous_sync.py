@@ -295,3 +295,20 @@ def test_cli_json_basename(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert [u["basename"] for u in payload["units"]] == ["alpha"]
     assert payload["units"][0]["status"] == "current"
+
+
+def test_cli_no_match_target_errors(tmp_path, monkeypatch):
+    """A targeted reconcile that matches no unit must FAIL, not silently pass with 0
+    units (#1969 review pass 2 finding 3 — a typo would otherwise exit 0 / ok:true)."""
+    root = _make_repo(tmp_path)
+    _write_unit(root, "alpha")
+    cs.stamp_units(cs.resolve_units(root), root)
+    monkeypatch.chdir(root)
+
+    for args in (["definitely_not_a_unit", "--check"], ["definitely_not_a_unit", "--check", "--json"]):
+        result = CliRunner().invoke(reconcile, args)
+        assert result.exit_code != 0, result.output
+        assert "No PDD unit matches" in result.output
+    # A real target still works.
+    ok = CliRunner().invoke(reconcile, ["alpha", "--check"])
+    assert ok.exit_code == 0, ok.output

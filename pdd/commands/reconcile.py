@@ -10,7 +10,13 @@ from typing import Optional
 
 import click
 
-from ..continuous_sync import CheckResult, build_report, project_root, run_check
+from ..continuous_sync import (
+    CheckResult,
+    build_report,
+    project_root,
+    resolve_units,
+    run_check,
+)
 
 
 def _pre_commit_hook_path(root: Path) -> Path:
@@ -167,6 +173,15 @@ def reconcile(
         ctx.obj["_suppress_result_summary"] = True
     target = basename or module_name
     modules = [target] if target else None
+
+    # A targeted run that matches no unit must fail loudly, not silently pass with
+    # 0 units (#1969 review pass 2 finding 3: a typo'd basename would otherwise
+    # exit 0 / ok:true and skip the intended unit in CI/runbook checks).
+    if target is not None and not resolve_units(project_root(), modules=modules):
+        raise click.ClickException(
+            f"No PDD unit matches '{target}'. Run `pdd reconcile` (no argument) to "
+            "verify all units, or check the basename / --module spelling."
+        )
 
     if check:
         result = run_check(modules=modules)

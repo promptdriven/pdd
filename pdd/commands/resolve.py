@@ -116,14 +116,16 @@ def _accept_current(
         return 0
     if before_class != "CONFLICT" and not force:
         moved = ", ".join(before_changes) or "no tracked artifacts"
-        suffix = "" if language.lower() == "python" else f" --language {language}"
+        # Only `pdd resolve` takes --language; pdd sync/update/reconcile do not, and
+        # `pdd update` targets the code FILE path (#1969 review pass 2 finding 1).
+        code_target = str(paths.get("code")) if paths.get("code") else basename
         if before_class == "UNBASELINED":
-            guidance = f"`pdd reconcile {basename}{suffix} --backfill` to baseline it"
+            guidance = f"`pdd reconcile {basename} --backfill` to baseline it"
         else:  # DRIFT — single-sided (code-only or prompt-only)
             guidance = (
-                f"`pdd update {basename}{suffix}` (back-propagate code->prompt) or "
-                f"`pdd sync {basename}{suffix}` (regenerate) to reconcile the stale "
-                f"side, or `pdd reconcile {basename}{suffix} --heal` to stamp only"
+                f"`pdd update {code_target}` (back-propagate code->prompt) or "
+                f"`pdd sync {basename}` (regenerate) to reconcile the stale side, or "
+                f"`pdd reconcile {basename} --heal` to stamp only"
             )
         if as_json:
             click.echo(json.dumps({
@@ -184,12 +186,16 @@ def _accept_current(
 
 def _preview_llm_strategy(basename: str, language: str, strategy: str) -> int:
     """Print what a not-yet-automated LLM strategy WOULD run; return non-zero."""
+    # pdd sync takes a bare basename; pdd update takes the code file path; neither
+    # accepts --language (#1969 review pass 2 finding 1). Only `pdd resolve` does.
     suffix = "" if language.lower() == "python" else f" --language {language}"
     if strategy == "prompt-wins":
-        would_run = f"pdd sync {basename}{suffix}"
+        would_run = f"pdd sync {basename}"
         effect = "regenerate the code from the prompt (an LLM generation)"
     else:  # code-wins
-        would_run = f"pdd update {basename}{suffix}"
+        paths = _resolve_paths(basename, language)
+        code_target = str(paths["code"]) if paths and paths.get("code") else basename
+        would_run = f"pdd update {code_target}"
         effect = "back-propagate the code into the prompt (an LLM update)"
     click.echo(
         f"--{strategy} would run `{would_run}` to {effect}, then re-stamp the "

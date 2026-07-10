@@ -3833,7 +3833,7 @@ Here are some common issues and their solutions:
 9. **Sync-Specific Issues**:
    - **"Another sync is running"**: Check for stale locks in `.pdd/locks/` directory and remove if process no longer exists
    - **Complex conflict resolution problems**: Use `pdd --verbose sync --dry-run basename` to see detailed LLM reasoning and decision analysis
-   - **State corruption or unexpected behavior**: Re-stamp the unit's fingerprint with `pdd reconcile {basename} --heal` (deterministic, no LLM). Do NOT hand-edit or delete `.pdd/meta/*.json` — the committed fingerprints are the drift oracle and must be regenerated, not edited (see CONTRIBUTING.md).
+   - **State corruption or unexpected behavior**: Re-stamp the unit's fingerprint deterministically (no LLM) — use `pdd reconcile {basename} --backfill` to rebuild a missing/invalid fingerprint, or `pdd reconcile {basename} --heal` to re-stamp a drifted (but present) one. Run `pdd reconcile {basename}` first to see which state it's in. Do NOT hand-edit or delete `.pdd/meta/*.json` — the committed fingerprints are the drift oracle and must be regenerated, not edited (see CONTRIBUTING.md).
    - **Animation display issues**: Sync operations work in background; animation is visual feedback only and doesn't affect functionality
    - **Fingerprint mismatches**: Use `pdd sync --dry-run basename` to see what changes were detected and why operations were recommended
 

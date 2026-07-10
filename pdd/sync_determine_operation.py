@@ -2032,20 +2032,27 @@ def _describe_conflict_artifacts(changes: List[str]) -> str:
     return ", ".join(ordered[:-1]) + f", and {ordered[-1]}"
 
 
-def _conflict_resolution_commands(basename: str, language: str) -> Dict[str, str]:
+def _conflict_resolution_commands(
+    basename: str, language: str, code_path: Optional[Path] = None
+) -> Dict[str, str]:
     """Exact commands offered for a CONFLICT unit — all runnable today.
 
     ``accept_current`` finalizes a hand-merge deterministically; ``prompt_wins`` /
-    ``code_wins`` are the real LLM commands (``pdd sync`` / ``pdd update``) that let
-    one side win. (The ``pdd resolve --prompt-wins`` / ``--code-wins`` flags are
-    only non-automated previews of these, so the message points at the real
-    commands rather than the preview stubs.)
+    ``code_wins`` are the real commands (``pdd sync`` / ``pdd update``) that let one
+    side win. (The ``pdd resolve --prompt-wins`` / ``--code-wins`` flags are only
+    non-automated previews of these, so the message points at the real commands.)
+
+    Command-shape matters (#1969 review, pass 2): only ``pdd resolve`` accepts
+    ``--language``. ``pdd sync`` takes a bare basename (it syncs every language
+    variant of it) and ``pdd update`` takes the CODE FILE path — neither accepts a
+    ``--language`` suffix, so they must not get one.
     """
     suffix = _conflict_command_suffix(language)
+    code_target = str(code_path) if code_path else f"path/to/{basename} code file"
     return {
         "accept_current": f"pdd resolve {basename}{suffix} --accept-current",
-        "prompt_wins": f"pdd sync {basename}{suffix}",
-        "code_wins": f"pdd update {basename}{suffix}",
+        "prompt_wins": f"pdd sync {basename}",
+        "code_wins": f"pdd update {code_target}",
     }
 
 
@@ -2074,7 +2081,9 @@ def _prompt_derived_conflict_decision(
     safe_bn = _safe_basename(basename)
     fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
     rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
-    resolution_commands = _conflict_resolution_commands(basename, language)
+    resolution_commands = _conflict_resolution_commands(
+        basename, language, code_path=paths.get("code") if paths else None
+    )
     moved = _describe_conflict_artifacts(changes)
     reason = (
         f"CONFLICT: '{basename}' — {moved} changed since the last sync, so pdd "

@@ -1144,9 +1144,10 @@ def test_conflict_message_is_actionable(pdd_test_environment):
     assert "prompt" in decision.reason and "code" in decision.reason
     assert f"pdd resolve {BASENAME} --accept-current" in decision.reason
     # The message points at the REAL runnable commands, not the preview stubs
-    # (#1969 review finding 3: --prompt-wins/--code-wins are non-automated stubs).
+    # (#1969 review finding 3), with valid command shapes: pdd sync takes a bare
+    # basename and pdd update takes the code file path (review pass 2, finding 1).
     assert f"pdd sync {BASENAME}" in decision.reason
-    assert f"pdd update {BASENAME}" in decision.reason
+    assert f"pdd update {paths['code']}" in decision.reason
     assert "--prompt-wins" not in decision.reason
     assert "--code-wins" not in decision.reason
     # Structured details for machine consumers (CI summaries, drift ledger).
@@ -1155,22 +1156,27 @@ def test_conflict_message_is_actionable(pdd_test_environment):
     commands = decision.details["resolution_commands"]
     assert commands["accept_current"] == f"pdd resolve {BASENAME} --accept-current"
     assert commands["prompt_wins"] == f"pdd sync {BASENAME}"
-    assert commands["code_wins"] == f"pdd update {BASENAME}"
+    assert commands["code_wins"] == f"pdd update {paths['code']}"
 
 
 def test_conflict_decision_helper_formats_language_suffix_and_artifacts():
-    """Non-Python units get a --language suffix; 3-way co-edits read naturally."""
+    """Non-Python units: only `pdd resolve` takes --language; sync/update must not
+    (#1969 review pass 2 finding 1 — sync/update reject --language)."""
     decision = _prompt_derived_conflict_decision(
         basename="parser",
         language="javascript",
         changes=["prompt", "code", "test"],
-        paths={},
+        paths={"code": Path("src/parser.js")},
         fingerprint=None,
         read_only=True,
     )
     commands = decision.details["resolution_commands"]
     assert commands["accept_current"] == "pdd resolve parser --language javascript --accept-current"
-    assert commands["code_wins"] == "pdd update parser --language javascript"
+    assert commands["prompt_wins"] == "pdd sync parser"
+    assert commands["code_wins"] == "pdd update src/parser.js"
+    # sync/update reject --language; the message must never emit it for them.
+    assert "--language" not in commands["prompt_wins"]
+    assert "--language" not in commands["code_wins"]
     assert "prompt, code, and test changed" in decision.reason
     assert decision.details["read_only"] is True
     # Non-destructive contract holds regardless of language.

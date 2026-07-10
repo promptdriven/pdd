@@ -209,7 +209,10 @@ def test_code_wins_is_a_documented_stub_that_exits_nonzero():
 
         assert result.exit_code == 2
         assert "not yet automated" in result.output
-        assert "pdd update widget" in result.output
+        # code-wins previews `pdd update <code file path>` (pdd update takes a file,
+        # not a basename — #1969 review pass 2 finding 1).
+        assert "pdd update " in result.output
+        assert f"{BASENAME}.py" in result.output
 
 
 def test_stub_previews_do_not_mutate_the_fingerprint():
