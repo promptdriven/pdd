@@ -228,6 +228,158 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return []
 
 
+# Backticked inline-code spans (single-line, non-empty) in issue markdown.
+_ISSUE_BACKTICK_TOKEN_RE = re.compile(r"`([^`\n]+)`")
+# Prompt-file path tokens (FILES_MODIFIED lists, prose references).
+_ISSUE_PROMPT_PATH_RE = re.compile(r"[A-Za-z0-9_.\-][A-Za-z0-9_./\-]*\.prompt\b")
+
+
+def _issue_candidate_tokens(text: str) -> List[str]:
+    """Collect high-precision explicit-module tokens from issue text.
+
+    Two token classes (see ``_extract_issue_named_modules``):
+    backticked single-word inline-code spans, and prompt-file path tokens
+    (FILES_MODIFIED-style lists). For prompt paths only the filename is
+    consulted; ``extract_module_from_include`` strips the language suffix and
+    rejects runtime ``*_LLM.prompt`` templates (a non-language-suffixed
+    ``<stem>.prompt`` falls back to its bare stem).
+    """
+    tokens: List[str] = []
+    for raw in _ISSUE_BACKTICK_TOKEN_RE.findall(text):
+        token = raw.strip()
+        if token and not any(ch.isspace() for ch in token):
+            tokens.append(token)
+    for path_token in _ISSUE_PROMPT_PATH_RE.findall(text):
+        filename = path_token.rsplit("/", 1)[-1]
+        basename = extract_module_from_include(filename)
+        tokens.append(basename if basename else filename[: -len(".prompt")])
+    return tokens
+
+
+def _resolve_issue_module_token(
+    token: str,
+    known_set: set,
+    tail_to_modules: Dict[str, List[str]],
+) -> Optional[str]:
+    """Resolve one candidate token to a known module key, or ``None``.
+
+    Tries the token verbatim, then with ``.prompt`` / language suffixes
+    stripped. A candidate that is not an exact known key may still resolve
+    through its final path component when that tail is UNAMBIGUOUS (exactly
+    one known module) and the qualification is consistent (one side is a
+    path suffix of the other, or the candidate is bare). Runtime ``*_LLM``
+    templates never resolve (#1396 boundary).
+    """
+    if _is_runtime_llm_template(token):
+        return None
+    candidates = [token]
+    if token.endswith(".prompt"):
+        candidates.append(token[: -len(".prompt")])
+    stripped = _strip_language_suffix_preserving_path(candidates[-1])
+    if stripped:
+        candidates.append(stripped)
+    for cand in candidates:
+        if cand in known_set:
+            return cand
+        tail_matches = tail_to_modules.get(cand.rsplit("/", 1)[-1], [])
+        if len(tail_matches) == 1 and (
+            "/" not in cand
+            or tail_matches[0].endswith(f"/{cand}")
+            or cand.endswith(f"/{tail_matches[0]}")
+        ):
+            return tail_matches[0]
+    return None
+
+
+def _extract_issue_named_modules(
+    title: str,
+    body: str,
+    architecture: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Deterministically extract known modules explicitly named in an issue.
+
+    Issue #1980: the branch-diff fast path must not silently drop modules the
+    issue explicitly requests. This helper matches the issue title/body against
+    the KNOWN module inventory (architecture basenames, runtime ``*_LLM``
+    templates already excluded by ``_architecture_module_basenames``) using
+    three high-precision, zero-LLM token classes:
+
+    1. Backticked inline-code tokens (e.g. ```greeter```,
+       ```prompts/greeter_python.prompt```) that resolve to a known
+       basename after optional ``.prompt``/language-suffix stripping.
+    2. Prompt-file path tokens anywhere in the text (FILES_MODIFIED-style
+       lists such as ``prompts/textutil_python.prompt``).
+    3. Bare word-boundary mentions, but ONLY for basenames whose final
+       component contains an underscore: multi-word names like
+       ``ci_validation`` cannot be ordinary prose words, while a single-word
+       module named e.g. ``python`` must not be pulled in just because the
+       word appears in prose (precision over recall — a plain-prose mention
+       of a single-word module is deliberately NOT treated as an explicit
+       request; use backticks or the prompt path to request it).
+
+    Ambiguous bare tails (mapping to more than one known module) are skipped;
+    downstream #1677 handling requires path-qualified names for those anyway.
+    Returns known-module keys in first-mention order; empty when there is no
+    architecture inventory to match against.
+    """
+    known = _architecture_module_basenames(architecture or [])
+    if not known:
+        return []
+    known_set = set(known)
+    # Map each final path component to its full module keys so a bare mention
+    # of "worker_app" can resolve "extensions/foo/src/worker_app".
+    tail_to_modules: Dict[str, List[str]] = {}
+    for module in known:
+        tail_to_modules.setdefault(module.rsplit("/", 1)[-1], []).append(module)
+
+    text = f"{title or ''}\n{body or ''}"
+    named: List[str] = []
+    seen: set[str] = set()
+
+    # Classes 1 + 2: backticked tokens and prompt-file paths.
+    for token in _issue_candidate_tokens(text):
+        resolved = _resolve_issue_module_token(token, known_set, tail_to_modules)
+        if resolved and resolved not in seen:
+            named.append(resolved)
+            seen.add(resolved)
+
+    # Class 3: bare word-boundary mentions of multi-word (underscored) names.
+    for module in known:
+        tail = module.rsplit("/", 1)[-1]
+        if module in seen or "_" not in tail or len(tail_to_modules[tail]) != 1:
+            continue
+        # No word chars, '/', '.', or '-' adjacent: matches a standalone
+        # mention but not longer identifiers (ci_validation_extra), path
+        # segments (a/ci_validation/b), or filenames (ci_validation.py is
+        # intentionally excluded — file mentions go through class 2).
+        if re.search(rf"(?<![\w./\-]){re.escape(tail)}(?![\w./\-])", text):
+            named.append(module)
+            seen.add(module)
+
+    return named
+
+
+def _issue_modules_missing_from_scope(
+    scope_modules: List[str],
+    issue_modules: List[str],
+) -> List[str]:
+    """Return issue-named modules not covered by the diff-detected scope.
+
+    Diff-detected keys may be path-qualified (``extensions/foo/src/worker_app``)
+    while issue-named keys resolve from architecture basenames, so a module is
+    considered covered when either its full key or its final path component is
+    already present in the scope (by full key or tail).
+    """
+    def _tail(module: str) -> str:
+        return module.rsplit("/", 1)[-1]
+
+    scope_keys = set(scope_modules) | {_tail(m) for m in scope_modules}
+    return [
+        m for m in issue_modules
+        if m not in scope_keys and _tail(m) not in scope_keys
+    ]
+
+
 def _branch_diff_is_runtime_llm_only(project_root: Path) -> bool:
     """Return True iff the branch diff vs. ``main`` consists only of runtime
     ``*_LLM.prompt`` template changes (with at least one such change present).
@@ -2745,6 +2897,24 @@ def run_agentic_sync(
         if not quiet:
             console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
         modules_to_sync = branch_modules
+        # Issue #1980: the branch diff reflects work already done, not the full
+        # request. Reconcile with the modules the issue explicitly names so the
+        # fast path never silently under-scopes: union any explicitly-named
+        # known module missing from the diff-detected set (still deterministic,
+        # zero LLM calls). When the diff already covers every issue-named
+        # module, behavior is unchanged.
+        issue_named_modules = _extract_issue_named_modules(title, body, architecture)
+        issue_only_modules = _issue_modules_missing_from_scope(
+            branch_modules, issue_named_modules
+        )
+        if issue_only_modules:
+            modules_to_sync = branch_modules + issue_only_modules
+            if not quiet:
+                console.print(
+                    "[green]Issue explicitly names known modules missing from the "
+                    f"branch diff; adding them to the sync scope: {issue_only_modules} "
+                    f"(from branch diff: {branch_modules})[/green]"
+                )
     elif _branch_diff_is_runtime_llm_only(project_root):
         # Hard boundary (Req 9 / issue #1396): the branch diff contains only
         # runtime *_LLM.prompt template changes. Those templates are consumed
