@@ -14233,6 +14233,26 @@ def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
     assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
 
 
+def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path):
+    import json as _json
+    import pdd.checkup_review_loop as crl
+    configured = tmp_path / "agentic.json"
+    ctx = crl.ReviewLoopContext(
+        issue_url="", issue_content="", repo_owner="promptdriven", repo_name="pdd",
+        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        pr_url="https://github.com/promptdriven/pdd/pull/1790",
+        pr_owner="promptdriven", pr_repo="pdd", pr_number=1790, project_root=tmp_path)
+    cfg = crl.ReviewLoopConfig(reviewer="codex", fixer="codex", agentic_mode=True,
+                               agentic_artifact_path=str(configured))
+    success, _report, _cost, _model = crl.run_checkup_review_loop(
+        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False)
+    assert success is True
+    data = _json.loads(configured.read_text())
+    assert data["status"] == "needs_human"
+    assert data["verdict"]["decision"] == "block"
+    assert data["reviewers"][0]["status"] == "failed"
+
+
 def test_agentic_mode_writes_artifact_to_configured_path(tmp_path, monkeypatch):
     import json as _json
     import pdd.checkup_review_loop as crl

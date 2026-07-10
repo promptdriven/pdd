@@ -995,7 +995,9 @@ def run_checkup_review_loop(
             reviewer_status={reviewer or DEFAULT_REVIEWER: "failed"},
             active_reviewer=reviewer or DEFAULT_REVIEWER,
         )
-        return True, _render_final_report(context, state, roles), 0.0, "unknown"
+        report = _render_final_report(context, state, roles)
+        _maybe_write_agentic_artifact(context, config, state)
+        return True, report, 0.0, "unknown"
 
     same_role_review_fix = (
         not config.review_only
@@ -1028,6 +1030,7 @@ def run_checkup_review_loop(
         state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
         state.reviewer_status[reviewer] = "failed"
         report = _finalize(context, state, roles, artifacts_dir)
+        _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
@@ -1209,6 +1212,7 @@ def run_checkup_review_loop(
             "in the loop's worktree.\n",
         )
         report = _finalize(context, state, roles, artifacts_dir)
+        _maybe_write_agentic_artifact(context, config, state)
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
@@ -1234,6 +1238,7 @@ def run_checkup_review_loop(
                 "Review-only mode: Layer 1 Step 5 shell evidence reported failures."
             )
             report = _finalize(context, state, roles, artifacts_dir)
+            _maybe_write_agentic_artifact(context, config, state)
             _post_review_loop_report(context, report, use_github_state)
             return True, report, state.total_cost, state.last_model
 

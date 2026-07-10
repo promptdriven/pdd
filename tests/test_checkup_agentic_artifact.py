@@ -87,6 +87,11 @@ def test_normalize_findings_empty_on_no_severity():
     assert _normalize_findings("", "codex") == []
 
 
+def test_normalize_findings_clean_json_does_not_parse_summary_severity():
+    raw = '{"status":"clean","summary":"No critical issues found","findings":[]}'
+    assert _normalize_findings(raw, "codex") == []
+
+
 def test_normalize_findings_caps_free_text():
     huge = "critical " + ("x" * (FINDING_TEXT_MAX_CHARS + 500))
     findings = _normalize_findings(huge, "codex")
@@ -191,6 +196,32 @@ def test_build_artifact_authority_is_closed_and_canonical_owned_R6():
     # canonical fail dominates regardless of agentic mirror.
     assert art.authority == "canonical_fail_agentic_not_authoritative"
     assert art.authority in AGENTIC_AUTHORITY_STATUSES
+    assert art.status == "failed"
+    assert art.verdict.decision == "block"
+
+
+def test_build_artifact_budget_and_degraded_reviewer_fail_closed_when_clean():
+    budget = build_agentic_v1_artifact(
+        loop_state=_state(max_cost_reached=True), config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert budget.status == "budget_exhausted"
+    assert budget.verdict.decision == "block"
+    degraded = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status={"codex": "degraded"}),
+        config=_config(), context=_context(), final_gate_report={"layer1_status": "pass"})
+    assert degraded.status == "needs_human"
+    assert degraded.verdict.decision == "block"
+
+
+def test_build_artifact_push_failure_dominates_attempted_fix():
+    fix = SimpleNamespace(fixer="claude", fixer_result="attempted",
+                          push_status="push_failed", changed_files=["a.py"],
+                          local_fixer_commit_sha="local-only")
+    art = build_agentic_v1_artifact(
+        loop_state=_state(fixes=[fix]), config=_config(), context=_context(),
+        final_gate_report={"layer1_status": "pass"})
+    assert art.fix_attempts[0].status == "failed"
+    assert art.fix_attempts[0].commit_sha is None
 
 
 def test_build_artifact_degraded_reviewer_on_parse_failure_R4():

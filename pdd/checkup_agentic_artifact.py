@@ -15,6 +15,7 @@ This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
 ``checkup_verdict_engine``) mirror the tuple verbatim and MUST NOT extend it.
 """
 
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -265,6 +266,30 @@ def _normalize_findings(
     if not str(raw).strip():
         return []
     try:
+        try:
+            payload = json.loads(str(raw))
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("findings"), list):
+            for item in payload["findings"]:
+                if not isinstance(item, dict):
+                    continue
+                severity = _coerce_str(item.get("severity"), "info").strip().lower()
+                if severity not in {"blocker", "critical", "high", "medium", "low", "info"}:
+                    severity = "info"
+                try:
+                    line_no = int(item["line"]) if item.get("line") is not None else None
+                except (TypeError, ValueError):
+                    line_no = None
+                findings.append(AgenticFinding(
+                    reviewer=reviewer_name, severity=severity,
+                    blocking=severity in blocking,
+                    path=_coerce_str(item.get("path") or item.get("file")) or None,
+                    line=line_no,
+                    summary=_bounded(_coerce_str(item.get("summary") or item.get("finding"))),
+                    suggested_fix=_bounded(_coerce_str(item.get("suggested_fix") or item.get("required_fix"))),
+                ))
+            return findings
         for line in str(raw).splitlines():
             stripped = line.strip()
             if not stripped:
@@ -373,6 +398,11 @@ def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
     the fixer ran and produced changes, i.e. ``applied``.
     """
     result = _coerce_str(fixer_result).strip().lower()
+    push = _coerce_str(push_status).strip().lower()
+    if push == "push_failed":
+        return "failed"
+    if push == "pushed":
+        return "applied"
     if "timeout" in result:
         return "timeout"
     if result == "attempted":
@@ -380,11 +410,6 @@ def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
     if result in ("skipped", "failed"):
         return result
     # No explicit fixer_result: infer from push outcome.
-    push = _coerce_str(push_status).strip().lower()
-    if push == "pushed":
-        return "applied"
-    if push == "push_failed":
-        return "failed"
     return "skipped"
 
 
@@ -446,6 +471,7 @@ def build_agentic_v1_artifact(
     blocking_severities = _blocking_severities(config)
     reviewer_status: Dict[str, str] = dict(getattr(loop_state, "reviewer_status", {}) or {})
     raw_outputs = list(getattr(loop_state, "raw_outputs", []) or [])
+    raw_structured_findings = list(getattr(loop_state, "findings", []) or [])
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
     reviewers_with_output: set = set()
     for entry in raw_outputs:
@@ -459,13 +485,11 @@ def build_agentic_v1_artifact(
         if not reviewer_name:
             continue
         reviewers_with_output.add(reviewer_name)
-        parsed = _normalize_findings(
-            _coerce_str(output_text), reviewer_name, blocking_severities
-        )
+        parsed = [] if raw_structured_findings else _normalize_findings(
+            _coerce_str(output_text), reviewer_name, blocking_severities)
         findings_by_reviewer.setdefault(reviewer_name, []).extend(parsed)
 
     # Prefer already-structured loop findings when present.
-    raw_structured_findings = list(getattr(loop_state, "findings", []) or [])
     structured: List[AgenticFinding] = []
     open_structured: List[AgenticFinding] = []
     for f in raw_structured_findings:
@@ -537,10 +561,9 @@ def build_agentic_v1_artifact(
                             getattr(fx, "push_status", None),
                         ),
                         changed_files=list(getattr(fx, "changed_files", []) or []),
-                        commit_sha=(
-                            getattr(fx, "pushed_head_sha", None)
-                            or getattr(fx, "local_fixer_commit_sha", None)
-                        ),
+                        commit_sha=(getattr(fx, "pushed_head_sha", None)
+                                    if _coerce_str(getattr(fx, "push_status", None)).strip().lower() == "pushed"
+                                    else None),
                     )
                 )
             except Exception:  # pragma: no cover - defensive
@@ -604,13 +627,19 @@ def build_agentic_v1_artifact(
     )
     remaining_open = [f for f in verdict_findings if f.blocking]
     stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
-    passed = fresh_status == "clean" and not remaining_open
-    agentic_blocking = bool(remaining_open) or (fresh_status not in ("clean", "missing"))
+    reviewer_states = {r.status for r in reviewers}
+    hard_reviewer_state = bool(reviewer_states & {
+        "failed", "degraded", "missing", "error", "timeout", "blocked"
+    })
+    validation_clean = no_fix or validation_status == "verified"
+    passed = (canonical_status != "fail" and not budget_exhausted
+              and not hard_reviewer_state and fresh_status == "clean"
+              and validation_clean and not remaining_open)
+    agentic_blocking = not passed
     decision = "pass" if passed else "block"
     verdict = AgenticVerdict(decision=decision, reason=stop_reason)
     # A reviewer that failed/degraded/errored (not a content block) means the
     # outcome could not be decided by the reviewers → needs_human.
-    reviewer_states = {r.status for r in reviewers}
     needs_human = bool(reviewer_states & {"failed", "degraded", "missing", "error"}) and not remaining_open
     status = _map_status(passed=passed, budget_exhausted=budget_exhausted, needs_human=needs_human)
 

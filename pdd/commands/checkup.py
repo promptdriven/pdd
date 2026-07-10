@@ -67,7 +67,7 @@ def _emit_agentic_review_loop_json(
     message: str,
     cost: float,
     model: str,
-) -> None:
+) -> bool:
     """Emit the machine-readable agentic verdict on stdout (issue #1788).
 
     ``pdd checkup --pr ... --agentic-review-loop`` implies ``--json`` and
@@ -75,9 +75,9 @@ def _emit_agentic_review_loop_json(
     ``pdd.checkup.agentic.v1`` artifact to ``./pdd-checkup-agentic-{pr}.json``;
     this prints that artifact verbatim when it can be located and parsed so
     users and hosted wrappers receive the same object that was written to disk.
-    When the artifact is missing or unparseable it prints a stable wrapper
-    carrying the artifact path (when known) and the run verdict, so stdout is
-    always valid JSON.
+    When the artifact is missing or unparseable it prints a stable, failed
+    wrapper carrying the artifact path (when known). This fails closed because
+    the transport result alone cannot prove that the review verdict passed.
     """
     import json as _json  # pylint: disable=import-outside-toplevel
 
@@ -92,20 +92,25 @@ def _emit_agentic_review_loop_json(
         try:
             artifact = _json.loads(artifact_path.read_text(encoding="utf-8"))
             click.echo(_json.dumps(artifact, indent=2))
-            return
+            return bool(
+                artifact.get("schema_version") == "pdd.checkup.agentic.v1"
+                and artifact.get("status") == "passed"
+                and (artifact.get("verdict") or {}).get("decision") == "pass"
+            )
         except (OSError, ValueError):
             pass
 
     wrapper = {
         "schema_version": "pdd.checkup.agentic.v1.wrapper",
         "artifact_path": str(artifact_path) if artifact_path is not None else None,
-        "success": bool(success),
-        "status": "passed" if success else "failed",
+        "success": False,
+        "status": "failed",
         "message": message,
         "cost": cost,
         "model": model,
     }
     click.echo(_json.dumps(wrapper, indent=2))
+    return False
 
 
 @click.command(
@@ -1398,7 +1403,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if agentic_review_loop:
             # Standalone adversarial PR checkup emits the machine-readable
             # pdd.checkup.agentic.v1 verdict on stdout (implies --json).
-            _emit_agentic_review_loop_json(
+            agentic_passed = _emit_agentic_review_loop_json(
                 pr_url=pr_url,
                 success=success,
                 message=message,
@@ -1412,7 +1417,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             click.echo(f"Cost: ${cost:.4f}")
             echo_model_line(model)
 
-        if not success:
+        if not success or (agentic_review_loop and not agentic_passed):
             raise click.exceptions.Exit(1)
 
         return message, cost, model
