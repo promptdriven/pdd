@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 from pdd.checkup_agentic_artifact import (
     AGENTIC_AUTHORITY_STATUSES,
@@ -172,6 +173,21 @@ def test_build_artifact_schema_version_constant_R1():
     assert "schema_version" in dumped and "schema" not in dumped
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema_version": "pdd.checkup.agentic.v2"},
+        {"authority": "invented_authority"},
+        {"mode": "maybe-fix"},
+        {"status": "green"},
+        {"verdict": {"decision": "maybe"}},
+    ],
+)
+def test_public_model_rejects_invalid_wire_contract_values(overrides):
+    with pytest.raises(ValidationError):
+        AgenticV1Artifact(**overrides)
+
+
 def test_build_artifact_nofix_never_populates_fix_attempts_R3():
     fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
                              changed_files=["a.py"], pushed_head_sha="deadbeef")]
@@ -239,16 +255,67 @@ def test_build_artifact_budget_recomputed_from_actuals_not_stale_flags():
     assert art.verdict.decision == "block"
 
 
-def test_build_artifact_budget_recomputes_rounds_and_minutes_from_actuals():
+def test_build_artifact_budget_recomputes_nonclean_rounds_and_minutes_from_actuals():
     art = build_agentic_v1_artifact(
         loop_state=_state(
             rounds_completed=5, elapsed_minutes=91.0,
-            max_rounds_reached=False, max_duration_reached=False),
+            max_rounds_reached=False, max_duration_reached=False,
+            fresh_final_status="findings"),
         config=_config(max_rounds=5, max_minutes=90.0),
         context=_context(),
         final_gate_report={"layer1_status": "pass"})
     assert art.budget.max_rounds_reached is True
     assert art.budget.max_minutes_reached is True
+
+
+def test_build_artifact_clean_on_last_allowed_round_is_not_budget_exhausted():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            rounds_completed=1,
+            max_rounds_reached=False,
+            fresh_final_status="clean",
+        ),
+        config=_config(max_rounds=1),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.budget.max_rounds_reached is False
+    assert art.status == "passed"
+    assert art.verdict.decision == "pass"
+
+
+def test_build_artifact_malformed_runtime_shapes_fail_closed():
+    state = _state(
+        reviewer_status="codex=clean",
+        raw_outputs=object(),
+        findings=42,
+        fixes="none",
+    )
+    art = build_agentic_v1_artifact(
+        loop_state=state,
+        config=_config(reviewer_commands="codex:/review"),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.schema_version == AGENTIC_V1_SCHEMA
+    assert art.status == "error"
+    assert art.authority == "canonical_unknown_agentic_fallback_blocking"
+    assert art.verdict.decision == "block"
+
+
+def test_secret_scrubber_exception_never_returns_original_text(monkeypatch):
+    import pdd.checkup_review_loop as review_loop
+
+    secret = "critical Authorization: Bearer ghp_super_secret_value"
+
+    def broken_scrubber(_text):
+        raise RuntimeError("scrubber unavailable")
+
+    monkeypatch.setattr(review_loop, "_scrub_secrets", broken_scrubber)
+    findings = _normalize_findings(secret, "codex")
+    assert findings
+    assert "ghp_super_secret_value" not in findings[0].summary
+    assert "REDACTED" in findings[0].summary
 
 
 def test_build_artifact_budget_within_caps_reports_not_reached():
@@ -471,6 +538,30 @@ def test_build_artifact_fixed_blockers_do_not_fail_clean_final_review():
     assert art.status == "passed"
     assert art.verdict.decision == "pass"
     assert art.authority == "canonical_pass_agentic_mirror_clean"
+
+
+def test_build_artifact_splits_structured_location_path_and_line():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={"codex": "findings"},
+            findings=[
+                SimpleNamespace(
+                    severity="medium",
+                    reviewer="codex",
+                    finding="numeric location",
+                    required_fix="fix it",
+                    location="pdd/agentic_checkup.py:1485",
+                    status="open",
+                )
+            ],
+            fresh_final_status="findings",
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "unknown"},
+    )
+    assert art.findings[0].path == "pdd/agentic_checkup.py"
+    assert art.findings[0].line == 1485
 
 
 def test_build_artifact_status_vocab_matches_spec():

@@ -14128,14 +14128,12 @@ def test_fresh_final_review_override_runs_override_role(tmp_path):
 
     def fake_run_review(*, reviewer, **kw):
         called["reviewer"] = reviewer
+        called["mode"] = kw["mode"]
         return crl.ReviewResult(
             reviewer=reviewer, status="clean", issue_aligned=True, findings=[]
         )
 
-    with (
-        patch.object(crl, "_run_review", side_effect=fake_run_review),
-        patch.object(crl, "_record_review"),
-    ):
+    with patch.object(crl, "_run_review", side_effect=fake_run_review):
         crl._maybe_run_fresh_final_review_override(
             context=ctx,
             config=cfg,
@@ -14150,8 +14148,9 @@ def test_fresh_final_review_override_runs_override_role(tmp_path):
         )
     # The override role (gemini), not the primary (codex), ran the fresh review.
     assert called["reviewer"] == "gemini"
+    assert called["mode"] == "fresh-final"
     assert state.fresh_final_status == "clean"
-    assert state.reviewer_status["gemini"] == "clean"
+    assert state.reviewer_status == {"codex": "clean"}
 
 
 def test_fresh_final_review_override_skips_when_not_agentic(tmp_path):
@@ -14234,14 +14233,26 @@ def test_fresh_final_review_override_runs_new_session_for_same_role(tmp_path):
 
     def fake_run_review(*, reviewer, **kw):
         called["reviewer"] = reviewer
+        called["mode"] = kw["mode"]
         return crl.ReviewResult(
-            reviewer=reviewer, status="clean", issue_aligned=True, findings=[]
+            reviewer=reviewer,
+            status="findings",
+            issue_aligned=True,
+            findings=[
+                crl.ReviewFinding(
+                    severity="medium",
+                    reviewer=reviewer,
+                    area="api",
+                    evidence="same-role fresh evidence",
+                    finding="Fresh session found a blocker.",
+                    required_fix="Fix the fresh finding.",
+                    location="pdd/example.py:12",
+                    round_number=1,
+                )
+            ],
         )
 
-    with (
-        patch.object(crl, "_run_review", side_effect=fake_run_review),
-        patch.object(crl, "_record_review"),
-    ):
+    with patch.object(crl, "_run_review", side_effect=fake_run_review):
         crl._maybe_run_fresh_final_review_override(
             context=ctx,
             config=cfg,
@@ -14257,11 +14268,30 @@ def test_fresh_final_review_override_runs_new_session_for_same_role(tmp_path):
 
     # A fresh session actually ran for the same-provider role.
     assert called.get("reviewer") == "codex"
+    assert called.get("mode") == "fresh-final"
     assert state.fresh_final_review_invocations == 1
-    assert state.fresh_final_status == "clean"
+    assert state.fresh_final_status == "findings"
+    # The primary provider row remains its earlier canonical status; the new
+    # session is separately attributable in artifacts and machine output.
+    assert state.reviewer_status["codex"] == "clean"
+    assert len(state.fresh_final_findings) == 1
+    assert state.fresh_final_findings[0].reviewer == "fresh-final"
+
+    from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
+
+    artifact = build_agentic_v1_artifact(
+        loop_state=state,
+        config=cfg,
+        context=ctx,
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert artifact.fresh_final_review.provider == "codex"
+    assert artifact.fresh_final_review.finding_count == 1
+    assert any(f.reviewer == "fresh-final" for f in artifact.findings)
+    assert artifact.verdict.decision == "block"
 
 
-def test_fresh_final_review_override_fails_closed_on_exception(tmp_path):
+def test_fresh_final_review_override_fails_closed_on_exception(tmp_path, capsys):
     """Issue #1788: if the fresh-final review raises, the override must fail
     closed to a hard non-clean state instead of leaving the prior clean
     verdict standing (so the artifact/CLI exit non-zero)."""
@@ -14296,7 +14326,7 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path):
     assert state.fresh_final_review_invocations == 1
     assert state.fresh_final_status == "failed"
     assert state.fresh_final_status in crl.HARD_NOT_CLEAN_STATES
-    assert state.reviewer_status["gemini"] == "failed"
+    assert "gemini" not in state.reviewer_status
 
     # The emitted artifact must block (non-zero CLI exit), not pass.
     from pdd.checkup_agentic_artifact import build_agentic_v1_artifact
@@ -14309,6 +14339,86 @@ def test_fresh_final_review_override_fails_closed_on_exception(tmp_path):
     )
     assert artifact.status != "passed"
     assert artifact.verdict.decision == "block"
+
+    captured = capsys.readouterr()
+    assert "provider exploded" in captured.err
+
+
+def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
+    import pdd.checkup_review_loop as crl
+
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="codex")
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+
+    with patch.object(
+        crl, "_run_review", side_effect=RuntimeError(f"Bearer {secret}")
+    ):
+        crl._maybe_run_fresh_final_review_override(
+            context=ctx,
+            config=cfg,
+            state=state,
+            worktree=tmp_path,
+            artifacts_dir=tmp_path,
+            round_number=1,
+            pr_metadata={},
+            deadline=None,
+            verbose=False,
+            quiet=False,
+        )
+
+    captured = capsys.readouterr()
+    assert secret not in state.stop_reason
+    assert secret not in captured.err
+    assert "REDACTED" in state.stop_reason
+
+
+def test_agentic_artifact_writer_exceptions_scrub_secrets(
+    tmp_path, monkeypatch, capsys
+):
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+    )
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+
+    with patch(
+        "pdd.checkup_agentic_artifact.build_agentic_v1_artifact",
+        side_effect=RuntimeError(f"Authorization: Bearer {secret}"),
+    ):
+        assert crl._maybe_write_agentic_artifact(ctx, cfg, state) is None
+
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert "REDACTED" in captured.err
+
+
+def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    with patch(
+        "pdd.checkup_agentic_artifact.build_agentic_v1_artifact",
+        side_effect=RuntimeError(f"Authorization: Bearer {secret}"),
+    ):
+        assert crl.write_final_gate_fallback_artifact(
+            artifact_path=str(tmp_path / "artifact.json")
+        ) is None
+
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert "REDACTED" in captured.err
 
 
 def _step5_failed_evidence():

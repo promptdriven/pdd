@@ -118,6 +118,104 @@ def _hosted_agentic_reviewers(reviewers: str) -> str:
     return configured
 
 
+def _prepare_hosted_agentic_artifact(
+    artifact_path: Optional[str],
+    *,
+    pr_owner: str = "",
+    pr_repo: str = "",
+    pr_number: int = 0,
+) -> None:
+    """Replace any prior hosted artifact with a current blocking placeholder.
+
+    This runs before validation/network early returns. A retry can therefore
+    never expose a passing artifact from an earlier invocation as the current
+    result when the new invocation fails before the review loop starts.
+    """
+    if not artifact_path:
+        return
+    path = Path(artifact_path)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        # The writer below may still be able to replace the file even when an
+        # unlink is denied (for example, a restrictive directory policy).
+        pass
+    write_final_gate_fallback_artifact(
+        artifact_path=artifact_path,
+        pr_owner=pr_owner,
+        pr_repo=pr_repo,
+        pr_number=pr_number,
+        canonical_status="unknown",
+        blockers=["Current hosted checkup invocation has not produced a verdict."],
+        no_fix=True,
+    )
+
+
+def _finalize_hosted_agentic_artifact(
+    artifact_path: Optional[str],
+    *,
+    canonical_passed: bool,
+) -> Optional[str]:
+    """Apply the complete canonical final-gate verdict to a hosted artifact.
+
+    The review loop emits its mirror/fallback details before the outer final
+    gate has loaded ``final-state.json`` and derived the real ship verdict.
+    Finalize authority only after that canonical result is known, so a Layer 2
+    failure can never remain labeled ``canonical_pass_*``.
+    """
+    if not artifact_path:
+        return None
+    path = Path(artifact_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("schema_version") != "pdd.checkup.agentic.v1":
+            return None
+
+        layer1 = payload.get("layer1")
+        if not isinstance(layer1, dict):
+            layer1 = {}
+            payload["layer1"] = layer1
+        layer1["status"] = "pass" if canonical_passed else "fail"
+        layer1["blockers"] = (
+            []
+            if canonical_passed
+            else ["Canonical final gate did not produce a shippable verdict."]
+        )
+
+        verdict = payload.get("verdict")
+        if not isinstance(verdict, dict):
+            verdict = {}
+            payload["verdict"] = verdict
+        mirror_blocking = (
+            payload.get("status") != "passed"
+            or verdict.get("decision") != "pass"
+        )
+        if canonical_passed:
+            payload["authority"] = (
+                "canonical_pass_agentic_mirror_blocking"
+                if mirror_blocking
+                else "canonical_pass_agentic_mirror_clean"
+            )
+        else:
+            payload["authority"] = "canonical_fail_agentic_not_authoritative"
+            if payload.get("status") == "passed":
+                payload["status"] = "failed"
+            verdict["decision"] = "block"
+            verdict.setdefault(
+                "reason", "Canonical final gate did not produce a shippable verdict."
+            )
+
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return str(path)
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning(
+            "Failed to finalize hosted agentic artifact (%s)", type(exc).__name__
+        )
+        return None
+
+
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     """Extract the LAST top-level JSON object from agent output text.
 
@@ -863,6 +961,19 @@ def run_agentic_checkup(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    # Establish hosted artifact provenance before any validation/network early
+    # return. This guarantees a retry cannot leave a prior passing artifact at
+    # the caller-controlled path when the current invocation fails early.
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
+    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    preview_pr = _parse_pr_url(pr_url) if pr_url else None
+    _prepare_hosted_agentic_artifact(
+        hosted_agentic_artifact_path,
+        pr_owner=preview_pr[0] if preview_pr else "",
+        pr_repo=preview_pr[1] if preview_pr else "",
+        pr_number=preview_pr[2] if preview_pr else 0,
+    )
+
     # 1. Check gh CLI
     if not _check_gh_cli():
         return (
@@ -944,7 +1055,6 @@ def run_agentic_checkup(
     full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
-    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)
@@ -958,7 +1068,6 @@ def run_agentic_checkup(
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
 
-    hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
     hosted_reviewers = _hosted_agentic_reviewers(reviewers)
 
     full_suite_source = (full_suite_source or "local").strip().lower()
@@ -1093,7 +1202,11 @@ def run_agentic_checkup(
         )
         hosted_agentic_mode = hosted_agentic_artifact_path is not None
         loop_config = ReviewLoopConfig(
-            reviewers=parse_reviewers(hosted_reviewers),
+            # Hosted fallback/mirror settings are additive evidence only: they
+            # must not change the canonical review-loop provider set or prompt.
+            # Per-role hosted commands are still serialized below for the
+            # artifact, but canonical execution uses the caller's reviewers.
+            reviewers=parse_reviewers(reviewers),
             reviewer=reviewer,
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
@@ -1123,13 +1236,13 @@ def run_agentic_checkup(
             # path without changing checkup authority.
             adversarial_prompt=(
                 adversarial_prompt
-                if (agentic_review_loop or hosted_agentic_mode)
+                if agentic_review_loop
                 else None
             ),
             agentic_mode=(agentic_review_loop or hosted_agentic_mode),
             fresh_final_review_role=(
                 fresh_final_review_role
-                if (agentic_review_loop or hosted_agentic_mode)
+                if agentic_review_loop
                 else None
             ),
             agentic_artifact_path=hosted_agentic_artifact_path,
@@ -1329,18 +1442,15 @@ def run_agentic_checkup(
                     _run_review_loop_layer(
                         pr_content=final_gate_pr_content,
                         layer1_step5_evidence=layer1_step5_evidence_for_review,
-                        # The Step 5 failure is historical handoff evidence.
-                        # Reaching Layer 2 means the canonical final gate can
-                        # still pass once the seeded finding is fixed; thread
-                        # the same canonical-pass mirror status used by the
-                        # ordinary Layer 1 success path. A non-clean Layer 2
-                        # result still produces the blocking mirror authority.
-                        final_gate_canonical_status="pass",
                     )
                 )
                 ship = _review_loop_ship_verdict(
                     load_final_state(project_root, issue_number, pr_number),
                     has_issue=has_issue,
+                )
+                _finalize_hosted_agentic_artifact(
+                    hosted_agentic_artifact_path,
+                    canonical_passed=ship,
                 )
                 total_cost = orch_cost + loop_cost
                 message = (
@@ -1485,15 +1595,14 @@ def run_agentic_checkup(
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content,
             layer1_step5_evidence=layer1_step5_evidence_for_review,
-            # Layer 1 (and any configured GitHub-checks gate) passed to reach
-            # here, so the canonical final-gate verdict entering Layer 2 is a
-            # pass. Thread it so the mirror artifact reports
-            # ``canonical_pass_agentic_mirror_*`` rather than an unknown fallback.
-            final_gate_canonical_status="pass",
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),
             has_issue=has_issue,
+        )
+        _finalize_hosted_agentic_artifact(
+            hosted_agentic_artifact_path,
+            canonical_passed=ship,
         )
         total_cost = orch_cost + loop_cost
         checks_clause = "GitHub checks gate passed; " if github_checks_message else ""

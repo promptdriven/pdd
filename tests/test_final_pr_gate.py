@@ -343,7 +343,7 @@ class TestFinalGateLibrary:
             context = kwargs["context"]
             config = kwargs["config"]
             assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
-            assert context.final_gate_canonical_status == "pass"
+            assert context.final_gate_canonical_status == ""
             assert config.agentic_mode is True
             assert config.agentic_artifact_path == str(artifact_path)
 

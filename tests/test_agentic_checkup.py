@@ -12,10 +12,12 @@ from pdd.agentic_checkup import (
     _extract_json_from_text,
     _fetch_comments,
     _fetch_pr_context,
+    _finalize_hosted_agentic_artifact,
     _hosted_agentic_reviewers,
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
+    _prepare_hosted_agentic_artifact,
     _truncate_issue_context,
     run_agentic_checkup,
 )
@@ -706,6 +708,9 @@ class TestRunAgenticCheckup:
         artifact_path = "/tmp/pdd-cloud/agentic-checkup.json"
         monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
         monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", artifact_path)
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_REVIEWERS", "gemini:/review,claude:/review"
+        )
 
         success, msg, cost, model = run_agentic_checkup(
             "https://github.com/owner/repo/issues/1",
@@ -724,10 +729,69 @@ class TestRunAgenticCheckup:
         assert config.agentic_artifact_path == artifact_path
         assert config.review_only is False
         assert config.no_fix is False
-        # Issue #1788: Layer 1 passed here, so the review-loop context carries an
-        # explicit canonical "pass" verdict for the mirror artifact authority.
+        assert config.reviewers == ("codex", "claude")
+        assert config.adversarial_prompt is None
+        assert config.fresh_final_review_role is None
+        assert config.reviewer_commands == {
+            "gemini": "/review",
+            "claude": "/review",
+        }
+        # Authority is finalized only after the complete final-gate verdict is
+        # known; Layer 2 must not be pre-labeled as canonical pass.
         loop_context = mock_review_loop.call_args.kwargs["context"]
-        assert loop_context.final_gate_canonical_status == "pass"
+        assert loop_context.final_gate_canonical_status == ""
+
+
+    def test_prepare_hosted_artifact_replaces_stale_pass(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["schema_version"] == "pdd.checkup.agentic.v1"
+        assert payload["status"] != "passed"
+        assert payload["authority"] == "canonical_unknown_agentic_fallback_blocking"
+        assert payload["verdict"]["decision"] == "block"
+
+    def test_finalize_hosted_artifact_canonical_fail_dominates_stale_pass(
+        self, tmp_path
+    ):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "layer1": {"status": "pass", "blockers": []},
+                    "verdict": {"decision": "pass", "reason": "clean"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert _finalize_hosted_agentic_artifact(
+            str(path), canonical_passed=False
+        ) == str(path)
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["layer1"]["status"] == "fail"
+        assert payload["status"] == "failed"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+        assert payload["verdict"]["decision"] == "block"
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")

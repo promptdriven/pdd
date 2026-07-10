@@ -17,7 +17,8 @@ This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +42,17 @@ AGENTIC_AUTHORITY_STATUSES = (
     "canonical_fail_agentic_not_authoritative",
 )
 
+AgenticAuthorityStatus = Literal[
+    "canonical_pass_agentic_mirror_clean",
+    "canonical_pass_agentic_mirror_blocking",
+    "canonical_unknown_agentic_fallback_pass",
+    "canonical_unknown_agentic_fallback_blocking",
+    "canonical_fail_agentic_not_authoritative",
+]
+AgenticArtifactStatus = Literal[
+    "passed", "failed", "needs_human", "error", "timeout", "budget_exhausted"
+]
+
 
 # ---------------------------------------------------------------------------
 # Pydantic v2 models
@@ -50,7 +62,7 @@ AGENTIC_AUTHORITY_STATUSES = (
 class AgenticLayer1(BaseModel):
     """Layer-1 (PR-scoped checkup) outcome block."""
 
-    status: str
+    status: Literal["pass", "fail", "unknown"]
     blockers: List[str] = Field(default_factory=list)
 
 
@@ -80,7 +92,7 @@ class AgenticFixAttempt(BaseModel):
     """One fixer attempt record (never populated in nofix mode; R3)."""
 
     provider: str
-    status: str
+    status: Literal["skipped", "applied", "failed", "timeout"]
     changed_files: List[str] = Field(default_factory=list)
     commit_sha: Optional[str] = None
 
@@ -88,7 +100,7 @@ class AgenticFixAttempt(BaseModel):
 class AgenticValidationResult(BaseModel):
     """Validation-after-fix outcome block."""
 
-    status: str
+    status: Literal["not_run", "verified", "unverified"]
     evidence: List[str] = Field(default_factory=list)
 
 
@@ -96,14 +108,16 @@ class AgenticFreshFinalReview(BaseModel):
     """Fresh final review (new context/session) outcome block."""
 
     provider: str
-    status: str
+    status: Literal[
+        "clean", "findings", "missing", "failed", "degraded", "error", "timeout", "blocked"
+    ]
     finding_count: int = 0
 
 
 class AgenticVerdict(BaseModel):
     """Final agentic verdict block."""
 
-    decision: str
+    decision: Literal["pass", "block", "unknown"]
     reason: str = ""
 
 
@@ -125,15 +139,15 @@ class AgenticV1Artifact(BaseModel):
     :data:`AGENTIC_AUTHORITY_STATUSES` (R6).
     """
 
-    schema_version: str = AGENTIC_V1_SCHEMA
+    schema_version: Literal["pdd.checkup.agentic.v1"] = AGENTIC_V1_SCHEMA
     owner: str = ""
     repo: str = ""
     pr_number: int = 0
     head_sha: str = ""
-    mode: str = "fix"
+    mode: Literal["fix", "nofix"] = "fix"
     # One of: passed | failed | needs_human | error | timeout | budget_exhausted.
-    status: str = "error"
-    authority: str = AGENTIC_AUTHORITY_STATUSES[0]
+    status: AgenticArtifactStatus = "error"
+    authority: AgenticAuthorityStatus = AGENTIC_AUTHORITY_STATUSES[0]
     layer1: AgenticLayer1 = Field(default_factory=lambda: AgenticLayer1(status="unknown"))
     reviewers: List[AgenticReviewer] = Field(default_factory=list)
     findings: List[AgenticFinding] = Field(default_factory=list)
@@ -161,8 +175,9 @@ def _scrub(text: str) -> str:
         from .checkup_review_loop import _scrub_secrets
 
         return _scrub_secrets(text)
-    except Exception:  # pragma: no cover - defensive: never crash the caller
-        return text
+    except Exception:  # pragma: no cover - defensive: fail closed on secrets
+        logger.warning("Secret scrubber unavailable; omitting free-text field")
+        return "[REDACTED: secret scrubber unavailable]"
 
 
 def _bounded(text: str) -> str:
@@ -360,6 +375,66 @@ def _coerce_str(value: Any, default: str = "") -> str:
     return str(value)
 
 
+def _mapping(value: Any) -> Dict[Any, Any]:
+    """Return a shallow dict for mapping-shaped runtime state, else ``{}``."""
+    if isinstance(value, Mapping):
+        try:
+            return dict(value)
+        except (TypeError, ValueError):
+            return {}
+    return {}
+
+
+def _sequence(value: Any) -> List[Any]:
+    """Return a list for non-text sequence-shaped runtime state, else ``[]``."""
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        try:
+            return list(value)
+        except TypeError:
+            return []
+    return []
+
+
+def _runtime_mapping(obj: Any, name: str) -> Dict[Any, Any]:
+    """Read a restored mapping field or raise into the fail-closed wrapper."""
+    value = getattr(obj, name, {})
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping")
+    return _mapping(value)
+
+
+def _runtime_sequence(obj: Any, name: str) -> List[Any]:
+    """Read a restored non-text sequence or raise into the fail-closed wrapper."""
+    value = getattr(obj, name, [])
+    if value is None:
+        return []
+    if not isinstance(value, Sequence) or isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        raise TypeError(f"{name} must be a non-text sequence")
+    return _sequence(value)
+
+
+def _split_location(location: Any) -> Tuple[Optional[str], Optional[int]]:
+    """Split a production ``ReviewFinding.location`` into path and line.
+
+    Function/symbol locations such as ``pdd/foo.py:helper`` are preserved as a
+    path-like location with no invented line number.
+    """
+    text = _coerce_str(location).strip()
+    if not text:
+        return None, None
+    match = re.fullmatch(r"(.+\.[A-Za-z0-9_]+):(\d+)", text)
+    if not match:
+        return text, None
+    try:
+        return match.group(1), int(match.group(2))
+    except (TypeError, ValueError):  # pragma: no cover - regex guarantees digits
+        return text, None
+
+
 def _num(obj: Any, *names: str) -> Optional[float]:
     """Return the first numeric attribute among ``names`` on ``obj``, else None.
 
@@ -407,10 +482,23 @@ def _recompute_budget_flags(loop_state: Any, config: Any) -> "AgenticBudget":
             return bool(used >= cap) or bool(persisted)
         return bool(persisted)
 
+    persisted_rounds = bool(getattr(loop_state, "max_rounds_reached", False))
+    fresh_status = _coerce_str(
+        getattr(loop_state, "fresh_final_status", "missing") or "missing"
+    ).strip().lower()
+    # Finishing cleanly on the last allowed round consumed the budget but did
+    # not exhaust it: no additional round was required. The loop's persisted
+    # flag remains authoritative when it explicitly stopped for max rounds;
+    # otherwise an actual boundary crossing only exhausts when the outcome is
+    # still non-clean and would require more work.
+    rounds_reached = persisted_rounds
+    if rounds_used is not None and max_rounds is not None and max_rounds > 0:
+        rounds_reached = rounds_reached or (
+            rounds_used >= max_rounds and fresh_status != "clean"
+        )
+
     return AgenticBudget(
-        max_rounds_reached=_reached(
-            rounds_used, max_rounds, bool(getattr(loop_state, "max_rounds_reached", False))
-        ),
+        max_rounds_reached=rounds_reached,
         max_minutes_reached=_reached(
             minutes_used,
             max_minutes,
@@ -508,7 +596,7 @@ def _map_status(*, passed: bool, budget_exhausted: bool, needs_human: bool) -> s
 # ---------------------------------------------------------------------------
 
 
-def build_agentic_v1_artifact(
+def _build_agentic_v1_artifact(
     *,
     loop_state: Any,
     config: Any,
@@ -544,9 +632,11 @@ def build_agentic_v1_artifact(
     # via ``_required_findings``) so the artifact never under-reports blocking
     # findings relative to the canonical loop (e.g. an open ``medium``).
     blocking_severities = _blocking_severities(config)
-    reviewer_status: Dict[str, str] = dict(getattr(loop_state, "reviewer_status", {}) or {})
-    raw_outputs = list(getattr(loop_state, "raw_outputs", []) or [])
-    raw_structured_findings = list(getattr(loop_state, "findings", []) or [])
+    reviewer_status: Dict[str, str] = _runtime_mapping(
+        loop_state, "reviewer_status"
+    )
+    raw_outputs = _runtime_sequence(loop_state, "raw_outputs")
+    raw_structured_findings = _runtime_sequence(loop_state, "findings")
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
     reviewers_with_output: set = set()
     for entry in raw_outputs:
@@ -570,12 +660,15 @@ def build_agentic_v1_artifact(
     for f in raw_structured_findings:
         try:
             severity = _coerce_str(getattr(f, "severity", "") or "info").lower()
+            finding_path, finding_line = _split_location(
+                getattr(f, "location", None)
+            )
             finding = AgenticFinding(
                 reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
                 severity=severity,
                 blocking=severity in blocking_severities,
-                path=(getattr(f, "location", None) or None),
-                line=None,
+                path=finding_path,
+                line=finding_line,
                 summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
                 suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
             )
@@ -593,7 +686,9 @@ def build_agentic_v1_artifact(
     )
 
     reviewers: List[AgenticReviewer] = []
-    reviewer_commands: Dict[str, str] = dict(getattr(config, "reviewer_commands", {}) or {})
+    reviewer_commands: Dict[str, str] = _runtime_mapping(
+        config, "reviewer_commands"
+    )
     # The loop reports a role as ``fixer`` in reviewer_status purely for
     # traceability; that is not a reviewer verdict, so skip it here.
     for name, status in reviewer_status.items():
@@ -622,7 +717,7 @@ def build_agentic_v1_artifact(
         )
 
     # --- fix attempts (R3: empty in nofix) --------------------------------
-    raw_fixes = list(getattr(loop_state, "fixes", []) or [])
+    raw_fixes = _runtime_sequence(loop_state, "fixes")
     fix_attempts: List[AgenticFixAttempt] = []
     if not no_fix:
         for fx in raw_fixes:
@@ -723,8 +818,8 @@ def build_agentic_v1_artifact(
     superseded_reviewers: set = set()
     if active_reviewer and original_reviewer and active_reviewer != original_reviewer:
         superseded_reviewers.add(original_reviewer)
-    reviewer_status_details = dict(
-        getattr(loop_state, "reviewer_status_details", {}) or {}
+    reviewer_status_details = _runtime_mapping(
+        loop_state, "reviewer_status_details"
     )
     for name, detail in reviewer_status_details.items():
         if not isinstance(detail, dict):
@@ -795,7 +890,7 @@ def build_agentic_v1_artifact(
             verdict=verdict,
             budget=budget,
         )
-    except Exception:  # pragma: no cover - defensive: always return a valid artifact
+    except Exception:  # pragma: no cover - defensive: always fail closed
         logger.warning("Falling back to a minimal agentic artifact after assembly error")
         return AgenticV1Artifact(
             schema_version=AGENTIC_V1_SCHEMA,
@@ -803,5 +898,52 @@ def build_agentic_v1_artifact(
             repo=repo,
             pr_number=pr_number,
             mode=mode,
-            authority=authority,
+            status="error",
+            authority="canonical_unknown_agentic_fallback_blocking",
+            layer1=AgenticLayer1(status="unknown"),
+            fresh_final_review=AgenticFreshFinalReview(
+                provider="", status="missing"
+            ),
+            verdict=AgenticVerdict(
+                decision="block", reason="Artifact assembly failed closed."
+            ),
+        )
+
+
+def build_agentic_v1_artifact(
+    *,
+    loop_state: Any,
+    config: Any,
+    context: Any,
+    final_gate_report: Any,
+) -> AgenticV1Artifact:
+    """Build an agentic artifact and never propagate malformed runtime state.
+
+    Review-loop state can be restored from older or partially-written JSON, so
+    mappings and sequences are not trusted solely because an attribute exists.
+    Any unexpected extraction failure returns a valid, blocking v1 artifact;
+    callers never receive an exception or a false pass.
+    """
+    try:
+        return _build_agentic_v1_artifact(
+            loop_state=loop_state,
+            config=config,
+            context=context,
+            final_gate_report=final_gate_report,
+        )
+    except Exception as exc:  # pragma: no cover - last-resort compatibility
+        logger.warning(
+            "Agentic artifact extraction failed closed: %s", type(exc).__name__
+        )
+        return AgenticV1Artifact(
+            schema_version=AGENTIC_V1_SCHEMA,
+            status="error",
+            authority="canonical_unknown_agentic_fallback_blocking",
+            layer1=AgenticLayer1(status="unknown"),
+            fresh_final_review=AgenticFreshFinalReview(
+                provider="", status="missing"
+            ),
+            verdict=AgenticVerdict(
+                decision="block", reason="Artifact extraction failed closed."
+            ),
         )

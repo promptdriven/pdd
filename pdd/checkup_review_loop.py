@@ -37,7 +37,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -971,6 +971,12 @@ class ReviewLoopState:
     # clean primary verdict. Regression tests assert on it to prove a fresh
     # session really happened rather than silently reusing the prior verdict.
     fresh_final_review_invocations: int = 0
+    # Findings from the explicit fresh-final session are attributed to the
+    # synthetic ``fresh-final`` reviewer identity so they cannot overwrite the
+    # primary provider's earlier review artifacts/status when both sessions use
+    # the same role. The provider remains available separately from
+    # ``ReviewLoopConfig.fresh_final_review_role``.
+    fresh_final_findings: List[ReviewFinding] = field(default_factory=list)
     # Issue #1788 (re-review, R5): actual budget consumption carried for the
     # agentic artifact builder to RECOMPUTE ``budget.max_*_reached`` from
     # observed values vs configured caps at artifact-build time, instead of
@@ -2135,6 +2141,10 @@ def _maybe_run_fresh_final_review_override(
         return
     resolved = _normalize_reviewers([role_raw])
     if not resolved:
+        state.fresh_final_status = "failed"
+        state.stop_reason = (
+            f"Fresh final reviewer role {role_raw!r} could not be resolved."
+        )
         return
     role = resolved[0]
     # Only run when the primary path is otherwise clean; a non-clean verdict
@@ -2158,37 +2168,47 @@ def _maybe_run_fresh_final_review_override(
             verbose=verbose,
             quiet=quiet,
             artifacts_dir=artifacts_dir,
-            mode="review",
+            mode="fresh-final",
             pr_metadata=pr_metadata,
             deadline=deadline,
         )
-        _record_review(state, result)
+        # Preserve the fresh session as a distinct audit identity. In
+        # particular, ``--fresh-final-review codex`` must not overwrite the
+        # primary codex review row or round artifacts.
+        fresh_findings = [
+            replace(finding, reviewer="fresh-final")
+            for finding in result.findings
+        ]
+        state.fresh_final_findings = fresh_findings
+        fresh_result = replace(
+            result, reviewer="fresh-final", findings=fresh_findings
+        )
+        _record_review(state, fresh_result, track_reviewer_status=False)
         if result.status in HARD_NOT_CLEAN_STATES:
-            state.reviewer_status[role] = result.status
             state.fresh_final_status = result.status
             state.stop_reason = (
                 f"Fresh final reviewer {role} could not complete: {result.status}."
             )
             return
-        open_findings = _actionable_findings(state, result.findings)
+        open_findings = _actionable_findings(state, fresh_findings)
         if open_findings:
-            state.reviewer_status[role] = "findings"
             state.fresh_final_status = "findings"
             state.stop_reason = f"Fresh final reviewer {role} reported findings."
         else:
-            state.reviewer_status[role] = "clean"
             state.fresh_final_status = "clean"
     except Exception as exc:
         # Fail closed (#1788): a fresh-final review that could not complete must
         # not leave the earlier clean verdict standing. Downgrade to a hard
         # non-clean state so the emitted artifact and CLI exit are non-zero.
-        state.reviewer_status[role] = "failed"
+        scrubbed_exc = _scrub_secrets(str(exc))
         state.fresh_final_status = "failed"
         state.stop_reason = (
-            f"Fresh final reviewer {role} raised and could not complete: {exc}"
+            f"Fresh final reviewer {role} raised and could not complete: "
+            f"{scrubbed_exc}"
         )
         print(
-            f"Warning: fresh final review override ({role}) failed: {exc}",
+            f"Warning: fresh final review override ({role}) failed: "
+            f"{scrubbed_exc}",
             file=sys.stderr,
         )
 
@@ -2347,8 +2367,10 @@ def _maybe_write_agentic_artifact(
         print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
         return str(out_path)
     except Exception as exc:  # pragma: no cover - defensive: never break the loop
+        scrubbed_exc = _scrub_secrets(str(exc))
         print(
-            f"Warning: failed to write agentic checkup artifact: {exc}", file=sys.stderr
+            f"Warning: failed to write agentic checkup artifact: {scrubbed_exc}",
+            file=sys.stderr,
         )
         return None
 
@@ -2411,8 +2433,10 @@ def write_final_gate_fallback_artifact(
         print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
         return str(out_path)
     except Exception as exc:  # pragma: no cover - defensive: never break the gate
+        scrubbed_exc = _scrub_secrets(str(exc))
         print(
-            f"Warning: failed to write agentic checkup fallback artifact: {exc}",
+            "Warning: failed to write agentic checkup fallback artifact: "
+            f"{scrubbed_exc}",
             file=sys.stderr,
         )
         return None

@@ -155,6 +155,9 @@ class ReviewLoopConfig:
     adversarial_prompt: Optional[str] = None
     agentic_mode: bool = False
     fresh_final_review_role: Optional[str] = None
+    agentic_artifact_path: Optional[str] = None
+    reviewer_commands: Dict[str, str] = field(default_factory=dict)
+    no_fix: bool = False
 
 
 @dataclass
@@ -175,6 +178,11 @@ class ReviewLoopContext:
     pr_number: int
     project_root: Path
     pr_content: str = ""
+    has_issue: bool = True
+    full_suite_source: str = "local"
+    test_scope: str = "full"
+    layer1_step5_evidence: str = ""
+    final_gate_canonical_status: str = ""
 
 
 @dataclass
@@ -236,6 +244,17 @@ class ReviewLoopState:
     # True only for explicit ``allow_same_reviewer_fixer`` runs where the
     # resolved reviewer and fixer are the same role.
     same_role_review_fix: bool = False
+    # Explicit fresh-final sessions are distinct from the primary provider's
+    # review artifacts/status, even when both use the same role.
+    fresh_final_review_invocations: int = 0
+    fresh_final_findings: List[ReviewFinding] = field(default_factory=list)
+    # Actual consumption used to recompute mirror budget state at serialization
+    # time rather than trusting potentially stale in-loop flags.
+    rounds_completed: int = 0
+    elapsed_minutes: float = 0.0
+    started_monotonic: Optional[float] = None
+    # Set when the render-time remote-head check invalidates prior validation.
+    validation_stale: bool = False
 
 
 # ---------------------------------------------------------------------------
