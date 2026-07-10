@@ -1,11 +1,11 @@
-% Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a passing, non-stale executable regression test.
+% Write `pdd/story_regression_gate.py`, the deterministic CI gate that enforces every user story has a present, non-stale executable regression test linked to it. The gate is static/AST-based: it checks marker presence and story-hash freshness and never executes a test body, so it does not (and must not claim to) prove that a test passes — pass/fail is verified separately by the story lane (`pytest -m story`).
 
 <include>context/python_preamble.prompt</include>
 
 <pdd-dependency>story_regression_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 
-<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a passing, non-stale executable regression test behind it. The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
+<pdd-reason>Capstone of EPIC #1698 (issue #1702): turns the story regression suite into an enforced contract. A PR cannot ship a user story without a present, non-stale executable regression test linked behind it (the gate proves presence + freshness statically; it never runs the test, so pass/fail is verified separately by the story lane). The gate is public-safe: it evaluates with no LLM/cloud credentials and is deterministic (same decision with and without secrets).</pdd-reason>
 
 % Background
 - User stories live in `user_stories/story__<id>.md`. A story's `story_id` is the filename stem with the `story__` prefix removed (e.g. `story__pdd_sync.md` -> `pdd_sync`).
@@ -26,13 +26,13 @@
 
 % Public API
 - `story_id_from_path(path) -> str` — derive the `story_id` from a `story__<id>.md` path.
-- `discover_story_markers(tests_dir) -> dict[str, StoryMarker]` — AST-scan every `*.py` under `tests_dir` for `@pytest.mark.story(...)` decorators, keyed by `story_id`. Read `story_id` and `story_hash` from keyword args (string literals only). Never import or execute the test modules. Returns `{}` when `tests_dir` is missing/empty. If two tests claim the same `story_id`, the first by sorted file path then line order wins (deterministic).
-- `classify_story(story_path, markers, *, story_text=None) -> StoryRegressionResult` — classify one story:
-  - No marker for the story's id -> `STATUS_STORY_REGRESSION_MISSING`.
-  - Marker present but its `story_hash` is missing/empty -> `STATUS_STORY_REGRESSION_STALE` (detail notes the hash was not recorded).
-  - Marker `story_hash` != current `_story_content_hash(story_text)` -> `STATUS_STORY_REGRESSION_STALE`.
-  - Otherwise -> `STATUS_STORY_REGRESSION_OK`.
-  `current_hash` is always the current `_story_content_hash`. Read the story file when `story_text` is not supplied.
+- `discover_story_markers(tests_dir) -> dict[str, StoryMarker]` — AST-scan every `*.py` under `tests_dir` (recursively) for story markers, keyed by `story_id`. A story marker is `pytest.mark.story(...)` declared as a per-test `@pytest.mark.story(...)` decorator, a module-level `pytestmark = pytest.mark.story(...)` assignment (claims every test in the module), or a class-level `pytestmark` (claims every method of the class); `pytestmark` may be a single mark or a list/tuple of marks. Read `story_id` and `story_hash` from keyword args, accepting either a string literal or a **module-level string constant referenced by name** (so `story_hash=STORY_HASH` resolves). Never import or execute the test modules; a non-UTF8 / unreadable / unparseable file is skipped, never fatal. Returns `{}` when `tests_dir` is missing/empty. This helper collapses duplicates to a single marker — first by sorted file path then line order wins (deterministic).
+- `discover_all_story_markers(tests_dir) -> dict[str, list[StoryMarker]]` — like `discover_story_markers` but keeps **every** marker that claims a `story_id` (deterministically ordered by file path then line). Freshness classification uses this so a stale duplicate can never shadow a fresh sibling: a story counts as fresh when *any* claiming test records an acceptable hash.
+- `classify_story(story_path, markers, *, story_text=None) -> StoryRegressionResult` — classify one story against every marker that claims it (a first-wins `dict` marker map is accepted for backward compatibility):
+  - No marker claims the story's id -> `STATUS_STORY_REGRESSION_MISSING`.
+  - At least one claiming marker records a `story_hash` in the story's acceptable-hash set -> `STATUS_STORY_REGRESSION_OK`.
+  - Markers claim the story but none record an acceptable hash -> `STATUS_STORY_REGRESSION_STALE` (detail notes either "no story_hash recorded" or the recorded-vs-current mismatch, drawn from the first hash-recording marker).
+  The **acceptable-hash set** is the union of the content hash (`_story_content_hash`, story prose only) and the bundle hash (`story_bundle_hash`, story + contract), so a story linked by either freshness primitive is accepted (pdd#1889 Bug 1). `current_hash` is always the current `_story_content_hash`. Read the story file when `story_text` is not supplied.
 - `evaluate_stories(*, stories_dir=None, tests_dir=None, only_story_ids=None) -> list[StoryRegressionResult]` — classify every discovered story (sorted by `story_id`). When `only_story_ids` is provided, restrict to that set (used to scope to a PR delta).
 - `changed_story_ids(project_root, *, base_ref=None) -> Optional[set[str]]` — return the `story_id`s of `story__*.md` files added or modified in `git diff <base>...HEAD`, plus tracked working-tree edits (`git diff HEAD`) and brand-new untracked files (`git ls-files --others --exclude-standard`, which `git diff` alone never reports). Resolve `<base>` by trying, in order: `base_ref`, `origin/<base_ref>`, `origin/main`, `origin/master`, `main`, `master` (first that `git rev-parse --verify` resolves). Returns `None` when git is unavailable or no base resolves (caller then evaluates all stories). Never raises; never makes network calls.
 - `load_story_regression_gate_config(project_root) -> str` — read `checkup.story_regression_gate` from `.pddrc`, then `[tool.pdd.checkup]` in `pyproject.toml`. Accept `off`/`warn`/`strict`. Normalize PyYAML booleans (`False` -> `off`; `True` -> ignored with a warning). Default `warn`.

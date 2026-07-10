@@ -90,8 +90,10 @@ def test_sync_without_basename_dispatches_global_sync(
     mock_sync_main,
     mock_auto_update,
     runner,
+    monkeypatch,
 ):
     """No-argument `pdd sync` should run global architecture sync."""
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
     mock_global_sync.return_value = (True, "Global sync dry run: 1 module(s) would sync.", 0.0, "global-sync")
 
     result = runner.invoke(cli.cli, ["sync", "--dry-run"])

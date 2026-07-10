@@ -104,7 +104,7 @@ regression tests"). `pdd checkup coverage` surfaces this per story as
 
 | `status` | Meaning |
 |----------|---------|
-| `story-regression-passing` | A marker-linked test records the current story hash |
+| `story-regression-present` | A fresh, marker-linked test exists for the story (its recorded story hash matches the current one, or the marker is a legacy hashless traceability-only link). This is a presence/freshness verdict, not an execution result: pass/fail is verified separately by the story lane (`pytest -m story`). |
 | `story-regression-missing` | No marker-linked test claims the story |
 | `story-regression-stale` | A marker-linked test exists, but it was generated from an older story hash |
 
