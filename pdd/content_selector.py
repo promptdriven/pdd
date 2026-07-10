@@ -525,6 +525,58 @@ def _contained_in_root(candidate_resolved: Path, root_resolved: Path) -> bool:
     )
 
 
+def _validated_project_path(
+    untrusted_path: str | Path,
+    *,
+    root: Path | None = None,
+) -> Optional[Path]:
+    """Return a canonical in-project path built from sanitized components.
+
+    ``code_file`` can originate in an issue-driven/cloud request, so it must
+    not flow directly into any filesystem operation. First reduce an absolute
+    path to a path relative to the trusted working-tree root (or reject it),
+    then sanitize every component with :func:`os.path.basename` before joining
+    it back to that root. Only after that lexical barrier do we resolve
+    symlinks and enforce canonical containment. This ordering is important:
+    checking containment *after* calling ``resolve`` on the raw caller value is
+    too late for CWE-022 and is reported by CodeQL's ``py/path-injection``
+    query.
+
+    The helper is total. Traversal, an outside absolute path, a symlink escape,
+    or any malformed value returns ``None``.
+    """
+    try:
+        root_resolved = (root or Path.cwd()).resolve()
+        raw = Path(untrusted_path)
+        if raw.is_absolute():
+            try:
+                relative = raw.relative_to(root_resolved)
+            except ValueError:
+                return None
+        else:
+            relative = raw
+
+        if not relative.parts:
+            return None
+
+        safe_parts: list[str] = []
+        for part in relative.parts:
+            # basename is the path-component sanitization barrier. Equality
+            # ensures separators/traversal were not silently stripped.
+            safe_part = os.path.basename(part)
+            if safe_part != part or safe_part in {'', os.curdir, os.pardir}:
+                return None
+            safe_parts.append(safe_part)
+
+        candidate = root_resolved.joinpath(*safe_parts)
+        resolved = candidate.resolve()
+        if not _contained_in_root(resolved, root_resolved):
+            return None
+        return resolved
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def find_collocated_test(code_file: str | Path) -> Optional[Path]:
     """Return the single existing co-located test for *code_file*, else ``None``.
 
@@ -545,7 +597,10 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
     never silently retargeted. Never raises: any error yields ``None``.
     """
     try:
-        module_path = Path(code_file)
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        if module_path is None:
+            return None
         suffix = module_path.suffix.lower()
         if suffix in _JS_TS_EXTENSIONS:
             raw_candidates = _collocated_js_ts_candidates(module_path)
@@ -554,34 +609,20 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
         else:
             return None
 
-        root_resolved = Path.cwd().resolve()
-        try:
-            module_resolved = module_path.resolve()
-        except OSError:
-            module_resolved = None
-
         seen: set[Path] = set()
         matches: list[Path] = []
         for candidate in raw_candidates:
-            try:
-                if not candidate.is_file():
-                    continue
-                resolved = candidate.resolve()
-            except (OSError, RuntimeError, ValueError):
-                # Skip only the bad candidate (e.g. a symlink loop raising
-                # RuntimeError, or a malformed path) — never abandon the whole
-                # detection and fall back to the runner-blind shadow (#1903).
+            resolved = _validated_project_path(candidate, root=root_resolved)
+            if resolved is None or not resolved.is_file():
+                # Skip only the bad candidate (including traversal/symlink
+                # escapes) and keep evaluating the rest.
                 continue
-            if not _contained_in_root(resolved, root_resolved):
-                # Containment (CWE-022): never adopt a test outside the
-                # working tree, regardless of how the candidate was derived.
-                continue
-            if module_resolved is not None and resolved == module_resolved:
+            if resolved == module_path:
                 continue
             if resolved in seen:
                 continue
             seen.add(resolved)
-            matches.append(candidate)
+            matches.append(resolved)
 
         if len(matches) == 1:
             return matches[0]
@@ -622,16 +663,20 @@ def resolve_test_output_path(
         sibling = find_collocated_test(code_file)
         if sibling is None:
             return derived
-        sibling_resolved = sibling.resolve()
+        root_resolved = Path.cwd().resolve()
+        sibling_resolved = _validated_project_path(sibling, root=root_resolved)
+        if sibling_resolved is None:
+            return derived
         # Defense in depth (CWE-022): find_collocated_test already rejects
         # candidates outside the working tree, but re-assert containment at
         # the adoption sink — the returned path becomes a generated-test
         # WRITE target downstream.
-        if not _contained_in_root(sibling_resolved, Path.cwd().resolve()):
+        if not _contained_in_root(sibling_resolved, root_resolved):
             return derived
-        if sibling_resolved == derived.resolve():
+        derived_resolved = _validated_project_path(derived, root=root_resolved)
+        if derived_resolved is not None and sibling_resolved == derived_resolved:
             return derived
-        return sibling
+        return sibling_resolved
     except Exception:  # pylint: disable=broad-except
         return derived
 
