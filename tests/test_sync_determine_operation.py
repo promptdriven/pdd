@@ -1740,6 +1740,40 @@ def test_get_pdd_file_paths_rejects_unsafe_architecture_filepath(
     ).resolve(strict=False)
 
 
+@pytest.mark.parametrize(
+    "unsafe_filename",
+    [
+        "../../credits_Python.prompt",
+        "/tmp/credits_Python.prompt",
+        "..\\..\\credits_Python.prompt",
+    ],
+)
+def test_get_pdd_file_paths_rejects_unsafe_architecture_filename(
+    tmp_path,
+    monkeypatch,
+    unsafe_filename,
+):
+    """Architecture prompt identities cannot probe outside the prompt root."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename=unsafe_filename,
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)

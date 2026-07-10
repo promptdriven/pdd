@@ -336,6 +336,22 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     return None
 
 
+def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
+    """Find a filename by scanning a directory instead of joining an input leaf."""
+    if not parent.is_dir():
+        return None
+    target_lower = filename.lower()
+    fallback_match = None
+    for child in parent.iterdir():
+        if not child.is_file():
+            continue
+        if child.name == filename:
+            return child
+        if fallback_match is None and child.name.lower() == target_lower:
+            fallback_match = child
+    return fallback_match
+
+
 def _resolve_context_name_for_basename(
     basename: str,
     context_override: Optional[str] = None,
@@ -648,6 +664,8 @@ def _get_filepath_from_architecture(
                 module.get("filepath"), basename, context_name=context_name
             )
 
+        physical_prompt_keys: Optional[set[str]] = None
+
         def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> bool:
             """Reject a same-leaf entry that directly identifies another prompt.
 
@@ -659,22 +677,47 @@ def _get_filepath_from_architecture(
             may not exist as prompt paths, so those remain eligible for the unique
             filepath fallback below.
             """
+            nonlocal physical_prompt_keys
             if prompt_path is None or prompts_root is None:
                 return True
             module_filename = module.get("filename")
             if not isinstance(module_filename, str) or not module_filename:
                 return True
+            normalized_filename = PurePosixPath(module_filename)
+            if (
+                "\\" in module_filename
+                or normalized_filename.is_absolute()
+                or ".." in normalized_filename.parts
+            ):
+                return False
             direct_candidate = _join_prompt_path_from_architecture(
                 prompts_root,
                 module_filename,
             )
-            resolved_candidate = _case_insensitive_path_lookup(direct_candidate)
-            if resolved_candidate is None:
-                return True
             try:
-                return resolved_candidate.resolve() == prompt_path.resolve()
-            except OSError:
+                direct_relative = direct_candidate.relative_to(prompts_root)
+                prompt_relative = prompt_path.relative_to(prompts_root)
+            except ValueError:
                 return False
+            if direct_relative.as_posix().lower() == prompt_relative.as_posix().lower():
+                return True
+
+            # Do not probe a metadata-derived path directly. Scan only beneath
+            # the already-resolved prompt root, then compare relative identities.
+            # If no physical prompt owns the architecture name, it may be a
+            # canonical filepath-derived filename and remains eligible.
+            direct_key = direct_relative.as_posix().lower()
+            if physical_prompt_keys is None:
+                physical_prompt_keys = set()
+                for physical_prompt in prompts_root.rglob("*.prompt"):
+                    if not physical_prompt.is_file():
+                        continue
+                    try:
+                        physical_key = physical_prompt.relative_to(prompts_root).as_posix().lower()
+                    except ValueError:
+                        continue
+                    physical_prompt_keys.add(physical_key)
+            return direct_key not in physical_prompt_keys
 
         # Try exact filename match first
         for module in modules:
@@ -1481,14 +1524,20 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # command summaries and sync behavior aligned with repos that intentionally
                 # namespace files such as lib_sse_example.ts or test_api_route.ts.
                 if name != code_stem and example_stem == code_stem:
-                    basename_example_path = project_root / f"{example_dir}{name}_example{_dot(extension)}"
-                    basename_test_path = project_root / f"{test_dir}test_{name}{_dot(extension)}"
+                    basename_example_path = _find_named_file(
+                        project_root / example_dir,
+                        f"{name}_example{_dot(extension)}",
+                    )
+                    basename_test_path = _find_named_file(
+                        project_root / test_dir,
+                        f"test_{name}{_dot(extension)}",
+                    )
                     preferred_example = False
                     preferred_test = False
-                    if not configured_example and basename_example_path.exists():
+                    if not configured_example and basename_example_path is not None:
                         example_path = basename_example_path
                         preferred_example = True
-                    if not configured_test and basename_test_path.exists():
+                    if not configured_test and basename_test_path is not None:
                         test_path = basename_test_path
                         preferred_test = True
                     if preferred_example or preferred_test:
