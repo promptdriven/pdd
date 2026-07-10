@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T18:41:46.408610+00:00",
+  "command": "fix",
+  "prompt_hash": "e646431c1d26c4b6c18069a0e326c4f20297e9453deb219fbce6c1bde38904d8",
+  "code_hash": "727207a44f44c851f3668868f497d348b388b77211bb8ec1e41a5e0b6b79946f",
+  "example_hash": "1b71d5d614f81c6543cc3a437ed8fcaa810372b06dc9bf23bde3cd09d9d715e6",
+  "test_hash": "acfbcbea92e5b943890af0983083d9dca84c7b4c6dd8d0980ec303815f45dbc6",
+  "test_files": {
+    "test_content_selector.py": "acfbcbea92e5b943890af0983083d9dca84c7b4c6dd8d0980ec303815f45dbc6"
+  },
+  "include_deps": {
+    "context/core/errors_example.py": "b50dbf08aec028bd57a8fe74762bf92aee9a1fe953fb3d7db50cc686c72bfee3",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/pytest_slicer.py": "c02a5488fe6f7248ed387636d5824cb2f1876544d3991e43ef253648a36e49a2"
+  }
+}

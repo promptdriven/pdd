@@ -1,21 +1,23 @@
 {
-  "pdd_version": "0.0.305.dev0",
-  "timestamp": "2026-07-16T22:34:09.571027+00:00",
-  "command": "sync",
-  "prompt_hash": "4b032c9f9fc2bc0fb7e6b0be992a340b9481be34c39c5df55d95f0de27c5db53",
-  "code_hash": "9eccbb0fdcba7d02057a8eccd472719367b7beb9ee08dd1f7afb3ebe94f0af85",
-  "example_hash": "ba5795976c73f371926d7e5f6b64ad003c8cbcd843b256310a4095481a8a60ac",
-  "test_hash": "b4a395f616c34afeff50c00b4ad290a7aa4b3b6f0d53a2a784319c5aea67aab1",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T18:41:46.155892+00:00",
+  "command": "test",
+  "prompt_hash": "2ae33917e1bbaed1d158254a8ac195aa2d9990b44fb8fa473c290ab025ee147b",
+  "code_hash": "d5b79fc009c5f935fd7fe70b2b2517f4f1f5c2c02a1231bf1d87ddbc4baba042",
+  "example_hash": "57c5e8ae852946da79151ab49e44400f2c093bf6f8add0bf25a01c9872a13101",
+  "test_hash": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
   "test_files": {
-    "test_agentic_checkup.py": "b4a395f616c34afeff50c00b4ad290a7aa4b3b6f0d53a2a784319c5aea67aab1"
+    "test_agentic_checkup.py": "4d7a9c10ba2f9925f7b567f885b6dd67dd48aa3e8757e347ddad9e6c7b6f3e02",
+    "test_agentic_checkup_orchestrator.py": "7bfdf5931599356de13b4129f62ad5ed7ae928e10ae391c88a2e16f62ebf8d5c",
+    "test_agentic_checkup_step5_pass_evidence.py": "a9d5ac08e1cbf1326ab352cffdfbb3bc84c280327b70413ef6f982860bf89e44"
   },
   "include_deps": {
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
     "context/agentic_checkup_orchestrator_example.py": "295a9ae294e22224d3c447f13c462854bfe4e526cebc89bcbba417ea514c7ef2",
-    "context/checkup_review_loop_example.py": "b073c715dbc68e6865dfc8730d25251481b400a8f7e3c382e2122d1f7de07d40",
-    "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
     "context/agentic_sync_example.py": "aa9683f1a26841f3cae854e72cce38636f0859d8dd2f7672fa14e412afdef884",
-    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3"
+    "context/checkup_review_loop_example.py": "9d94a966f8a8bf617bb80bf1613e77dfdaba702270a61980f31ac3e95df525ba",
+    "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
