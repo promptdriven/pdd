@@ -196,3 +196,38 @@ def test_secret_labeled_write_refuses_unencrypted_rollback(tmp_path) -> None:
     )
     with pytest.raises(TransactionError, match="requires configured encryption"):
         TransactionManager(tmp_path).prepare("tx-secret", (secret,))
+
+
+def test_descriptor_time_parent_symlink_swap_cannot_redirect_commit(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    target = source / "widget.py"
+    target.write_text("value = 1\n")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    outside_target = outside / "widget.py"
+    outside_target.write_text("outside = True\n")
+
+    manager = TransactionManager(tmp_path)
+    manager.prepare("tx-parent-swap", _writes())
+    original = manager._canonical_relpath  # pylint: disable=protected-access
+    armed = True
+
+    def swap_after_resolution(relpath):
+        nonlocal armed
+        canonical = original(relpath)
+        if armed and relpath == PurePosixPath("src/widget.py"):
+            armed = False
+            source.rename(tmp_path / "src-before-swap")
+            source.symlink_to(outside, target_is_directory=True)
+        return canonical
+
+    monkeypatch.setattr(manager, "_canonical_relpath", swap_after_resolution)
+    with pytest.raises(TransactionConflict, match="parent changed or is unsafe"):
+        manager.commit("tx-parent-swap")
+
+    assert outside_target.read_text() == "outside = True\n"
+    assert (tmp_path / "src-before-swap/widget.py").read_text() == "value = 1\n"
+    assert not (tmp_path / ".pdd/evidence/widget.json").exists()
