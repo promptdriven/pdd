@@ -54,7 +54,13 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         #   - self-closing:     ``<include path="..." />``
         # Real prompts use all three; missing any one means a real PDD
         # include form sits outside #739's safety net.
-        # Body-form must exclude self-closing `<include ... />`. Without
+        # Body-form must exclude self-closing `<include ... />` and must not
+        # cross another include opener. Without the tempered body match, an
+        # inline documentation token such as `` `<include>` `` can consume
+        # everything through a later real ``</include>`` and surface hundreds
+        # of lines as a bogus filesystem path.
+        #
+        # Without
         # the `(?<!/)>` lookbehind, the body-form regex would absorb the
         # entire `<include path="..." />\n<include>foo.md` span as one
         # match, losing the inner include and producing garbage.
@@ -68,7 +74,9 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         # actually resolves it as ``docs/source.md`` — and the scope
         # guard's allowlist would diverge from the real include graph.
         single_matches = re.findall(
-            r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', content, re.DOTALL
+            r'<include(?:\s+([^>]*?))?(?<!/)>((?:(?!<include\b).)*?)</include>',
+            content,
+            re.DOTALL,
         )
         for attrs, body in single_matches:
             path_value: Optional[str] = None
