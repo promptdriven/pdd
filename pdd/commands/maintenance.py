@@ -510,8 +510,21 @@ def sync(
                 agentic_fallback=_agentic_fallback_from_sync_result(result),
                 **grounding_kwargs_from_ctx(ctx.obj),
             )
+        overall_success = (
+            bool(result.get("overall_success", True))
+            if isinstance(result, Mapping)
+            else True
+        )
+        if not overall_success:
+            # Issue #1979: the summary panel says "Overall status: Failed" but the
+            # command used to return the cost-tracking tuple unconditionally and
+            # exit 0. Follow the #1677 / dispatch-helper convention and exit
+            # non-zero so CI, shell `&&` chains, and the agentic child runners
+            # never read a failed sync as success. Raised AFTER the evidence
+            # manifest write so failure evidence is still recorded.
+            raise click.exceptions.Exit(1)
         return str(result), total_cost, model_name
-    except click.Abort:
+    except (click.Abort, click.exceptions.Exit):
         raise
     except AmbiguousModuleError as exc:
         # Issue #1677: an ambiguous module name is a hard, actionable error. Always
