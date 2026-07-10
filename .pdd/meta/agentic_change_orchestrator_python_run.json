@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-14T18:21:03+00:00",
+  "timestamp": "2026-07-10T18:19:42.514644+00:00",
   "exit_code": 0,
-  "tests_passed": 148,
+  "tests_passed": 262,
   "tests_failed": 0,
-  "coverage": 100.0,
+  "coverage": 82.0,
   "test_hash": "2143164ebab405ee47b64dc45ce6c52eb025a54340233bb749b7333aa40cfbdd",
   "test_files": {
     "test_agentic_change_orchestrator.py": "2143164ebab405ee47b64dc45ce6c52eb025a54340233bb749b7333aa40cfbdd"
