@@ -124,7 +124,7 @@ def _prepare_hosted_agentic_artifact(
     pr_owner: str = "",
     pr_repo: str = "",
     pr_number: int = 0,
-) -> None:
+) -> bool:
     """Replace any prior hosted artifact with a current blocking placeholder.
 
     This runs before validation/network early returns. A retry can therefore
@@ -132,7 +132,7 @@ def _prepare_hosted_agentic_artifact(
     result when the new invocation fails before the review loop starts.
     """
     if not artifact_path:
-        return
+        return True
     path = Path(artifact_path)
     try:
         path.unlink(missing_ok=True)
@@ -140,7 +140,7 @@ def _prepare_hosted_agentic_artifact(
         # The writer below may still be able to replace the file even when an
         # unlink is denied (for example, a restrictive directory policy).
         pass
-    write_final_gate_fallback_artifact(
+    written_path = write_final_gate_fallback_artifact(
         artifact_path=artifact_path,
         pr_owner=pr_owner,
         pr_repo=pr_repo,
@@ -148,6 +148,20 @@ def _prepare_hosted_agentic_artifact(
         canonical_status="unknown",
         blockers=["Current hosted checkup invocation has not produced a verdict."],
         no_fix=True,
+    )
+    if written_path != artifact_path:
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(payload, dict)
+        and payload.get("schema_version") == "pdd.checkup.agentic.v1"
+        and payload.get("status") != "passed"
+        and payload.get("authority") == "canonical_unknown_agentic_fallback_blocking"
+        and isinstance(payload.get("verdict"), dict)
+        and payload["verdict"].get("decision") == "block"
     )
 
 
@@ -189,8 +203,7 @@ def _finalize_hosted_agentic_artifact(
             verdict = {}
             payload["verdict"] = verdict
         mirror_blocking = (
-            payload.get("status") != "passed"
-            or verdict.get("decision") != "pass"
+            payload.get("status") != "passed" or verdict.get("decision") != "pass"
         )
         if canonical_passed:
             payload["authority"] = (
@@ -967,12 +980,19 @@ def run_agentic_checkup(
     project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
     preview_pr = _parse_pr_url(pr_url) if pr_url else None
-    _prepare_hosted_agentic_artifact(
+    hosted_artifact_ready = _prepare_hosted_agentic_artifact(
         hosted_agentic_artifact_path,
         pr_owner=preview_pr[0] if preview_pr else "",
         pr_repo=preview_pr[1] if preview_pr else "",
         pr_number=preview_pr[2] if preview_pr else 0,
     )
+    if not hosted_artifact_ready:
+        return (
+            False,
+            "Failed to establish current hosted agentic artifact provenance.",
+            0.0,
+            "",
+        )
 
     # 1. Check gh CLI
     if not _check_gh_cli():
@@ -1234,16 +1254,10 @@ def run_agentic_checkup(
             # hosted pdd_cloud env contract turns this on for canonical
             # final-gate/review-loop execution and writes to the env-provided
             # path without changing checkup authority.
-            adversarial_prompt=(
-                adversarial_prompt
-                if agentic_review_loop
-                else None
-            ),
+            adversarial_prompt=(adversarial_prompt if agentic_review_loop else None),
             agentic_mode=(agentic_review_loop or hosted_agentic_mode),
             fresh_final_review_role=(
-                fresh_final_review_role
-                if agentic_review_loop
-                else None
+                fresh_final_review_role if agentic_review_loop else None
             ),
             agentic_artifact_path=hosted_agentic_artifact_path,
             # Canonical prompts may only consume commands supplied by the

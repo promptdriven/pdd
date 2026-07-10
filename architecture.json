@@ -7877,8 +7877,8 @@
           },
           {
             "name": "_prepare_hosted_agentic_artifact",
-            "signature": "(artifact_path: Optional[str], *, pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0) -> None",
-            "returns": "None"
+            "signature": "(artifact_path: Optional[str], *, pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0) -> bool",
+            "returns": "True only when hosted mode is disabled or the configured path contains a verified current blocking placeholder"
           },
           {
             "name": "_finalize_hosted_agentic_artifact",

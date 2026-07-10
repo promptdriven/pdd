@@ -761,7 +761,6 @@ class TestRunAgenticCheckup:
         loop_context = mock_review_loop.call_args.kwargs["context"]
         assert loop_context.final_gate_canonical_status == ""
 
-
     def test_prepare_hosted_artifact_replaces_stale_pass(self, tmp_path):
         path = tmp_path / "agentic.json"
         path.write_text(
@@ -776,8 +775,11 @@ class TestRunAgenticCheckup:
             encoding="utf-8",
         )
 
-        _prepare_hosted_agentic_artifact(
-            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        assert (
+            _prepare_hosted_agentic_artifact(
+                str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+            )
+            is True
         )
 
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -785,6 +787,70 @@ class TestRunAgenticCheckup:
         assert payload["status"] != "passed"
         assert payload["authority"] == "canonical_unknown_agentic_fallback_blocking"
         assert payload["verdict"]["decision"] == "block"
+
+    def test_prepare_hosted_artifact_fails_when_stale_pass_cannot_be_replaced(
+        self, tmp_path
+    ):
+        path = tmp_path / "agentic.json"
+        stale = {
+            "schema_version": "pdd.checkup.agentic.v1",
+            "status": "passed",
+            "authority": "canonical_pass_agentic_mirror_clean",
+            "verdict": {"decision": "pass"},
+        }
+        path.write_text(json.dumps(stale), encoding="utf-8")
+
+        with (
+            patch.object(Path, "unlink", side_effect=PermissionError),
+            patch(
+                "pdd.agentic_checkup.write_final_gate_fallback_artifact",
+                return_value=None,
+            ),
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is False
+
+        assert json.loads(path.read_text(encoding="utf-8")) == stale
+
+    @pytest.mark.parametrize("payload", ["not-json", "{}"])
+    def test_prepare_hosted_artifact_rejects_malformed_readback(
+        self, tmp_path, payload
+    ):
+        path = tmp_path / "agentic.json"
+
+        def malformed_writer(**_kwargs):
+            path.write_text(payload, encoding="utf-8")
+            return str(path)
+
+        with patch(
+            "pdd.agentic_checkup.write_final_gate_fallback_artifact",
+            side_effect=malformed_writer,
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is False
+
+    def test_hosted_run_stops_before_other_early_returns_without_provenance(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(tmp_path / "agentic.json")
+        )
+
+        with (
+            patch(
+                "pdd.agentic_checkup._prepare_hosted_agentic_artifact",
+                return_value=False,
+            ),
+            patch("pdd.agentic_checkup._check_gh_cli") as check_gh,
+        ):
+            success, message, cost, model = run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1", quiet=True, cwd=tmp_path
+            )
+
+        assert success is False
+        assert "provenance" in message
+        assert cost == 0.0
+        assert model == ""
+        check_gh.assert_not_called()
 
     def test_finalize_hosted_artifact_canonical_fail_dominates_stale_pass(
         self, tmp_path
@@ -1197,7 +1263,9 @@ def _run_final_gate_short_circuit(
     return result, artifact_path
 
 
-def test_final_gate_layer1_failure_writes_canonical_fail_artifact(tmp_path, monkeypatch):
+def test_final_gate_layer1_failure_writes_canonical_fail_artifact(
+    tmp_path, monkeypatch
+):
     (success, msg, _cost, _model), artifact_path = _run_final_gate_short_circuit(
         tmp_path,
         monkeypatch,
