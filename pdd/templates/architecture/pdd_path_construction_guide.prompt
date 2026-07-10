@@ -360,9 +360,9 @@ pdd sync home_page --dry-run
 % COMMON MISTAKES AND FIXES
 % ============================================================================
 
-1. **Using slashes in filename**
-   - ❌ `app/api/tasks/route_TypeScript.prompt`
-   - ✅ `api_tasks_route_TypeScript.prompt`
+1. **Flattening a path-aware filename**
+   - ❌ `api_tasks_route_TypeScript.prompt`
+   - ✅ `app/api/tasks/route_TypeScript.prompt` (mirrors `app/api/tasks/route.ts`)
 
 2. **Using framework names as language suffix**
    - ❌ `page_NextJS.prompt`

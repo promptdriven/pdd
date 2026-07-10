@@ -14,7 +14,7 @@ import json
 import hashlib
 import subprocess
 import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -265,15 +265,11 @@ def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]
     return None
 
 
-def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_filename: str) -> Path:
-    """Build a prompt path from architecture.json without duplicating subdirectories.
-
-    Issue #1169: If the naively-joined path does not exist on disk, search
-    recursively under prompts_root for a case-insensitive filename match.
-    Handles the common case where architecture.json stores just the filename
-    (e.g. "firestore_client_Python.prompt") while the file lives in a nested
-    subdirectory (e.g. prompts/src/clients/).
-    """
+def _join_prompt_path_from_architecture(
+    prompts_root: Path,
+    architecture_filename: str,
+) -> Path:
+    """Join an architecture prompt name without duplicating root segments."""
     arch_path = Path(architecture_filename)
     if arch_path.is_absolute():
         return arch_path
@@ -288,7 +284,19 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
             overlap = candidate
             break
 
-    joined = prompts_root.joinpath(*arch_parts[overlap:])
+    return prompts_root.joinpath(*arch_parts[overlap:])
+
+
+def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_filename: str) -> Path:
+    """Build a prompt path from architecture.json without duplicating subdirectories.
+
+    Issue #1169: If the directly joined path does not exist on disk, search
+    recursively under prompts_root for a case-insensitive filename match.
+    Handles the common case where architecture.json stores just the filename
+    (e.g. "firestore_client_Python.prompt") while the file lives in a nested
+    subdirectory (e.g. prompts/src/clients/).
+    """
+    joined = _join_prompt_path_from_architecture(prompts_root, architecture_filename)
     resolved_joined = _case_insensitive_path_lookup(joined)
     if resolved_joined:
         return resolved_joined
@@ -590,7 +598,9 @@ def _get_filepath_from_architecture(
     architecture_path: Path,
     prompt_filename: str,
     basename: Optional[str] = None,
-    language: Optional[str] = None
+    language: Optional[str] = None,
+    prompt_path: Optional[Path] = None,
+    prompts_root: Optional[Path] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Extract filepath for a prompt from architecture.json.
 
@@ -602,6 +612,9 @@ def _get_filepath_from_architecture(
         prompt_filename: The prompt filename to search for (e.g., "models_findings_Python.prompt").
         basename: Optional basename for alternative matching (e.g., "models_findings").
         language: Optional language for alternative matching (e.g., "Python").
+        prompt_path: Resolved physical prompt, used to reject an architecture
+            entry that directly names a different same-leaf prompt.
+        prompts_root: Root used to resolve architecture prompt filenames.
 
     Returns:
         Tuple of (filepath, matched_filename) if found, else (None, None).
@@ -635,11 +648,43 @@ def _get_filepath_from_architecture(
                 module.get("filepath"), basename, context_name=context_name
             )
 
+        def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> bool:
+            """Reject a same-leaf entry that directly identifies another prompt.
+
+            A flat prompt and a nested prompt can share a basename. The nested
+            architecture filename is useful when the nested ``prompts_dir`` strips
+            that prefix, but it must not be borrowed by the flat sibling. A direct,
+            existing architecture-derived prompt path is authoritative evidence of
+            which physical prompt owns the entry. Canonical filepath-derived names
+            may not exist as prompt paths, so those remain eligible for the unique
+            filepath fallback below.
+            """
+            if prompt_path is None or prompts_root is None:
+                return True
+            module_filename = module.get("filename")
+            if not isinstance(module_filename, str) or not module_filename:
+                return True
+            direct_candidate = _join_prompt_path_from_architecture(
+                prompts_root,
+                module_filename,
+            )
+            resolved_candidate = _case_insensitive_path_lookup(direct_candidate)
+            if resolved_candidate is None:
+                return True
+            try:
+                return resolved_candidate.resolve() == prompt_path.resolve()
+            except OSError:
+                return False
+
         # Try exact filename match first
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename") == prompt_filename and _aligns(module):
+            if (
+                module.get("filename") == prompt_filename
+                and _aligns(module)
+                and _belongs_to_resolved_prompt(module)
+            ):
                 return module.get("filepath"), module.get("filename")
 
         # Try case-insensitive filename match
@@ -647,8 +692,45 @@ def _get_filepath_from_architecture(
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename", "").lower() == prompt_filename_lower and _aligns(module):
+            if (
+                module.get("filename", "").lower() == prompt_filename_lower
+                and _aligns(module)
+                and _belongs_to_resolved_prompt(module)
+            ):
                 return module.get("filepath"), module.get("filename")
+
+        def _unique_match(candidates: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+            """Return one output identity, never first-match-wins across outputs."""
+            by_filepath: Dict[str, Dict[str, Any]] = {}
+            for candidate in candidates:
+                filepath = candidate.get("filepath")
+                if not isinstance(filepath, str) or not filepath.strip():
+                    continue
+                by_filepath.setdefault(PurePosixPath(filepath).as_posix(), candidate)
+            if len(by_filepath) != 1:
+                return None, None
+            matched = next(iter(by_filepath.values()))
+            return matched.get("filepath"), matched.get("filename")
+
+        # A nested .pddrc may make the caller's prompt key relative to a deeper
+        # prompts_dir than architecture.json uses. Match a UNIQUE filename leaf
+        # instead of assuming the repository prompt root is literally `prompts/`.
+        # Path-qualified basenames remain guarded by filepath alignment, and a bare
+        # ambiguous leaf is rejected by _architecture_module_choices before this
+        # helper is called from get_pdd_file_paths.
+        prompt_leaf_lower = PurePosixPath(prompt_filename.replace("\\", "/")).name.lower()
+        leaf_match = _unique_match([
+            module
+            for module in modules
+            if isinstance(module, dict)
+            and PurePosixPath(
+                str(module.get("filename", "")).replace("\\", "/")
+            ).name.lower() == prompt_leaf_lower
+            and _aligns(module)
+            and _belongs_to_resolved_prompt(module)
+        ])
+        if leaf_match[0]:
+            return leaf_match
 
         # Try basename + language match if provided
         if basename and language:
@@ -665,7 +747,10 @@ def _get_filepath_from_architecture(
                     if not isinstance(module, dict):
                         continue
                     module_filename = module.get("filename", "")
-                    if module_filename.lower() == expected_filename_lower:
+                    if (
+                        module_filename.lower() == expected_filename_lower
+                        and _belongs_to_resolved_prompt(module)
+                    ):
                         return module.get("filepath"), module.get("filename")
 
             # Nested basenames must not borrow an unrelated flat architecture entry.
@@ -675,7 +760,9 @@ def _get_filepath_from_architecture(
                 simple_filename_lower = f"{basename.split('/')[-1]}_{language}.prompt".lower()
                 matching_modules = [
                     module for module in modules
-                    if isinstance(module, dict) and module.get("filename", "").lower() == simple_filename_lower
+                    if isinstance(module, dict)
+                    and module.get("filename", "").lower() == simple_filename_lower
+                    and _belongs_to_resolved_prompt(module)
                 ]
                 safe_matches = [
                     module for module in matching_modules
@@ -684,10 +771,67 @@ def _get_filepath_from_architecture(
                 if len(safe_matches) == 1:
                     return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
 
+            # Canonical architecture normalization derives filename from filepath.
+            # Consumer repositories may still keep a prompt in a context-specific
+            # prompts_dir, so the prompt path and normalized architecture filename
+            # need not share directory segments. A unique, language-compatible
+            # filepath identity is still safe to use.
+            expected_extension = get_extension(language).lower()
+            relative_basename = _relative_basename_for_context(basename, context_name)
+            target_leaf = PurePosixPath(relative_basename).name
+            filepath_match = _unique_match([
+                module
+                for module in modules
+                if isinstance(module, dict)
+                and isinstance(module.get("filepath"), str)
+                and PurePosixPath(module["filepath"]).stem == target_leaf
+                and (
+                    not expected_extension
+                    or PurePosixPath(module["filepath"]).suffix.lower()
+                    == f".{expected_extension}"
+                )
+                and _aligns(module)
+                and _belongs_to_resolved_prompt(module)
+            ])
+            if filepath_match[0]:
+                return filepath_match
+
         return None, None
 
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
         return None, None
+
+
+def _contained_architecture_code_path(
+    project_root: Path,
+    architecture_filepath: str,
+) -> Optional[Path]:
+    """Resolve a safe repository-relative architecture output path.
+
+    Architecture metadata can be generated or hand-edited. It must never turn a
+    sync operation into an arbitrary filesystem write. Architecture filepaths use
+    POSIX separators by contract; absolute paths, parent traversal, backslashes,
+    and symlink-assisted escapes are rejected so callers can fall back to the
+    repository's configured output template.
+    """
+    if not isinstance(architecture_filepath, str):
+        return None
+
+    raw = architecture_filepath.strip()
+    if not raw or "\\" in raw:
+        return None
+
+    try:
+        relative = PurePosixPath(raw)
+        if relative.is_absolute() or ".." in relative.parts:
+            return None
+
+        resolved_root = project_root.resolve(strict=False)
+        candidate = resolved_root.joinpath(*relative.parts).resolve(strict=False)
+        candidate.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
 
 
 def _architecture_module_choices(
@@ -1221,41 +1365,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 arch_path,
                 prompt_filename_for_lookup,
                 basename=basename,
-                language=language
+                language=language,
+                prompt_path=prompt_path_obj,
+                prompts_root=prompts_root,
             )
-            if not arch_filepath:
-                # Issue #3203: architecture.json `filename` fields are stored
-                # relative to the repository `prompts/` root (e.g.
-                # "backend/foo_python.prompt"). A nested .pddrc context whose
-                # `prompts_dir` points at a subdirectory (e.g. "prompts/backend")
-                # makes `prompts_root` strip that leading segment, so the lookup
-                # key becomes "foo_python.prompt" and NEVER matches the stored
-                # filename. Tier-1 resolution then silently misses and falls back
-                # to the .pddrc code template, writing/looking under the wrong
-                # directory. Retry with the key relative to the repo `prompts/`
-                # root so architecture.json's filepath is honored for modules
-                # whose prompt lives in a context subdirectory.
-                try:
-                    prompts_repo_root = (arch_path.parent / "prompts").resolve()
-                    alt_lookup = str(
-                        prompt_path_obj.resolve().relative_to(prompts_repo_root)
-                    ).replace(os.sep, "/")
-                    if alt_lookup != prompt_filename_for_lookup:
-                        arch_filepath, _ = _get_filepath_from_architecture(
-                            arch_path,
-                            alt_lookup,
-                            basename=basename,
-                            language=language
-                        )
-                except ValueError:
-                    pass
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")
                 extension = get_extension(language)
 
                 # Resolve filepath relative to architecture.json's directory (project root)
-                project_root = arch_path.parent
-                code_path = project_root / arch_filepath
+                project_root = arch_path.parent.resolve(strict=False)
+                code_path = _contained_architecture_code_path(project_root, arch_filepath)
+                if code_path is None:
+                    logger.warning(
+                        "Ignoring unsafe architecture.json filepath for %s: %r",
+                        basename,
+                        arch_filepath,
+                    )
+                    arch_filepath = None
+                else:
+                    # From this point forward, use only the validated path rebuilt
+                    # from the contained resolved target, never the raw metadata.
+                    arch_filepath = code_path.relative_to(project_root).as_posix()
+
+            if arch_filepath:
                 code_stem = code_path.stem
 
                 # Get configured directories from .pddrc if available
@@ -1263,12 +1396,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_dir = "examples/"
                 test_dir = "tests/"
                 generate_dir = ""
+                outputs_config: Dict[str, Any] = {}
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
                         context_name = context_override or resolved_context_name
                         if not context_name:
-                            arch_context_path = project_root / arch_filepath
+                            arch_context_path = code_path
                             context_name = (
                                 _detect_context(arch_context_path, config, None)
                                 or _detect_context(Path.cwd(), config, None)
@@ -1278,6 +1412,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         example_dir = defaults.get('example_output_path', 'examples/')
                         test_dir = defaults.get('test_output_path', 'tests/')
                         generate_dir = defaults.get('generate_output_path', '')
+                        configured_outputs = defaults.get('outputs', {})
+                        if isinstance(configured_outputs, dict):
+                            outputs_config = configured_outputs
                         if example_dir and not example_dir.endswith('/'):
                             example_dir = example_dir + '/'
                         if test_dir and not test_dir.endswith('/'):
@@ -1311,6 +1448,33 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"
                 test_path = project_root / f"{test_dir}test_{example_stem}{_dot(extension)}"
+                configured_example = False
+                configured_test = False
+
+                # architecture.json owns the code destination, but exact .pddrc
+                # example/test templates still own those artifact destinations.
+                # Do this before legacy basename-existing-file preferences so a
+                # configured path is never silently replaced by a conventional one.
+                if outputs_config:
+                    template_paths = _generate_paths_from_templates(
+                        basename=construct_paths_basename,
+                        language=language,
+                        extension=extension,
+                        outputs_config=outputs_config,
+                        prompt_path=prompt_path,
+                    )
+                    for artifact in ("example", "test"):
+                        if artifact not in outputs_config or artifact not in template_paths:
+                            continue
+                        configured_path = template_paths[artifact]
+                        if not configured_path.is_absolute():
+                            configured_path = project_root / configured_path
+                        if artifact == "example":
+                            example_path = configured_path
+                            configured_example = True
+                        else:
+                            test_path = configured_path
+                            configured_test = True
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
@@ -1321,10 +1485,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     basename_test_path = project_root / f"{test_dir}test_{name}{_dot(extension)}"
                     preferred_example = False
                     preferred_test = False
-                    if basename_example_path.exists():
+                    if not configured_example and basename_example_path.exists():
                         example_path = basename_example_path
                         preferred_example = True
-                    if basename_test_path.exists():
+                    if not configured_test and basename_test_path.exists():
                         test_path = basename_test_path
                         preferred_test = True
                     if preferred_example or preferred_test:

@@ -1560,58 +1560,212 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
-def test_get_pdd_file_paths_architecture_filepath_with_nested_context_prompts_dir(tmp_path, monkeypatch):
-    """Issue #3203: architecture.json filepath must win even when a .pddrc context
-    nests prompts under a subdirectory (``prompts_dir: prompts/backend``).
-
-    architecture.json ``filename`` fields are stored relative to the repo
-    ``prompts/`` root (``backend/credits_Python.prompt``). A nested ``prompts_dir``
-    makes the lookup key relative to ``prompts/backend`` (``credits_Python.prompt``),
-    stripping the ``backend/`` segment, so tier-1 resolution silently missed and
-    fell back to the ``.pddrc`` ``backend/functions/{name}.py`` template — the wrong
-    directory for endpoint-test modules that live under ``backend/tests/``.
-    """
-    monkeypatch.chdir(tmp_path)
-
-    (tmp_path / "prompts" / "backend").mkdir(parents=True)
-    (tmp_path / "backend" / "functions").mkdir(parents=True)
-    (tmp_path / "backend" / "tests" / "endpoint_tests" / "tests").mkdir(parents=True)
-    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
-
-    # Prompt lives flat under the context's prompts_dir.
-    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
-        "% endpoint test mixin for the credits endpoints\n"
+def _write_nested_architecture_project(
+    root: Path,
+    *,
+    prompts_dir: str,
+    architecture_filename: str,
+    architecture_filepath: str,
+) -> None:
+    prompt_dir = root / prompts_dir
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "credits_Python.prompt").write_text(
+        "% endpoint test mixin for the credits endpoints\n",
+        encoding="utf-8",
     )
-    # Real deliverable lives under backend/tests, NOT backend/functions.
-    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
-    real_code.write_text("class CreditsTestsMixin:\n    pass\n")
-
-    (tmp_path / ".pddrc").write_text(
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
         'contexts:\n'
         '  backend:\n'
-        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        f'    paths: ["backend/**", "{prompts_dir}/**"]\n'
         '    defaults:\n'
-        '      prompts_dir: "prompts/backend"\n'
+        f'      prompts_dir: "{prompts_dir}"\n'
         '      generate_output_path: "backend/functions/"\n'
         '      outputs:\n'
         '        code:\n'
         '          path: "backend/functions/{name}.py"\n'
+        '        example:\n'
+        '          path: "custom_usage/{name}_usage.py"\n'
+        '        test:\n'
+        '          path: "custom_specs/{name}_spec.py"\n',
+        encoding="utf-8",
     )
-    # architecture.json stores the prompt path relative to the repo prompts/ root,
-    # keeping the "backend/" segment that the nested prompts_dir strips.
-    (tmp_path / "architecture.json").write_text(json.dumps({
-        "modules": [{
-            "filename": "backend/credits_Python.prompt",
-            "filepath": "backend/tests/endpoint_tests/tests/credits.py",
-        }]
-    }))
+    (root / "architecture.json").write_text(
+        json.dumps({
+            "modules": [{
+                "filename": architecture_filename,
+                "filepath": architecture_filepath,
+            }]
+        }),
+        encoding="utf-8",
+    )
 
-    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
 
-    # Must resolve to the architecture.json filepath, not the .pddrc template
-    # (backend/functions/credits.py, which does not exist).
+def test_get_pdd_file_paths_architecture_filepath_with_custom_prompt_root_and_outputs(
+    tmp_path,
+    monkeypatch,
+):
+    """A custom prompt root resolves from one architecture lookup."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.parent.mkdir(parents=True)
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="specs/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    architecture_lookups = 0
+    original_lookup = sync_determine_module._get_filepath_from_architecture
+
+    def counting_lookup(*args, **kwargs):
+        nonlocal architecture_lookups
+        architecture_lookups += 1
+        return original_lookup(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_determine_module,
+        "_get_filepath_from_architecture",
+        counting_lookup,
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="specs/backend",
+        context_override="backend",
+    )
+
     assert paths["code"] == real_code
+    assert paths["example"] == tmp_path / "custom_usage" / "credits_usage.py"
+    assert paths["test"] == tmp_path / "custom_specs" / "credits_spec.py"
+    assert architecture_lookups == 1
+
+
+def test_get_pdd_file_paths_matches_canonical_filepath_derived_architecture_filename(
+    tmp_path,
+    monkeypatch,
+):
+    """Issue #617 normalized filenames can differ from the physical prompt path."""
+    monkeypatch.chdir(tmp_path)
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.parent.mkdir(parents=True)
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/tests/endpoint_tests/tests/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"] == real_code
+
+
+def test_get_pdd_file_paths_does_not_borrow_nested_same_leaf_architecture_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A flat prompt cannot inherit a nested sibling's architecture filepath."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/utils/credits_Python.prompt",
+        architecture_filepath="backend/functions/utils/credits.py",
+    )
+    nested_prompt = tmp_path / "prompts" / "backend" / "utils" / "credits_Python.prompt"
+    nested_prompt.parent.mkdir(parents=True)
+    nested_prompt.write_text("% nested credits helper\n", encoding="utf-8")
+    nested_code = tmp_path / "backend" / "functions" / "utils" / "credits.py"
+    nested_code.parent.mkdir(parents=True)
+    nested_code.write_text("def nested_credits():\n    pass\n", encoding="utf-8")
+
+    flat_paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+    nested_paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend/utils",
+        context_override="backend",
+    )
+
+    assert flat_paths["code"].resolve() == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve()
+    assert nested_paths["code"] == nested_code
+
+
+@pytest.mark.parametrize(
+    "unsafe_filepath",
+    ["../../outside.py", "/tmp/pdd-sync-outside.py", "..\\..\\outside.py"],
+)
+def test_get_pdd_file_paths_rejects_unsafe_architecture_filepath(
+    tmp_path,
+    monkeypatch,
+    unsafe_filepath,
+):
+    """Architecture metadata cannot make sync write outside the project."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath=unsafe_filepath,
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
+    """A relative architecture path cannot escape through an existing symlink."""
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    try:
+        (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="backend/credits_Python.prompt",
+        architecture_filepath="linked/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
 
 
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
