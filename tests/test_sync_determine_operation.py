@@ -1662,6 +1662,11 @@ def test_get_pdd_file_paths_matches_canonical_filepath_derived_architecture_file
         architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
     )
 
+    def fail_recursive_scan(*_args, **_kwargs):
+        pytest.fail("canonical architecture ownership must not scan the prompt tree")
+
+    monkeypatch.setattr(Path, "rglob", fail_recursive_scan)
+
     paths = get_pdd_file_paths(
         "credits",
         "python",
@@ -1708,6 +1713,59 @@ def test_get_pdd_file_paths_does_not_borrow_nested_same_leaf_architecture_entry(
         tmp_path / "backend" / "functions" / "credits.py"
     ).resolve()
     assert nested_paths["code"] == nested_code
+
+
+def test_get_pdd_file_paths_does_not_borrow_sibling_context_architecture_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A narrowed backend root cannot inherit a frontend prompt's module."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/credits_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+    frontend_prompt = tmp_path / "prompts" / "frontend" / "credits_Python.prompt"
+    frontend_prompt.parent.mkdir(parents=True)
+    frontend_prompt.write_text("% frontend credits\n", encoding="utf-8")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_does_not_alias_prompt_named_module_by_filepath_stem(
+    tmp_path,
+    monkeypatch,
+):
+    """A billing prompt whose code stem is credits remains the billing module."""
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/billing_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
 
 
 @pytest.mark.parametrize(
@@ -1769,6 +1827,94 @@ def test_get_pdd_file_paths_rejects_unsafe_architecture_filename(
         context_override="backend",
     )
 
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_rejects_unsafe_filename_when_prompt_is_missing(
+    tmp_path,
+    monkeypatch,
+):
+    """A missing internal prompt cannot make discovery follow an external hint."""
+    monkeypatch.chdir(tmp_path)
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external-prompts"
+    external_dir.mkdir()
+    external_prompt = external_dir / "credits_Python.prompt"
+    external_prompt.write_text("% external prompt\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename=str(external_prompt),
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").unlink()
+
+    unsafe_filenames = (
+        str(external_prompt),
+        f"../../../{external_dir.name}/credits_Python.prompt",
+    )
+    for unsafe_filename in unsafe_filenames:
+        (tmp_path / "architecture.json").write_text(
+            json.dumps({
+                "modules": [{
+                    "filename": unsafe_filename,
+                    "filepath": "backend/tests/endpoint_tests/tests/credits.py",
+                }]
+            }),
+            encoding="utf-8",
+        )
+
+        paths = get_pdd_file_paths(
+            "credits",
+            "python",
+            prompts_dir="prompts/backend",
+            context_override="backend",
+        )
+
+        assert paths["prompt"].resolve(strict=False) != external_prompt.resolve()
+        assert paths["prompt"].resolve(strict=False).is_relative_to(
+            (tmp_path / "prompts" / "backend").resolve()
+        )
+        assert paths["code"].resolve(strict=False) == (
+            tmp_path / "backend" / "functions" / "credits.py"
+        ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_rejects_symlink_prompt_discovery_escape(
+    tmp_path,
+    monkeypatch,
+):
+    """Architecture prompt discovery cannot escape through a directory symlink."""
+    monkeypatch.chdir(tmp_path)
+    external_dir = tmp_path.parent / f"{tmp_path.name}-external-symlink-prompts"
+    external_dir.mkdir()
+    external_prompt = external_dir / "credits_Python.prompt"
+    external_prompt.write_text("% external prompt\n", encoding="utf-8")
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="linked/credits_Python.prompt",
+        architecture_filepath="backend/tests/endpoint_tests/tests/credits.py",
+    )
+    internal_prompt = tmp_path / "prompts" / "backend" / "credits_Python.prompt"
+    internal_prompt.unlink()
+    try:
+        (tmp_path / "prompts" / "backend" / "linked").symlink_to(
+            external_dir,
+            target_is_directory=True,
+        )
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) != external_prompt.resolve()
     assert paths["code"].resolve(strict=False) == (
         tmp_path / "backend" / "functions" / "credits.py"
     ).resolve(strict=False)

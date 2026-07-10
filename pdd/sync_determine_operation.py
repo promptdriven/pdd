@@ -14,6 +14,7 @@ import json
 import hashlib
 import subprocess
 import fnmatch
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
@@ -268,11 +269,11 @@ def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]
 def _join_prompt_path_from_architecture(
     prompts_root: Path,
     architecture_filename: str,
-) -> Path:
+) -> Optional[Path]:
     """Join an architecture prompt name without duplicating root segments."""
-    arch_path = Path(architecture_filename)
-    if arch_path.is_absolute():
-        return arch_path
+    arch_path = _safe_architecture_prompt_filename(architecture_filename)
+    if arch_path is None:
+        return None
 
     arch_parts = arch_path.parts
     root_parts = prompts_root.parts
@@ -287,7 +288,10 @@ def _join_prompt_path_from_architecture(
     return prompts_root.joinpath(*arch_parts[overlap:])
 
 
-def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_filename: str) -> Path:
+def _resolve_prompt_path_from_architecture(
+    prompts_root: Path,
+    architecture_filename: str,
+) -> Optional[Path]:
     """Build a prompt path from architecture.json without duplicating subdirectories.
 
     Issue #1169: If the directly joined path does not exist on disk, search
@@ -296,8 +300,19 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
     (e.g. "firestore_client_Python.prompt") while the file lives in a nested
     subdirectory (e.g. prompts/src/clients/).
     """
+    safe_filename = _safe_architecture_prompt_filename(architecture_filename)
+    if safe_filename is None:
+        return None
     joined = _join_prompt_path_from_architecture(prompts_root, architecture_filename)
-    resolved_joined = _case_insensitive_path_lookup(joined)
+    if joined is None:
+        return None
+    relative_parts = _prompt_relative_parts_for_root(prompts_root, safe_filename)
+    resolved_joined, contained = _walk_prompt_relative_path(
+        prompts_root,
+        relative_parts,
+    )
+    if not contained:
+        return None
     if resolved_joined:
         return resolved_joined
 
@@ -306,10 +321,16 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
     # filesystem ordering when multiple nested files share the basename.
     if prompts_root.is_dir():
         target_lower = Path(architecture_filename).name.lower()
-        matches = [
-            c for c in prompts_root.rglob("*.prompt")
-            if c.is_file() and c.name.lower() == target_lower
-        ]
+        resolved_root = prompts_root.resolve(strict=False)
+        matches = []
+        for candidate in prompts_root.rglob("*.prompt"):
+            if not candidate.is_file() or candidate.name.lower() != target_lower:
+                continue
+            try:
+                candidate.resolve(strict=False).relative_to(resolved_root)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            matches.append(candidate)
         if matches:
             matches.sort(key=lambda p: (len(p.parts), str(p)))
             return matches[0]
@@ -350,6 +371,201 @@ def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
         if fallback_match is None and child.name.lower() == target_lower:
             fallback_match = child
     return fallback_match
+
+
+def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
+    """Return one safe repository-relative architecture filename.
+
+    Architecture filenames are metadata, not trusted filesystem paths. Prompt
+    discovery must never follow absolute paths, parent traversal, backslashes,
+    or empty values supplied by that metadata.
+    """
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw or "\\" in raw:
+        return None
+    filename = PurePosixPath(raw)
+    if filename.is_absolute() or ".." in filename.parts:
+        return None
+    return filename
+
+
+@lru_cache(maxsize=512)
+def _directory_entry_index(
+    directory: str,
+    modified_ns: int,
+) -> Tuple[Dict[str, Tuple[Path, ...]], Dict[str, Tuple[Path, ...]]]:
+    """Index one directory; ``modified_ns`` invalidates add/remove/rename."""
+    del modified_ns  # Cache-key only.
+    directories: Dict[str, List[Path]] = {}
+    files: Dict[str, List[Path]] = {}
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                if entry.is_dir():
+                    directories.setdefault(entry.name.lower(), []).append(path)
+                elif entry.is_file():
+                    files.setdefault(entry.name.lower(), []).append(path)
+            except OSError:
+                continue
+    return (
+        {key: tuple(value) for key, value in directories.items()},
+        {key: tuple(value) for key, value in files.items()},
+    )
+
+
+def _indexed_directory_child(
+    parent: Path,
+    name: str,
+    *,
+    directory: bool,
+) -> Optional[Path]:
+    """Return an exact/case-insensitive child from a bounded cached index."""
+    try:
+        stat = parent.stat()
+        directories, files = _directory_entry_index(
+            str(parent),
+            stat.st_mtime_ns,
+        )
+    except (OSError, RuntimeError):
+        return None
+    matches = (directories if directory else files).get(name.lower(), ())
+    if not matches:
+        return None
+    return next((match for match in matches if match.name == name), matches[0])
+
+
+def _walk_prompt_relative_path(
+    root: Path,
+    relative_parts: Tuple[str, ...],
+) -> Tuple[Optional[Path], bool]:
+    """Find a relative prompt by walking only children of a trusted root.
+
+    No metadata-derived path is passed to a filesystem API. Each directory or
+    file used for the next step comes from listing the already-contained parent,
+    which both avoids path-injection sinks and avoids recursive tree scans.
+    """
+    if not relative_parts:
+        return None, True
+    try:
+        resolved_root = root.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None, False
+    current = root
+    for part in relative_parts[:-1]:
+        current = _indexed_directory_child(current, part, directory=True)
+        if current is None:
+            return None, True
+        try:
+            current.resolve(strict=False).relative_to(resolved_root)
+        except (OSError, RuntimeError, ValueError):
+            return None, False
+
+    found = _indexed_directory_child(
+        current,
+        relative_parts[-1],
+        directory=False,
+    )
+    if found is None:
+        return None, True
+    try:
+        found.resolve(strict=False).relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError):
+        return None, False
+    return found, True
+
+
+def _prompt_relative_parts_for_root(
+    root: Path,
+    architecture_filename: PurePosixPath,
+) -> Tuple[str, ...]:
+    """Strip directory segments already represented by a prompt root."""
+    arch_parts = architecture_filename.parts
+    root_parts = root.parts
+    overlap = 0
+    for candidate in range(min(len(root_parts), len(arch_parts)), 0, -1):
+        if tuple(part.lower() for part in root_parts[-candidate:]) == tuple(
+            part.lower() for part in arch_parts[:candidate]
+        ):
+            overlap = candidate
+            break
+    return tuple(arch_parts[overlap:])
+
+
+def _architecture_prompt_roots(
+    prompts_root: Path,
+    architecture_path: Path,
+) -> Tuple[Path, ...]:
+    """Return contained roots that can own architecture prompt filenames."""
+    project_root = architecture_path.parent.resolve(strict=False)
+    candidates: List[Path] = [
+        prompts_root.resolve(strict=False),
+        project_root / "prompts",
+        project_root / "pdd" / "prompts",
+    ]
+
+    pddrc_path = _find_pddrc_file(prompts_root)
+    if pddrc_path:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+            contexts = config.get("contexts", {})
+            if isinstance(contexts, dict):
+                for context in contexts.values():
+                    if not isinstance(context, dict):
+                        continue
+                    defaults = context.get("defaults", {})
+                    configured = defaults.get("prompts_dir") if isinstance(defaults, dict) else None
+                    safe_configured = _safe_architecture_prompt_filename(configured)
+                    if safe_configured is not None:
+                        candidates.append(project_root.joinpath(*safe_configured.parts))
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    # A narrowed context root (prompts/backend or specs/backend) needs its
+    # immediate parent to identify a sibling context such as frontend.
+    for candidate in list(candidates):
+        if candidate.parent != project_root:
+            candidates.append(candidate.parent)
+
+    roots: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+            resolved.relative_to(project_root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        key = os.path.normcase(str(resolved))
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return tuple(roots)
+
+
+def _architecture_prompt_owner(
+    architecture_filename: PurePosixPath,
+    prompt_roots: Tuple[Path, ...],
+) -> Tuple[List[Path], bool]:
+    """Return distinct physical prompts and whether every walked path was contained."""
+    owners: Dict[str, Path] = {}
+    all_contained = True
+    for root in prompt_roots:
+        relative_parts = _prompt_relative_parts_for_root(root, architecture_filename)
+        owner, contained = _walk_prompt_relative_path(root, relative_parts)
+        if not contained:
+            all_contained = False
+            continue
+        if owner is None:
+            continue
+        try:
+            key = os.path.normcase(str(owner.resolve(strict=False)))
+        except (OSError, RuntimeError):
+            continue
+        owners.setdefault(key, owner)
+    return list(owners.values()), all_contained
 
 
 def _resolve_context_name_for_basename(
@@ -524,6 +740,9 @@ def _find_prompt_file(
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
             joined = _resolve_prompt_path_from_architecture(prompts_root, arch_filename)
+            if joined is None:
+                arch_filename = None
+        if arch_filename and joined is not None:
             resolved_joined = _case_insensitive_path_lookup(joined)
             if resolved_joined:
                 return resolved_joined
@@ -617,6 +836,7 @@ def _get_filepath_from_architecture(
     language: Optional[str] = None,
     prompt_path: Optional[Path] = None,
     prompts_root: Optional[Path] = None,
+    prompt_roots: Optional[Tuple[Path, ...]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Extract filepath for a prompt from architecture.json.
 
@@ -631,6 +851,8 @@ def _get_filepath_from_architecture(
         prompt_path: Resolved physical prompt, used to reject an architecture
             entry that directly names a different same-leaf prompt.
         prompts_root: Root used to resolve architecture prompt filenames.
+        prompt_roots: Contained prompt roots used to establish physical
+            ownership across sibling contexts without recursive scans.
 
     Returns:
         Tuple of (filepath, matched_filename) if found, else (None, None).
@@ -664,8 +886,6 @@ def _get_filepath_from_architecture(
                 module.get("filepath"), basename, context_name=context_name
             )
 
-        physical_prompt_keys: Optional[set[str]] = None
-
         def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> bool:
             """Reject a same-leaf entry that directly identifies another prompt.
 
@@ -677,47 +897,46 @@ def _get_filepath_from_architecture(
             may not exist as prompt paths, so those remain eligible for the unique
             filepath fallback below.
             """
-            nonlocal physical_prompt_keys
-            if prompt_path is None or prompts_root is None:
-                return True
             module_filename = module.get("filename")
             if not isinstance(module_filename, str) or not module_filename:
+                # Architecture source-file entries without prompt-style names
+                # are eligible for the filepath-stem compatibility fallback.
                 return True
-            normalized_filename = PurePosixPath(module_filename)
-            if (
-                "\\" in module_filename
-                or normalized_filename.is_absolute()
-                or ".." in normalized_filename.parts
-            ):
+            normalized_filename = _safe_architecture_prompt_filename(module_filename)
+            if normalized_filename is None:
                 return False
-            direct_candidate = _join_prompt_path_from_architecture(
-                prompts_root,
-                module_filename,
-            )
-            try:
-                direct_relative = direct_candidate.relative_to(prompts_root)
-                prompt_relative = prompt_path.relative_to(prompts_root)
-            except ValueError:
-                return False
-            if direct_relative.as_posix().lower() == prompt_relative.as_posix().lower():
+
+            # Validation must precede this context-free discovery return. The
+            # caller may not have found a physical prompt yet, but unsafe
+            # architecture metadata must already be ineligible as a hint.
+            if prompt_path is None or prompts_root is None:
                 return True
 
-            # Do not probe a metadata-derived path directly. Scan only beneath
-            # the already-resolved prompt root, then compare relative identities.
-            # If no physical prompt owns the architecture name, it may be a
-            # canonical filepath-derived filename and remains eligible.
-            direct_key = direct_relative.as_posix().lower()
-            if physical_prompt_keys is None:
-                physical_prompt_keys = set()
-                for physical_prompt in prompts_root.rglob("*.prompt"):
-                    if not physical_prompt.is_file():
-                        continue
-                    try:
-                        physical_key = physical_prompt.relative_to(prompts_root).as_posix().lower()
-                    except ValueError:
-                        continue
-                    physical_prompt_keys.add(physical_key)
-            return direct_key not in physical_prompt_keys
+            # Non-prompt source filenames have no prompt ownership identity;
+            # their compatibility behavior is governed by filepath stem.
+            if not extract_module_from_include(normalized_filename.name):
+                return True
+
+            roots = prompt_roots or (prompts_root.resolve(strict=False),)
+            owners, all_contained = _architecture_prompt_owner(
+                normalized_filename,
+                roots,
+            )
+            if not all_contained:
+                return False
+            if not owners:
+                # Canonical filepath-derived names need not exist physically as
+                # prompt paths, so absence of an owner remains eligible.
+                return True
+            try:
+                expected = os.path.normcase(str(prompt_path.resolve(strict=False)))
+                owner_keys = {
+                    os.path.normcase(str(owner.resolve(strict=False)))
+                    for owner in owners
+                }
+            except (OSError, RuntimeError):
+                return False
+            return owner_keys == {expected}
 
         # Try exact filename match first
         for module in modules:
@@ -826,6 +1045,11 @@ def _get_filepath_from_architecture(
                 module
                 for module in modules
                 if isinstance(module, dict)
+                and not extract_module_from_include(
+                    PurePosixPath(
+                        str(module.get("filename", "")).replace("\\", "/")
+                    ).name
+                )
                 and isinstance(module.get("filepath"), str)
                 and PurePosixPath(module["filepath"]).stem == target_leaf
                 and (
@@ -1331,6 +1555,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json(prompts_root_anchor)
+        prompt_ownership_roots: Tuple[Path, ...] = (prompts_root_anchor,)
+        if arch_path:
+            prompt_ownership_roots = _architecture_prompt_roots(
+                prompts_root_anchor,
+                arch_path,
+            )
 
         # Issue #1677: fail fast on an ambiguous BARE basename BEFORE resolving a
         # prompt or falling back to a .pddrc default path. A short name such as
@@ -1411,6 +1641,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 language=language,
                 prompt_path=prompt_path_obj,
                 prompts_root=prompts_root,
+                prompt_roots=prompt_ownership_roots,
             )
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")
