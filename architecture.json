@@ -12720,5 +12720,48 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Registers the `pdd checkup simplify` CLI command (multi-provider simplify integration).",
+    "description": "Defines the `simplify` Click command that dispatches to run_checkup_simplify across engines (claude/codex/gemini/opencode/auto), with --apply/--engine/--path options; a thin command wrapper over pdd/checkup_simplify.py.",
+    "dependencies": [],
+    "priority": 278,
+    "filename": "commands/checkup_simplify_python.prompt",
+    "filepath": "pdd/commands/checkup_simplify.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "functions": [
+        {
+          "name": "checkup_simplify",
+          "signature": "(ctx: click.Context)",
+          "returns": "Optional[Tuple[str, float, str]]"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Detects whether pdd runs in a remote/SSH or headless session (for interactive-flow decisions).",
+    "description": "is_remote_session() inspects SSH_* env vars, DISPLAY, and WSL/WSLg to return (is_remote, reason); used to gate interactive prompts and browser flows.",
+    "dependencies": [],
+    "priority": 279,
+    "filename": "core/remote_session_python.prompt",
+    "filepath": "pdd/core/remote_session.py",
+    "tags": [],
+    "interface": {
+      "type": "module",
+      "functions": [
+        {
+          "name": "is_remote_session",
+          "signature": "()",
+          "returns": "Tuple[bool, str]"
+        },
+        {
+          "name": "should_skip_browser",
+          "signature": "(explicit_flag: Optional[bool])",
+          "returns": "Tuple[bool, str]"
+        }
+      ]
+    }
   }
 ]

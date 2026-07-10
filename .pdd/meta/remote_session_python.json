@@ -1,14 +1,12 @@
 {
-  "pdd_version": "0.0.299",
-  "timestamp": "2026-07-09T20:41:18.229340+00:00",
+  "pdd_version": "0.0.300.dev0",
+  "timestamp": "2026-07-10T02:22:51.624312+00:00",
   "command": "fix",
   "prompt_hash": "9a49cada503bed5d892ea7b68570c6357b6ee220a2f5a41ba1e37204f61e6760",
   "code_hash": "163292e0200246767f685e9478c8ab4531c06ba471be4ceb9a6ee8065b1cfc12",
-  "example_hash": "ebcf3626cc73386164ac48e804e2e7973cb9783892ac88cda49779cf158389c5",
-  "test_hash": "3beca26794e2f665a1052ba5dfa8a54bd90c4587c02c9c2fa03c7b85d1725e39",
-  "test_files": {
-    "test_remote_session.py": "3beca26794e2f665a1052ba5dfa8a54bd90c4587c02c9c2fa03c7b85d1725e39"
-  },
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
   "include_deps": {
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/cloud_example.py": "92418beb7a1e7f25682bf2abce5b19013b95e7eed95256c930b83c1dd6dbfb0a",
