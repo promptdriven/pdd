@@ -1,17 +1,17 @@
 {
-  "pdd_version": "0.0.275.dev3",
-  "timestamp": "2026-06-16T01:31:18.161464+00:00",
+  "pdd_version": "0.0.285.dev18",
+  "timestamp": "2026-07-10T18:00:01.932912+00:00",
   "command": "fix",
-  "prompt_hash": "0784d6ff7f749b74e6938bfdd945a1cf97aed961ebea4bf3849fe512bf7163f9",
-  "code_hash": "587d51aaed8470de39bbefbb0882f481f269431cca8b50e45b22e90dbd2eb695",
+  "prompt_hash": "4c72237184226aed3f2c20ba6a3b44d50df50d37c5870909fa2fc3e695597b81",
+  "code_hash": "11d3c060ea0361ec1a3bedd637a2d04e6ffd6030cca884486be8232e38bbe896",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22",
+  "test_hash": "daf57f3bb02e467053caf2fa5ac5b8d11cdad4db74016ee521d6e6f64c283621",
   "test_files": {
-    "test_agentic_sync_runner.py": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22"
+    "test_agentic_sync_runner.py": "daf57f3bb02e467053caf2fa5ac5b8d11cdad4db74016ee521d6e6f64c283621"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
-    "context/agentic_common_example.py": "f9cdb30a932973d341b795faf510056b95573610af5ac48e3849cf42c205998e",
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
     "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
