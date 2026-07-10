@@ -15,7 +15,7 @@ import hashlib
 import subprocess
 import fnmatch
 from functools import lru_cache
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
@@ -385,6 +385,11 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
     raw = value.strip()
     if not raw or "\\" in raw:
         return None
+    # Windows drive-qualified metadata (e.g. "D:/x", "D:x") is relative to
+    # PurePosixPath but escapes the repository when joined on Windows, where a
+    # differing drive yields a drive-relative path outside prompts_root. Reject it.
+    if PureWindowsPath(raw).drive:
+        return None
     filename = PurePosixPath(raw)
     if filename.is_absolute() or ".." in filename.parts:
         return None
@@ -644,6 +649,91 @@ def _module_filepath_matches_basename(
     return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
 
 
+def _context_owned_filepath(
+    architecture_filepath: Optional[str],
+    context_name: Optional[str],
+) -> bool:
+    """Return True when a borrowed architecture filepath is inside a context's territory.
+
+    Leaf- and filepath-stem-matched architecture entries are heuristic borrows:
+    unlike an exact filename match, they do not directly name the resolved prompt.
+    A stale sibling-context entry (e.g. a ``frontend`` module whose prompt was
+    deleted but whose ``architecture.json`` row survives) can otherwise be borrowed
+    by a same-leaf ``backend`` prompt and silently redirect the sync onto the
+    foreign module's code. Restrict such borrows to filepaths the resolving
+    prompt's context owns — its ``paths`` globs or configured output locations.
+
+    Returns True (permit) whenever no territory can be derived: a bare basename
+    with no resolvable context, a missing/invalid ``.pddrc``, or a repo-root output
+    path. Non-context projects therefore keep the prior, permissive behavior.
+    """
+    if not isinstance(architecture_filepath, str) or not architecture_filepath.strip():
+        return True
+    if not context_name:
+        return True
+    pddrc_path = _find_pddrc_file()
+    if not pddrc_path:
+        return True
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except (ValueError, KeyError, TypeError):
+        return True
+    contexts = config.get("contexts", {})
+    context_config = contexts.get(context_name) if isinstance(contexts, dict) else None
+    if not isinstance(context_config, dict):
+        return True
+
+    normalized = PurePosixPath(
+        architecture_filepath.strip().replace("\\", "/")
+    ).as_posix()
+
+    globs = [p for p in context_config.get("paths", []) if isinstance(p, str) and p]
+    prefixes: List[str] = []
+    defaults = context_config.get("defaults", {})
+    if isinstance(defaults, dict):
+        for key in ("generate_output_path", "test_output_path", "example_output_path"):
+            value = defaults.get(key)
+            if isinstance(value, str) and value.strip():
+                prefixes.append(value)
+        outputs = defaults.get("outputs", {})
+        if isinstance(outputs, dict):
+            for spec in outputs.values():
+                template = spec.get("path") if isinstance(spec, dict) else None
+                if isinstance(template, str) and template.strip():
+                    prefixes.append(template)
+
+    # No territory declared for this context — impose no restriction.
+    if not globs and not prefixes:
+        return True
+
+    for pattern in globs:
+        pattern_norm = pattern.replace("\\", "/")
+        base = pattern_norm.rstrip("*").rstrip("/")
+        if (
+            fnmatch.fnmatch(normalized, pattern_norm)
+            or normalized == base
+            or (base and normalized.startswith(base + "/"))
+        ):
+            return True
+
+    for prefix in prefixes:
+        prefix_norm = prefix.replace("\\", "/")
+        # Output templates such as "backend/functions/{name}.py" contribute only
+        # the directory before the first placeholder.
+        if "{" in prefix_norm:
+            prefix_norm = prefix_norm.split("{", 1)[0]
+        base = prefix_norm.strip().rstrip("/")
+        if base.startswith("./"):
+            base = base[2:]
+        if base in ("", "."):
+            # A repo-root output path imposes no territory constraint.
+            return True
+        if normalized == base or normalized.startswith(base + "/"):
+            return True
+
+    return False
+
+
 def _overlay_configured_output_paths(
     result: Dict[str, Path],
     outputs_config: Dict[str, Any],
@@ -837,6 +927,7 @@ def _get_filepath_from_architecture(
     prompt_path: Optional[Path] = None,
     prompts_root: Optional[Path] = None,
     prompt_roots: Optional[Tuple[Path, ...]] = None,
+    resolved_context_name: Optional[str] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Extract filepath for a prompt from architecture.json.
 
@@ -853,6 +944,10 @@ def _get_filepath_from_architecture(
         prompts_root: Root used to resolve architecture prompt filenames.
         prompt_roots: Contained prompt roots used to establish physical
             ownership across sibling contexts without recursive scans.
+        resolved_context_name: The resolving prompt's ``.pddrc`` context. Restricts
+            heuristic leaf/filepath-stem borrows to that context's territory so a
+            stale sibling-context entry cannot redirect the sync (see
+            :func:`_context_owned_filepath`).
 
     Returns:
         Tuple of (filepath, matched_filename) if found, else (None, None).
@@ -1003,6 +1098,7 @@ def _get_filepath_from_architecture(
             ).name.lower() == prompt_leaf_lower
             and _aligns(module)
             and _belongs_to_resolved_prompt(module)
+            and _context_owned_filepath(module.get("filepath"), resolved_context_name)
         ])
         if leaf_match[0]:
             return leaf_match
@@ -1072,6 +1168,7 @@ def _get_filepath_from_architecture(
                 )
                 and _aligns(module)
                 and _belongs_to_resolved_prompt(module)
+                and _context_owned_filepath(module.get("filepath"), resolved_context_name)
             ])
             if filepath_match[0]:
                 return filepath_match
@@ -1099,6 +1196,11 @@ def _contained_architecture_code_path(
 
     raw = architecture_filepath.strip()
     if not raw or "\\" in raw:
+        return None
+    # Drive-qualified output metadata (e.g. "D:/x.py", "D:x.py") is POSIX-relative
+    # but escapes the project root when joined on Windows. Reject it so callers fall
+    # back to the configured output template.
+    if PureWindowsPath(raw).drive:
         return None
 
     try:
@@ -1655,6 +1757,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 prompt_path=prompt_path_obj,
                 prompts_root=prompts_root,
                 prompt_roots=prompt_ownership_roots,
+                resolved_context_name=resolved_context_name,
             )
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")

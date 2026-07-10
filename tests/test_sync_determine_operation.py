@@ -37,7 +37,9 @@ from sync_determine_operation import (
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
-    get_pdd_file_paths
+    get_pdd_file_paths,
+    _safe_architecture_prompt_filename,
+    _contained_architecture_code_path,
 )
 
 # --- Test Plan ---
@@ -1769,6 +1771,41 @@ def test_get_pdd_file_paths_does_not_borrow_sibling_context_architecture_entry(
     ).resolve(strict=False)
 
 
+def test_get_pdd_file_paths_does_not_borrow_stale_sibling_context_entry(
+    tmp_path,
+    monkeypatch,
+):
+    """A deleted sibling prompt's surviving architecture row must not be borrowed.
+
+    Regression: when the frontend prompt no longer exists, its ``frontend`` entry
+    has no physical owner. The same-leaf ``backend`` prompt must still fall back to
+    its own configured output, never inherit the foreign module's ``frontend``
+    filepath and silently overwrite another context's code.
+    """
+    monkeypatch.chdir(tmp_path)
+    _write_nested_architecture_project(
+        tmp_path,
+        prompts_dir="prompts/backend",
+        architecture_filename="frontend/credits_Python.prompt",
+        architecture_filepath="frontend/credits.py",
+    )
+    # NOTE: the frontend prompt is intentionally NOT created — the entry is stale.
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+    assert paths["code"].resolve(strict=False) != (
+        tmp_path / "frontend" / "credits.py"
+    ).resolve(strict=False)
+
+
 def test_get_pdd_file_paths_does_not_alias_prompt_named_module_by_filepath_stem(
     tmp_path,
     monkeypatch,
@@ -1856,6 +1893,37 @@ def test_get_pdd_file_paths_rejects_unsafe_architecture_filename(
     assert paths["code"].resolve(strict=False) == (
         tmp_path / "backend" / "functions" / "credits.py"
     ).resolve(strict=False)
+
+
+@pytest.mark.parametrize(
+    "drive_filename",
+    [
+        "D:/credits_Python.prompt",
+        "D:credits_Python.prompt",
+        "C:/nested/credits_Python.prompt",
+    ],
+)
+def test_safe_architecture_prompt_filename_rejects_windows_drive(drive_filename):
+    """Drive-qualified prompt metadata is POSIX-relative but escapes on Windows.
+
+    ``PurePosixPath`` treats ``D:/x`` as relative, so the earlier absolute/`..`
+    checks pass it through; joining it on Windows yields a drive-relative path
+    outside ``prompts_root``. The validator must reject it on every platform.
+    """
+    assert _safe_architecture_prompt_filename(drive_filename) is None
+
+
+@pytest.mark.parametrize(
+    "drive_filepath",
+    [
+        "D:/credits.py",
+        "D:credits.py",
+        "C:/nested/credits.py",
+    ],
+)
+def test_contained_architecture_code_path_rejects_windows_drive(tmp_path, drive_filepath):
+    """Drive-qualified output metadata must not resolve to a code path."""
+    assert _contained_architecture_code_path(tmp_path, drive_filepath) is None
 
 
 def test_get_pdd_file_paths_rejects_unsafe_filename_when_prompt_is_missing(

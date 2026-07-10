@@ -236,13 +236,18 @@ This includes BOTH files AND metadata (architecture.json, .pddrc).
 Run these commands to identify problems:
 
 ```bash
-# 1. Find prompt files in nested directories (WRONG - should be flat)
-echo "=== Nested prompt files (WRONG) ==="
+# 1. List prompt files in nested directories.
+#    Issue #617: nested prompts (e.g. prompts/app/, prompts/backend/) are CORRECT
+#    under Strategy B or a .pddrc `prompts_dir` context. Do NOT blanket-delete them;
+#    only relocate a prompt that does not match the project's chosen strategy.
+echo "=== Nested prompt files (expected under Strategy B / a .pddrc prompts_dir) ==="
 find prompts -mindepth 2 -name "*.prompt" 2>/dev/null
 
-# 2. Check architecture.json for slashes in filename field (WRONG)
-echo "=== Filenames with slashes in architecture.json (WRONG) ==="
-cat architecture.json | jq -r '.[].filename' | grep '/' || echo "None found"
+# 2. Check architecture.json filenames MIRROR their filepath (Issue #617).
+#    A slash in `filename` is CORRECT when the `filepath` is nested. The problem is a
+#    FLATTENED filename (underscores, no slash) whose filepath has directories.
+echo "=== architecture.json filename vs filepath (must mirror per Issue #617) ==="
+cat architecture.json | jq -r '.[] | "\(.filename)\tfilepath=\(.filepath)"' 2>/dev/null || echo "None found"
 
 # 3. Check for orphan code files at wrong paths
 echo "=== Potential orphan code files ==="
@@ -275,9 +280,12 @@ ls -la .pdd/backups/ 2>/dev/null
 
 **1. Delete prompt files at incorrect paths:**
 
-   **Strategy A (per-module):** Prompts should be FLAT in `prompts/`. Delete nested ones:
+   **Strategy A (per-module):** Prompts are FLAT in `prompts/`. Delete nested ones ONLY
+   if the project uses Strategy A. Issue #617/#1971: nested prompts under a `.pddrc`
+   `prompts_dir` context (Strategy B) are CORRECT — never delete those.
    ```bash
-   # Remove incorrectly nested prompt files (Strategy A only)
+   # Remove incorrectly nested prompt files (Strategy A ONLY — never run if any
+   # .pddrc context defines a prompts_dir subdirectory that legitimately nests prompts)
    find prompts -mindepth 2 -name "*.prompt" -delete 2>/dev/null
 
    # Remove empty subdirectories
@@ -447,7 +455,8 @@ ls -la .pdd/backups/ 2>/dev/null
    rm -f *_preprocessed.prompt 2>/dev/null
    rm -f pdd/*_preprocessed.prompt 2>/dev/null
 
-   # If using nested prompt directories (WRONG), remove preprocessed files there too
+   # Remove stale preprocessed files under nested prompt directories too
+   # (the nested prompts themselves are fine — only *_preprocessed.prompt are removed)
    find prompts -name "*_preprocessed.prompt" -delete 2>/dev/null
    ```
 
@@ -481,9 +490,9 @@ Before applying validation fixes, verify:
 3. [ ] **Preprocessed files**: No stale `*_preprocessed.prompt` files with old basenames
 
 **Metadata - architecture.json:**
-4. [ ] **Filenames**: ALL use underscores, NO SLASHES
-5. [ ] **Filenames**: ALL follow `{{basename}}_{{Language}}.prompt` pattern
-6. [ ] **Dependencies**: ALL reference corrected filenames (no slashes)
+4. [ ] **Filenames mirror filepath (Issue #617)**: each `filename` shares its `filepath` directory structure using forward slashes (e.g. `app/page_TypeScriptReact.prompt` for `app/page.tsx`) — do NOT flatten a nested filepath to an underscore name
+5. [ ] **Filenames**: leaf follows `{{basename}}_{{Language}}.prompt` pattern
+6. [ ] **Dependencies**: ALL reference the corrected path-mirroring filenames
 
 **Metadata - .pddrc (Strategy A — per-module exact paths):**
 7. [ ] **Contexts**: Each module has dedicated context with `paths: ["*basename*"]`
