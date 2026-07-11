@@ -220,6 +220,50 @@ def test_vitest_imported_test_helper_mutation_cannot_pass(tmp_path: Path) -> Non
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
+def test_vitest_side_effect_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import './helper';\n"
+        "test('widget works', () => expect(globalThis.expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate side effect helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_vitest(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_vitest_local_alias_config_fails_closed(tmp_path: Path) -> None:
+    config = '{"resolve":{"alias":{"@":"./src"}}}'
+    root, commit = _repository(tmp_path, config=config)
+    (root / "src").mkdir()
+    (root / "src/helper.ts").write_text("export const expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import { expected } from '@/helper';\n"
+        "test('widget works', () => expect(expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add aliased protected helper")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "alias" in executions[0].detail
+
+
 def test_default_candidate_node_modules_vitest_is_not_trusted(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
@@ -241,6 +285,21 @@ def test_default_candidate_node_modules_vitest_is_not_trusted(tmp_path: Path) ->
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "candidate node_modules" in executions[0].detail
+
+
+def test_explicit_candidate_local_vitest_command_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = root / "tools" / "vitest.py"
+    runner.parent.mkdir()
+    runner.write_text(_fake_vitest(tmp_path).read_text(encoding="utf-8"), encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add candidate-local Vitest command")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, runner)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate checkout" in executions[0].detail
 
 
 def test_vitest_subprocess_cannot_read_secret(
