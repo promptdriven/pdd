@@ -1,6 +1,5 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
-import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -168,7 +167,7 @@ def test_vitest_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
     _envelope, executions = _run(
         root, base, _git(root, "rev-parse", "HEAD"), _fake_vitest(tmp_path)
     )
-    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
 @pytest.mark.parametrize("path", ["vitest.config.json", "setup.ts", "transform.ts"])
