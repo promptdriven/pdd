@@ -2,12 +2,12 @@
   "pdd_version": "0.0.285.dev18",
   "timestamp": "2026-07-10T18:00:01.932912+00:00",
   "command": "fix",
-  "prompt_hash": "a1321e8a1f301ecadd32d9b690f82fd3a97a3c16651eac6b022f9a9d8b577a5f",
-  "code_hash": "684ac72377f78d0e5847d582a66008ebfc4987fa1dee2755f7bd4b33e7dd26bd",
+  "prompt_hash": "eb168068b40e05254e92133feb664e64ae6380597b358a4847e01df738838d5a",
+  "code_hash": "024798fe2d9eae941aebec2a89beba55bcad7ed4b4cc9fc1e8ff444e101ca36a",
   "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
-  "test_hash": "2b8be2bf6b5812948d9e322a8babff4d2525f3f1edca70fb78d98f3abfb5daf7",
+  "test_hash": "9544fbf1cec7bb18f797441070b58b504db22dd2c5d5a1a43d82bdc8c17c2249",
   "test_files": {
-    "test_agentic_sync_runner.py": "2b8be2bf6b5812948d9e322a8babff4d2525f3f1edca70fb78d98f3abfb5daf7"
+    "test_agentic_sync_runner.py": "9544fbf1cec7bb18f797441070b58b504db22dd2c5d5a1a43d82bdc8c17c2249"
   },
   "include_deps": {
     "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",

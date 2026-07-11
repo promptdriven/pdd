@@ -738,24 +738,56 @@ def _jest_config_from_package_json(package_json: Path) -> Optional[Mapping[str, 
     return None
 
 
+# Test-discovery keys whose presence in an unparseable JS/TS config means we
+# cannot assume jest's defaults (issue #1903 §A, review round 3).
+_JS_RUNNER_DISCOVERY_KEYS = (
+    "testMatch",
+    "testRegex",
+    "testPathIgnorePatterns",
+    "roots",
+    "rootDir",
+)
+_JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config")
+
+
+def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
+    """True when a JS/TS config *text* references a test-discovery key.
+
+    We cannot execute/parse a ``jest.config.js`` in Python, but we CAN read it
+    as text: if it mentions ``testMatch``/``roots``/``rootDir``/``testRegex``/
+    ``testPathIgnorePatterns`` it customizes where tests are collected and we
+    must NOT assume the default convention. If it references none of them, the
+    project uses jest's default discovery (which collects the co-located
+    ``__test__/{stem}.test.{ext}`` we would write). Total — errors -> ``False``.
+    """
+    try:
+        text = config_file.read_text(encoding="utf-8", errors="ignore")
+    except (OSError, ValueError):
+        return False
+    return any(key in text for key in _JS_RUNNER_DISCOVERY_KEYS)
+
+
 def _collect_js_runner_config(
     module_path: Path, root_resolved: Path
-) -> tuple[Mapping[str, Any], Optional[Path]]:
-    """Return the nearest JSON-readable jest/vitest config and its directory.
+) -> tuple[Mapping[str, Any], Optional[Path], bool]:
+    """Return the nearest jest/vitest config, its directory, and an opaque flag.
 
     Walks from the module's directory up to (and including) *root_resolved*,
     reading ``jest.config.json`` / ``.jestrc`` / ``.jestrc.json`` and the
-    ``package.json`` ``"jest"``/``"vitest"`` block (nearest wins). JS/TS config
-    files (``jest.config.js``/``.ts``) are NOT parseable in Python and are
-    skipped here — the caller still treats such a project as jest-configured and
-    falls back to the default co-located convention (which jest's default
-    ``testMatch`` collects). Returns ``({}, None)`` when no JSON config is found.
-    Total — any error is swallowed.
+    ``package.json`` ``"jest"``/``"vitest"`` block (nearest wins). A JS/TS config
+    file (``jest.config.js``/``.ts``, ``vitest.config.*``) is NOT parseable in
+    Python; when the nearest config is such a file the third return value
+    (``opaque_custom``) is ``True`` IFF the file's text references a
+    test-discovery key (``testMatch``/``roots``/``rootDir``/...), signalling the
+    caller to conservatively refuse to claim a co-located path is collected. A
+    JS/TS config that customizes nothing discovery-related leaves
+    ``opaque_custom=False`` so the default convention (which jest collects) is
+    used. Returns ``({}, None, False)`` when no config is found. Total.
     """
     try:
         current = module_path.parent.resolve()
     except (OSError, RuntimeError):
-        return {}, None
+        return {}, None, False
     root_s = str(root_resolved)
     while True:
         for fname in ("jest.config.json", ".jestrc", ".jestrc.json"):
@@ -766,21 +798,28 @@ def _collect_js_runner_config(
                         candidate.read_text(encoding="utf-8", errors="ignore")
                     )
                     if isinstance(data, Mapping):
-                        return data, current
+                        return data, current, False
                 except (OSError, ValueError):
                     pass
         pkg = current / "package.json"
         if pkg.is_file():
             block = _jest_config_from_package_json(pkg)
             if block is not None:
-                return block, current
+                return block, current, False
+        # Unparseable JS/TS config file at this level — inspect its text for
+        # custom discovery keys.
+        for stem in _JS_RUNNER_CONFIG_FILE_STEMS:
+            for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
+                jsfile = current / f"{stem}{ext}"
+                if jsfile.is_file():
+                    return {}, current, _js_config_text_has_custom_discovery(jsfile)
         if str(current) == root_s or not _contained_in_root(current, root_resolved):
             break
         parent = current.parent
         if parent == current:
             break
         current = parent
-    return {}, None
+    return {}, None, False
 
 
 def _micromatch_to_regex(glob: str) -> Optional[str]:
@@ -885,16 +924,70 @@ def _sub_root_dir(value: str, root_dir: Path) -> str:
     return value.replace("<rootDir>", str(root_dir))
 
 
-def _greenfield_candidate_paths(module_path: Path, config: Mapping[str, Any]) -> list[Path]:
-    """Ordered co-located first-test candidates, biased by config conventions.
+def _resolve_config_roots(
+    config: Mapping[str, Any], config_dir: Path
+) -> tuple[list[Path], Path]:
+    """Resolve jest's effective ``rootDir`` and ``roots`` (absolute paths).
 
-    Chooses the ``.test``/``.spec`` infix and ``__test__``/``__tests__``/beside
-    placement to match hints in ``testMatch``/``testRegex`` when present, else
-    the jest-default-friendly ``__test__/{stem}.test.{ext}``.
+    *config_dir* is the ``<rootDir>`` base. Returns ``(roots, root_dir)``;
+    ``roots`` defaults to ``[root_dir]`` when none are configured.
+    """
+    root_dir = config_dir
+    root_dir_value = config.get("rootDir")
+    if isinstance(root_dir_value, str) and root_dir_value:
+        try:
+            root_dir = (config_dir / root_dir_value).resolve()
+        except (OSError, RuntimeError, ValueError):
+            root_dir = config_dir
+    roots: list[Path] = []
+    for r in _as_str_list(config.get("roots")):
+        try:
+            roots.append((config_dir / _sub_root_dir(r, root_dir)).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    return (roots or [root_dir]), root_dir
+
+
+_GLOB_WILDCARD_CHARS = frozenset("*?[]{}()+@!")
+
+
+def _testmatch_literal_dir(glob: str, root_dir: Path) -> Optional[Path]:
+    """Literal directory prefix of a ``testMatch`` glob before its first wildcard.
+
+    ``<rootDir>/test/**/*.test.ts`` -> ``<root>/test``. Returns ``None`` when the
+    pattern has no fixed directory anchor. Used to derive a collected write
+    location for a centralized (non-co-located) test layout (issue #1903 §A).
+    """
+    sub = _sub_root_dir(glob, root_dir)
+    idx = next((i for i, c in enumerate(sub) if c in _GLOB_WILDCARD_CHARS), len(sub))
+    slash = sub.rfind("/", 0, idx)
+    if slash <= 0:
+        return None
+    dir_str = sub[:slash]
+    try:
+        directory = Path(dir_str)
+        if not directory.is_absolute():
+            directory = root_dir / dir_str
+        return directory.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _greenfield_candidate_paths(
+    module_path: Path, config: Mapping[str, Any], config_dir: Optional[Path]
+) -> list[Path]:
+    """Ordered first-test candidates, biased by config conventions.
+
+    Co-located placements beside the module come first (the preferred layout).
+    When the config declares ``roots``/``rootDir`` or a ``testMatch`` with a
+    fixed directory prefix (a CENTRALIZED layout), also derive candidates UNDER
+    those collected directories so a project whose runner does not collect
+    co-located tests still gets a runner-collected path instead of a runner-blind
+    ``tests/`` shadow (issue #1903 §A). ``_candidate_is_collected`` decides which
+    survive; ordering only sets preference.
     """
     stem = module_path.stem
     ext = module_path.suffix
-    parent = module_path.parent
     hint = " ".join(
         _as_str_list(config.get("testMatch")) + _as_str_list(config.get("testRegex"))
     ).lower()
@@ -906,16 +999,35 @@ def _greenfield_candidate_paths(module_path: Path, config: Mapping[str, Any]) ->
 
     if "__tests__" in hint and "__test__" not in hint:
         subdirs = ["__tests__", "__test__", ""]
-    elif "__test__" in hint:
-        subdirs = ["__test__", "__tests__", ""]
     else:
         subdirs = ["__test__", "__tests__", ""]
 
-    candidates: list[Path] = []
-    for infix in infixes:
-        for sub in subdirs:
-            base = parent / sub if sub else parent
-            candidates.append(base / f"{stem}{infix}{ext}")
+    def _variants(base: Path) -> list[Path]:
+        out: list[Path] = []
+        for infix in infixes:
+            for sub in subdirs:
+                anchored = base / sub if sub else base
+                out.append(anchored / f"{stem}{infix}{ext}")
+        return out
+
+    candidates: list[Path] = list(_variants(module_path.parent))
+
+    if config_dir is not None:
+        roots, root_dir = _resolve_config_roots(config, config_dir)
+        anchor_dirs: list[Path] = []
+        for glob in _as_str_list(config.get("testMatch")):
+            literal = _testmatch_literal_dir(glob, root_dir)
+            if literal is not None:
+                anchor_dirs.append(literal)
+        if config.get("roots"):
+            anchor_dirs.extend(roots)
+        seen = {str(c) for c in candidates}
+        for anchor in anchor_dirs:
+            for cand in _variants(anchor):
+                key = str(cand)
+                if key not in seen:
+                    candidates.append(cand)
+                    seen.add(key)
     return candidates
 
 
@@ -937,22 +1049,12 @@ def _candidate_is_collected(
     if config_dir is None:
         return None
     posix = candidate.as_posix()
-    root_dir = config_dir
-    root_dir_value = config.get("rootDir")
-    if isinstance(root_dir_value, str) and root_dir_value:
-        root_dir = (config_dir / root_dir_value).resolve()
+    resolved_roots, root_dir = _resolve_config_roots(config, config_dir)
 
     # roots / rootDir containment.
-    roots_values = _as_str_list(config.get("roots"))
-    resolved_roots = []
-    for r in roots_values:
-        try:
-            resolved_roots.append((config_dir / _sub_root_dir(r, root_dir)).resolve())
-        except (OSError, RuntimeError, ValueError):
-            continue
-    if not resolved_roots:
-        resolved_roots = [root_dir]
-    if roots_values or (isinstance(root_dir_value, str) and root_dir_value):
+    if config.get("roots") or (
+        isinstance(config.get("rootDir"), str) and config.get("rootDir")
+    ):
         if not any(_contained_in_root(candidate, root) for root in resolved_roots):
             return False
 
@@ -997,12 +1099,18 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
     JSON-readable config: ``testMatch``/``testRegex`` pick the ``.test``/``.spec``
     + ``__test__``/``__tests__`` convention, and ``roots``/``rootDir``/
     ``testPathIgnorePatterns`` are enforced so a custom layout never yields an
-    UNCOLLECTED test — if no co-located candidate would be collected, return
-    ``None`` (fall back to the derived path). When the config is only a JS file
-    (``jest.config.js``, unparseable in Python) the jest-default convention
+    UNCOLLECTED test — if no candidate would be collected, return ``None`` (fall
+    back to the derived path). For a CENTRALIZED layout (``roots``/``rootDir`` or
+    a ``testMatch`` with a fixed directory prefix) a collected path UNDER the
+    configured directory is derived instead of a co-located one, so the test
+    still lands where the runner looks. When the runner is configured only by a
+    JS file (``jest.config.js``, unparseable in Python): if that file's text
+    references NO discovery key the jest-default convention
     ``__test__/{stem}.test.{ext}`` is used (jest's default ``testMatch`` collects
-    it). Python keeps its pytest-idiomatic ``tests/`` default (unchanged). Any
-    other language, or no detectable runner, yields ``None``.
+    it); if it DOES customize discovery (``testMatch``/``roots``/... we cannot
+    parse) we conservatively return ``None`` rather than claim an unproven path is
+    collected. Python keeps its pytest-idiomatic ``tests/`` default (unchanged).
+    Any other language, or no detectable runner, yields ``None``.
 
     The module path is caller/issue-influenced, so it flows through
     :func:`_validated_project_path` (CWE-022) before any filesystem use and the
@@ -1019,8 +1127,15 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
         if not _project_uses_js_test_runner(module_path, root_resolved):
             return None
 
-        config, config_dir = _collect_js_runner_config(module_path, root_resolved)
-        candidates = _greenfield_candidate_paths(module_path, config)
+        config, config_dir, opaque_custom = _collect_js_runner_config(
+            module_path, root_resolved
+        )
+        # An unparseable JS/TS config that customizes discovery: we cannot prove
+        # where tests are collected, so refuse to write a possibly-uncollected
+        # test (fall back to the derived path) rather than guess the default.
+        if opaque_custom:
+            return None
+        candidates = _greenfield_candidate_paths(module_path, config, config_dir)
 
         fallback_default: Optional[Path] = None
         for candidate in candidates:
