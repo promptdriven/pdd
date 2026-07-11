@@ -1763,9 +1763,36 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
     return None
 
 
+def _validated_report_live_includes(
+    prompt_path: Path, root: Path
+) -> tuple[bool, Optional[List[Path]]]:
+    """Resolve all live legacy includes once, before any dependency is read."""
+    from pdd.continuous_sync import canonical_sync_enabled
+    from pdd.sync_core.includes import parse_include_references
+
+    if canonical_sync_enabled(prompt_path) or not prompt_path.exists():
+        return False, None
+    try:
+        content = prompt_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False, None
+    references = parse_include_references(content)
+    if not references:
+        return False, None
+    resolved: List[Path] = []
+    for reference in references:
+        dependency = _safe_report_include(reference.path, prompt_path, root)
+        if dependency is None:
+            return True, None
+        resolved.append(dependency)
+    return True, resolved
+
+
 def extract_include_deps(
     prompt_path: Path,
     dependency_root: Optional[Path] = None,
+    *,
+    resolved_live_dependencies: Optional[List[Path]] = None,
 ) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
@@ -1781,6 +1808,18 @@ def extract_include_deps(
     from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
     if not canonical_sync_enabled(prompt_path):
+        if resolved_live_dependencies is not None:
+            dependencies: Dict[str, str] = {}
+            for dependency in resolved_live_dependencies:
+                digest = calculate_sha256(dependency)
+                if digest:
+                    key_root = dependency_root or Path.cwd()
+                    try:
+                        key = str(dependency.relative_to(key_root))
+                    except ValueError:
+                        key = str(dependency)
+                    dependencies[key] = digest
+            return dependencies
         if not prompt_path.exists():
             return {}
         try:
@@ -1849,6 +1888,7 @@ def calculate_prompt_hash(
     dependency_root: Optional[Path] = None,
     *,
     hash_version: int = 1,
+    resolved_live_dependencies: Optional[List[Path]] = None,
 ) -> Optional[str]:
     """Hash a prompt file including the content of all its <include> dependencies.
 
@@ -1874,26 +1914,31 @@ def calculate_prompt_hash(
         return None
     from pdd.sync_core.includes import parse_include_references
 
-    references = (
-        _legacy_include_references(prompt_content)
-        if hash_version == 1 else
-        [reference.path for reference in parse_include_references(prompt_content)]
-    )
-    declared_dependencies = (
-        references
-        if references else list((stored_deps or {}).keys())
-    )
-    if hash_version == 1:
-        declared_dependencies = sorted(set(item.strip() for item in declared_dependencies))
-    resolved_dependencies = []
-    for declared in declared_dependencies:
-        candidate = _legacy_dependency_path(
-            ((dependency_root / prompt_path.name) if dependency_root else prompt_path).resolve(),
-            declared,
+    references = parse_include_references(prompt_content)
+    if references and resolved_live_dependencies is not None:
+        resolved_dependencies = list(resolved_live_dependencies)
+        if hash_version == 1:
+            resolved_dependencies = sorted(set(resolved_dependencies))
+    else:
+        declared_dependencies = (
+            [reference.path for reference in references]
+            if references else list((stored_deps or {}).keys())
         )
-        if candidate is None:
-            return None
-        resolved_dependencies.append(candidate.resolve())
+        if hash_version == 1:
+            declared_dependencies = sorted(set(declared_dependencies))
+        resolved_dependencies = []
+        for declared in declared_dependencies:
+            candidate = _legacy_dependency_path(
+                (
+                    (dependency_root / prompt_path.name)
+                    if dependency_root
+                    else prompt_path
+                ).resolve(),
+                declared,
+            )
+            if candidate is None:
+                return None
+            resolved_dependencies.append(candidate.resolve())
 
     hasher = hashlib.sha256()
     hasher.update(prompt_path.read_bytes())
@@ -2011,13 +2056,28 @@ def calculate_current_hashes(
             }
         elif file_type == 'prompt' and isinstance(file_path, Path):
             # Issue #522: Hash prompt with <include> dependencies
+            has_live_includes = False
+            resolved_live_dependencies = None
+            if dependency_root is not None:
+                has_live_includes, resolved_live_dependencies = (
+                    _validated_report_live_includes(file_path, dependency_root)
+                )
             hashes['prompt_hash'] = calculate_prompt_hash(
                 file_path,
                 stored_deps=stored_include_deps,
                 dependency_root=dependency_root,
+                resolved_live_dependencies=resolved_live_dependencies,
             )
             # Also extract current include deps for persistence
-            hashes['include_deps'] = extract_include_deps(file_path, dependency_root)
+            hashes['include_deps'] = (
+                extract_include_deps(
+                    file_path,
+                    dependency_root,
+                    resolved_live_dependencies=resolved_live_dependencies,
+                )
+                if not has_live_includes or resolved_live_dependencies is not None
+                else {}
+            )
             # If no deps found in prompt but we have stored deps, preserve them
             if not hashes['include_deps'] and stored_include_deps:
                 # Re-hash stored deps to check for changes

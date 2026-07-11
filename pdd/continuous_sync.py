@@ -277,49 +277,51 @@ def _bounded_prompt_paths(
     prompt_root: Path, budget: Dict[str, int]
 ) -> tuple[List[Path], Optional[DiscoveryFailure]]:
     prompt_paths: List[Path] = []
-    walk_failure: DiscoveryFailure | None = None
-
-    def on_walk_error(error: OSError) -> None:
-        nonlocal walk_failure
-        walk_failure = DiscoveryFailure(
-            prompt_root=prompt_root,
-            reason=f"configured prompt root traversal failed: {error}",
-            failure="prompt_traversal_error",
-        )
-
-    for current_root, dirnames, filenames in os.walk(prompt_root, onerror=on_walk_error):
-        if walk_failure is not None:
-            return prompt_paths, walk_failure
-        current = Path(current_root)
-        budget["entries"] += 1 + len(dirnames) + len(filenames)
-        if budget["entries"] > MAX_PROMPT_DISCOVERY_ENTRIES:
+    pending = [prompt_root]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = os.scandir(current)
+            with entries:
+                for entry in entries:
+                    budget["entries"] += 1
+                    if budget["entries"] > MAX_PROMPT_DISCOVERY_ENTRIES:
+                        return prompt_paths, DiscoveryFailure(
+                            prompt_root=prompt_root,
+                            reason=(
+                                "configured prompt root exceeded traversal budget "
+                                f"of {MAX_PROMPT_DISCOVERY_ENTRIES} directory entries"
+                            ),
+                            failure="prompt_traversal_budget",
+                        )
+                    entry_path = current / entry.name
+                    try:
+                        is_directory = entry.is_dir(follow_symlinks=False)
+                    except OSError as exc:
+                        raise OSError(f"cannot inspect {entry_path}: {exc}") from exc
+                    if is_directory:
+                        if not _is_hidden_or_system_dir(entry_path):
+                            pending.append(entry_path)
+                        continue
+                    if not entry.name.endswith(".prompt") or "_" not in entry.name:
+                        continue
+                    prompt_paths.append(entry_path)
+                    budget["files"] += 1
+                    if budget["files"] > MAX_PROMPT_DISCOVERY_FILES:
+                        return prompt_paths, DiscoveryFailure(
+                            prompt_root=prompt_root,
+                            reason=(
+                                "configured prompt root exceeded traversal budget "
+                                f"of {MAX_PROMPT_DISCOVERY_FILES} prompt files"
+                            ),
+                            failure="prompt_traversal_budget",
+                        )
+        except OSError as exc:
             return prompt_paths, DiscoveryFailure(
                 prompt_root=prompt_root,
-                reason=(
-                    "configured prompt root exceeded traversal budget "
-                    f"of {MAX_PROMPT_DISCOVERY_ENTRIES} directory entries"
-                ),
-                failure="prompt_traversal_budget",
+                reason=f"configured prompt root traversal failed: {exc}",
+                failure="prompt_traversal_error",
             )
-        dirnames[:] = [
-            dirname
-            for dirname in sorted(dirnames)
-            if not _is_hidden_or_system_dir(current / dirname)
-        ]
-        for filename in sorted(filenames):
-            if not filename.endswith(".prompt") or "_" not in filename:
-                continue
-            prompt_paths.append(current / filename)
-            budget["files"] += 1
-            if budget["files"] > MAX_PROMPT_DISCOVERY_FILES:
-                return prompt_paths, DiscoveryFailure(
-                    prompt_root=prompt_root,
-                    reason=(
-                        "configured prompt root exceeded traversal budget "
-                        f"of {MAX_PROMPT_DISCOVERY_FILES} prompt files"
-                    ),
-                    failure="prompt_traversal_budget",
-                )
     return sorted(prompt_paths), None
 
 
@@ -1290,6 +1292,35 @@ def _unsafe_fingerprinted_artifacts(
     return unsafe
 
 
+def _unsafe_artifact_result(
+    unit: SyncUnit,
+    paths: Dict[str, Any],
+    root: Path,
+    fingerprint_path: Path,
+) -> Optional[Dict[str, Any]]:
+    """Return a unit failure when any resolved artifact violates project safety."""
+    unsafe_artifacts = _unsafe_fingerprinted_artifacts(paths, root)
+    if not unsafe_artifacts:
+        return None
+    changed_files = sorted(key.split(":", 1)[0] for key in unsafe_artifacts)
+    return {
+        "basename": unit.basename,
+        "language": unit.language,
+        "classification": FAILURE_CLASSIFICATION,
+        "operation": "none",
+        "reason": "unsafe fingerprinted artifacts: "
+        + ", ".join(
+            f"{artifact} {reason}"
+            for artifact, reason in sorted(unsafe_artifacts.items())
+        ),
+        "changed_files": changed_files,
+        "metadata_valid": False,
+        "fingerprint_path": str(fingerprint_path),
+        "paths": _paths_as_json(paths, root),
+        "failure": "unsafe_artifacts",
+    }
+
+
 def _changed_artifacts(
     fingerprint: Fingerprint,
     paths: Dict[str, Path],
@@ -1368,44 +1399,47 @@ def _find_matching_artifact(
     resolved_root = root.resolve()
     if budget is None:
         budget = {"repair_entries": 0}
-    walk_failure: DiscoveryFailure | None = None
-
-    def on_walk_error(error: OSError) -> None:
-        nonlocal walk_failure
-        walk_failure = DiscoveryFailure(
-            prompt_root=root,
-            reason=f"repair search traversal failed: {error}",
-            failure="repair_traversal_error",
-        )
-
-    for current_root, dirnames, filenames in os.walk(root, onerror=on_walk_error):
-        if walk_failure is not None:
-            return None, walk_failure
-        current = Path(current_root)
-        dirnames[:] = [
-            dirname
-            for dirname in sorted(dirnames)
-            if not _is_hidden_or_system_dir(current / dirname)
-        ]
-        filenames = sorted(filenames)
-        budget["repair_entries"] = budget.get("repair_entries", 0) + 1 + len(dirnames) + len(filenames)
-        if budget["repair_entries"] > MAX_REPAIR_DISCOVERY_ENTRIES:
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = os.scandir(current)
+            with entries:
+                for entry in entries:
+                    budget["repair_entries"] = budget.get("repair_entries", 0) + 1
+                    if budget["repair_entries"] > MAX_REPAIR_DISCOVERY_ENTRIES:
+                        return None, DiscoveryFailure(
+                            prompt_root=root,
+                            reason=(
+                                "repair search exceeded traversal budget "
+                                f"of {MAX_REPAIR_DISCOVERY_ENTRIES} directory entries"
+                            ),
+                            failure="repair_traversal_budget",
+                        )
+                    candidate = current / entry.name
+                    try:
+                        is_directory = entry.is_dir(follow_symlinks=False)
+                    except OSError as exc:
+                        raise OSError(f"cannot inspect {candidate}: {exc}") from exc
+                    if is_directory:
+                        if not _is_hidden_or_system_dir(candidate):
+                            pending.append(candidate)
+                        continue
+                    if entry.name != filename:
+                        continue
+                    if _artifact_path_violation(candidate, resolved_root):
+                        continue
+                    if (
+                        entry.is_file(follow_symlinks=False)
+                        and calculate_sha256(candidate) == expected_hash
+                    ):
+                        matches.append(candidate)
+        except OSError as exc:
             return None, DiscoveryFailure(
                 prompt_root=root,
-                reason=(
-                    "repair search exceeded traversal budget "
-                    f"of {MAX_REPAIR_DISCOVERY_ENTRIES} directory entries"
-                ),
-                failure="repair_traversal_budget",
+                reason=f"repair search traversal failed: {exc}",
+                failure="repair_traversal_error",
             )
-        for candidate_name in filenames:
-            if candidate_name != filename:
-                continue
-            candidate = current / candidate_name
-            if _artifact_path_violation(candidate, resolved_root):
-                continue
-            if candidate.is_file() and calculate_sha256(candidate) == expected_hash:
-                matches.append(candidate)
     if len(matches) == 1:
         return matches[0], None
     return None, None
@@ -1536,6 +1570,10 @@ def classify_unit(
             "failure": failure,
         }
 
+    unsafe_result = _unsafe_artifact_result(unit, paths, base, fp_path)
+    if unsafe_result is not None:
+        return unsafe_result
+
     _raw_fp, raw_error = _load_fingerprint_json(fp_path, base)
     if raw_error == "unsafe_metadata":
         return {
@@ -1592,27 +1630,9 @@ def classify_unit(
                 "failure": repair_failure.failure,
             }
 
-    unsafe_artifacts = _unsafe_fingerprinted_artifacts(paths, base)
-    if unsafe_artifacts:
-        changed_files = sorted(
-            key.split(":", 1)[0] for key in unsafe_artifacts
-        )
-        return {
-            "basename": unit.basename,
-            "language": unit.language,
-            "classification": FAILURE_CLASSIFICATION,
-            "operation": "none",
-            "reason": "unsafe fingerprinted artifacts: "
-            + ", ".join(
-                f"{artifact} {reason}"
-                for artifact, reason in sorted(unsafe_artifacts.items())
-            ),
-            "changed_files": changed_files,
-            "metadata_valid": False,
-            "fingerprint_path": str(fp_path),
-            "paths": _paths_as_json(paths, base),
-            "failure": "unsafe_artifacts",
-        }
+    unsafe_result = _unsafe_artifact_result(unit, paths, base, fp_path)
+    if unsafe_result is not None:
+        return unsafe_result
 
     missing_hashes = _missing_required_hashes(fingerprint, paths)
     if missing_hashes:
