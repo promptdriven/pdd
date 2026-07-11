@@ -144,9 +144,11 @@ class FileReplayStore(ReplayStore):
                     self.path, {}, consume_record, trust_root=self.trust_root
                 )
                 return
-            except DescriptorStoreError as exc:
+            except (DescriptorStoreError, OSError) as exc:
                 error = exc
         if error is not None:
+            if isinstance(error, OSError):
+                raise AttestationError("replay ledger I/O failed") from error
             raise AttestationError(str(error)) from error
 
     def is_durable(self) -> bool:
