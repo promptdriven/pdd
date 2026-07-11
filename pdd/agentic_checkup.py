@@ -923,6 +923,7 @@ def run_agentic_checkup(
     adversarial_prompt: Optional[str] = None,
     agentic_review_loop: bool = False,
     fresh_final_review_role: Optional[str] = None,
+    agentic_artifact_path: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -970,6 +971,8 @@ def run_agentic_checkup(
         start_step_override: Optional recovery override for the legacy
             orchestrator resume point. Used to start from a later step when
             cached state already contains earlier step outputs.
+        agentic_artifact_path: Invocation-private artifact destination for an
+            explicit standalone agentic review loop. Ignored in other modes.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -979,6 +982,14 @@ def run_agentic_checkup(
     # the caller-controlled path when the current invocation fails early.
     project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     hosted_agentic_artifact_path = _hosted_agentic_artifact_path(project_root)
+    standalone_agentic_artifact_path = (
+        str(agentic_artifact_path or "").strip() or None
+        if agentic_review_loop
+        else None
+    )
+    effective_agentic_artifact_path = (
+        standalone_agentic_artifact_path or hosted_agentic_artifact_path
+    )
     preview_pr = _parse_pr_url(pr_url) if pr_url else None
     hosted_artifact_ready = _prepare_hosted_agentic_artifact(
         hosted_agentic_artifact_path,
@@ -1259,7 +1270,7 @@ def run_agentic_checkup(
             fresh_final_review_role=(
                 fresh_final_review_role if agentic_review_loop else None
             ),
-            agentic_artifact_path=hosted_agentic_artifact_path,
+            agentic_artifact_path=effective_agentic_artifact_path,
             # Canonical prompts may only consume commands supplied by the
             # caller. Hosted fallback/mirror commands are artifact metadata;
             # keeping them in a separate field prevents the non-authoritative

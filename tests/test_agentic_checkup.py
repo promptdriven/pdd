@@ -656,19 +656,29 @@ class TestRunAgenticCheckup:
         mock_load_pddrc,
         mock_fetch_pr_context,
         mock_review_loop,
+        monkeypatch,
+        tmp_path,
     ):
         mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+        private_artifact = tmp_path / "private-agentic-verdict.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH",
+            str(tmp_path / "hosted-agentic-verdict.json"),
+        )
 
         run_agentic_checkup(
             None,
             quiet=True,
             pr_url="https://github.com/owner/repo/pull/2",
             agentic_review_loop=True,
+            agentic_artifact_path=str(private_artifact),
             no_fix=True,
         )
 
         config = mock_review_loop.call_args.kwargs["config"]
         assert config.agentic_mode is True
+        assert config.agentic_artifact_path == str(private_artifact)
         assert config.no_fix is True
         assert config.review_only is True
 

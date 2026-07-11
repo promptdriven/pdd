@@ -6,7 +6,11 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pdd.commands.checkup import checkup
+from pdd.commands.checkup import (
+    _emit_agentic_review_loop_json,
+    _prepare_agentic_review_loop_artifact,
+    checkup,
+)
 
 
 def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
@@ -370,12 +374,18 @@ def test_agentic_review_loop_conflicts_with_final_gate() -> None:
     runner = CliRunner()
     result = runner.invoke(
         checkup,
-        ["--agentic-review-loop", "--final-gate", "--pr",
-         "https://github.com/org/repo/pull/7"],
+        [
+            "--agentic-review-loop",
+            "--final-gate",
+            "--pr",
+            "https://github.com/org/repo/pull/7",
+        ],
         obj={"quiet": True},
     )
     assert result.exit_code != 0
-    assert "--agentic-review-loop cannot be combined with --final-gate." in result.output
+    assert (
+        "--agentic-review-loop cannot be combined with --final-gate." in result.output
+    )
 
 
 def test_agentic_review_loop_forwards_knobs_and_allows_no_fix() -> None:
@@ -385,11 +395,14 @@ def test_agentic_review_loop_forwards_knobs_and_allows_no_fix() -> None:
         result = runner.invoke(
             checkup,
             [
-                "--pr", "https://github.com/org/repo/pull/7",
+                "--pr",
+                "https://github.com/org/repo/pull/7",
                 "--agentic-review-loop",
                 "--no-fix",
-                "--adversarial-prompt", "be maximally skeptical",
-                "--fresh-final-review", "gemini",
+                "--adversarial-prompt",
+                "be maximally skeptical",
+                "--fresh-final-review",
+                "gemini",
             ],
             obj={"quiet": True, "verbose": False},
         )
@@ -412,8 +425,7 @@ def test_agentic_review_loop_emits_json_wrapper_on_stdout() -> None:
             run_checkup.return_value = (True, "clean", 0.0, "codex")
             result = runner.invoke(
                 checkup,
-                ["--pr", "https://github.com/org/repo/pull/7",
-                 "--agentic-review-loop"],
+                ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
                 obj={"quiet": False, "verbose": False},
             )
     assert result.exit_code == 1, result.output
@@ -430,12 +442,18 @@ def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
 
     runner = CliRunner()
     with runner.isolated_filesystem():
+
         def run_and_write_artifact(**_kwargs):
-            with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
+            with open(
+                _kwargs["agentic_artifact_path"], "w", encoding="utf-8"
+            ) as handle:
                 json.dump(
-                    {"schema_version": "pdd.checkup.agentic.v1",
-                     "authority": "canonical_pass_agentic_mirror_clean",
-                     "status": "passed", "verdict": {"decision": "pass"}},
+                    {
+                        "schema_version": "pdd.checkup.agentic.v1",
+                        "authority": "canonical_pass_agentic_mirror_clean",
+                        "status": "passed",
+                        "verdict": {"decision": "pass"},
+                    },
                     handle,
                 )
             return True, "clean", 0.0, "codex"
@@ -444,8 +462,7 @@ def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
             run_checkup.side_effect = run_and_write_artifact
             result = runner.invoke(
                 checkup,
-                ["--pr", "https://github.com/org/repo/pull/7",
-                 "--agentic-review-loop"],
+                ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
                 obj={"quiet": False, "verbose": False},
             )
     assert result.exit_code == 0, result.output
@@ -456,22 +473,31 @@ def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
 
 def test_agentic_review_loop_blocking_artifact_exits_nonzero() -> None:
     import json
+
     runner = CliRunner()
     with runner.isolated_filesystem():
+
         def run_and_write_artifact(**_kwargs):
-            with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
+            with open(
+                _kwargs["agentic_artifact_path"], "w", encoding="utf-8"
+            ) as handle:
                 json.dump(
-                    {"schema_version": "pdd.checkup.agentic.v1", "status": "failed",
-                     "verdict": {"decision": "block"}},
+                    {
+                        "schema_version": "pdd.checkup.agentic.v1",
+                        "status": "failed",
+                        "verdict": {"decision": "block"},
+                    },
                     handle,
                 )
             return True, "report produced", 0.0, "codex"
 
         with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
             run_checkup.side_effect = run_and_write_artifact
-            result = runner.invoke(checkup,
+            result = runner.invoke(
+                checkup,
                 ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
-                obj={"quiet": False, "verbose": False})
+                obj={"quiet": False, "verbose": False},
+            )
     assert result.exit_code == 1
     assert json.loads(result.output)["verdict"]["decision"] == "block"
 
@@ -483,8 +509,11 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
     with runner.isolated_filesystem():
         with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
             json.dump(
-                {"schema_version": "pdd.checkup.agentic.v1", "status": "passed",
-                 "verdict": {"decision": "pass"}},
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "verdict": {"decision": "pass"},
+                },
                 handle,
             )
         with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
@@ -501,30 +530,97 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
     assert payload["status"] == "failed"
 
 
-def test_agentic_review_loop_rejects_artifact_when_stale_cleanup_fails() -> None:
+def test_agentic_review_loop_fails_before_run_when_private_path_reservation_fails() -> (
+    None
+):
     import json
 
     runner = CliRunner()
     with runner.isolated_filesystem():
         with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
             json.dump(
-                {"schema_version": "pdd.checkup.agentic.v1", "status": "passed",
-                 "verdict": {"decision": "pass"}},
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "verdict": {"decision": "pass"},
+                },
                 handle,
             )
-        with patch("pdd.commands.checkup.Path.unlink", side_effect=PermissionError):
+        with patch(
+            "pdd.commands.checkup.tempfile.NamedTemporaryFile",
+            side_effect=PermissionError,
+        ):
             with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
-                run_checkup.return_value = (True, "blocking report produced", 0.0, "codex")
+                run_checkup.return_value = (
+                    True,
+                    "blocking report produced",
+                    0.0,
+                    "codex",
+                )
                 result = runner.invoke(
                     checkup,
-                    ["--pr", "https://github.com/org/repo/pull/7",
-                     "--agentic-review-loop"],
+                    [
+                        "--pr",
+                        "https://github.com/org/repo/pull/7",
+                        "--agentic-review-loop",
+                    ],
                     obj={"quiet": False, "verbose": False},
                 )
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
     assert payload["status"] == "failed"
+    run_checkup.assert_not_called()
+
+
+def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Same-PR invocations must not consume each other's verdict artifact."""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    pr_url = "https://github.com/org/repo/pull/7"
+    first_private, first_public = _prepare_agentic_review_loop_artifact(pr_url)
+    second_private, second_public = _prepare_agentic_review_loop_artifact(pr_url)
+
+    assert first_private is not None
+    assert second_private is not None
+    assert first_private != second_private
+    assert first_public == second_public
+
+    second_private.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not _emit_agentic_review_loop_json(
+        artifact_path=first_private,
+        published_artifact_path=first_public,
+        message="first invocation wrote no verdict",
+        cost=0.0,
+        model="codex",
+    )
+    first_payload = json.loads(capsys.readouterr().out)
+    assert first_payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
+    assert first_payload["status"] == "failed"
+
+    assert _emit_agentic_review_loop_json(
+        artifact_path=second_private,
+        published_artifact_path=second_public,
+        message="clean",
+        cost=0.0,
+        model="codex",
+    )
+    second_payload = json.loads(capsys.readouterr().out)
+    assert second_payload["schema_version"] == "pdd.checkup.agentic.v1"
+    assert second_payload["status"] == "passed"
 
 
 def test_agentic_review_loop_does_not_require_issue() -> None:
