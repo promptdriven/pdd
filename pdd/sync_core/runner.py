@@ -7,6 +7,7 @@ import hashlib
 import ast
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +45,13 @@ PYTEST_PROTECTED_FLAGS = (
     "--strict-config", "--strict-markers", "-ra", "-p", "no:cacheprovider"
 )
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
+JEST_CONFIG_PATHS = (
+    PurePosixPath("jest.config.json"),
+    PurePosixPath("package.json"),
+)
+JEST_DYNAMIC_CONFIG_NAMES = (
+    "jest.config.js", "jest.config.cjs", "jest.config.mjs", "jest.config.ts"
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,7 @@ class RunnerConfig:
     """Protected execution limits for trusted validation adapters."""
 
     timeout_seconds: int = 300
+    jest_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -374,6 +383,131 @@ def _has_external_pytest_plugins(
     return False
 
 
+def _jest_config(root: Path, ref: str) -> tuple[PurePosixPath, dict[str, object]]:
+    """Load the only supported, static Jest configuration forms."""
+    for name in JEST_DYNAMIC_CONFIG_NAMES:
+        if read_git_blob(root, ref, PurePosixPath(name)) is not None:
+            raise ValueError("dynamic Jest configuration is not supported")
+    config_path = PurePosixPath("jest.config.json")
+    content = read_git_blob(root, ref, config_path)
+    if content is None:
+        config_path = PurePosixPath("package.json")
+        content = read_git_blob(root, ref, config_path)
+    if content is None:
+        raise ValueError("no static Jest configuration is present")
+    try:
+        parsed = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Jest configuration must be valid JSON") from exc
+    if config_path.name == "package.json":
+        parsed = parsed.get("jest") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        raise ValueError("Jest configuration must be a JSON object")
+    return config_path, parsed
+
+
+def _jest_local_path(value: str) -> PurePosixPath | None:
+    """Normalize a static config path without accepting package references."""
+    value = value.replace("<rootDir>/", "")
+    if value.startswith("<") or value.startswith("/") or not value:
+        return None
+    path = PurePosixPath(value)
+    if ".." in path.parts:
+        return None
+    return path
+
+
+def _jest_config_references(config: object) -> set[PurePosixPath]:
+    """Find local executable support named by static Jest config keys."""
+    if not isinstance(config, dict):
+        return set()
+    references: set[PurePosixPath] = set()
+    for key in ("setupFiles", "setupFilesAfterEnv", "reporters", "projects"):
+        value = config.get(key, [])
+        if not isinstance(value, list):
+            raise ValueError(f"Jest {key} must be an array")
+        for item in value:
+            target = item[0] if isinstance(item, list) and item else item
+            if isinstance(target, str):
+                path = _jest_local_path(target)
+                if path is not None:
+                    references.add(path)
+    resolver = config.get("resolver")
+    if resolver is not None:
+        if not isinstance(resolver, str):
+            raise ValueError("Jest resolver must be a string")
+        path = _jest_local_path(resolver)
+        if path is not None:
+            references.add(path)
+    transforms = config.get("transform", {})
+    if not isinstance(transforms, dict):
+        raise ValueError("Jest transform must be an object")
+    for value in transforms.values():
+        target = value[0] if isinstance(value, list) and value else value
+        if isinstance(target, str):
+            path = _jest_local_path(target)
+            if path is not None:
+                references.add(path)
+        elif not isinstance(target, dict):
+            raise ValueError("Jest transform entry must be a static path")
+    return references
+
+
+def _local_javascript_imports(
+    root: Path, ref: str, source_path: PurePosixPath, source: bytes
+) -> set[PurePosixPath]:
+    """Resolve literal relative JS imports without executing candidate modules."""
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        return set()
+    imports = re.findall(
+        r"(?:from\s+|import\s*\(|require\s*\()['\"](\.{1,2}/[^'\"]+)['\"]",
+        text,
+    )
+    resolved: set[PurePosixPath] = set()
+    for item in imports:
+        candidate = source_path.parent / PurePosixPath(item)
+        candidates = [candidate]
+        if not candidate.suffix:
+            candidates.extend(candidate.with_suffix(suffix) for suffix in (".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"))
+            candidates.extend(candidate / f"index{suffix}" for suffix in (".js", ".ts", ".tsx"))
+        resolved.update(path for path in candidates if read_git_blob(root, ref, path) is not None)
+    return resolved
+
+
+def _jest_support_closure(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Return static config and transitive local Jest support modules."""
+    config_path, config = _jest_config(root, ref)
+    paths = {config_path}
+    pending = list(_jest_config_references(config))
+    visited: set[PurePosixPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = read_git_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Jest support path is missing: {path.as_posix()}")
+        paths.add(path)
+        pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
+    return tuple((path, read_git_blob(root, ref, path)) for path in sorted(paths) if read_git_blob(root, ref, path) is not None)
+
+
+def jest_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> str:
+    """Hash static Jest config and executable local support closure."""
+    del test_paths
+    digest = hashlib.sha256()
+    for path, content in _jest_support_closure(root, ref, ()):
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
 def _support_digest(
     root: Path, ref: str, profile: VerificationProfile
 ) -> tuple[str, tuple[PurePosixPath, ...]]:
@@ -388,6 +522,26 @@ def _support_digest(
         for path in obligation.code_under_test_paths
     )
     closure = _pytest_support_closure(root, ref, tests, product)
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest(), tuple(path for path, _content in closure)
+
+
+def _jest_support_digest(
+    root: Path, ref: str, profile: VerificationProfile
+) -> tuple[str, tuple[PurePosixPath, ...]]:
+    """Hash the protected static Jest support closure for a profile."""
+    tests = tuple(
+        path
+        for obligation in profile.obligations
+        if obligation.validator_id == "jest"
+        for path in obligation.artifact_paths
+    )
+    try:
+        closure = _jest_support_closure(root, ref, tests)
+    except ValueError:
+        return "invalid-jest-closure", ()
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -465,7 +619,9 @@ def runner_identity_digest(
         ],
     }
     if root is not None:
-        payload["support_closure_digest"] = _support_digest(root, ref, profile)[0]
+        payload["support_closure_digest"] = hashlib.sha256(
+            (_support_digest(root, ref, profile)[0] + _jest_support_digest(root, ref, profile)[0]).encode()
+        ).hexdigest()
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -617,6 +773,107 @@ def _trusted_collection_runner(
         encoding="utf-8",
     )
     return runner
+
+
+def _jest_environment(home: Path) -> dict[str, str]:
+    """Return a credential-free, non-ambient environment for Jest."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
+        and not key.startswith(("JEST_", "NODE_", "npm_config_", "NPM_CONFIG_"))
+        and key not in {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}
+    } | {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_CACHE_HOME": str(home / "cache"),
+        "NODE_ENV": "test",
+    }
+
+
+def _jest_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+    """Return an explicit local Jest argv prefix; never invoke an npm script."""
+    if config.jest_command is not None:
+        return config.jest_command
+    node = shutil.which("node")
+    binary = root / "node_modules" / "jest" / "bin" / "jest.js"
+    if node is None or not binary.is_file():
+        return None
+    return (node, str(binary))
+
+
+_JEST_REPORTER = """class PddTrustedReporter {
+  constructor() { this.tests = []; }
+  onTestResult(test, result) {
+    for (const assertion of result.testResults || []) {
+      const names = [...(assertion.ancestorTitles || []), assertion.title].join(' > ');
+      this.tests.push({identity: require('path').relative(process.cwd(), test.path) + '::' + names, status: assertion.status});
+    }
+  }
+  onRunComplete() { require('fs').writeFileSync(process.env.PDD_TRUSTED_JEST_OUTPUT, JSON.stringify({tests: this.tests})); }
+}
+module.exports = PddTrustedReporter;
+"""
+
+
+def _jest_result(
+    output: Path, returncode: int, expected: tuple[str, ...] | None
+) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    """Validate trusted reporter data and normalize every non-pass state."""
+    try:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        tests = payload["tests"]
+        if not isinstance(tests, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("identity"), str)
+            and isinstance(item.get("status"), str)
+            for item in tests
+        ):
+            raise ValueError("malformed Jest reporter payload")
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        return EvidenceOutcome.COLLECTION_ERROR, "trusted Jest reporter produced malformed JSON", ()
+    identities = tuple(sorted(item["identity"] for item in tests))
+    if not identities:
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Jest test identities collected", ()
+    if len(set(identities)) != len(identities):
+        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter emitted duplicate test identities", ()
+    if expected is not None and identities != expected:
+        return EvidenceOutcome.QUARANTINED, "checked-head Jest identities differ from protected base", identities
+    statuses = {item["status"] for item in tests}
+    if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
+        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter emitted an unsupported status", identities
+    if returncode or "failed" in statuses:
+        return EvidenceOutcome.FAIL, "Jest reported failed protected tests", identities
+    if statuses - {"passed"}:
+        return EvidenceOutcome.SKIP, "Jest reported skipped or todo protected tests", identities
+    return EvidenceOutcome.PASS, f"{len(identities)} protected Jest tests passed", identities
+
+
+def _run_jest(
+    root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
+    config: RunnerConfig, expected: tuple[str, ...] | None = None,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run exact protected Jest paths using a temporary trusted reporter."""
+    command_prefix = _jest_command(root, config)
+    if command_prefix is None:
+        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
+    try:
+        config_path, _config_data = _jest_config(root, "HEAD")
+    except ValueError as exc:
+        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-config", str(exc)), ()
+    with tempfile.TemporaryDirectory(prefix="pdd-trusted-jest-") as directory:
+        temporary = Path(directory)
+        reporter = temporary / "reporter.cjs"
+        output = temporary / "results.json"
+        reporter.write_text(_JEST_REPORTER, encoding="utf-8")
+        command = [*command_prefix, *(path.as_posix() for path in paths), "--runInBand", f"--config={root / config_path}", f"--reporters={reporter}"]
+        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+        try:
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False, timeout=timeout_seconds, env=_jest_environment(temporary) | {"PDD_TRUSTED_JEST_OUTPUT": str(output)})
+        except subprocess.TimeoutExpired:
+            return RunnerExecution("jest", EvidenceOutcome.TIMEOUT, digest, "Jest execution timed out"), ()
+        outcome, detail, identities = _jest_result(output, result.returncode, expected)
+        return RunnerExecution("jest", outcome, digest, detail), identities
 
 
 def _run_test_node(
@@ -837,6 +1094,27 @@ def _dirty_tracked_closure(root: Path) -> set[str]:
     return {line for line in result.stdout.splitlines() if line}
 
 
+def _dirty_jest_support(root: Path) -> set[str]:
+    """Return uncommitted ambient files commonly executable by Jest config."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root, capture_output=True, check=False,
+    )
+    if result.returncode != 0:
+        return {"<unreadable-git-status>"}
+    dirty: set[str] = set()
+    for field in result.stdout.decode(errors="surrogateescape").split("\0"):
+        path = field[3:] if len(field) >= 4 else ""
+        relpath = PurePosixPath(path)
+        if (
+            relpath.name.startswith("jest.config.")
+            or relpath.name == "package.json"
+            or relpath.name.startswith(("setup.", "transform.", "reporter.", "resolver."))
+        ):
+            dirty.add(path)
+    return dirty
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -868,7 +1146,7 @@ def _obligation_preflight(
 ) -> RunnerExecution | None:
     # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
-    if obligation.kind.casefold() != "test" or obligation.validator_id != "pytest":
+    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest"}:
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -882,44 +1160,60 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
         )
-    expected_config_digests = {
-        pytest_validator_config_digest(root, ref, obligation.artifact_paths)
-        for ref in (base_sha, head_sha)
-    }
-    if expected_config_digests != {obligation.validator_config_digest}:
-        support_paths = tuple(
-            path
-            for path, _content in _pytest_support_closure(
-                root,
-                head_sha,
-                obligation.artifact_paths,
-                obligation.code_under_test_paths,
-            )
-        )
-        changed_support = _changed_paths(root, base_sha, head_sha, support_paths)
-        direct_config = {
-            path.as_posix()
-            for path in _pytest_config_paths(root, head_sha, obligation.artifact_paths)
+    digest_function = pytest_validator_config_digest if obligation.validator_id == "pytest" else jest_validator_config_digest
+    try:
+        expected_config_digests = {
+            digest_function(root, ref, obligation.artifact_paths)
+            for ref in (base_sha, head_sha)
         }
-        plugin_support = sorted(set(changed_support) - direct_config)
-        if plugin_support:
-            return RunnerExecution(
-                obligation.obligation_id,
-                EvidenceOutcome.QUARANTINED,
-                obligation.validator_config_digest,
-                "candidate-modified pytest support cannot solely certify itself: "
-                + ", ".join(plugin_support),
+    except ValueError as exc:
+        return RunnerExecution(obligation.obligation_id, EvidenceOutcome.ERROR, obligation.validator_config_digest, str(exc))
+    if expected_config_digests != {obligation.validator_config_digest}:
+        if obligation.validator_id == "pytest":
+            support_paths = tuple(
+                path
+                for path, _content in _pytest_support_closure(
+                    root,
+                    head_sha,
+                    obligation.artifact_paths,
+                    obligation.code_under_test_paths,
+                )
             )
+            changed_support = _changed_paths(root, base_sha, head_sha, support_paths)
+            direct_config = {
+                path.as_posix()
+                for path in _pytest_config_paths(
+                    root, head_sha, obligation.artifact_paths
+                )
+            }
+            plugin_support = sorted(set(changed_support) - direct_config)
+            if plugin_support:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.QUARANTINED,
+                    obligation.validator_config_digest,
+                    "candidate-modified pytest support cannot solely certify itself: "
+                    + ", ".join(plugin_support),
+                )
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
             obligation.validator_config_digest,
             "declared validator config digest does not match protected closure",
         )
-    if _has_dynamic_pytest_plugins(root, base_sha, obligation.artifact_paths,
-                                   obligation.code_under_test_paths) or (
-        _has_dynamic_pytest_plugins(root, head_sha, obligation.artifact_paths,
-                                    obligation.code_under_test_paths)
+    if obligation.validator_id == "pytest" and (
+        _has_dynamic_pytest_plugins(
+            root,
+            base_sha,
+            obligation.artifact_paths,
+            obligation.code_under_test_paths,
+        )
+        or _has_dynamic_pytest_plugins(
+            root,
+            head_sha,
+            obligation.artifact_paths,
+            obligation.code_under_test_paths,
+        )
     ):
         return RunnerExecution(
             obligation.obligation_id,
@@ -927,10 +1221,13 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "dynamic pytest_plugins declarations are not bound by this adapter",
         )
-    if _has_external_pytest_plugins(
-        root, base_sha, obligation.artifact_paths, obligation.code_under_test_paths
-    ) or _has_external_pytest_plugins(
-        root, head_sha, obligation.artifact_paths, obligation.code_under_test_paths
+    if obligation.validator_id == "pytest" and (
+        _has_external_pytest_plugins(
+            root, base_sha, obligation.artifact_paths, obligation.code_under_test_paths
+        )
+        or _has_external_pytest_plugins(
+            root, head_sha, obligation.artifact_paths, obligation.code_under_test_paths
+        )
     ):
         return RunnerExecution(
             obligation.obligation_id,
@@ -938,7 +1235,10 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "external pytest_plugins declarations are not bound by this adapter",
         )
-    if _config_loads_plugin(root, base_sha) or _config_loads_plugin(root, head_sha):
+    if obligation.validator_id == "pytest" and (
+        _config_loads_plugin(root, base_sha)
+        or _config_loads_plugin(root, head_sha)
+    ):
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -946,6 +1246,19 @@ def _obligation_preflight(
             "repository-configured pytest plugins are not bound by this adapter",
         )
     return None
+
+
+def _collect_jest_at_base(
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run protected-base Jest with the trusted reporter to establish identities."""
+    with tempfile.TemporaryDirectory(prefix="pdd-jest-protected-base-") as directory:
+        clone = Path(directory) / "repository"
+        cloned = subprocess.run(["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)], capture_output=True, text=True, check=False)
+        checked_out = cloned.returncode == 0 and subprocess.run(["git", "checkout", "-q", "--detach", base_sha], cwd=clone, capture_output=True, check=False).returncode == 0
+        if not checked_out:
+            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Jest clone"), ()
+        return _run_jest(clone, paths, config.timeout_seconds, config)
 
 
 def _protected_node_ids(
@@ -995,6 +1308,27 @@ def _run_obligation_in_tree(
     preflight = _obligation_preflight(root, obligation, base_sha, head_sha)
     if preflight is not None:
         return preflight
+    if obligation.validator_id == "jest":
+        profile = VerificationProfile(
+            UnitId("runner-closure", PurePosixPath("closure.prompt"), "javascript"),
+            (obligation,), obligation.requirement_ids, "closure",
+        )
+        _digest, support_paths = _jest_support_digest(root, head_sha, profile)
+        protected_paths = tuple(sorted(set(obligation.artifact_paths) | set(support_paths)))
+        changed = _changed_paths(root, base_sha, head_sha, protected_paths)
+        changed.update(_dirty_jest_support(root))
+        if changed:
+            return RunnerExecution(
+                obligation.obligation_id, EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified Jest support cannot solely certify itself: "
+                + ", ".join(sorted(changed)),
+            )
+        base_execution, base_ids = _collect_jest_at_base(root, base_sha, obligation.artifact_paths, config)
+        if base_execution.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
+        head_execution, _head_ids = _run_jest(root, obligation.artifact_paths, config.timeout_seconds, config, base_ids)
+        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
     profile = VerificationProfile(
         UnitId("runner-closure", PurePosixPath("closure.prompt"), "python"),
         (obligation,),
