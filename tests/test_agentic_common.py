@@ -3056,6 +3056,51 @@ def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
     _restore_routing_model_env(originals_anthropic)
 
 
+def test_run_agentic_task_routing_preserves_explicit_codex_model(
+    mock_cwd,
+    monkeypatch,
+):
+    """A routed OpenAI config must preserve an explicit CODEX_MODEL override."""
+    from pdd.routing_policy import RoutingConfig, RoutingPolicy, RoutingPolicyRow
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("CODEX_MODEL", "o3-pro")
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_agent_provider_preference", lambda: ["openai"]
+    )
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, os.environ.get("CODEX_MODEL")))
+        return (True, "done", 0.1, "o3-pro", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+    policy = RoutingPolicy(
+        rows={
+            "bug-fix": RoutingPolicyRow(
+                initial_config=RoutingConfig(
+                    harness="openai", model_tier=1, thinking_effort="high"
+                )
+            )
+        }
+    )
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=policy,
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("openai", "o3-pro")]
+    assert os.environ["CODEX_MODEL"] == "o3-pro"
+
+
 def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
     mock_cwd,
     monkeypatch,

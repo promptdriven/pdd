@@ -2874,6 +2874,12 @@ def _apply_routing_model_env(
         return
     if env_var not in originals:
         originals[env_var] = os.environ.get(env_var)
+    # An explicit provider model is a user-level override and must take
+    # precedence over the tier-derived routing default.  In particular, a
+    # routed OpenAI config must not replace CODEX_MODEL=o3-pro (or another
+    # explicitly selected Codex model) with the model for its tier.
+    if (os.environ.get(env_var) or "").strip():
+        return
     model = resolve_model_for_tier(config.model_tier, provider=provider)
     if model:
         os.environ[env_var] = model
