@@ -133,6 +133,9 @@ def _sandbox_command(
             ["sudo", "-n", "true"], capture_output=True, check=False,
         ).returncode == 0
         prefix = ["sudo", "-n", "-E"] if elevated else []
+        setpriv = shutil.which("setpriv") if elevated else None
+        if elevated and setpriv is None:
+            raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
         workdir = (cwd or Path.cwd()).resolve()
         argv = [*prefix, "bwrap", "--unshare-all", "--die-with-parent",
                 "--new-session", "--tmpfs", "/", "--dir", "/tmp"]
@@ -145,9 +148,12 @@ def _sandbox_command(
         for item in writable_files:
             resolved = str(item.resolve())
             argv.extend(("--bind", resolved, resolved))
-        argv.extend(("--uid", str(os.getuid()), "--gid", str(os.getgid()),
-                     "--chdir", str(workdir)))
-        return [*argv, "--", *_limited_command(command, limits)], None
+        argv.extend(("--chdir", str(workdir)))
+        drop = (
+            [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
+             "--clear-groups", "--"] if setpriv else []
+        )
+        return [*argv, "--", *drop, *_limited_command(command, limits)], None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 

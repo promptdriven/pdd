@@ -25,9 +25,10 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert profile is None
     assert argv[:4] == ["sudo", "-n", "-E", "bwrap"]
     assert "--unshare-all" in argv
-    assert argv[argv.index("--uid") + 1] == str(os.getuid())
-    assert argv.index("--bind") < argv.index("--uid") < argv.index("--")
-    assert argv.index("--proc") < argv.index("--uid")
+    separator = argv.index("--")
+    assert argv.index("--bind") < separator < argv.index("--reuid")
+    assert argv[argv.index("--reuid") + 1] == str(os.getuid())
+    assert argv.index("--proc") < separator
     assert "--ro-bind" not in argv or argv[argv.index("--ro-bind") + 1] != "/"
 
 
