@@ -87,6 +87,7 @@ class LifecycleResult:
     post_merge_tree_changes: int
     missing_scenarios: tuple[str, ...] = ()
     candidate_wheel_sha256: str = ""
+    dependency_environment_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -396,6 +397,7 @@ def _complete_nightly(
         "collection_errors",
         "timeouts",
         "candidate_wheel_sha256",
+        "dependency_environment_digest",
     }
     return (
         required_counts <= counts.keys()
@@ -527,6 +529,11 @@ def _scan_predicate(
             character in "0123456789abcdef"
             for character in lifecycle.candidate_wheel_sha256
         )
+        and len(lifecycle.dependency_environment_digest) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in lifecycle.dependency_environment_digest
+        )
         and extra["nightly_observation_complete"] == 1
     )
 
@@ -653,20 +660,19 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         for name in lifecycle_names
     ) or not isinstance(lifecycle_payload.get("missing_scenarios"), list):
         return False, False
-    candidate_wheel_sha256 = lifecycle_payload.get("candidate_wheel_sha256")
-    if (
-        not isinstance(candidate_wheel_sha256, str)
-        or len(candidate_wheel_sha256) != 64
-        or any(
-            character not in "0123456789abcdef"
-            for character in candidate_wheel_sha256
-        )
+    digest_names = ("candidate_wheel_sha256", "dependency_environment_digest")
+    digests = {name: lifecycle_payload.get(name) for name in digest_names}
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+        for value in digests.values()
     ):
         return False, False
     lifecycle = LifecycleResult(
         *(lifecycle_payload[name] for name in lifecycle_names),
         tuple(lifecycle_payload["missing_scenarios"]),
-        candidate_wheel_sha256,
+        *(digests[name] for name in digest_names),
     )
     extra_names = {
         "pdd_cloud_vendored_sync_semantics",
@@ -791,6 +797,7 @@ def _build_global_certificate_from_targets(
             "post_merge_tree_changes": lifecycle.post_merge_tree_changes,
             "missing_scenarios": list(lifecycle.missing_scenarios),
             "candidate_wheel_sha256": lifecycle.candidate_wheel_sha256,
+            "dependency_environment_digest": lifecycle.dependency_environment_digest,
         },
     }
     body["scan_ok"] = all(report.get("ok") for report in reports) and _scan_predicate(

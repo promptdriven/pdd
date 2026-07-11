@@ -13,6 +13,11 @@ REQUIRED_SCENARIOS = frozenset(
         "built-wheel-clean-environment",
         "candidate-wheel-public-report",
         "candidate-wheel-transaction-recovery",
+        "public-code-only-repair-zero-write-rerun",
+        "public-include-only-repair-zero-write-rerun",
+        "public-prompt-only-repair-zero-write-rerun",
+        "public-simultaneous-edit-repair-block",
+        "public-test-only-repair-zero-write-rerun",
         "pdd-cloud-real-consumer-canary",
         "released-checker-owned-scenario-harness",
     }

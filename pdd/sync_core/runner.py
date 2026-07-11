@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import ast
 import json
-import os
 import re
 import subprocess
 import sys
@@ -21,7 +20,7 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import SECRET_ENV_MARKERS
+from .isolation import untrusted_child_environment
 from .git_io import read_git_blob
 from .types import (
     EvidenceOutcome,
@@ -91,9 +90,16 @@ def _local_module_paths(
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
+        elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level
-            modules.add(prefix + node.module)
+            module = prefix + (node.module or "")
+            if node.module:
+                modules.add(module)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                separator = "" if not module or module.endswith(".") else "."
+                modules.add(f"{module}{separator}{alias.name}")
         elif isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name) and target.id == "pytest_plugins"
             for target in node.targets
@@ -350,12 +356,10 @@ def _junit_outcome(
 
 def _pytest_environment() -> dict[str, str]:
     """Return the protected credential-free pytest process environment."""
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
-        and key not in {"PYTEST_ADDOPTS", "PYTHONPATH"}
-    } | {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1"}
+    return untrusted_child_environment(
+        extra={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1"},
+        drop={"PYTEST_ADDOPTS", "PYTHONPATH"},
+    )
 
 
 def _run_test_node(
