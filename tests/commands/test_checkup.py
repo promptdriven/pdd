@@ -518,16 +518,31 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
             )
         with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
             # Simulate best-effort artifact emission failing in this invocation.
-            run_checkup.return_value = (True, "blocking report produced", 0.0, "codex")
+            run_checkup.return_value = (
+                True,
+                "blocking report with ghp_sensitive_runtime_token",
+                12.34,
+                "sensitive-provider-model",
+            )
             result = runner.invoke(
                 checkup,
                 ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
                 obj={"quiet": False, "verbose": False},
             )
+        with open("pdd-checkup-agentic-7.json", encoding="utf-8") as handle:
+            persisted = json.load(handle)
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
     assert payload["status"] == "failed"
+    assert persisted == {
+        "schema_version": "pdd.checkup.agentic.v1.wrapper",
+        "success": False,
+        "status": "failed",
+    }
+    assert "ghp_sensitive_runtime_token" not in json.dumps(persisted)
+    assert "sensitive-provider-model" not in json.dumps(persisted)
+    assert "12.34" not in json.dumps(persisted)
 
 
 def test_agentic_review_loop_fails_before_run_when_private_path_reservation_fails() -> (

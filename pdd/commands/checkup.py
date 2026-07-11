@@ -160,7 +160,21 @@ def _emit_agentic_review_loop_json(
             pass
     if artifact_path is not None and public_artifact_exists:
         try:
-            artifact_path.write_text(_json.dumps(wrapper, indent=2), encoding="utf-8")
+            # The stdout wrapper may contain provider/runtime diagnostics. Do
+            # not persist those fields: provider exceptions and model output
+            # can contain credentials. The public path only needs a static,
+            # blocking tombstone to ensure a stale pass cannot survive.
+            artifact_path.write_text(
+                _json.dumps(
+                    {
+                        "schema_version": "pdd.checkup.agentic.v1.wrapper",
+                        "success": False,
+                        "status": "failed",
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             artifact_path.replace(published_artifact_path)
         except OSError:
             try:
