@@ -5,6 +5,7 @@ Requests==2.34.2
 aiofiles==25.1.0
 boto3==1.43.14
 click==8.4.1
+cryptography>=46,<50
 filelock>=3.12
 firebase_admin==7.4.0
 firecrawl_py==4.28.0
@@ -45,6 +46,7 @@ uvicorn[standard]>=0.32.0
 websockets>=13.0
 watchdog>=4.0.0
 tiktoken>=0.7.0
+tree-sitter-language-pack==1.12.5
 
 # Dev dependencies
 build
