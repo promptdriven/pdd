@@ -308,7 +308,58 @@ def _handle_verification_failure(
     return failure_type, import_error_retries, False
 
 
-def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[str]:
+_MOCK_CONTRACT_VERIFIED_PATTERN = _re.compile(
+    r"^\s*\*\*Mock contract audit:\*\*\s*MOCK_CONTRACTS_VERIFIED\s*$",
+    _re.IGNORECASE | _re.MULTILINE,
+)
+_MOCK_CONTRACT_MISMATCH_PATTERN = _re.compile(
+    r"^\s*\*\*Mock contract audit:\*\*\s*MOCK_CONTRACT_MISMATCH\s*$",
+    _re.IGNORECASE | _re.MULTILINE,
+)
+
+
+def _enforce_mock_contract_audit_gate(
+    step_output: str,
+    resolved_token: Optional[str],
+    *,
+    mock_contract_audit_required: bool,
+    output_console: Console,
+) -> Optional[str]:
+    """Prevent a tests-pass token from bypassing a required mock audit.
+
+    The semantic comparison is performed by the Step 9 agent against real
+    schemas, types, and production readers. This deterministic boundary only
+    enforces the agent's explicit result marker; it never guesses whether a
+    field name or mocked value is valid.
+    """
+    if _MOCK_CONTRACT_MISMATCH_PATTERN.search(step_output):
+        output_console.print(
+            "[yellow]Step 9 found a mock/interface contract mismatch; "
+            "starting another fix cycle.[/yellow]"
+        )
+        return "CONTINUE_CYCLE"
+
+    if (
+        mock_contract_audit_required
+        and resolved_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS")
+        and not _MOCK_CONTRACT_VERIFIED_PATTERN.search(step_output)
+    ):
+        output_console.print(
+            "[yellow]Step 9 claimed tests pass without the required "
+            "MOCK_CONTRACTS_VERIFIED audit marker; starting another fix "
+            "cycle.[/yellow]"
+        )
+        return "CONTINUE_CYCLE"
+
+    return resolved_token
+
+
+def _resolve_step9_loop_token(
+    step_output: str,
+    console: Console,
+    *,
+    mock_contract_audit_required: bool = False,
+) -> Optional[str]:
     """Resolve Step 9 loop-control token (tiers 1–3 + tier-4 fallback).
 
     Maps ALL_TESTS_PASS at step 9 to LOCAL_TESTS_PASS for downstream handling.
@@ -316,7 +367,12 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
     """
     tok = _classify_step_output(step_output, step_num=9)
     if tok:
-        return tok
+        return _enforce_mock_contract_audit_gate(
+            step_output,
+            tok,
+            mock_contract_audit_required=mock_contract_audit_required,
+            output_console=console,
+        )
     tier4 = classify_step_output(
         step_output, ["ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"]
     )
@@ -324,14 +380,27 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
         console.print(
             "[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]"
         )
-        return "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
+        resolved = (
+            "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
+        )
+        return _enforce_mock_contract_audit_gate(
+            step_output,
+            resolved,
+            mock_contract_audit_required=mock_contract_audit_required,
+            output_console=console,
+        )
     if tier4 and tier4.token == "CLASSIFICATION_ERROR":
         console.print(
             "[yellow]Step 9 classification unavailable (tier 4 error); "
             "starting next cycle.[/yellow]"
         )
         return "CONTINUE_CYCLE"
-    return None
+    return _enforce_mock_contract_audit_gate(
+        step_output,
+        None,
+        mock_contract_audit_required=mock_contract_audit_required,
+        output_console=console,
+    )
 
 
 def _resolve_cached_step9_output(step_outputs: Dict[str, str]) -> str:
@@ -359,6 +428,8 @@ def _post_step9_resume_action(
     current_cycle: int,
     max_cycles: int,
     console: Console,
+    *,
+    mock_contract_audit_required: bool = False,
 ) -> str:
     """Decide what resume should do when last_completed_step >= 9 (Issue #1001).
 
@@ -384,8 +455,19 @@ def _post_step9_resume_action(
     # (that's Step 3), but if the cached output surfaces it, treat as
     # success — Step 3 would already have determined no bug exists.
     if "NOT_A_BUG" in step9_output:
-        return "SUCCESS_FALL_THROUGH"
-    tok = _resolve_step9_loop_token(step9_output, console)
+        not_a_bug_gate = _enforce_mock_contract_audit_gate(
+            step9_output,
+            "LOCAL_TESTS_PASS",
+            mock_contract_audit_required=mock_contract_audit_required,
+            output_console=console,
+        )
+        if not_a_bug_gate != "CONTINUE_CYCLE":
+            return "SUCCESS_FALL_THROUGH"
+    tok = _resolve_step9_loop_token(
+        step9_output,
+        console,
+        mock_contract_audit_required=mock_contract_audit_required,
+    )
     if tok in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
         return "SUCCESS_FALL_THROUGH"
     # Explicit terminal token from Step 9 (tier-1–3 detect_control_token
@@ -687,6 +769,25 @@ def _is_intermediate_file(filepath: str) -> bool:
 # TypeScript/JavaScript test file extensions
 _TS_TEST_EXTENSIONS = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
 
+# These patterns identify use of test-double APIs only. They intentionally do
+# not inspect mocked field names or values; semantic validity is established by
+# the Step 9 real-contract audit (Issue #1939).
+_MOCK_CONTRACT_API_PATTERNS = (
+    _re.compile(r"\b(?:unittest\.)?mock\.(?:patch|Mock|MagicMock|AsyncMock)\b"),
+    _re.compile(r"\b(?:Mock|MagicMock|AsyncMock)\s*\("),
+    _re.compile(r"(?<![\w.])patch(?:\.object)?\s*\("),
+    _re.compile(r"\bmonkeypatch\.(?:setattr|setitem|setenv|delenv)\s*\("),
+    _re.compile(r"\bmocker\.(?:patch|spy|stub)\b"),
+    _re.compile(
+        r"\b(?:jest|vi)\.(?:mock|doMock|fn|spyOn|stubGlobal|stubEnv)\s*\("
+    ),
+    _re.compile(
+        r"\b(?:mockReturnValue|mockResolvedValue|mockRejectedValue|"
+        r"mockImplementation)(?:Once)?\s*\("
+    ),
+    _re.compile(r"\bsinon\.(?:stub|mock|spy)\s*\("),
+)
+
 
 def _is_test_file(filename: str) -> bool:
     """Check if a filename matches test file conventions for any supported language.
@@ -705,6 +806,39 @@ def _is_test_file(filename: str) -> bool:
         if basename.endswith(ext):
             return True
     return False
+
+
+def _find_mock_contract_test_files(test_files: List[str], cwd: Path) -> List[str]:
+    """Return in-worktree test files that use a recognized mocking API.
+
+    This is a routing detector, not a schema validator. It decides whether the
+    Step 9 agent must perform the real interface/schema comparison and is
+    deliberately independent of field-name heuristics.
+    """
+    root = cwd.resolve()
+    audit_files: List[str] = []
+    seen: Set[str] = set()
+
+    for test_file in test_files:
+        candidate = (cwd / test_file).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        try:
+            source = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not any(pattern.search(source) for pattern in _MOCK_CONTRACT_API_PATTERNS):
+            continue
+        normalized = str(candidate.relative_to(root))
+        if normalized not in seen:
+            seen.add(normalized)
+            audit_files.append(normalized)
+
+    return audit_files
 
 
 def _extract_marker_files(text: str) -> List[str]:
@@ -2127,6 +2261,7 @@ def run_agentic_e2e_fix_orchestrator(
     # after `success`/`final_message` are initialized below. Default: no-op.
     _resume_deferred_action: Optional[str] = None
     _cached_step9_resume_action: Optional[str] = None
+    resume_mock_contract_audit_required = False
     # On resume, restore the current cycle's start snapshot so the resume-time
     # cycle-waste-breaker can prove no in-cycle progress before authorizing
     # terminal success. None when the saved state is legacy (no snapshot) or
@@ -2230,8 +2365,23 @@ def run_agentic_e2e_fix_orchestrator(
             )
             if last_completed_step >= 9 and not has_cached_failed_output:
                 step9_cached = _resolve_cached_step9_output(step_outputs)
+                resume_test_files = _extract_test_files(
+                    issue_content,
+                    changed_files,
+                    cwd,
+                    resumed_initial_file_hashes,
+                )
+                resume_mock_contract_audit_required = bool(
+                    _find_mock_contract_test_files(resume_test_files, cwd)
+                )
                 _cached_step9_resume_action = _post_step9_resume_action(
-                    step9_cached, current_cycle, max_cycles, console
+                    step9_cached,
+                    current_cycle,
+                    max_cycles,
+                    console,
+                    mock_contract_audit_required=(
+                        resume_mock_contract_audit_required
+                    ),
                 )
 
             cached_step3 = step_outputs.get("3")
@@ -2283,7 +2433,13 @@ def run_agentic_e2e_fix_orchestrator(
                 else:
                     step9_cached = _resolve_cached_step9_output(step_outputs)
                     resume_action = _post_step9_resume_action(
-                        step9_cached, current_cycle, max_cycles, console
+                        step9_cached,
+                        current_cycle,
+                        max_cycles,
+                        console,
+                        mock_contract_audit_required=(
+                            resume_mock_contract_audit_required
+                        ),
                     )
                 if resume_action == "ADVANCE_CYCLE":
                     current_cycle += 1
@@ -2833,6 +2989,7 @@ def run_agentic_e2e_fix_orchestrator(
                     raise ValueError(f"Could not load prompt template: {template_name}")
 
                 # 2. Prepare Context
+                step9_mock_contract_files: List[str] = []
                 context = {
                     "issue_url": issue_url,
                     "repo_owner": repo_owner,
@@ -2865,6 +3022,25 @@ def run_agentic_e2e_fix_orchestrator(
 
                 if step_num == 9:
                     context["next_cycle"] = current_cycle + 1
+                    step9_test_files = _extract_test_files(
+                        issue_content,
+                        changed_files,
+                        cwd,
+                        initial_file_hashes,
+                    )
+                    step9_mock_contract_files = _find_mock_contract_test_files(
+                        step9_test_files, cwd
+                    )
+                    context["mock_contract_audit_required"] = (
+                        "true" if step9_mock_contract_files else "false"
+                    )
+                    context["mock_contract_test_files"] = (
+                        "\n".join(
+                            f"- `{path}`" for path in step9_mock_contract_files
+                        )
+                        if step9_mock_contract_files
+                        else "- (none detected)"
+                    )
 
                 # Preprocess to escape curly braces in included content
                 exclude = list(context.keys())
@@ -3146,7 +3322,13 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
-                    _step9_token = _resolve_step9_loop_token(step_output, console)
+                    _step9_token = _resolve_step9_loop_token(
+                        step_output,
+                        console,
+                        mock_contract_audit_required=bool(
+                            step9_mock_contract_files
+                        ),
+                    )
 
                     def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
                         nonlocal import_error_retries, success, final_message
@@ -3272,7 +3454,13 @@ def run_agentic_e2e_fix_orchestrator(
                                 exc_info=True,
                             )
 
-                        retry_token = _resolve_step9_loop_token(retry_output, console)
+                        retry_token = _resolve_step9_loop_token(
+                            retry_output,
+                            console,
+                            mock_contract_audit_required=bool(
+                                step9_mock_contract_files
+                            ),
+                        )
                         if retry_token is None and not retry_success:
                             console.print(
                                 "[yellow]Step 9 retry failed with no parseable loop-control token; "
