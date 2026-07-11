@@ -94,6 +94,7 @@ jobs:
           pytest -q
           tests/test_sync_core_supervisor.py
           tests/test_sync_core_runner.py
+          tests/test_sync_core_lifecycle_scenarios.py
           tests/test_sync_core_reporting.py
           --timeout=60
 

@@ -169,3 +169,21 @@ def test_candidate_only_profile_cannot_approve_itself(tmp_path) -> None:
     profiles = load_verification_profiles(root, _manifest(root, base, head))
     assert profiles.coverage == 0.0
     assert any("lacks protected approval" in item for item in profiles.invalid_reasons)
+
+
+def test_profile_digest_binds_code_under_test_role_policy(tmp_path) -> None:
+    root = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    support = _profile()
+    profile_path.write_text(json.dumps(support))
+    base = _commit(root, "support role")
+    support_digest = load_verification_profiles(root, _manifest(root, base, base)).profiles[0].profile_digest
+
+    product = _profile()
+    product["profiles"][0]["obligations"][0]["code_under_test_paths"] = ["src/widget.py"]
+    (root / "src").mkdir()
+    (root / "src/widget.py").write_text("VALUE = 1\n")
+    profile_path.write_text(json.dumps(product))
+    head = _commit(root, "product role")
+    product_digest = load_verification_profiles(root, _manifest(root, head, head)).profiles[0].profile_digest
+    assert support_digest != product_digest

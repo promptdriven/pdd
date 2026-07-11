@@ -16,6 +16,7 @@ from pdd.sync_core.certificate import LifecycleResult
 from pdd.sync_core.lifecycle import (
     _install_candidate_wheel,
     _isolated_lifecycle_environment,
+    _lifecycle_command,
     run_lifecycle_matrix,
 )
 from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS
@@ -86,6 +87,33 @@ def _write_wheel(
         )
         archive.writestr(f"{dist_info}/RECORD", "")
     return wheel
+
+
+def test_lifecycle_command_maps_inputs_read_only_and_environment_immutable(
+    tmp_path, monkeypatch
+) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    environment = tmp_path / "candidate-environment"
+    environment.mkdir()
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    cloud = tmp_path / "cloud"
+    cloud.mkdir()
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.lifecycle.run_supervised", fake_run)
+    result = _lifecycle_command(
+        [sys.executable, "-c", "pass"], scratch, scratch / "home",
+        readable_roots=(environment, wheelhouse, cloud),
+    )
+    assert result.returncode == 0
+    assert captured["writable_roots"] == (scratch,)
+    assert captured["readable_roots"] == (environment, wheelhouse, cloud)
 
 
 def test_lifecycle_contract_requires_public_repair_injection_scenarios() -> None:

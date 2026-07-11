@@ -23,6 +23,7 @@ from pdd.sync_core.runner import (
     _has_dynamic_pytest_plugins,
     _local_module_paths,
     pytest_validator_config_digest,
+    runner_identity_digest,
 )
 
 
@@ -772,3 +773,62 @@ def test_managed_subprocess_fails_closed_without_supported_os_sandbox(
     assert "unsupported sandbox platform" in result.stderr
     assert "must not execute" not in result.stdout
     assert surviving is False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "pytest_plugins = []\npytest_plugins += ['vendor.runtime']\n",
+        "pytest_plugins = []\n(alias := pytest_plugins).append('vendor.runtime')\n",
+        "pytest_plugins = ['tests.local']\ndel pytest_plugins[0]\n",
+        "pytest_plugins = ['tests.local']\npytest_plugins[0] = 'vendor.runtime'\n",
+        "pytest_plugins = []\nalias = pytest_plugins\nalias.value = 'vendor.runtime'\n",
+    ],
+)
+def test_effective_pytest_plugin_mutations_fail_closed(source: str) -> None:
+    _resolved, dynamic = _local_module_paths(
+        Path("."), "HEAD", PurePosixPath("tests/conftest.py"), source.encode()
+    )
+    assert dynamic is True
+
+
+def test_runner_identity_binds_code_under_test_role_policy(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "product.py").write_text("VALUE = 1\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "product")
+    commit = _git(root, "rev-parse", "HEAD")
+    support = _profile(root, commit)
+    product = _profile(root, commit, (PurePosixPath("product.py"),))
+    assert runner_identity_digest(support, root=root, ref=commit) != (
+        runner_identity_digest(product, root=root, ref=commit)
+    )
+
+
+def test_candidate_leader_exit_cannot_forge_junit_pass(tmp_path: Path) -> None:
+    content = (
+        "import os, sys\n"
+        "for arg in sys.argv:\n"
+        "    if arg.startswith('--junitxml='):\n"
+        "        open(arg.split('=', 1)[1], 'w').write("
+        "'<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>')\n"
+        "os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_candidate_leader_exit_cannot_forge_collection_pass(tmp_path: Path) -> None:
+    content = (
+        "import os\n"
+        "output = os.environ.get('PDD_TRUSTED_COLLECTION_OUTPUT')\n"
+        "if output:\n"
+        "    open(output, 'w').write('[\"tests/test_widget.py::test_widget\"]')\n"
+        "    os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS

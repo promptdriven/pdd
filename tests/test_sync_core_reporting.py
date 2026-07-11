@@ -539,6 +539,25 @@ def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
         )
 
 
+def test_trusted_finalizer_rejects_allowed_state_renamed_to_support(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    replay = tmp_path / "external-trust/rename-reuse.json"
+    finalize_unit(
+        root, PurePosixPath("prompts/widget_python.prompt"), base_ref=commit,
+        head_ref=commit, signer=SIGNER, replay_ledger_path=replay,
+    )
+    evidence = next((root / ".pdd/evidence/v2").glob("*.json"))
+    subprocess.run(["git", "add", evidence], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "durable evidence"], cwd=root, check=True)
+    evidence.rename(root / "conftest.py")
+    with pytest.raises(ValueError, match="completely clean checkout"):
+        finalize_unit(
+            root, PurePosixPath("prompts/widget_python.prompt"), base_ref=commit,
+            head_ref=_git(root, "rev-parse", "HEAD"), signer=SIGNER,
+            replay_ledger_path=replay,
+        )
+
+
 @pytest.mark.parametrize(
     ("edits", "semantic", "changed_roles"),
     [

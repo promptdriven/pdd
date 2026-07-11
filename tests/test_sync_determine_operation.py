@@ -5569,3 +5569,43 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"FM1: generation writes {written.suffix!r} but sync expects "
             f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )
+
+
+def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "shared.bin"
+    dependency.write_bytes(b"dependency\xff")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"<include>  shared.bin  </include>\ninvalid:\xff\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+
+def test_v1_hash_resolves_stored_relative_keys_from_cwd(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "stored.txt"
+    dependency.write_bytes(b"stored")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"no includes\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(
+        prompt, {"stored.txt": "ignored"}, hash_version=1
+    ) == expected
+
+
+def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(
+        '<include path="missing.txt"/>\n<include-many>missing.txt</include-many>\n'
+    )
+    assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
+        prompt.read_bytes()
+    ).hexdigest()

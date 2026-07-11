@@ -231,3 +231,24 @@ def test_descriptor_time_parent_symlink_swap_cannot_redirect_commit(
     assert outside_target.read_text() == "outside = True\n"
     assert (tmp_path / "src-before-swap/widget.py").read_text() == "value = 1\n"
     assert not (tmp_path / ".pdd/evidence/widget.json").exists()
+
+
+def test_prepare_failure_never_publishes_orphan_transaction(tmp_path, monkeypatch) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/widget.py").write_text("value = 1\n")
+    manager = TransactionManager(tmp_path)
+    original = manager._write_blob  # pylint: disable=protected-access
+    calls = 0
+
+    def fail_second(path, content):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("simulated prepare failure")
+        return original(path, content)
+
+    monkeypatch.setattr(manager, "_write_blob", fail_second)
+    with pytest.raises(OSError, match="simulated prepare failure"):
+        manager.prepare("tx-failed", _writes())
+    assert not (tmp_path / ".pdd/transactions/tx-failed").exists()
+    assert manager.incomplete() == ()

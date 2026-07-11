@@ -10,7 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from pdd.sync_core.supervisor import SupervisorLimits, _sandbox_command, run_supervised
+from pdd.sync_core.supervisor import (
+    SupervisorLimits,
+    _limited_command,
+    _live_processes,
+    _sandbox_command,
+    run_supervised,
+)
 
 
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
@@ -187,4 +193,48 @@ def test_macos_fails_closed_without_kernel_lifetime_containment(
     )
     assert result.returncode == 125
     assert "cannot prove process lifetime isolation" in result.stderr
+    assert surviving is False
+
+
+def test_file_size_limit_uses_output_budget() -> None:
+    limits = SupervisorLimits(max_output_bytes=1234, max_writable_bytes=987654)
+    command = _limited_command(["/bin/true"], limits)
+    assert "1234" in command
+    assert "987654" not in command[1:7]
+
+
+@pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
+def test_binary_output_has_aggregate_limit_and_deterministic_decode(tmp_path: Path) -> None:
+    limits = SupervisorLimits(max_output_bytes=1024)
+    result, _surviving = run_supervised(
+        [sys.executable, "-c", "import os; os.write(1, b'\\xff' * 800); os.write(2, b'x' * 800)"],
+        cwd=tmp_path, timeout=10, env=dict(os.environ),
+        writable_roots=(tmp_path,), limits=limits,
+    )
+    assert result.returncode == 125
+    assert len(result.stdout.encode("utf-8")) + len(result.stderr.encode("utf-8")) <= 3 * 1024
+    assert "\ufffd" in result.stdout
+
+
+def test_live_processes_rejects_reused_pid_identity(monkeypatch) -> None:
+    monkeypatch.setattr("pdd.sync_core.supervisor._process_identity", lambda _pid: "new")
+    monkeypatch.setattr(os, "kill", lambda *_args: None)
+    assert _live_processes({123: "old"}) == set()
+
+
+@pytest.mark.skipif(not shutil.which("bwrap"), reason="requires Linux bubblewrap")
+def test_writable_churn_cannot_escape_supervisor_cleanup(tmp_path: Path) -> None:
+    program = (
+        "import pathlib, threading, time\n"
+        "root=pathlib.Path('.')\n"
+        "def churn():\n"
+        "  while True:\n"
+        "    p=root/'churn'; p.write_bytes(b'x'); p.unlink(missing_ok=True)\n"
+        "threading.Thread(target=churn, daemon=True).start(); time.sleep(.5)\n"
+    )
+    result, surviving = run_supervised(
+        [sys.executable, "-c", program], cwd=tmp_path, timeout=5,
+        env=dict(os.environ), writable_roots=(tmp_path,),
+    )
+    assert result.returncode == 0
     assert surviving is False
