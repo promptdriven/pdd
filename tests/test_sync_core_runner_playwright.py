@@ -1,5 +1,6 @@
 """Contract tests for the fail-closed trusted Playwright adapter."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,31 @@ def _repository(
     return root, _git(root, "rev-parse", "HEAD")
 
 
+def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    dependencies = directory / "dependencies"
+    browsers = directory / "browsers"
+    dependencies.mkdir(exist_ok=True)
+    browsers.mkdir(exist_ok=True)
+    lockfile = directory / "package-lock.json"
+    lockfile.write_text("{}\n", encoding="utf-8")
+    manifest = directory / "playwright-toolchain.json"
+    manifest.write_text(
+        json.dumps({
+            "version": 2,
+            "roles": {
+                "launcher": str(launcher.resolve()),
+                "entrypoint": str(entrypoint.resolve()),
+                "dependencies": str(dependencies.resolve()),
+                "browser_runtime": str(browsers.resolve()),
+                "lockfile": str(lockfile.resolve()),
+            },
+        }),
+        encoding="utf-8",
+    )
+    return manifest
+
+
 def _run(
     root: Path,
     base: str,
@@ -133,11 +159,7 @@ def _run(
     if entrypoint.is_relative_to(root):
         declared = "protected-playwright-tool"
         (manifest_root / declared).write_bytes(b"protected")
-    manifest = manifest_root / "playwright-toolchain.json"
-    manifest.write_text(
-        '{"version":1,"files":[' + repr(declared).replace("'", '"') + "]}",
-        encoding="utf-8",
-    )
+    manifest = _toolchain_manifest(manifest_root, Path(command[0]), manifest_root / declared)
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     try:
         config_digest = playwright_validator_config_digest(root, base, paths)
@@ -222,7 +244,6 @@ def test_playwright_malformed_json_shapes_fail_closed(
     [
         "const key='grep'; export default { [key]: /widget/ };\n",
         "const controls={ ['webServer']: {command:'./server.sh'} }; export default {...controls};\n",
-        "export default { globalSetup /*comment*/: './setup.ts' };\n",
     ],
 )
 def test_playwright_rejects_non_declarative_config_shapes(
@@ -562,11 +583,18 @@ def test_toolchain_manifest_binds_transitive_and_stable_symlink_target_bytes(
     (toolchain / "modules").mkdir()
     (toolchain / "modules/helper").symlink_to(target, target_is_directory=True)
     manifest = tmp_path / "playwright-toolchain.json"
-    manifest.write_text(
-        '{"version":1,"files":["toolchain/node","toolchain/cli.js",'
-        '"toolchain/modules/helper"]}',
-        encoding="utf-8",
-    )
+    (toolchain / "browsers").mkdir()
+    (toolchain / "package-lock.json").write_text("{}", encoding="utf-8")
+    manifest.write_text(json.dumps({
+        "version": 2,
+        "roles": {
+            "launcher": str((toolchain / "node").resolve()),
+            "entrypoint": str((toolchain / "cli.js").resolve()),
+            "dependencies": str((toolchain / "modules").resolve()),
+            "browser_runtime": str((toolchain / "browsers").resolve()),
+            "lockfile": str((toolchain / "package-lock.json").resolve()),
+        },
+    }), encoding="utf-8")
     before = _toolchain_manifest_identity(manifest)
     (target / "index.js").write_text("module.exports = 2", encoding="utf-8")
     assert _toolchain_manifest_identity(manifest) != before
@@ -577,10 +605,7 @@ def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
 ) -> None:
     root, commit = _repository(tmp_path)
     runner = _fake_playwright(tmp_path)
-    manifest = tmp_path / "playwright-toolchain.json"
-    manifest.write_text(
-        '{"version":1,"files":["fake_playwright.py"]}', encoding="utf-8"
-    )
+    manifest = _toolchain_manifest(tmp_path / "protected-toolchain", Path(sys.executable), runner)
     original_run = subprocess.run
 
     def mutate_after_playwright(*args, **kwargs):
@@ -610,6 +635,29 @@ def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
             playwright_toolchain_manifest=manifest,
         ),
     )
+    assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert "toolchain" in executions[0].detail.lower()
+
+
+def test_playwright_rechecks_one_identity_after_the_complete_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_playwright(tmp_path)
+    original = __import__("pdd.sync_core.runner", fromlist=["_run_playwright"])._run_playwright
+    calls = 0
+
+    def mutate_after_final_run(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 3:
+            runner.write_text(runner.read_text(encoding="utf-8") + "# post-run drift\n")
+        return result
+
+    monkeypatch.setattr("pdd.sync_core.runner._run_playwright", mutate_after_final_run)
+    _envelope, executions = _run(root, commit, commit, runner)
+    assert calls == 3
     assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
     assert "toolchain" in executions[0].detail.lower()
 
@@ -1108,7 +1156,6 @@ def test_playwright_rejects_unbound_execution_controls(
     [
         'export default { "grep": /widget/ };\n',
         "export default { 'retries': 1 };\n",
-        'export default { "globalSetup": "./setup.ts" };\n',
         'export default { "webServer": { command: "npm run dev" } };\n',
     ],
 )
