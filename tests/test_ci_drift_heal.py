@@ -4365,6 +4365,7 @@ class TestMainDryRunJson:
             "ok": True,
             "consumer": "ci-heal",
             "summary": report["summary"],
+            "units": [],
         }
 
     def test_dry_run_json_returns_one_when_not_ok(self, capsys):
@@ -4404,7 +4405,43 @@ class TestMainDryRunJson:
             "ok": False,
             "consumer": "ci-heal",
             "summary": report["summary"],
+            "units": [],
         }
+
+    def test_dry_run_json_retains_value_free_unit_classifications(self, capsys):
+        """CI consumers can compare classifications without receiving paths or errors."""
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 1,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 0,
+            },
+            "units": [
+                {
+                    "basename": "widget",
+                    "language": "python",
+                    "classification": "CODE_CHANGED",
+                    "paths": {"code": "/candidate/private/widget.py"},
+                    "reason": "candidate-controlled diagnostic",
+                }
+            ],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = json.loads(capsys.readouterr().out)
+        assert output["units"] == [
+            {
+                "basename": "widget",
+                "language": "python",
+                "classification": "CODE_CHANGED",
+            }
+        ]
+        assert "paths" not in output["units"][0]
+        assert "reason" not in output["units"][0]
 
 
 class TestHealModuleConflict:
