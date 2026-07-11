@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
-from pathlib import Path
+from dataclasses import replace
+from pathlib import Path, PurePosixPath
 
-from pdd.sync_core.manifest import build_unit_manifest
+from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
+from pdd.sync_core.git_io import read_git_blob
+from pdd.sync_core.manifest import ManifestRefs
+from pdd.sync_core.runner import pytest_validator_config_digest
+from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
-PROFILE_PATH = ROOT / ".pdd" / "verification-profiles.json"
+PROFILE_FILE = ROOT / PROFILE_REL_PATH
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 FOUNDATION_PROFILE_PATHS = {
@@ -21,6 +28,7 @@ FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/supervisor.py",
     "tests/test_sync_core_descriptor_store.py",
 }
+REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
 
 
 def _git(root: Path, *args: str) -> None:
@@ -40,6 +48,21 @@ def _commit(root: Path, message: str) -> str:
         message,
     )
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+
+
+def _requirements(prompt_path: PurePosixPath) -> list[str]:
+    raw = (ROOT / prompt_path).read_bytes()
+    explicit = sorted(set(REQUIREMENT_ID.findall(raw.decode("utf-8"))))
+    return explicit or [f"CONTRACT-SHA256:{hashlib.sha256(raw).hexdigest()}"]
+
+
+def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
+    def protected_read(_root: Path, _ref: str, path: PurePosixPath) -> bytes | None:
+        if path == PROFILE_REL_PATH:
+            return profile_bytes
+        return read_git_blob(ROOT, "HEAD", path)
+
+    monkeypatch.setattr(verification, "read_git_blob", protected_read)
 
 
 def test_pdd_protected_inventory_is_complete_and_exact() -> None:
@@ -68,7 +91,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     )
 
     assert not (ROOT / ".pdd" / "sync-waivers.json").exists()
-    assert PROFILE_PATH.is_file()
+    assert PROFILE_FILE.is_file()
     assert not (ROOT / ".pdd" / "attestation-trust.json").exists()
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -92,6 +115,94 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
         item.candidate_id.artifact_relpath.as_posix()
         for item in manifest.candidates
     } == set(tracked)
+
+
+def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
+    """Require one complete, reviewable profile for every protected PDD unit."""
+    payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
+    rows = payload["profiles"]
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
+    expected = {
+        (unit.prompt_relpath.as_posix(), unit.language_id)
+        for unit in manifest.expected_managed
+    }
+    actual = {(row["prompt_path"], row["language_id"]) for row in rows}
+
+    assert len(expected) == EXPECTED_MANAGED_UNITS
+    assert len(rows) == EXPECTED_MANAGED_UNITS
+    assert len(actual) == len(rows)
+    assert actual == expected
+
+    for row in rows:
+        prompt_path = PurePosixPath(row["prompt_path"])
+        requirements = _requirements(prompt_path)
+        assert row["required_requirement_ids"] == requirements
+        assert len(row["obligations"]) == 1
+        obligation = row["obligations"][0]
+        assert obligation["obligation_id"] == "threshold-human-attestation"
+        assert obligation["kind"] == "human-attestation"
+        assert obligation["validator_id"] == "threshold-ed25519"
+        assert obligation["validator_config_digest"] == "threshold-ed25519-v1"
+        assert obligation["required"] is True
+        assert obligation["requirement_ids"] == requirements
+        assert obligation["artifact_paths"] == [prompt_path.as_posix()]
+        assert (ROOT / prompt_path).is_file()
+
+    profile_bytes = PROFILE_FILE.read_bytes()
+    protected_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+    _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
+    profiles = load_verification_profiles(ROOT, protected_manifest)
+    assert not profiles.invalid_reasons
+    assert profiles.coverage == 1.0
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+
+    pytest_obligations = [
+        obligation
+        for profile in profiles.profiles
+        for obligation in profile.obligations
+        if obligation.validator_id == "pytest"
+    ]
+    for obligation in pytest_obligations:
+        assert obligation.validator_config_digest == pytest_validator_config_digest(
+            ROOT, "HEAD", obligation.artifact_paths
+        )
+    assert pytest_obligations == []
+
+
+def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
+    """A candidate copy is rejected until this rollout has merged as protected base."""
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    candidate_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-head")
+    )
+    profile_bytes = PROFILE_FILE.read_bytes()
+
+    def candidate_only_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if path == PROFILE_REL_PATH:
+            return profile_bytes if ref == "candidate-head" else None
+        return read_git_blob(ROOT, "HEAD", path)
+
+    monkeypatch.setattr(verification, "read_git_blob", candidate_only_read)
+    profiles = load_verification_profiles(ROOT, candidate_manifest)
+
+    assert profiles.coverage == 0.0
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2
+    candidate_only = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "candidate-only profile lacks protected approval" in reason
+    ]
+    incomplete = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "verification profile is incomplete" in reason
+    ]
+    assert len(candidate_only) == EXPECTED_MANAGED_UNITS
+    assert len(incomplete) == EXPECTED_MANAGED_UNITS
 
 
 def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:

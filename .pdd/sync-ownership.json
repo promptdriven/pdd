@@ -13191,12 +13191,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "tests/test_verification_profile_rollout.py",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": "tests/test_sync_determine_operation.py",
       "role": "human-maintained"
     },
