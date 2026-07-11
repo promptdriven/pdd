@@ -47,7 +47,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     assert all(
         row.keys() == {"pattern", "inventory", "role", "owner"}
         and row["inventory"] == "HUMAN_OWNED"
-        and row["role"] == "human-maintained"
+        and row["role"] in {"human-maintained", "excluded-project"}
         and row["owner"] == "pdd-maintainers"
         and not any(token in row["pattern"] for token in ("*", "?", "["))
         for row in ownership["rules"]

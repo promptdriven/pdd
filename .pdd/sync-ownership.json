@@ -3567,6 +3567,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "examples/arch/architecture.json",
+      "role": "excluded-project"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "examples/arch/architecture_diagram.html",
       "role": "human-maintained"
     },
@@ -3629,6 +3635,12 @@
       "owner": "pdd-maintainers",
       "pattern": "examples/architecture_contract_summary_demo/TOUCHPOINTS.md",
       "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "examples/architecture_contract_summary_demo/architecture.json",
+      "role": "excluded-project"
     },
     {
       "inventory": "HUMAN_OWNED",
@@ -3923,6 +3935,12 @@
       "owner": "pdd-maintainers",
       "pattern": "examples/prompts_linter/README.md",
       "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "examples/prompts_linter/architecture.json",
+      "role": "excluded-project"
     },
     {
       "inventory": "HUMAN_OWNED",
@@ -4293,6 +4311,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "examples/template_example/architecture.json",
+      "role": "excluded-project"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "examples/template_example/architecture_diagram.html",
       "role": "human-maintained"
     },
@@ -4564,6 +4588,12 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "examples/tictactoe/tictactoe_prd.md",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
+      "pattern": "pdd-local.sh",
       "role": "human-maintained"
     },
     {
@@ -5931,12 +5961,6 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
-      "pattern": "pdd-local.sh",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
       "pattern": "pr_summary.md",
       "role": "human-maintained"
     },
@@ -7155,6 +7179,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "research/repo-bloat-benchmark/distractors/pdd-failure-classification/manifests.lock",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-failure-classification/manifests/pdd-failure-classification.10x.json",
       "role": "human-maintained"
     },
@@ -7186,12 +7216,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-failure-classification/manifests/pdd-failure-classification.5x.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": "research/repo-bloat-benchmark/distractors/pdd-failure-classification/manifests.lock",
       "role": "human-maintained"
     },
     {
@@ -7905,6 +7929,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "research/repo-bloat-benchmark/distractors/pdd-find-section/manifests.lock",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-find-section/manifests/pdd-find-section.10x.json",
       "role": "human-maintained"
     },
@@ -7936,12 +7966,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-find-section/manifests/pdd-find-section.5x.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": "research/repo-bloat-benchmark/distractors/pdd-find-section/manifests.lock",
       "role": "human-maintained"
     },
     {
@@ -8589,6 +8613,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "research/repo-bloat-benchmark/distractors/pdd-language-extensions/manifests.lock",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-language-extensions/manifests/pdd-language-extensions.10x.json",
       "role": "human-maintained"
     },
@@ -8620,12 +8650,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "research/repo-bloat-benchmark/distractors/pdd-language-extensions/manifests/pdd-language-extensions.5x.json",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": "research/repo-bloat-benchmark/distractors/pdd-language-extensions/manifests.lock",
       "role": "human-maintained"
     },
     {
@@ -9735,6 +9759,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/fixtures/arch_include_validate_ok/architecture.json",
+      "role": "excluded-project"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/fixtures/arch_include_validate_ok/prompts/child_Python.prompt",
       "role": "human-maintained"
     },
@@ -10479,6 +10509,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "tests/story_regression.sh",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "tests/story_regression/test_story_pdd_bug.py",
       "role": "human-maintained"
     },
@@ -10540,12 +10576,6 @@
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
       "pattern": "tests/story_regression/test_story_pdd_update.py",
-      "role": "human-maintained"
-    },
-    {
-      "inventory": "HUMAN_OWNED",
-      "owner": "pdd-maintainers",
-      "pattern": "tests/story_regression.sh",
       "role": "human-maintained"
     },
     {
