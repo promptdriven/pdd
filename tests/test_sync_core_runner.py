@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import pytest
+
 from pdd.sync_core import (
     AttestationSigner,
     AttestationIssue,
@@ -384,6 +386,42 @@ def test_dynamic_pytest_plugins_fail_closed(tmp_path) -> None:
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "dynamic pytest_plugins" in executions[0].detail
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "pytest_plugins = []\npytest_plugins.append('tests.plugin')\n",
+        "pytest_plugins = set()\npytest_plugins.update({'tests.plugin'})\n",
+        "pytest_plugins = []\nglobals()['pytest_plugins'] = ['tests.plugin']\n",
+        "pytest_plugins = []\nsetattr(sys.modules[__name__], 'pytest_plugins', ['tests.plugin'])\n",
+    ],
+)
+def test_mutated_pytest_plugins_fail_closed(tmp_path, declaration) -> None:
+    root, _initial = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/__init__.py").write_text("")
+    (root / "tests/plugin.py").write_text("VALUE = 1\n")
+    (root / "conftest.py").write_text("import sys\n" + declaration)
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutated plugin declaration")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "dynamic pytest_plugins" in executions[0].detail
+
+
+def test_unrelated_getattr_in_protected_conftest_is_allowed(tmp_path) -> None:
+    root, _initial = _repository(tmp_path, "def test_widget(value): assert value == 1\n")
+    (root / "conftest.py").write_text(
+        "import pytest\n"
+        "VALUE = getattr(type('Config', (), {'value': 1}), 'value')\n"
+        "@pytest.fixture\ndef value(): return VALUE\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "ordinary reflection")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
 
 
 def test_candidate_modified_importfrom_alias_helper_cannot_self_certify(tmp_path) -> None:

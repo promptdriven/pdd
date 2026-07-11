@@ -4219,6 +4219,37 @@ class TestFingerprintIncludeDependencies:
         ).hexdigest()
         assert calculate_prompt_hash(prompt, hash_version=1) == expected
 
+    def test_legacy_v1_preserves_pre_versioned_include_grammar_and_missing_files(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        body_dep = prompt.parent / "body.py"
+        attr_dep = prompt.parent / "attribute.py"
+        create_file(body_dep, "BODY = 1\n")
+        create_file(attr_dep, "ATTRIBUTE = 1\n")
+        create_file(
+            prompt,
+            "<include path=\"attribute.py\">body.py</include>\n"
+            "<include path=\"attribute.py\"/>\n"
+            "<include-many>*.py</include-many>\n"
+            "<include>missing.py</include>\n",
+        )
+        expected = hashlib.sha256(prompt.read_bytes() + body_dep.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_stored_dependencies_skip_missing_and_keep_key_order(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(prompt, "No includes.\n")
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
+        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
