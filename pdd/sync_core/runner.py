@@ -468,10 +468,12 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
 def _managed_subprocess(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
+    readable_roots: tuple[Path, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run an untrusted command in a networkless sandbox and reap its group."""
     return run_supervised(command, cwd=cwd, timeout=timeout, env=env,
-                          writable_roots=writable_roots, writable_files=writable_files)
+                          writable_roots=writable_roots, writable_files=writable_files,
+                          readable_roots=readable_roots)
 
 
 def runner_identity_digest(
@@ -694,6 +696,7 @@ def _run_test_node(
             [*command, f"--junitxml={junit}"], cwd=root,
             timeout=timeout_seconds, env=_pytest_environment(home),
             writable_roots=(home.parent,), writable_files=(junit,),
+            readable_roots=(root,),
         )
         if result.returncode == 124:
             return RunnerExecution(
@@ -757,6 +760,7 @@ def _collect_node_ids(
             env=_pytest_environment(home) | {
                 "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
             }, writable_roots=(home.parent,), writable_files=(collection_output,),
+            readable_roots=(root,),
         )
         if result.returncode == 124:
             return (

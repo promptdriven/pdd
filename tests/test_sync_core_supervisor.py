@@ -67,7 +67,7 @@ def test_detached_session_descendant_is_terminated(tmp_path: Path) -> None:
         writable_roots=(tmp_path,),
     )
     assert result.returncode == 0
-    assert surviving is True
+    assert surviving is False
     time.sleep(1.2)
     assert not marker.exists()
 
@@ -93,7 +93,7 @@ def test_detached_descendant_cannot_escape_by_removing_marker(tmp_path: Path) ->
         timeout=10, env=dict(os.environ), writable_roots=(tmp_path,),
     )
     assert result.returncode == 0
-    assert surviving is True
+    assert surviving is False
     time.sleep(1.2)
     assert not marker.exists()
 

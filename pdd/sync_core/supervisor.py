@@ -148,6 +148,7 @@ def _live_processes(pids: set[int]) -> set[int]:
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
+    readable_roots: tuple[Path, ...] = (),
 ) -> tuple[list[str], Path | None]:
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
@@ -182,6 +183,8 @@ def _sandbox_command(
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
         for item in _runtime_roots(command, workdir):
             bind("--ro-bind", item)
+        for item in readable_roots:
+            bind("--ro-bind", item.resolve())
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
@@ -201,13 +204,14 @@ def run_supervised(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
     limits: SupervisorLimits = SupervisorLimits(),
+    readable_roots: tuple[Path, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
-            limits=limits,
+            limits=limits, readable_roots=readable_roots,
         )
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
