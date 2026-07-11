@@ -23,6 +23,7 @@ from pdd.sync_core.runner import (
     _directory_identity,
     _local_javascript_imports,
     _playwright_environment,
+    _playwright_command_error,
     _playwright_result,
     playwright_validator_config_digest,
 )
@@ -278,6 +279,21 @@ def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
     (dependencies / "helper").unlink()
     (dependencies / "helper").symlink_to(tmp_path / "missing", target_is_directory=True)
     assert _directory_identity(dependencies) != before
+
+
+@pytest.mark.parametrize("option", ["--require=helper", "--import=helper", "--loader=helper"])
+def test_playwright_command_rejects_candidate_resolving_prefix_options(
+    tmp_path: Path, option: str
+) -> None:
+    executable = tmp_path.parent / "node"
+    entrypoint = tmp_path.parent / "playwright-cli.js"
+    executable.write_bytes(b"node")
+    entrypoint.write_bytes(b"cli")
+    error = _playwright_command_error(
+        tmp_path, (str(executable), option, str(entrypoint))
+    )
+    assert error is not None
+    assert "exactly" in error or "options" in error
 
 
 def test_playwright_candidate_node_modules_dependency_is_not_trusted(
