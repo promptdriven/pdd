@@ -21,6 +21,7 @@ from pdd.sync_core.lifecycle import (
 from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS
 from pdd.sync_core import scenario_harness
 from pdd.sync_core import (
+    CandidateArtifactPolicy,
     PlannedWrite,
     TransactionConflict,
     TransactionManager,
@@ -127,6 +128,41 @@ def test_lifecycle_matrix_fails_closed_without_hash_pinned_wheelhouse(
     assert result.failed == len(REQUIRED_SCENARIOS)
     assert result.candidate_wheel_sha256 == ""
     assert result.dependency_environment_digest == ""
+
+
+def test_lifecycle_matrix_rejects_actual_runtime_lock_mismatch(tmp_path, monkeypatch) -> None:
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    lock = tmp_path / "runtime.lock"
+    lock.write_bytes(b"different lock bytes\n")
+    attestation = tmp_path / "attestation.json"
+    attestation.write_text("{}")
+    policy = CandidateArtifactPolicy(
+        "builder", b"a" * 32, "workflow", "b" * 64,
+        "CPython", "3.12.3", "cp312", "platform",
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle.load_candidate_artifact_provenance",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle._install_candidate_wheel",
+        lambda *_args, **_kwargs: pytest.fail("mismatched lock reached installation"),
+    )
+    result = run_lifecycle_matrix(
+        tmp_path,
+        candidate_wheel=wheel,
+        candidate_wheelhouse=wheelhouse,
+        candidate_runtime_lock=lock,
+        candidate_attestation=attestation,
+        candidate_artifact_policy=policy,
+        cloud_root=tmp_path,
+        cloud_base_ref="a" * 40,
+        cloud_head_ref="b" * 40,
+    )
+    assert result.failed == len(REQUIRED_SCENARIOS)
 
 
 def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
