@@ -81,6 +81,7 @@ def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
                                     "tests/test_widget.py",
                                     "tests/test_widget_e2e.py",
                                 ],
+                                "code_under_test_paths": ["notes.md"],
                             }
                         ],
                     }
@@ -105,11 +106,29 @@ def test_snapshot_contains_prompt_include_code_and_all_tests(tmp_path) -> None:
         ("code", "src/widget.py"),
         ("test", "tests/test_widget.py"),
         ("test", "tests/test_widget_e2e.py"),
+        ("code", "notes.md"),
     }
     executable = next(
         item for item in snapshot.artifacts if item.relpath.name == "test_widget_e2e.py"
     )
     assert executable.git_mode == "100755"
+
+
+def test_code_under_test_bytes_invalidate_snapshot(tmp_path) -> None:
+    root, base = _repository(tmp_path)
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=base)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+    before = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
+    (root / "notes.md").write_text("Changed product bytes\n")
+    _git(root, "add", "notes.md")
+    _git(root, "commit", "-q", "-m", "change declared product")
+    head = _git(root, "rev-parse", "HEAD")
+    changed_manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    changed_profile = load_verification_profiles(root, changed_manifest).profiles[0]
+    after = build_unit_snapshot(
+        root, changed_manifest, changed_manifest.managed_units[0], changed_profile
+    )
+    assert before.digest() != after.digest()
 
 
 def test_query_expansion_cannot_receive_trusted_verified_status(tmp_path) -> None:

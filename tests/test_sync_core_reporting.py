@@ -524,6 +524,21 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
         path.write_text(json.dumps(payload, sort_keys=True))
 
 
+def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    replay = tmp_path / "external-trust/dirty-reuse.json"
+    finalize_unit(
+        root, PurePosixPath("prompts/widget_python.prompt"), base_ref=commit,
+        head_ref=commit, signer=SIGNER, replay_ledger_path=replay,
+    )
+    (root / "conftest.py").write_text("pytest_plugins = []\n")
+    with pytest.raises(ValueError, match="completely clean checkout"):
+        finalize_unit(
+            root, PurePosixPath("prompts/widget_python.prompt"), base_ref=commit,
+            head_ref=commit, signer=SIGNER, replay_ledger_path=replay,
+        )
+
+
 @pytest.mark.parametrize(
     ("edits", "semantic", "changed_roles"),
     [
