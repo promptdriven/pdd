@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import pytest
+import pdd.sync_core.runner as runner_module
 
 from pdd.sync_core import (
     AttestationIssue,
@@ -27,6 +28,7 @@ from pdd.sync_core.runner import (
     _playwright_command_error,
     _playwright_result,
     _toolchain_manifest_identity,
+    _playwright_toolchain_identity,
     playwright_validator_config_digest,
 )
 
@@ -210,6 +212,159 @@ def test_playwright_support_snapshot_binds_owning_spec_directory(tmp_path: Path)
     assert playwright_validator_config_digest(
         root, _git(root, "rev-parse", "HEAD"), paths
     ) != before
+
+
+def test_playwright_resources_resolve_from_runner_cwd(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "oracle.js").write_text("window.expected = 'root';\n", encoding="utf-8")
+    (root / "tests/oracle.js").write_text("window.expected = 'decoy';\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('widget works', async ({ page }) => "
+        "page.addInitScript({ path: './oracle.js' }));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "cwd resource")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    (root / "oracle.js").write_text("window.expected = 'changed';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change consumed resource")
+    assert playwright_validator_config_digest(root, "HEAD", paths) != before
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [
+        "{ path: './bound.js', path: './candidate.js' }",
+        "{ path: './bound.js', ...override }",
+        "{ path: './bound.js', ['path']: './candidate.js' }",
+    ],
+)
+def test_playwright_resource_objects_require_exact_schema(
+    tmp_path: Path, argument: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        f"test('widget works', async ({{ page }}) => page.addInitScript({argument}));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "ambiguous resource object")
+    with pytest.raises(ValueError, match="schema|property|path"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize("target", ["oracle.js", "widget.spec.ts-snapshots/oracle.txt"])
+def test_playwright_rejects_symlinked_closure_members(
+    tmp_path: Path, target: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    actual = root / "actual.txt"
+    actual.write_text("trusted", encoding="utf-8")
+    link = root / target
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(Path("actual.txt") if link.parent == root else Path("../actual.txt"))
+    if target == "oracle.js":
+        (root / "tests/widget.spec.ts").write_text(
+            "import { test } from '@playwright/test';\n"
+            "test('widget works', async ({ page }) => "
+            "page.addInitScript({ path: './oracle.js' }));\n",
+            encoding="utf-8",
+        )
+    else:
+        (root / "tests/widget.spec.ts").write_text(
+            "import { expect, test } from '@playwright/test';\n"
+            "test('widget works', () => expect('x').toMatchSnapshot());\n",
+            encoding="utf-8",
+        )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "symlink closure member")
+    with pytest.raises(ValueError, match="symlink"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_excludes_declared_product_edges_from_support_digest(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    product = root / "src/widget.ts"
+    product.write_text("export const value = 'base';\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { value } from '../src/widget';\n"
+        "test('widget works', () => expect(value).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "product import")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    products = (PurePosixPath("src/widget.ts"),)
+    before = playwright_validator_config_digest(root, "HEAD", paths, products)
+    product.write_text("export const value = 'candidate';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate product change")
+    assert playwright_validator_config_digest(root, "HEAD", paths, products) == before
+
+
+def test_playwright_receiver_schema_accepts_representative_suite(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test.use({ viewport: { width: 800, height: 600 } });\n"
+        "test.beforeEach(async ({ page }) => page.goto('/'));\n"
+        "test('widget works', async ({ page }) => test.step('action', async () => {\n"
+        "  await page.waitForSelector('#ready');\n"
+        "  await expect(page.locator('#ready')).toBeEnabled();\n"
+        "}));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "representative suite")
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
+
+
+def test_playwright_toolchain_entrypoint_must_resolve_inside_declared_package(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    entrypoint = _fake_node_playwright(tmp_path)
+    manifest = _toolchain_manifest(
+        tmp_path / "unrelated-toolchain", Path(sys.executable), entrypoint
+    )
+    with pytest.raises(ValueError, match="entrypoint|dependency|package"):
+        _playwright_toolchain_identity(
+            root, (sys.executable, str(entrypoint)), manifest
+        )
+
+
+def test_playwright_execution_uses_process_group_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    calls: list[list[str]] = []
+
+    def supervised(command, **_kwargs):
+        calls.append(command)
+        payload = {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        }
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert calls
 
 
 @pytest.mark.parametrize(
