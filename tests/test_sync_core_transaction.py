@@ -298,7 +298,13 @@ def test_descriptor_time_parent_symlink_swap_cannot_redirect_commit(
         return canonical
 
     monkeypatch.setattr(manager, "_canonical_relpath", swap_after_resolution)
-    with pytest.raises(TransactionConflict, match="parent changed or is unsafe"):
+    with pytest.raises(
+        TransactionConflict,
+        match=(
+            r"^destination (?:parent changed or is unsafe|alias policy changed): "
+            r"src/widget\.py$"
+        ),
+    ):
         manager.commit("tx-parent-swap")
 
     assert outside_target.read_text() == "outside = True\n"
