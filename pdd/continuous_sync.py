@@ -25,6 +25,17 @@ from .sync_core import CanonicalReportOptions, build_canonical_report
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
 
 
+MAX_PROMPT_DISCOVERY_FILES = 10000
+SKIPPED_DISCOVERY_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".pdd",
+    "__pycache__",
+    "node_modules",
+    ".venv",
+    "venv",
+}
 DRIFT_CLASSIFICATIONS = {
     "DOC_CHANGED",
     "PROMPT_CHANGED",
@@ -46,6 +57,15 @@ class SyncUnit:
     language: str
     prompt_path: Path
     prompts_dir: Path
+
+
+@dataclass(frozen=True)
+class DiscoveryFailure:
+    """A prompt discovery failure that must be visible in JSON output."""
+
+    prompt_root: Path
+    reason: str
+    failure: str
 
 
 def project_root(start: Optional[Path] = None) -> Path:
@@ -237,9 +257,42 @@ def _prompts_dir_for(prompt_path: Path) -> Path:
     return prompt_path.parent
 
 
-def _prompt_units(prompt_root: Path) -> List[SyncUnit]:
+def _is_hidden_or_system_dir(path: Path) -> bool:
+    return path.name.startswith(".") or path.name in SKIPPED_DISCOVERY_DIRS
+
+
+def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[DiscoveryFailure]]:
+    prompt_paths: List[Path] = []
+    for current_root, dirnames, filenames in os.walk(prompt_root):
+        current = Path(current_root)
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not _is_hidden_or_system_dir(current / dirname)
+        ]
+        for filename in sorted(filenames):
+            if not filename.endswith(".prompt") or "_" not in filename:
+                continue
+            prompt_paths.append(current / filename)
+            if len(prompt_paths) > MAX_PROMPT_DISCOVERY_FILES:
+                return prompt_paths, DiscoveryFailure(
+                    prompt_root=prompt_root,
+                    reason=(
+                        "configured prompt root exceeded traversal budget "
+                        f"of {MAX_PROMPT_DISCOVERY_FILES} prompt files"
+                    ),
+                    failure="prompt_traversal_budget",
+                )
+    return sorted(prompt_paths), None
+
+
+def _prompt_units(prompt_root: Path) -> tuple[List[SyncUnit], List[DiscoveryFailure]]:
     units: List[SyncUnit] = []
-    for prompt_path in sorted(prompt_root.rglob("*_*.prompt")):
+    failures: List[DiscoveryFailure] = []
+    prompt_paths, failure = _bounded_prompt_paths(prompt_root)
+    if failure is not None:
+        failures.append(failure)
+    for prompt_path in prompt_paths[:MAX_PROMPT_DISCOVERY_FILES]:
         basename, language = infer_module_identity(prompt_path)
         if basename is None or language is None:
             continue
@@ -251,7 +304,19 @@ def _prompt_units(prompt_root: Path) -> List[SyncUnit]:
                 prompts_dir=_prompts_dir_for(prompt_path),
             )
         )
-    return units
+    return units, failures
+
+
+def _is_safe_prompt_root(base: Path, prompt_root: Path) -> bool:
+    """Return whether a configured prompt root is within the trusted workspace."""
+    if not prompt_root.is_absolute():
+        return True
+    trusted_workspace = base.resolve().parent
+    try:
+        prompt_root.resolve(strict=False).relative_to(trusted_workspace)
+    except ValueError:
+        return False
+    return True
 
 
 def _configured_prompt_roots(base: Path) -> List[Path]:
@@ -281,6 +346,23 @@ def _configured_prompt_roots(base: Path) -> List[Path]:
     if not configured:
         configured.append((base / "prompts").resolve(strict=False))
     return list(dict.fromkeys(configured))
+
+
+def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailure]]:
+    roots: List[Path] = []
+    failures: List[DiscoveryFailure] = []
+    for prompt_root in _configured_prompt_roots(base):
+        if _is_safe_prompt_root(base, prompt_root):
+            roots.append(prompt_root)
+            continue
+        failures.append(
+            DiscoveryFailure(
+                prompt_root=prompt_root,
+                reason="configured prompt root is outside configured workspace",
+                failure="unsafe_prompt_root",
+            )
+        )
+    return roots, failures
 
 
 def _matches_module(unit: SyncUnit, wanted: set[str]) -> bool:
@@ -434,65 +516,104 @@ def discover_units(
     modules: Optional[Iterable[str]] = None,
 ) -> List[SyncUnit]:
     """Discover prompt-backed units under ``root``."""
-    base = project_root(root)
-    wanted = set(modules or [])
-    prompt_roots = _configured_prompt_roots(base)
-    prompt_units = [
-        unit
-        for prompt_root in prompt_roots
-        if prompt_root.is_dir()
-        for unit in _prompt_units(prompt_root)
-    ]
-    meta_root = base / ".pdd" / "meta"
-    metadata_identities = _metadata_identities(meta_root)
+    units, _failures = _discover_units_and_failures(root, modules)
+    return units
 
-    prompt_index: Dict[tuple[str, str], SyncUnit] = {}
-    for unit in prompt_units:
-        prompt_index.setdefault((_safe_basename(unit.basename), unit.language), unit)
 
-    if wanted:
-        units: List[SyncUnit] = []
-        seen: set[tuple[str, str, Path]] = set()
-        for identity in metadata_identities:
-            if not _identity_matches_wanted(identity, wanted):
-                continue
-            unit = _unit_from_metadata_identity(
-                identity,
-                prompt_roots[0],
-                prompt_index,
-                requested_basename=_requested_basename_for_identity(identity, wanted),
-            )
-            dedupe_key = (unit.basename, unit.language, unit.prompt_path)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            units.append(unit)
-        for unit in prompt_units:
-            if not _matches_module(unit, wanted):
-                continue
-            dedupe_key = (unit.basename, unit.language, unit.prompt_path)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            units.append(unit)
-        return units
+def _append_unique_unit(
+    units: List[SyncUnit],
+    seen: set[tuple[str, str, Path]],
+    unit: SyncUnit,
+) -> None:
+    dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+    if dedupe_key in seen:
+        return
+    seen.add(dedupe_key)
+    units.append(unit)
 
+
+def _metadata_units(
+    metadata_identities: List[tuple[str, str]],
+    prompt_root: Path,
+    prompt_index: Dict[tuple[str, str], SyncUnit],
+    wanted: set[str],
+) -> List[SyncUnit]:
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
     for identity in metadata_identities:
-        unit = _unit_from_metadata_identity(identity, prompt_roots[0], prompt_index)
-        dedupe_key = (unit.basename, unit.language, unit.prompt_path)
-        if dedupe_key in seen:
+        if wanted and not _identity_matches_wanted(identity, wanted):
             continue
-        seen.add(dedupe_key)
-        units.append(unit)
-    for unit in prompt_units:
-        dedupe_key = (unit.basename, unit.language, unit.prompt_path)
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        units.append(unit)
+        unit = _unit_from_metadata_identity(
+            identity,
+            prompt_root,
+            prompt_index,
+            requested_basename=_requested_basename_for_identity(identity, wanted),
+        )
+        _append_unique_unit(units, seen, unit)
     return units
+
+
+def _discover_units_and_failures(
+    root: Optional[Path] = None,
+    modules: Optional[Iterable[str]] = None,
+) -> tuple[List[SyncUnit], List[DiscoveryFailure]]:
+    """Discover prompt-backed units and discovery failures under ``root``."""
+    base = project_root(root)
+    wanted = set(modules or [])
+    prompt_roots, failures = _validated_prompt_roots(base)
+    prompt_units: List[SyncUnit] = []
+    for prompt_root in prompt_roots:
+        if not prompt_root.is_dir():
+            continue
+        units, unit_failures = _prompt_units(prompt_root)
+        prompt_units.extend(units)
+        failures.extend(unit_failures)
+    metadata_identities = _metadata_identities(base / ".pdd" / "meta")
+
+    units = _metadata_units(
+        metadata_identities,
+        prompt_roots[0] if prompt_roots else base / "prompts",
+        _prompt_index(prompt_units),
+        wanted,
+    )
+    seen = {(unit.basename, unit.language, unit.prompt_path) for unit in units}
+    if wanted:
+        for unit in prompt_units:
+            if not _matches_module(unit, wanted):
+                continue
+            _append_unique_unit(units, seen, unit)
+        return units, failures
+
+    for unit in prompt_units:
+        _append_unique_unit(units, seen, unit)
+    return units, failures
+
+
+def _prompt_index(prompt_units: List[SyncUnit]) -> Dict[tuple[str, str], SyncUnit]:
+    prompt_index: Dict[tuple[str, str], SyncUnit] = {}
+    for unit in prompt_units:
+        prompt_index.setdefault((_safe_basename(unit.basename), unit.language), unit)
+    return prompt_index
+
+
+def _discovery_failure_payload(failure: DiscoveryFailure, root: Path) -> Dict[str, Any]:
+    try:
+        prompt_root = failure.prompt_root.resolve(strict=False).relative_to(
+            root.resolve()
+        ).as_posix()
+    except ValueError:
+        prompt_root = str(failure.prompt_root)
+    return {
+        "basename": "",
+        "language": "",
+        "classification": FAILURE_CLASSIFICATION,
+        "operation": "none",
+        "reason": failure.reason,
+        "changed_files": [],
+        "metadata_valid": False,
+        "paths": {"prompt_root": prompt_root},
+        "failure": failure.failure,
+    }
 
 
 def _load_fingerprint_json(path: Path) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -538,6 +659,27 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
         else:
             payload[key] = str(value)
     return payload
+
+
+def _directory_snapshot(root: Path) -> set[Path]:
+    if not root.exists():
+        return set()
+    return {path for path in root.rglob("*") if path.is_dir()}
+
+
+def _remove_new_empty_dirs(root: Path, before: set[Path]) -> None:
+    if not root.exists():
+        return
+    after = sorted(
+        (path for path in root.rglob("*") if path.is_dir() and path not in before),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for path in after:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
 
 
 def _changed_artifacts(
@@ -721,6 +863,29 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
     # exists.  The legacy helper creates its parent directory as a write-side
     # convenience, so derive the read-only project-relative location here.
     fp_path = base / ".pdd" / "meta" / f"{_safe_basename(unit.basename)}_{unit.language}.json"
+    before_dirs = _directory_snapshot(base)
+    try:
+        paths = get_pdd_file_paths(
+            unit.basename,
+            unit.language,
+            prompts_dir=str(unit.prompts_dir),
+        )
+    except Exception as exc:  # pragma: no cover - surfaced in JSON report
+        _remove_new_empty_dirs(base, before_dirs)
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": f"path resolution failed: {exc}",
+            "changed_files": [],
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": {"prompt": str(unit.prompt_path)},
+            "failure": "path_resolution",
+        }
+    _remove_new_empty_dirs(base, before_dirs)
+
     _raw_fp, raw_error = _load_fingerprint_json(fp_path)
     if raw_error is not None:
         return {
@@ -732,25 +897,7 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "changed_files": [],
             "metadata_valid": False,
             "fingerprint_path": str(fp_path),
-            "paths": {"prompt": str(unit.prompt_path)},
-        }
-
-    try:
-        paths = get_pdd_file_paths(
-            unit.basename,
-            unit.language,
-            prompts_dir=str(unit.prompts_dir),
-        )
-    except Exception as exc:  # pragma: no cover - surfaced in JSON report
-        return {
-            "basename": unit.basename,
-            "language": unit.language,
-            "classification": FAILURE_CLASSIFICATION,
-            "operation": "none",
-            "reason": f"path resolution failed: {exc}",
-            "changed_files": [],
-            "metadata_valid": False,
-            "paths": {"prompt": str(unit.prompt_path)},
+            "paths": _paths_as_json(paths, base),
         }
 
     fingerprint = _fingerprint_from_payload(_raw_fp)
@@ -904,8 +1051,11 @@ def build_report(
                 "canonical read-only reporting cannot append a repository ledger"
             )
         return _canonical_compatibility_report(base, consumer, modules)
-    units = discover_units(base, modules=modules)
+    units, discovery_failures = _discover_units_and_failures(base, modules=modules)
     classified = [classify_unit(unit, base) for unit in units]
+    classified.extend(
+        _discovery_failure_payload(failure, base) for failure in discovery_failures
+    )
     summary = _build_summary(classified)
     ledger_path = _append_ledger(base, consumer, classified) if ledger else None
     ok = (
