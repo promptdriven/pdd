@@ -41,7 +41,11 @@ def _repository(tmp_path: Path, test_content: str) -> tuple[Path, str]:
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _profile(root: Path, ref: str) -> VerificationProfile:
+def _profile(
+    root: Path,
+    ref: str,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> VerificationProfile:
     paths = (PurePosixPath("tests/test_widget.py"),)
     obligation = VerificationObligation(
         "pytest",
@@ -50,14 +54,20 @@ def _profile(root: Path, ref: str) -> VerificationProfile:
         pytest_validator_config_digest(root, ref, paths),
         ("REQ-1",),
         paths,
+        code_under_test_paths=code_under_test_paths,
     )
     return VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
 
 
-def _run(root: Path, base: str, head: str):
+def _run(
+    root: Path,
+    base: str,
+    head: str,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+):
     return run_profile(
         root,
-        _profile(root, base),
+        _profile(root, base, code_under_test_paths),
         RunBinding("snapshot-v1", base, head),
         AttestationIssue(
             AttestationSigner("trusted-ci", b"v" * 32),
@@ -160,8 +170,64 @@ def test_candidate_modified_product_code_can_be_certified_by_protected_tests(tmp
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "candidate product")
     head = _git(root, "rev-parse", "HEAD")
-    _envelope, executions = _run(root, base, head)
+    _envelope, executions = _run(
+        root, base, head, (PurePosixPath("product.py"),)
+    )
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_candidate_modified_helper_outside_tests_is_protected(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "from support.fixtures import expected\n"
+        "def test_widget(): assert expected() == 1\n",
+    )
+    (root / "support").mkdir()
+    (root / "support/__init__.py").write_text("")
+    (root / "support/fixtures.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "support/fixtures.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "support/fixtures.py" in executions[0].detail
+
+
+def test_collection_time_protected_test_rewrite_fails_closed(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "import product\ndef test_widget(): assert False\n",
+    )
+    (root / "product.py").write_text(
+        "from pathlib import Path\n"
+        "Path('tests/test_widget.py').write_text("
+        "'import product\\ndef test_widget(): assert True\\n')\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate product")
+    head = _git(root, "rev-parse", "HEAD")
+    original = (root / "tests/test_widget.py").read_bytes()
+    _envelope, executions = _run(
+        root, head, head, (PurePosixPath("product.py"),)
+    )
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+    assert "protected" in executions[0].detail
+    assert (root / "tests/test_widget.py").read_bytes() == original
+
+
+def test_external_literal_pytest_plugin_fails_closed(tmp_path) -> None:
+    root, _initial = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "conftest.py").write_text('pytest_plugins = "pytest_mock"\n')
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "external plugin")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "external pytest_plugins" in executions[0].detail
 
 
 def test_string_pytest_plugins_are_bound_as_protected_support(tmp_path) -> None:
