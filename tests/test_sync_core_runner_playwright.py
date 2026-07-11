@@ -1640,3 +1640,125 @@ def test_playwright_receiver_capabilities_accept_documented_representative_chain
     assert playwright_validator_config_digest(
         root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
     )
+
+
+def test_playwright_rejects_suite_level_retries(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test.describe.configure({ retries: 2 });\n"
+        "test('widget works', async () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "suite retries")
+
+    with pytest.raises(ValueError, match="retr"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_reporter_preserves_failure_across_retry_attempts(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    payload = {
+        "suites": [{
+            "title": "tests/widget.spec.ts",
+            "specs": [{
+                "title": "widget works",
+                "file": str(root / "tests/widget.spec.ts"),
+                "tests": [{
+                    "projectName": "chromium",
+                    "results": [{"status": "failed"}, {"status": "passed"}],
+                }],
+            }],
+        }],
+    }
+
+    outcome, _detail, identities = _playwright_result(
+        root, json.dumps(payload), 0, None
+    )
+
+    assert outcome is EvidenceOutcome.FAIL
+    assert identities == (IDENTITY,)
+
+
+def test_playwright_phase_identity_excludes_imported_declared_product(
+    tmp_path: Path,
+) -> None:
+    root, _base = _repository(tmp_path)
+    (root / "source.ts").write_text(
+        "import React from 'react';\n"
+        "export const widget = React.createElement('div');\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { widget } from '../source';\n"
+        "test('widget works', async () => expect(widget).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "import declared product")
+    head = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(
+        root,
+        head,
+        head,
+        _fake_playwright(tmp_path),
+        code_under_test_paths=(PurePosixPath("source.ts"),),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_rejects_symlink_config_before_subprocess_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "playwright.config.ts").unlink()
+    target = root / "export default {};"
+    target.write_text("export default {};\n", encoding="utf-8")
+    (root / "playwright.config.ts").symlink_to(target.name)
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "symlink config")
+    commit = _git(root, "rev-parse", "HEAD")
+    launches = 0
+
+    def supervised(*_args, **_kwargs):
+        nonlocal launches
+        launches += 1
+        raise AssertionError("invalid closure must fail before Playwright launch")
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert launches == 0
+    assert "symlink" in executions[0].detail.lower()
+
+
+def test_playwright_tracks_page_locator_and_frame_receiver_aliases(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('widget works', async ({ page: browserPage }) => {\n"
+        "  const card = browserPage.locator('.card');\n"
+        "  const { first: firstCard } = { first: card.first() };\n"
+        "  const frame = browserPage.mainFrame();\n"
+        "  await firstCard.click();\n"
+        "  await frame.waitForSelector('#ready');\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "receiver aliases")
+
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
