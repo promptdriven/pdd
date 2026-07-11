@@ -35,12 +35,16 @@ FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
         "tests": (
             "tests/test_sync_core_candidate_artifact_provenance.py",
+            "tests/test_sync_core_descriptor_store.py",
             "tests/test_sync_core_trust.py",
         ),
         "code": ("pdd/sync_core/descriptor_store.py",),
     },
     "pytest-supervisor": {
-        "tests": ("tests/test_sync_core_lifecycle_scenarios.py",),
+        "tests": (
+            "tests/test_sync_core_lifecycle_scenarios.py",
+            "tests/test_sync_core_runner.py",
+        ),
         "code": ("pdd/sync_core/supervisor.py",),
     },
 }
