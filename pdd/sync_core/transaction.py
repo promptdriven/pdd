@@ -695,11 +695,18 @@ class TransactionManager:
                 pending.append(transaction_dir.name)
         return tuple(pending)
 
-    def recover(self, transaction_id: str) -> TransactionResult:
+    def recover(
+        self,
+        transaction_id: str,
+        *,
+        alias_policy_loader: Callable[
+            [], Mapping[PurePosixPath, PurePosixPath]
+        ]
+        | None = None,
+    ) -> TransactionResult:
         """Complete COMMITTING work or discard a PREPARED transaction idempotently."""
         transaction_dir = self._transaction_dir(transaction_id)
         payload = self._read_journal(transaction_dir)
-        self._adopt_journal_aliases(payload)
         phase = TransactionPhase(str(payload["phase"]))
         if phase is TransactionPhase.COMMITTED:
             return TransactionResult(transaction_id, phase, (), True)
@@ -711,6 +718,9 @@ class TransactionManager:
             )
         if phase is not TransactionPhase.COMMITTING:
             return TransactionResult(transaction_id, phase, (), True)
+        if alias_policy_loader is not None:
+            self.policy = PathPolicy(self.checkout_root, alias_policy_loader())
+        self._adopt_journal_aliases(payload)
         entries = payload.get("entries")
         if not isinstance(entries, list):
             raise TransactionError("transaction entries are malformed")

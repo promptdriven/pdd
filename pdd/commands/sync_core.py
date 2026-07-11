@@ -317,9 +317,10 @@ def recover(ctx: click.Context, transaction_id: str) -> None:
     """Explicitly recover one crash-durable synchronization transaction."""
     ctx.ensure_object(dict)
     root = Path.cwd()
-    result = TransactionManager(
-        root, approved_aliases=load_committed_aliases(root)
-    ).recover(transaction_id)
+    result = TransactionManager(root).recover(
+        transaction_id,
+        alias_policy_loader=lambda: load_committed_aliases(root),
+    )
     click.echo(
         json.dumps(
             {

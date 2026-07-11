@@ -647,9 +647,11 @@ def _candidate_records(
     candidates: list[CandidateRecord] = []
     accounted: set[PurePosixPath] = set()
     invalid: list[str] = []
-    alias_counterparts = _managed_alias_counterparts(
-        {**sources.prompt_owner, **sources.output_owner}, sources.approved_aliases
+    concrete_owners = {**sources.prompt_owner, **sources.output_owner}
+    alias_counterparts, counterpart_invalid = _managed_alias_counterparts(
+        concrete_owners, sources.approved_aliases
     )
+    invalid.extend(counterpart_invalid)
     for path in sorted(set(sources.base_entries) | set(sources.head_entries)):
         unit_id = (
             sources.prompt_owner.get(path)
@@ -729,18 +731,29 @@ def _candidate_records(
 def _managed_alias_counterparts(
     managed_paths: dict[PurePosixPath, UnitId],
     approved_aliases: dict[PurePosixPath, PurePosixPath],
-) -> dict[PurePosixPath, UnitId]:
+) -> tuple[dict[PurePosixPath, UnitId], list[str]]:
     """Map exact managed logical paths to their approved canonical destinations."""
     counterparts: dict[PurePosixPath, UnitId] = {}
+    invalid: list[str] = []
     for path, unit_id in managed_paths.items():
         for alias, canonical in approved_aliases.items():
             if path == alias:
-                counterparts[canonical] = unit_id
+                counterpart = canonical
             elif path.parts[: len(alias.parts)] == alias.parts:
-                counterparts[canonical.joinpath(*path.parts[len(alias.parts) :])] = (
-                    unit_id
+                counterpart = canonical.joinpath(*path.parts[len(alias.parts) :])
+            else:
+                continue
+            concrete_owner = managed_paths.get(counterpart)
+            derived_owner = counterparts.get(counterpart)
+            conflicting_owner = concrete_owner or derived_owner
+            if conflicting_owner is not None and conflicting_owner != unit_id:
+                invalid.append(
+                    f"{counterpart.as_posix()}: canonical counterpart has multiple "
+                    "managed owners"
                 )
-    return counterparts
+                continue
+            counterparts[counterpart] = unit_id
+    return counterparts, invalid
 
 
 def _is_protected_control(path: PurePosixPath) -> bool:

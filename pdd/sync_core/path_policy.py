@@ -89,6 +89,10 @@ class PathPolicy:
         base_entry = read_git_tree_entry(self.checkout_root, self.base_ref, alias_relpath)
         head_entry = read_git_tree_entry(self.checkout_root, self.head_ref, alias_relpath)
         if base_entry is None and head_entry is None:
+            if required:
+                raise PathPolicyError(
+                    f"approved alias is absent from protected trees: {alias_relpath}"
+                )
             return None
         if base_entry != head_entry or base_entry is None or head_entry is None:
             raise PathPolicyError(f"approved alias changed in protected trees: {alias_relpath}")
