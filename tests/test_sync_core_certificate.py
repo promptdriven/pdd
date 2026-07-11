@@ -29,6 +29,7 @@ CHECKER = CheckerIdentity(
     "promptdriven/pdd/.github/workflows/global-sync.yml@refs/tags/v-test-checker",
 )
 OBSERVATION = NightlyObservation(True, True, 0, True, "BLOCKED", 0)
+CANDIDATE_WHEEL_SHA256 = "d" * 64
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +72,7 @@ def _report(name):
 
 
 def _nightly(path, signer, count=7, *, include_observation=True):
-    start = datetime(2026, 7, 3, tzinfo=timezone.utc)
+    start = datetime.now(timezone.utc) - timedelta(days=count - 1)
     rows = []
     for index in range(count):
         reports = [
@@ -108,6 +109,7 @@ def _nightly(path, signer, count=7, *, include_observation=True):
             "post_repair_second_run_writes": 0,
             "post_merge_tree_changes": 0,
             "missing_scenarios": [],
+            "candidate_wheel_sha256": CANDIDATE_WHEEL_SHA256,
         }
         body = {
             "schema_version": 2,
@@ -208,7 +210,9 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
     monkeypatch.setattr(
         "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
     )
-    lifecycle = LifecycleResult(0, 0, 0, 0, 0, 0)
+    lifecycle = LifecycleResult(
+        0, 0, 0, 0, 0, 0, candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256
+    )
     certificate = build_global_certificate(
         (
             RepositoryTarget("pdd", pdd),
@@ -239,6 +243,23 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
     ) is True
+    assert (
+        certificate["lifecycle"]["candidate_wheel_sha256"]
+        == CANDIDATE_WHEEL_SHA256
+    )
+    certificate["lifecycle"]["candidate_wheel_sha256"] = "not-a-wheel-digest"
+    body = {key: value for key, value in certificate.items() if key != "signature"}
+    certificate["signature"]["value"] = signer.sign_bytes(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    )
+    assert verify_global_certificate(
+        certificate,
+        signer.public_key_bytes(),
+        expected_issuer=signer.issuer,
+        expected_repository_shas=expected,
+        expected_repository_ids=_expected_ids(certificate),
+        expected_checker_identity=CHECKER,
+    ) is False
     certificate["counts"]["managed_units"] = 0
     assert verify_global_certificate(
         certificate,
@@ -266,7 +287,9 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
     monkeypatch.setattr(
         "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
     )
-    lifecycle = LifecycleResult(0, 0, 0, 0, 0, 0, ("merge-group",))
+    lifecycle = LifecycleResult(
+        0, 0, 0, 0, 0, 0, ("merge-group",), CANDIDATE_WHEEL_SHA256
+    )
     certificate = build_global_certificate(
         (
             RepositoryTarget("pdd", tmp_path / "pdd"),
@@ -322,7 +345,15 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         ),
         GlobalCertificateOptions(
             tmp_path / "replay",
-            LifecycleResult(0, 0, 0, 0, 0, 0),
+            LifecycleResult(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+            ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
@@ -467,7 +498,15 @@ def test_unsigned_nightly_rows_cannot_fabricate_temporal_proof(
         ),
         GlobalCertificateOptions(
             tmp_path / "replay",
-            LifecycleResult(0, 0, 0, 0, 0, 0),
+            LifecycleResult(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+            ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
@@ -504,7 +543,15 @@ def test_signed_nightly_rows_without_observations_do_not_extend_streak(
         ),
         GlobalCertificateOptions(
             tmp_path / "replay",
-            LifecycleResult(0, 0, 0, 0, 0, 0),
+            LifecycleResult(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+            ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
