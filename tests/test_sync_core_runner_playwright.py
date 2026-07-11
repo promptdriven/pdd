@@ -1,6 +1,5 @@
 """Contract tests for the fail-closed trusted Playwright adapter."""
 
-import json
 import shutil
 import subprocess
 import sys
