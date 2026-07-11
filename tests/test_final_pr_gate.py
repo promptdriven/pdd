@@ -378,6 +378,7 @@ class TestFinalGateLibrary:
                 active_reviewer="codex",
                 original_reviewer="codex",
                 fresh_final_status="clean",
+                issue_aligned=True,
                 stop_reason="Primary reviewer is clean.",
             )
             state.findings_by_key[resolved.key] = resolved

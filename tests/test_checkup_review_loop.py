@@ -14538,6 +14538,7 @@ def test_step5_failure_resolved_by_layer2_does_not_force_canonical_fail(
         active_reviewer="codex",
         original_reviewer="codex",
         fresh_final_status="clean",
+        issue_aligned=True,
         stop_reason="Primary reviewer is clean.",
     )
     # Layer 2 resolved the seeded finding.
@@ -14595,8 +14596,9 @@ def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
         pr_url="",
         pr_owner="promptdriven",
         pr_repo="pdd",
-        pr_number=1790,
-        project_root=tmp_path,
+            pr_number=1790,
+            project_root=tmp_path,
+            has_issue=False,
     )
     cfg = crl.ReviewLoopConfig(agentic_mode=True, review_only=True)
     state = crl.ReviewLoopState(
@@ -14634,8 +14636,9 @@ def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path)
         pr_url="https://github.com/promptdriven/pdd/pull/1790",
         pr_owner="promptdriven",
         pr_repo="pdd",
-        pr_number=1790,
-        project_root=tmp_path,
+            pr_number=1790,
+            project_root=tmp_path,
+            has_issue=False,
     )
     cfg = crl.ReviewLoopConfig(
         reviewer="codex",
@@ -14673,6 +14676,7 @@ def test_agentic_mode_writes_artifact_to_configured_path(tmp_path, monkeypatch):
         pr_repo="pdd",
         pr_number=1790,
         project_root=tmp_path,
+        has_issue=False,
     )
     cfg = crl.ReviewLoopConfig(
         agentic_mode=True,
@@ -14744,8 +14748,9 @@ def test_final_gate_canonical_pass_status_yields_mirror_authority(
         pr_owner="promptdriven",
         pr_repo="pdd",
         pr_number=1790,
-        project_root=tmp_path,
-        # Layer 1 passed without actionable Step 5 evidence, so the final gate
+            project_root=tmp_path,
+            has_issue=True,
+            # Layer 1 passed without actionable Step 5 evidence, so the final gate
         # threads the canonical verdict explicitly.
         final_gate_canonical_status="pass",
     )
@@ -14758,8 +14763,9 @@ def test_final_gate_canonical_pass_status_yields_mirror_authority(
     state = crl.ReviewLoopState(
         reviewer_status={"codex": "clean"},
         active_reviewer="codex",
-        fresh_final_status="clean",
-        stop_reason="Primary reviewer is clean.",
+            fresh_final_status="clean",
+            issue_aligned=True,
+            stop_reason="Primary reviewer is clean.",
     )
     out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
     data = _json.loads((tmp_path / "hosted" / "agentic.json").read_text())

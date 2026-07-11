@@ -924,16 +924,22 @@ def _build_agentic_v1_artifact(
     }
     hard_reviewer_state = bool(reviewer_states & hard_reviewer_states)
     validation_clean = validation_status in {"not_run", "verified"}
+    alignment_required = bool(getattr(context, "has_issue", False))
+    issue_aligned = getattr(loop_state, "issue_aligned", None)
+    alignment_clean = not alignment_required or issue_aligned is True
     passed = (
         canonical_status != "fail"
         and not budget_exhausted
         and not hard_reviewer_state
         and fresh_status == "clean"
         and validation_clean
+        and alignment_clean
         and not remaining_open
     )
     agentic_blocking = not passed
     decision = "pass" if passed else "block"
+    if not alignment_clean:
+        stop_reason = "Issue alignment was not proven by the reviewer."
     verdict = AgenticVerdict(decision=decision, reason=stop_reason)
     # A reviewer that failed/degraded/errored (not a content block) means the
     # outcome could not be decided by the reviewers → needs_human.

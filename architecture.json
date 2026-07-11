@@ -7869,6 +7869,41 @@
     "interface": {
       "type": "module",
       "module": {
+        "dataclasses": [
+          {
+            "name": "_HostedAgenticArtifactReservation",
+            "fields": [
+              {
+                "name": "public_path",
+                "type": "Path"
+              },
+              {
+                "name": "private_path",
+                "type": "Path"
+              },
+              {
+                "name": "lock_path",
+                "type": "Path"
+              },
+              {
+                "name": "owner_path",
+                "type": "Path"
+              },
+              {
+                "name": "invocation_id",
+                "type": "str"
+              },
+              {
+                "name": "identity_digest",
+                "type": "str"
+              },
+              {
+                "name": "pr_number",
+                "type": "int"
+              }
+            ]
+          }
+        ],
         "functions": [
           {
             "name": "run_agentic_checkup",
@@ -7877,8 +7912,13 @@
           },
           {
             "name": "_prepare_hosted_agentic_artifact",
-            "signature": "(artifact_path: Optional[str], *, pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0) -> bool",
-            "returns": "True only when hosted mode is disabled or the configured path contains a verified current blocking placeholder"
+            "signature": "(artifact_path: Optional[str], *, pr_owner: str = \"\", pr_repo: str = \"\", pr_number: int = 0) -> Optional[_HostedAgenticArtifactReservation]",
+            "returns": "Invocation-private reservation after a verified public blocking placeholder is published, otherwise None"
+          },
+          {
+            "name": "_publish_hosted_agentic_artifact",
+            "signature": "(reservation: Optional[_HostedAgenticArtifactReservation], *, canonical_passed: Optional[bool]) -> Optional[str]",
+            "returns": "Stable public path only after ownership and artifact identity validation"
           },
           {
             "name": "_finalize_hosted_agentic_artifact",

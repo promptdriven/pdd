@@ -334,6 +334,30 @@ def test_build_artifact_nonfinite_budget_values_fail_closed(
     assert art.verdict.decision == "block"
 
 
+@pytest.mark.parametrize(
+    "has_issue,issue_aligned,expected_pass",
+    [
+        (True, True, True),
+        (True, False, False),
+        (True, None, False),
+        (False, None, True),
+    ],
+)
+def test_build_artifact_requires_alignment_only_when_issue_present(
+    has_issue, issue_aligned, expected_pass
+):
+    art = build_agentic_v1_artifact(
+        loop_state=_state(issue_aligned=issue_aligned),
+        config=_config(),
+        context=_context(has_issue=has_issue),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert (art.status == "passed") is expected_pass
+    assert (art.verdict.decision == "pass") is expected_pass
+    if has_issue and issue_aligned is not True:
+        assert "alignment" in art.verdict.reason.lower()
+
+
 def test_build_artifact_budget_recomputes_nonclean_rounds_and_minutes_from_actuals():
     art = build_agentic_v1_artifact(
         loop_state=_state(
