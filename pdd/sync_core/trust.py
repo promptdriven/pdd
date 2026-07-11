@@ -134,10 +134,15 @@ class FileReplayStore(ReplayStore):
             if previous is None:
                 records[key] = attestation_id
             return records
-        try:
-            update_json(self.path, {}, consume_record)
-        except DescriptorStoreError as exc:
-            raise AttestationError(str(exc)) from exc
+        error = None
+        for _attempt in range(3):
+            try:
+                update_json(self.path, {}, consume_record)
+                return
+            except DescriptorStoreError as exc:
+                error = exc
+        if error is not None:
+            raise AttestationError(str(error)) from error
 
     def is_durable(self) -> bool:
         """Return true for the fsynced external ledger."""

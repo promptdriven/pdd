@@ -146,12 +146,17 @@ class CandidateArtifactPolicy:
                 )
             records.append(list(key))
             return records
-        try:
-            update_json(path, [], consume_record)
-        except DescriptorStoreError as exc:
+        error = None
+        for _attempt in range(3):
+            try:
+                update_json(path, [], consume_record)
+                return
+            except DescriptorStoreError as exc:
+                error = exc
+        if error is not None:
             raise CandidateArtifactProvenanceError(
-                f"candidate replay ledger is unsafe: {exc}"
-            ) from exc
+                f"candidate replay ledger is unsafe: {error}"
+            ) from error
 
     def _read_durable_records(self, path: Path) -> list[list[str]]:
         if path.exists():

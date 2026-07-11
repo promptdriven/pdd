@@ -233,7 +233,10 @@ def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
             )
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
-    monkeypatch.setattr("pdd.sync_core.lifecycle.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle._lifecycle_command",
+        lambda command, *_args, **_kwargs: fake_run(command),
+    )
     installed = _install_candidate_wheel(
         tmp_path,
         tmp_path / "home",
@@ -273,7 +276,10 @@ def test_candidate_install_proves_isolated_module_entrypoint(
             )
         return subprocess.CompletedProcess(command, 0, "ok", "")
 
-    monkeypatch.setattr("pdd.sync_core.lifecycle.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "pdd.sync_core.lifecycle._lifecycle_command",
+        lambda command, *_args, **_kwargs: fake_run(command),
+    )
     assert _install_candidate_wheel(
         tmp_path,
         tmp_path / "home",

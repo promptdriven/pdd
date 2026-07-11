@@ -6,10 +6,7 @@ from __future__ import annotations
 import hashlib
 import ast
 import json
-import os
 import shlex
-import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -33,6 +30,7 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
+from .supervisor import run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -416,49 +414,9 @@ def _managed_subprocess(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
     writable_roots: tuple[Path, ...],
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
-    # pylint: disable=consider-using-with
     """Run an untrusted command in a networkless sandbox and reap its group."""
-    argv = command
-    profile_path = None
-    if sys.platform == "darwin" and shutil.which("sandbox-exec"):
-        rules = ["(version 1)", "(allow default)", "(deny network*)",
-                 "(deny file-write*)",
-                 '(allow file-write* (literal "/dev/null"))']
-        for item in writable_roots:
-            rules.append(f'(allow file-write* (subpath "{item.resolve()}"))')
-        descriptor, profile_name = tempfile.mkstemp(prefix="pdd-sandbox-", suffix=".sb")
-        os.close(descriptor)
-        profile_path = Path(profile_name)
-        profile_path.write_text("\n".join(rules), encoding="utf-8")
-        argv = ["sandbox-exec", "-f", str(profile_path), *command]
-    process = subprocess.Popen(
-        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=env | {
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": str(writable_roots[0].resolve()),
-            "TEMP": str(writable_roots[0].resolve()),
-            "TMP": str(writable_roots[0].resolve()),
-        }, start_new_session=True,
-    )
-    timed_out = False
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        os.killpg(process.pid, signal.SIGKILL)
-        stdout, stderr = process.communicate()
-    surviving = False
-    if not timed_out and os.name != "nt":
-        try:
-            os.killpg(process.pid, 0)
-            surviving = True
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    if profile_path is not None:
-        profile_path.unlink(missing_ok=True)
-    return subprocess.CompletedProcess(command, 124 if timed_out else process.returncode,
-                                       stdout, stderr), surviving
+    return run_supervised(command, cwd=cwd, timeout=timeout, env=env,
+                          writable_roots=writable_roots)
 
 
 def runner_identity_digest(
