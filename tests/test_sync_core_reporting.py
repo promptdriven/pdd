@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -155,6 +156,7 @@ def _finalize_trusted_baseline(
     *,
     artifact_closure_digest: str | None = None,
     legacy_pre_closure: bool = False,
+    playwright_command: tuple[str, ...] | None = None,
 ) -> None:
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     profile = load_verification_profiles(root, manifest).profiles[0]
@@ -164,17 +166,27 @@ def _finalize_trusted_baseline(
         unit.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(profile, root=root, ref=commit),
+        runner_identity_digest(
+            profile,
+            root=root,
+            ref=commit,
+            config=RunnerConfig(playwright_command=playwright_command),
+        ),
         TRUSTED_RUNNER_VERSION,
         commit,
         commit,
+        playwright_command,
         artifact_closure_digest=artifact_closure_digest or snapshot.digest(),
     )
     envelope = SIGNER.issue(
         AttestationRequest(
             "attestation-widget-1",
             binding,
-            (ObligationEvidence("pytest", EvidenceOutcome.PASS),),
+            (
+                ObligationEvidence(
+                    profile.obligations[0].obligation_id, EvidenceOutcome.PASS
+                ),
+            ),
             "nonce-widget-1",
             NOW,
         )
@@ -263,6 +275,34 @@ def test_canonical_report_migrates_fresh_signed_pre_closure_envelope(tmp_path) -
 
     assert report["ok"] is True
     assert report["counts"]["trusted_in_sync"] == 1
+
+
+def test_canonical_report_rejects_signed_legacy_pathless_playwright_command(
+    tmp_path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, "fake_playwright"),
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is False
+    assert report["counts"]["trusted_current_evidence"] == 0
+    assert "Playwright" in report["units"][0]["reason"]
 
 
 def test_finalizer_reuses_fresh_signed_pre_closure_envelope(tmp_path) -> None:
