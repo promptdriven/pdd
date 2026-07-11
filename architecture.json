@@ -5556,9 +5556,7 @@
   {
     "reason": "CLI entry point for the change command.",
     "description": "Command-line interface for change. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "fingerprint_transaction_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 150,
     "filename": "change_main_python.prompt",
     "filepath": "pdd/change_main.py",
