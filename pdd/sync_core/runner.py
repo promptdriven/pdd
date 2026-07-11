@@ -1,4 +1,5 @@
 """Trusted validator adapters and pass-only normalized evidence outcomes."""
+# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
@@ -214,6 +215,7 @@ def _transitive_support_blobs(
     test_artifacts: tuple[PurePosixPath, ...] = (),
     code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    # pylint: disable=too-many-arguments
     """Resolve local Python imports from protected runner support paths."""
     paths = set(included)
     remaining = list(pending)
@@ -896,6 +898,7 @@ def _run_obligation_in_tree(
     head_sha: str,
     config: RunnerConfig,
 ) -> RunnerExecution:
+    # pylint: disable=too-many-locals
     """Run one protected obligation with changed-test self-certification guards."""
     preflight = _obligation_preflight(root, obligation, base_sha, head_sha)
     if preflight is not None:
