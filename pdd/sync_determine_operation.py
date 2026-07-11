@@ -331,19 +331,23 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
 def _resolve_context_name_for_basename(
     basename: str,
     context_override: Optional[str] = None,
+    *,
+    pddrc_path: Optional[Path] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Resolve the context for a basename when no explicit override is provided."""
     if context_override:
         return context_override
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = pddrc_path or _find_pddrc_file()
     if not pddrc_path:
         return None
 
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except ValueError:
-        return None
+    if config is None:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except ValueError:
+            return None
 
     return _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
 
@@ -952,19 +956,26 @@ def _resolve_prompts_root(prompts_dir: str) -> Path:
     return prompts_root
 
 
-def _relative_basename_for_context(basename: str, context_name: Optional[str]) -> str:
+def _relative_basename_for_context(
+    basename: str,
+    context_name: Optional[str],
+    *,
+    pddrc_path: Optional[Path] = None,
+    config: Optional[Dict[str, Any]] = None,
+) -> str:
     """Strip context-specific prefixes from basename when possible."""
     if not context_name:
         return basename
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = pddrc_path or _find_pddrc_file()
     if not pddrc_path:
         return basename
 
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except ValueError:
-        return basename
+    if config is None:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except ValueError:
+            return basename
 
     contexts = config.get("contexts", {})
     context_config = contexts.get(context_name, {})

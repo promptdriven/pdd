@@ -269,7 +269,7 @@ def test_issue_1996_read_only_resolver_uses_full_context_template_contract(
 
     paths = continuous_sync._resolve_report_paths(unit, pdd_project)
 
-    assert paths["code"] == pdd_project / "web/components/AssetCard/asset_card-AssetCard-asset-card.tsx"
+    assert paths["code"] == pdd_project / "web/components/AssetCard/asset_card-Assetcard-asset-card.tsx"
     assert paths["example"] == pdd_project / "demo/components/AssetCard.tsx"
 
 
@@ -307,6 +307,32 @@ def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
     assert paths["code"] == pdd_project / "web/src/page.tsx"
     assert paths["example"] == pdd_project / "web/examples/page_example.tsx"
     assert paths["test"] == pdd_project / "web/tests/test_page.tsx"
+
+
+def test_issue_1996_duplicate_architecture_leaves_get_distinct_derived_stems(
+    pdd_project: Path,
+) -> None:
+    architecture = {
+        "modules": [
+            {"filename": "admin/page_typescriptreact.prompt", "filepath": "app/admin/page.tsx"},
+            {"filename": "settings/page_typescriptreact.prompt", "filepath": "app/settings/page.tsx"},
+        ]
+    }
+    (pdd_project / "architecture.json").write_text(json.dumps(architecture), encoding="utf-8")
+    prompt = pdd_project / "prompts/admin/page_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build admin page.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit(
+        basename="admin/page",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["example"] == pdd_project / "examples/app_admin_page_example.tsx"
+    assert paths["test"] == pdd_project / "tests/test_app_admin_page.tsx"
 
 
 @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
