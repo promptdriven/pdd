@@ -252,3 +252,16 @@ def test_runner_normalizes_external_threshold_quorum_to_pass(tmp_path: Path) -> 
         ),
     )
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_policy_rejects_duplicate_public_key_under_distinct_identities(tmp_path: Path) -> None:
+    """One Ed25519 key must never satisfy multiple human threshold slots."""
+    root, base, store, _keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["signers"][1]["public_key"] = policy["signers"][0]["public_key"]
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    _git(root, "add", ".pdd/human-attestation-policy.json")
+    duplicate_key_base = _git(root, "commit", "-qm", "duplicate protected key")
+    with pytest.raises(HumanAttestationError, match="duplicate"):
+        load_human_attestation_policy(root, duplicate_key_base, store)
