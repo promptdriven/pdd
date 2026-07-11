@@ -210,6 +210,139 @@ def test_issue_1932_complete_inventory_blocks_unbaselined_units(pdd_project: Pat
         }
 
 
+def test_issue_1996_mixed_contexts_keep_implicit_default_prompt_inventory(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n",
+        encoding="utf-8",
+    )
+    frontend = pdd_project / "prompts/frontend/card_typescript.prompt"
+    frontend.parent.mkdir(parents=True, exist_ok=True)
+    frontend.write_text("Build a card.\n", encoding="utf-8")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert {unit["basename"] for unit in report["units"]} >= {
+        "widget",
+        "unbaselined_helper",
+        "card",
+    }
+
+
+def test_issue_1996_read_only_resolver_uses_full_context_template_contract(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      outputs:\n"
+        "        code:\n"
+        "          path: 'web/{category}/{name}/{name_snake}-{name_pascal}-{name_kebab}.{ext}'\n"
+        "        example:\n"
+        "          path: 'demo/{dir_prefix}{name}.{ext}'\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/frontend/components/AssetCard_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build an asset card.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit(
+        basename="frontend/components/AssetCard",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts/frontend",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "web/components/AssetCard/asset_card-AssetCard-asset-card.tsx"
+    assert paths["example"] == pdd_project / "demo/components/AssetCard.tsx"
+
+
+def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
+    pdd_project: Path,
+) -> None:
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      generate_output_path: web/src\n"
+        "      example_output_path: web/examples\n"
+        "      test_output_path: web/tests\n",
+        encoding="utf-8",
+    )
+    nested = pdd_project / "prompts/frontend/admin"
+    nested.mkdir(parents=True, exist_ok=True)
+    prompt = nested / "page_typescriptreact.prompt"
+    prompt.write_text("Build admin page.\n", encoding="utf-8")
+    (pdd_project / "prompts/frontend/architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "admin/page_typescriptreact.prompt", "filepath": "page.tsx"}]}),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        basename="frontend/admin/page",
+        language="typescriptreact",
+        prompt_path=prompt,
+        prompts_dir=pdd_project / "prompts/frontend",
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "web/src/page.tsx"
+    assert paths["example"] == pdd_project / "web/examples/page_example.tsx"
+    assert paths["test"] == pdd_project / "web/tests/test_page.tsx"
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_nested_pddrc_symlink_fails_before_identity_read(
+    pdd_project: Path,
+) -> None:
+    nested = pdd_project / "prompts/sub"
+    nested.mkdir()
+    (nested / "thing_python.prompt").write_text("Build thing.\n", encoding="utf-8")
+    outside = pdd_project.parent / "outside-pddrc"
+    outside.write_text("contexts: {}\n", encoding="utf-8")
+    os.symlink(outside, nested / ".pddrc")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "unsafe_config" for item in report["failures"])
+    assert all(item["basename"] != "sub/thing" for item in report["units"])
+
+
+def test_issue_1996_metadata_units_share_command_discovery_budget(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(continuous_sync, "MAX_PROMPT_DISCOVERY_FILES", 4)
+    meta = pdd_project / ".pdd/meta"
+    for index in range(8):
+        (meta / f"extra_{index}_python.json").write_text("{}", encoding="utf-8")
+
+    report = continuous_sync.build_report(consumer="sync", root=pdd_project)
+
+    assert report["ok"] is False
+    assert report["summary"]["total"] <= 5
+    assert any(item["failure"] == "discovery_budget" for item in report["failures"])
+
+
 @pytest.mark.parametrize(
     ("name", "path", "edit", "classification"),
     [
