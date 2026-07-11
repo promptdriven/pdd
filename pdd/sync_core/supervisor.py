@@ -30,13 +30,13 @@ class SupervisorLimits:
 
 def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
     """Return the minimal host trees needed to start the configured interpreter."""
-    roots = {cwd.resolve(), Path(sys.prefix).resolve()}
+    roots = {cwd.resolve(), Path(sys.prefix)}
     executable = shutil.which(command[0]) or command[0]
-    roots.add(Path(executable).resolve().parent)
+    roots.add(Path(executable).parent)
     for candidate in ("/bin", "/usr", "/lib", "/lib64"):
         path = Path(candidate)
         if path.exists():
-            roots.add(path.resolve())
+            roots.add(path)
     return tuple(sorted(roots, key=lambda item: (len(item.parts), str(item))))
 
 
