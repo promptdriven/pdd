@@ -35,7 +35,12 @@ def build_unit_snapshot(
         raise SnapshotError("cannot snapshot a unit absent from the checked head")
     if profile.unit_id != unit.unit_id:
         raise SnapshotError("verification profile identity does not match unit")
-    policy = PathPolicy(root, load_protected_aliases(root, manifest))
+    policy = PathPolicy(
+        root,
+        load_protected_aliases(root, manifest),
+        base_ref=manifest.base_ref,
+        head_ref=manifest.head_ref,
+    )
     artifacts: dict[tuple[str, PurePosixPath], ArtifactSnapshot] = {}
 
     def add(role: str, relpath: PurePosixPath, required: bool = True) -> None:

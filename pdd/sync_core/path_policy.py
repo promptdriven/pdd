@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import posixpath
 import stat
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
+from .git_io import read_git_blob, read_git_tree_entry
 from .types import ArtifactSnapshot
 
 
@@ -32,12 +34,17 @@ class PathPolicy:
         self,
         checkout_root: Path,
         approved_aliases: Mapping[PurePosixPath, PurePosixPath] | None = None,
+        *,
+        base_ref: str | None = None,
+        head_ref: str | None = None,
     ) -> None:
         root = Path(checkout_root)
         if root.is_symlink() or not root.is_dir():
             raise PathPolicyError("checkout root must be a real directory")
         self.checkout_root = root.resolve()
         self.approved_aliases = dict(approved_aliases or {})
+        self.base_ref = base_ref
+        self.head_ref = head_ref
 
     @staticmethod
     def _validate_relpath(relpath: PurePosixPath) -> None:
@@ -51,6 +58,68 @@ class PathPolicy:
         except ValueError:
             return False
 
+    @staticmethod
+    def _canonical_alias_target(
+        alias_relpath: PurePosixPath, raw_target: bytes
+    ) -> PurePosixPath:
+        try:
+            target_text = raw_target.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PathPolicyError(
+                f"approved alias target is not UTF-8: {alias_relpath}"
+            ) from exc
+        target = PurePosixPath(target_text)
+        if target.is_absolute():
+            raise PathPolicyError(f"approved alias target escapes checkout: {alias_relpath}")
+        normalized = PurePosixPath(
+            posixpath.normpath((alias_relpath.parent / target).as_posix())
+        )
+        if normalized == PurePosixPath(".") or ".." in normalized.parts:
+            raise PathPolicyError(f"approved alias target escapes checkout: {alias_relpath}")
+        return normalized
+
+    def _immutable_alias_target(
+        self,
+        alias_relpath: PurePosixPath,
+        *,
+        required: bool,
+    ) -> PurePosixPath | None:
+        if self.base_ref is None or self.head_ref is None:
+            return None
+        base_entry = read_git_tree_entry(self.checkout_root, self.base_ref, alias_relpath)
+        head_entry = read_git_tree_entry(self.checkout_root, self.head_ref, alias_relpath)
+        if base_entry is None and head_entry is None:
+            return None
+        if base_entry != head_entry or base_entry is None or head_entry is None:
+            raise PathPolicyError(f"approved alias changed in protected trees: {alias_relpath}")
+        if base_entry.mode != "120000" or base_entry.object_type != "blob":
+            if not required:
+                return None
+            raise PathPolicyError(
+                f"approved alias is not an unchanged symlink: {alias_relpath}"
+            )
+        target = read_git_blob(self.checkout_root, self.base_ref, alias_relpath)
+        if target is None:
+            raise PathPolicyError(f"approved alias target is unreadable: {alias_relpath}")
+        return self._canonical_alias_target(alias_relpath, target)
+
+    def _approved_alias_target(
+        self, alias_relpath: PurePosixPath,
+        *,
+        required: bool = False,
+    ) -> PurePosixPath | None:
+        configured = self.approved_aliases.get(alias_relpath)
+        immutable = self._immutable_alias_target(
+            alias_relpath,
+            required=required or configured is not None,
+        )
+        if configured is None:
+            return immutable
+        self._validate_relpath(configured)
+        if immutable is not None and configured != immutable:
+            raise PathPolicyError(f"approved alias target changed: {alias_relpath}")
+        return configured
+
     def resolve(self, relpath: PurePosixPath, *, allow_missing: bool = False) -> ResolvedPath:
         """Resolve a logical path without permitting unapproved link traversal."""
         self._validate_relpath(relpath)
@@ -63,11 +132,17 @@ class PathPolicy:
             if not component.exists() and not component.is_symlink():
                 break
             mode = component.lstat().st_mode
+            approved_target = self._approved_alias_target(
+                logical_component,
+                required=stat.S_ISLNK(mode),
+            )
+            if approved_target is not None and not stat.S_ISLNK(mode):
+                raise PathPolicyError(
+                    f"approved alias is not a symlink: {logical_component}"
+                )
             if stat.S_ISLNK(mode):
-                approved_target = self.approved_aliases.get(logical_component)
                 if approved_target is None:
                     raise PathPolicyError(f"unapproved managed symlink: {logical_component}")
-                self._validate_relpath(approved_target)
                 target = component.resolve(strict=True)
                 expected = self.checkout_root.joinpath(*approved_target.parts).resolve(strict=True)
                 if target != expected or not self._within_root(target):
