@@ -783,6 +783,42 @@ def test_validate_command_wires_protected_jest_runner_config(
     assert call.kwargs["config"].jest_command == (os.sys.executable, str(external))
 
 
+def test_validate_command_wires_protected_vitest_runner_config(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    external = tmp_path / "trusted-tools" / "vitest.py"
+    external.parent.mkdir()
+    external.write_text("print('trusted vitest')\n")
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--vitest-command",
+                f"{os.sys.executable} {external}",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    call = mocked_finalize.call_args
+    assert call.kwargs["signer"] is signer
+    assert call.kwargs["config"].vitest_command == (os.sys.executable, str(external))
+
+
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
