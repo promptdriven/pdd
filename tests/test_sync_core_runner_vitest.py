@@ -1,7 +1,6 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
 import json
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -171,9 +170,16 @@ def test_vitest_execution_uses_shared_supervisor(
         return subprocess.CompletedProcess([], 1, "", ""), set()
 
     monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+    original_run = subprocess.run
+
+    def guarded_run(command, *args, **kwargs):
+        if command and command[0] == "git":
+            return original_run(command, *args, **kwargs)
+        pytest.fail("Vitest bypassed shared supervision")
+
     monkeypatch.setattr(
         "pdd.sync_core.runner.subprocess.run",
-        lambda *_args, **_kwargs: pytest.fail("Vitest bypassed shared supervision"),
+        guarded_run,
     )
     _run_vitest(
         root,

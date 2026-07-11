@@ -1,4 +1,5 @@
 """Canonical synchronization certification and recovery commands."""
+# pylint: disable=duplicate-code
 
 from __future__ import annotations
 
@@ -166,17 +167,25 @@ def _runner_config_from_options(
     """Build trusted validator configuration from protected CLI/env options."""
     jest_command = options.get("jest_command")
     vitest_command = options.get("vitest_command")
+    vitest_manifest = options.get("vitest_toolchain_manifest")
+    protected_vitest = _protected_command(
+        vitest_command if isinstance(vitest_command, str) else None,
+        "--vitest-command",
+        cwd,
+    )
+    if protected_vitest is not None and len(protected_vitest) != 2:
+        raise click.ClickException(
+            "--vitest-command must contain exactly an absolute launcher and entrypoint"
+        )
     return RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
             "--jest-command",
             cwd,
         ),
-        vitest_command=_protected_command(
-            vitest_command if isinstance(vitest_command, str) else None,
-            "--vitest-command",
-            cwd,
-        ),
+        vitest_command=protected_vitest,
+        vitest_toolchain_manifest=Path(vitest_manifest).expanduser().resolve()
+        if isinstance(vitest_manifest, str) and vitest_manifest else None,
     )
 
 
@@ -435,6 +444,12 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     envvar="PDD_SYNC_VITEST_COMMAND",
     help="Protected absolute external Vitest command argv.",
 )
+@click.option(
+    "--vitest-toolchain-manifest",
+    envvar="PDD_SYNC_VITEST_TOOLCHAIN_MANIFEST",
+    type=click.Path(path_type=Path),
+    help="Protected external Node/Vitest toolchain closure manifest.",
+)
 @click.pass_context
 def validate(
     ctx: click.Context,
@@ -443,7 +458,9 @@ def validate(
     head_ref: str,
     jest_command: str | None,
     vitest_command: str | None,
+    vitest_toolchain_manifest: Path | None,
 ) -> None:
+    # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Run protected obligations and transactionally finalize trusted evidence."""
     ctx.ensure_object(dict)
     root = Path.cwd().resolve()
@@ -454,7 +471,12 @@ def validate(
         head_ref=head_ref,
         signer=attestation_signer_from_environment(),
         config=_runner_config_from_options(
-            {"jest_command": jest_command, "vitest_command": vitest_command},
+            {
+                "jest_command": jest_command,
+                "vitest_command": vitest_command,
+                "vitest_toolchain_manifest": str(vitest_toolchain_manifest)
+                if vitest_toolchain_manifest else None,
+            },
             root,
         ),
     )

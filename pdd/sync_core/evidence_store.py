@@ -49,7 +49,7 @@ def evidence_relpath(attestation_id: str) -> PurePosixPath:
 def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
     """Convert a signed envelope to stable JSON data without altering its payload."""
     binding = envelope.binding
-    return {
+    payload = {
         "attestation_id": envelope.attestation_id,
         "issuer": envelope.issuer,
         "binding": {
@@ -79,6 +79,13 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         },
         "signature": envelope.signature,
     }
+    if binding.vitest_command is not None:
+        payload["binding"]["vitest_command"] = list(binding.vitest_command)
+    if binding.vitest_toolchain_manifest is not None:
+        payload["binding"]["vitest_toolchain_manifest"] = binding.vitest_toolchain_manifest
+    if binding.vitest_toolchain_identity is not None:
+        payload["binding"]["vitest_toolchain_identity"] = binding.vitest_toolchain_identity
+    return payload
 
 
 def encode_attestation(envelope: AttestationEnvelope) -> bytes:
@@ -109,6 +116,17 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             PurePosixPath(_string(subject_data, "prompt_relpath")),
             _string(subject_data, "language_id"),
         )
+        command_data = binding_data.get("vitest_command")
+        if command_data is not None and (
+            not isinstance(command_data, list)
+            or len(command_data) != 2
+            or not all(isinstance(item, str) and item for item in command_data)
+        ):
+            raise TypeError("vitest_command must be two non-empty strings")
+        for key in ("vitest_toolchain_manifest", "vitest_toolchain_identity"):
+            value = binding_data.get(key)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise TypeError(f"{key} must be a non-empty string")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -117,6 +135,9 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "tool_version"),
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
+            tuple(command_data) if command_data is not None else None,
+            binding_data.get("vitest_toolchain_manifest"),
+            binding_data.get("vitest_toolchain_identity"),
         )
         results = tuple(
             ObligationEvidence(

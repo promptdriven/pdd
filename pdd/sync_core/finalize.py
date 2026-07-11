@@ -221,10 +221,21 @@ def _reusable_result(
         snapshot.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(profile, root=root, ref=head_sha),
+        runner_identity_digest(
+            profile, root=root, ref=head_sha,
+            config=RunnerConfig(
+                vitest_command=envelope.binding.vitest_command,
+                vitest_toolchain_manifest=Path(envelope.binding.vitest_toolchain_manifest)
+                if envelope.binding.vitest_toolchain_manifest else None,
+                vitest_toolchain_identity=envelope.binding.vitest_toolchain_identity,
+            ),
+        ),
         TRUSTED_RUNNER_VERSION,
         base_sha,
         envelope.binding.checked_sha,
+        envelope.binding.vitest_command,
+        envelope.binding.vitest_toolchain_manifest,
+        envelope.binding.vitest_toolchain_identity,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(
