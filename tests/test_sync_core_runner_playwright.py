@@ -63,7 +63,7 @@ def _fake_node_playwright(tmp_path: Path) -> Path:
         "const file = path.resolve(process.cwd(), 'tests/widget.spec.ts');\n"
         "const collection = process.argv.includes('--list');\n"
         "const result = collection ? [] : [{status: 'passed'}];\n"
-        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
+        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', file, tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
         encoding="utf-8",
     )
     return runner
