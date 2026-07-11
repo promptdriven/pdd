@@ -17,6 +17,7 @@ from typing import Callable
 from .certificate import count_vendored_sync_semantics
 from .classifier import classify
 from .identity import initialize_repository_identity
+from .isolation import untrusted_child_environment
 from .manifest import build_unit_manifest
 from .runner import AttestationIssue, RunBinding, RunnerConfig, run_profile
 from .scenario_contract import REQUIRED_SCENARIOS
@@ -140,15 +141,7 @@ def _candidate(
         capture_output=True,
         text=True,
         check=False,
-        env={
-            key: value
-            for key, value in os.environ.items()
-            if not any(
-                marker in key.upper()
-                for marker in ("API_KEY", "CREDENTIAL", "PASSWORD", "SECRET", "TOKEN")
-            )
-            and key not in {"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
-        },
+        env=untrusted_child_environment(drop={"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}),
     )
 
 
@@ -807,9 +800,17 @@ def _owned_harness(_arguments: argparse.Namespace) -> ScenarioResult:
     if any(
         marker in key.upper()
         for key in os.environ
-        for marker in ("SIGNING_KEY", "CERTIFICATE_SIGNING", "ATTESTATION_SIGNING")
+        for marker in (
+            "SIGNING_KEY",
+            "CERTIFICATE_SIGNING",
+            "ATTESTATION_SIGNING",
+            "SIGNER",
+            "CERTIFICATE",
+            "ATTESTATION",
+            "RELEASED_CHECKER",
+        )
     ):
-        raise AssertionError("scenario child received signing material")
+        raise AssertionError("scenario child received signing capability")
     return ScenarioResult("released-checker-owned-scenario-harness", "PASS")
 
 

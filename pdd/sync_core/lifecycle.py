@@ -12,23 +12,17 @@ from pathlib import Path
 from typing import Any
 
 from .certificate import LifecycleResult
-from .isolation import SECRET_ENV_MARKERS
+from .isolation import untrusted_child_environment
 from .scenario_contract import REQUIRED_SCENARIOS
 
 
 def _isolated_lifecycle_environment(home: Path) -> dict[str, str]:
     """Build a credential-free environment with no source import overrides."""
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
-        and key not in {"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
-    }
-    environment["HOME"] = str(home)
-    environment["XDG_CONFIG_HOME"] = str(home / ".config")
-    environment["XDG_CACHE_HOME"] = str(home / ".cache")
-    environment["PYTHONNOUSERSITE"] = "1"
-    return environment
+    return untrusted_child_environment(
+        home=home,
+        extra={"PYTHONNOUSERSITE": "1"},
+        drop={"PYTHONPATH", "PYTHONHOME", "PDD_PATH"},
+    )
 
 
 def _failed_result(*, timeout: bool = False) -> LifecycleResult:
@@ -40,6 +34,7 @@ def _failed_result(*, timeout: bool = False) -> LifecycleResult:
         1,
         1,
         tuple(sorted(REQUIRED_SCENARIOS)),
+        "",
         "",
     )
 
@@ -78,7 +73,40 @@ def _normalized_results(payload: Any) -> dict[str, dict[str, Any]]:
     return results
 
 
-def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path | None:
+def _dependency_environment_digest(candidate_python: Path, isolated: dict[str, str]) -> str:
+    """Hash the installed distribution set visible to the candidate wheel."""
+    probe = subprocess.run(
+        [
+            str(candidate_python),
+            "-c",
+            (
+                "import importlib.metadata as m, json;"
+                "rows=[];"
+                "\nfor d in m.distributions():"
+                "\n rows.append({"
+                "'name': d.metadata.get('Name', ''),"
+                "'version': d.version,"
+                "'files': sorted("
+                "(str(f), getattr(getattr(f, 'hash', None), 'value', ''), f.size or 0)"
+                " for f in (d.files or ()))"
+                "})"
+                "\nprint(json.dumps(sorted(rows, key=lambda r: (r['name'].lower(), r['version'])),"
+                " sort_keys=True, separators=(',', ':')))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=isolated,
+    )
+    if probe.returncode != 0:
+        return ""
+    return hashlib.sha256(probe.stdout.encode()).hexdigest()
+
+
+def _install_candidate_wheel(
+    temporary: Path, home: Path, wheel: Path
+) -> tuple[Path, str] | None:
     """Install the exact candidate wheel in a separate isolated environment."""
     environment = temporary / "candidate-venv"
     isolated = _isolated_lifecycle_environment(home)
@@ -100,6 +128,7 @@ def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path |
             "-m",
             "pip",
             "install",
+            "--no-deps",
             "--only-binary=:all:",
             "--disable-pip-version-check",
             "--force-reinstall",
@@ -110,7 +139,9 @@ def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path |
         check=False,
         env=isolated,
     )
-    return candidate_python if installed.returncode == 0 else None
+    if installed.returncode != 0:
+        return None
+    return candidate_python, _dependency_environment_digest(candidate_python, isolated)
 
 
 def run_lifecycle_matrix(
@@ -122,7 +153,7 @@ def run_lifecycle_matrix(
     cloud_head_ref: str | None = None,
     timeout_seconds: int = 1200,
 ) -> LifecycleResult:
-    # pylint: disable=too-many-arguments
+    # pylint: disable=too-many-arguments,too-many-locals
     """Run only the scenario harness installed with the released checker."""
     del root  # Candidate repository tests are never lifecycle evidence.
     if (
@@ -137,11 +168,12 @@ def run_lifecycle_matrix(
         temporary = Path(directory)
         output = temporary / "result.json"
         (temporary / "home").mkdir(mode=0o700)
-        candidate_python = _install_candidate_wheel(
+        installed_candidate = _install_candidate_wheel(
             temporary, temporary / "home", Path(candidate_wheel)
         )
-        if candidate_python is None:
+        if installed_candidate is None:
             return _failed_result()
+        candidate_python, dependency_digest = installed_candidate
         command = [
             sys.executable,
             "-I",
@@ -198,4 +230,5 @@ def run_lifecycle_matrix(
             sum(int(row["post_merge_tree_changes"]) for row in results.values()),
             missing,
             hashlib.sha256(Path(candidate_wheel).read_bytes()).hexdigest(),
+            dependency_digest,
         )

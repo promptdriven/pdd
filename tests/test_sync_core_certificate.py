@@ -30,6 +30,7 @@ CHECKER = CheckerIdentity(
 )
 OBSERVATION = NightlyObservation(True, True, 0, True, "BLOCKED", 0)
 CANDIDATE_WHEEL_SHA256 = "d" * 64
+DEPENDENCY_ENVIRONMENT_DIGEST = "e" * 64
 
 
 @pytest.fixture(autouse=True)
@@ -110,6 +111,7 @@ def _nightly(path, signer, count=7, *, include_observation=True):
             "post_merge_tree_changes": 0,
             "missing_scenarios": [],
             "candidate_wheel_sha256": CANDIDATE_WHEEL_SHA256,
+            "dependency_environment_digest": DEPENDENCY_ENVIRONMENT_DIGEST,
         }
         body = {
             "schema_version": 2,
@@ -211,7 +213,14 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
     )
     lifecycle = LifecycleResult(
-        0, 0, 0, 0, 0, 0, candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+        dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
     )
     certificate = build_global_certificate(
         (
@@ -288,7 +297,15 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
         "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
     )
     lifecycle = LifecycleResult(
-        0, 0, 0, 0, 0, 0, ("merge-group",), CANDIDATE_WHEEL_SHA256
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        ("merge-group",),
+        CANDIDATE_WHEEL_SHA256,
+        DEPENDENCY_ENVIRONMENT_DIGEST,
     )
     certificate = build_global_certificate(
         (
@@ -353,6 +370,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
                 0,
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+                dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
             ),
             nightly,
             checker_identity=CHECKER,
@@ -506,6 +524,7 @@ def test_unsigned_nightly_rows_cannot_fabricate_temporal_proof(
                 0,
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+                dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
             ),
             nightly,
             checker_identity=CHECKER,
@@ -551,6 +570,7 @@ def test_signed_nightly_rows_without_observations_do_not_extend_streak(
                 0,
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+                dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
             ),
             nightly,
             checker_identity=CHECKER,

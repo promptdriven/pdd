@@ -93,7 +93,7 @@ def main() -> None:
     cli = importlib.import_module("pdd.cli").cli
 
     cli.main(
-        args=["sync", "certify", *sys.argv[1:]],
+        args=["certify", *sys.argv[1:]],
         prog_name="pdd-sync-checker",
         standalone_mode=True,
     )
