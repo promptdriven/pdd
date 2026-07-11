@@ -110,5 +110,16 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
-    assert len(profiles.invalid_reasons) == EXPECTED_PROFILE_COUNT
-    assert all("candidate-only profile lacks protected approval" in reason for reason in profiles.invalid_reasons)
+    assert len(profiles.invalid_reasons) == EXPECTED_PROFILE_COUNT * 2
+    candidate_only = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "candidate-only profile lacks protected approval" in reason
+    ]
+    incomplete = [
+        reason
+        for reason in profiles.invalid_reasons
+        if "verification profile is incomplete" in reason
+    ]
+    assert len(candidate_only) == EXPECTED_PROFILE_COUNT
+    assert len(incomplete) == EXPECTED_PROFILE_COUNT
