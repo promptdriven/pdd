@@ -26,7 +26,8 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
     bwrap = json.loads(argv[-2])
-    assert "--unshare-all" in bwrap
+    assert {"--unshare-pid", "--unshare-net", "--unshare-cgroup"} <= set(bwrap)
+    assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
     assert bwrap[bwrap.index("--reuid") + 1] == str(os.getuid())

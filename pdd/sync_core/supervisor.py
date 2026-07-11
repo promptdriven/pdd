@@ -164,7 +164,8 @@ def _sandbox_command(
         if elevated and setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
         workdir = (cwd or Path.cwd()).resolve()
-        argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+        argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
+                "--unshare-uts", "--unshare-cgroup", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
