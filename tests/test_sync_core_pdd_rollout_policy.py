@@ -69,8 +69,8 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     }
     assert managed_prompt_paths == {path for path, _language in identities}
     tracked = subprocess.check_output(
-        ["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=ROOT, text=True
-    ).splitlines()
+        ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=ROOT
+    ).decode("utf-8").split("\0")[:-1]
     assert {item.candidate_id.artifact_relpath.as_posix() for item in manifest.candidates} == set(tracked)
 
 
