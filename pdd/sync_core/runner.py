@@ -1615,7 +1615,11 @@ def run_obligation(
             "dirty checkout cannot receive committed-head evidence: "
             + ", ".join(dirty_all),
         )
-    dirty = _dirty_pytest_support(root)
+    dirty = (
+        _dirty_jest_support(root)
+        if obligation.validator_id == "jest"
+        else _dirty_pytest_support(root)
+    )
     if dirty:
         return RunnerExecution(
             obligation.obligation_id,
@@ -1624,6 +1628,15 @@ def run_obligation(
             "candidate-modified test cannot solely certify itself: "
             + ", ".join(sorted(dirty)),
         )
+    if obligation.validator_id == "jest" and config.jest_command is not None:
+        command_error = _protected_command_error(root, config.jest_command)
+        if command_error is not None:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                command_error,
+            )
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
