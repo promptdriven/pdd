@@ -369,7 +369,16 @@ def _resolve_prompt_path_from_architecture(
             matches.sort(key=lambda p: (len(p.parts), str(p)))
             return matches[0]
         if unsafe_matches:
-            raise UnsafePromptPathError(unsafe_matches[0], resolved_root)
+            relevant_unsafe = unsafe_matches
+            if context_prefix:
+                relevant_unsafe = [
+                    candidate for candidate in unsafe_matches
+                    if _prompt_path_has_context_prefix(
+                        candidate, prompts_root, context_prefix
+                    )
+                ]
+            if relevant_unsafe:
+                raise UnsafePromptPathError(relevant_unsafe[0], resolved_root)
 
     return joined
 
@@ -1077,6 +1086,8 @@ def _find_prompt_file(
     Returns:
         Actual filesystem Path with correct casing, or None if not found.
     """
+    if _safe_architecture_prompt_filename(basename) is None:
+        raise UnsafePromptPathError(Path(basename), prompts_root.resolve(strict=False))
     name = basename.split('/')[-1] if '/' in basename else basename
     # Containment anchor for recursive discovery AND the CWD-independent .pddrc anchor
     # for context detection / prefix stripping: resolution is often driven from a
@@ -1207,9 +1218,18 @@ def _find_prompt_file(
                 arch_matches.sort(key=lambda p: (len(p.parts), str(p)))
                 return arch_matches[0]
             if unsafe_arch_matches:
-                raise UnsafePromptPathError(
-                    unsafe_arch_matches[0], resolved_prompts_root
-                )
+                relevant_unsafe = unsafe_arch_matches
+                if context_prefix:
+                    relevant_unsafe = [
+                        candidate for candidate in unsafe_arch_matches
+                        if _prompt_path_has_context_prefix(
+                            candidate, prompts_root, context_prefix
+                        )
+                    ]
+                if relevant_unsafe:
+                    raise UnsafePromptPathError(
+                        relevant_unsafe[0], resolved_prompts_root
+                    )
 
     # --- Step 4: Recursive glob fallback (always works) ---
     # Case-insensitive on both basename and language suffix.
@@ -1277,7 +1297,16 @@ def _find_prompt_file(
         matches.sort(key=lambda p: (len(p.parts), str(p)))
         return matches[0]
     if unsafe_matches:
-        raise UnsafePromptPathError(unsafe_matches[0], resolved_prompts_root)
+        relevant_unsafe = unsafe_matches
+        if context_prefix:
+            relevant_unsafe = [
+                candidate for candidate in unsafe_matches
+                if _prompt_path_has_context_prefix(
+                    candidate, prompts_root, context_prefix
+                )
+            ]
+        if relevant_unsafe:
+            raise UnsafePromptPathError(relevant_unsafe[0], resolved_prompts_root)
 
     return None
 
@@ -1435,6 +1464,8 @@ def _get_filepath_from_architecture(
                 else _OWNERSHIP_INELIGIBLE
             )
 
+        borrow_ownership_cache: Dict[Tuple[str, str], bool] = {}
+
         def _borrow_ownership_ok(module: Dict[str, Any]) -> bool:
             """Eligibility for an architecture row in the resolving context.
 
@@ -1444,10 +1475,15 @@ def _get_filepath_from_architecture(
             cross-context row). A merely ELIGIBLE (heuristic) row is confined to the
             resolving context's own territory.
             """
-            ownership = _belongs_to_resolved_prompt(module)
-            if ownership == _OWNERSHIP_INELIGIBLE:
-                return False
             filepath = module.get("filepath")
+            cache_key = (
+                str(module.get("filename") or ""),
+                str(filepath or ""),
+            )
+            cached = borrow_ownership_cache.get(cache_key)
+            if cached is not None:
+                return cached
+
             if _filepath_owned_by_other_context(
                 filepath,
                 resolved_context_name,
@@ -1455,16 +1491,21 @@ def _get_filepath_from_architecture(
                 config_snapshot=territory_config,
                 project_root=territory_project_root,
             ):
+                borrow_ownership_cache[cache_key] = False
                 return False
-            if _context_owned_filepath(
+            context_owned = _context_owned_filepath(
                 filepath,
                 resolved_context_name,
                 pddrc_anchor,
                 config_snapshot=territory_config,
                 project_root=territory_project_root,
-            ):
-                return True
-            return ownership == _OWNERSHIP_PROVEN
+            )
+            ownership = _belongs_to_resolved_prompt(module)
+            allowed = ownership != _OWNERSHIP_INELIGIBLE and (
+                context_owned or ownership == _OWNERSHIP_PROVEN
+            )
+            borrow_ownership_cache[cache_key] = allowed
+            return allowed
 
         # Try exact filename match first
         for module in modules:
@@ -2116,6 +2157,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     try:
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
+        if _safe_architecture_prompt_filename(basename) is None:
+            raise UnsafePromptPathError(
+                Path(basename), prompts_root.resolve(strict=False)
+            )
         name = basename.split('/')[-1] if '/' in basename else basename
 
         # Anchor configuration lookups (architecture.json, .pddrc) at the resolved
@@ -2201,7 +2246,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             else:
                 prompt_path = str(prompts_root / prompt_filename)
             pddrc_path = _find_pddrc_file(prompts_root_anchor)
-            if pddrc_path and not effective_dir_parts:
+            if pddrc_path:
                 try:
                     config = _load_pddrc_config(pddrc_path)
                     context_name = (
@@ -2219,7 +2264,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         )
                         prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
                         if prefix and not prompts_root_ends_with_prefix:
-                            prompt_path = str(prompts_root / prefix / prompt_filename)
+                            prompt_path = str(
+                                prompts_root.joinpath(
+                                    *Path(prefix).parts,
+                                    *effective_dir_parts,
+                                    prompt_filename,
+                                )
+                            )
                 except ValueError:
                     pass
 

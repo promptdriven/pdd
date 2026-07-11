@@ -3096,22 +3096,31 @@ def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
     _write_two_context_pddrc(tmp_path)
     rows = [
         {
-            "filename": f"stale-{index}/credits_Python.prompt",
+            "filename": "stale/credits_Python.prompt",
             "filepath": "frontend/credits.py",
         }
-        for index in range(300)
+        for _ in range(500)
     ]
     (tmp_path / "architecture.json").write_text(
         json.dumps({"modules": rows}), encoding="utf-8"
     )
     original_load = sync_determine_module._load_pddrc_config
+    original_owner = sync_determine_module._architecture_prompt_owner
     loads = {"count": 0}
+    ownership_checks = {"count": 0}
 
     def counting_load(path):
         loads["count"] += 1
         return original_load(path)
 
+    def counting_owner(*args, **kwargs):
+        ownership_checks["count"] += 1
+        return original_owner(*args, **kwargs)
+
     monkeypatch.setattr(sync_determine_module, "_load_pddrc_config", counting_load)
+    monkeypatch.setattr(
+        sync_determine_module, "_architecture_prompt_owner", counting_owner
+    )
     monkeypatch.chdir(tmp_path)
 
     paths = get_pdd_file_paths(
@@ -3122,6 +3131,78 @@ def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
         "frontend/credits.py"
     )
     assert loads["count"] <= 10
+    assert ownership_checks["count"] <= 1
+
+
+def test_get_pdd_file_paths_rejects_missing_basename_traversal(tmp_path, monkeypatch):
+    """A missing module basename cannot escape prompt/output roots via ``..``."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("../outside/foo", "python", prompts_dir="prompts")
+
+    assert not (tmp_path / "outside" / "foo_python.prompt").exists()
+
+
+def test_get_pdd_file_paths_nested_missing_custom_module_keeps_context_root(
+    tmp_path,
+    monkeypatch,
+):
+    """Nested path-qualified new modules retain both context and nested segments."""
+    (tmp_path / "specs").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "frontend/utils/foo",
+        "python",
+        prompts_dir="specs",
+        context_override="frontend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "specs" / "frontend" / "utils" / "foo_python.prompt"
+    ).resolve(strict=False)
+    code = paths["code"].resolve(strict=False).as_posix()
+    assert code.endswith("/frontend/utils/foo.py")
+    assert "/frontend/frontend/" not in code
+
+
+def test_get_pdd_file_paths_ignores_unsafe_symlink_in_sibling_context(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe frontend candidate cannot block an explicit backend new module."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    frontend = tmp_path / "prompts" / "frontend"
+    frontend.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (frontend / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    assert external.read_text(encoding="utf-8") == original
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
