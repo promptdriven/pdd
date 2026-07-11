@@ -2160,6 +2160,60 @@ class TestSyncOneModule:
         assert "test churn threshold exceeded" in error.lower(), error
         assert runner.module_states["foo"].needs_review is None
 
+    def test_adopted_classifier_rejects_unsafe_and_shadow_paths(self):
+        """Issue #1903 §B.4: the never-block classifier must reject absolute
+        paths, traversal, and PDD-owned `tests/` shadows (JS or Python), and
+        accept only in-repo co-located conventions."""
+        from pdd.agentic_sync_runner import _is_adopted_collocated_test_path as ok
+        # Rejected — keep the strict hard-fail.
+        for bad in [
+            None, "", "   ",
+            "/abs/x.test.ts", "~/x.test.ts", "C:/x.test.ts", "\\\\unc\\x.test.ts",
+            "../../victim.test.ts", "src/../../x.test.ts",
+            "tests/foo.test.ts", "tests/test_foo.py",  # PDD-owned shadow root
+        ]:
+            assert ok(bad) is False, bad
+        # Accepted — genuine in-repo co-located tests.
+        for good in [
+            "frontend/src/app/__test__/page.test.tsx",
+            "src/__tests__/widget.spec.ts",
+            "lib/button.test.tsx",
+            "packages/ui/src/card.spec.jsx",
+        ]:
+            assert ok(good) is True, good
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_js_tests_shadow_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """A JS/TS test under the PDD-owned `tests/` shadow root is NOT an adopted
+        co-located test — it keeps the strict hard-fail even in an issue-driven
+        run (the round-4 regression the earlier `.test.`-substring heuristic
+        missed)."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: tests/foo.test.ts\n"  # `.test.` but under the tests/ shadow
+            "pre_line_count: 100\npost_line_count: 5\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "tests/ JS shadow must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
     def test_needs_review_persists_across_resume(self, tmp_path):
         """Issue #1903 §B.4: a durable resume must not drop the needs-review
         flag for an already-synced module."""

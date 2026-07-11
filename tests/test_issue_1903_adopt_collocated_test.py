@@ -351,6 +351,60 @@ class TestGreenfieldRunnerDiscovery:
         got = find_runner_collected_test_path(code)
         assert Path(got).resolve() == (tmp_path / "lib/__test__/util.spec.ts").resolve()
 
+    def test_centralized_same_stem_modules_do_not_collide(self, tmp_path, monkeypatch):
+        # Two different modules that share a stem MUST map to DISTINCT centralized
+        # test paths — else syncing the second overwrites the first (never fork,
+        # never overwrite).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["<rootDir>/test/**/*.test.ts"]}}))
+        a = _write(tmp_path / "src/a/util.ts")
+        b = _write(tmp_path / "src/b/util.ts")
+        got_a = find_runner_collected_test_path(a)
+        got_b = find_runner_collected_test_path(b)
+        assert got_a is not None and got_b is not None
+        assert Path(got_a).resolve() != Path(got_b).resolve(), (got_a, got_b)
+        # Each preserves its module's relative directory under the test root.
+        assert "a" in Path(got_a).resolve().relative_to(tmp_path.resolve()).parts
+        assert "b" in Path(got_b).resolve().relative_to(tmp_path.resolve()).parts
+
+    def test_vitest_custom_include_refuses(self, tmp_path, monkeypatch):
+        # A vitest.config.ts with a custom test.include (unparseable) must NOT be
+        # assumed default -> refuse (fall back to derived), never a false-green.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "vitest.config.ts",
+               "export default { test: { include: ['custom/**/*.spec.ts'] } }\n")
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_vitest_plain_config_co_locates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "vitest.config.ts", "export default { test: {} }\n")
+        _write(tmp_path / "package.json", '{"devDependencies": {"vitest": "^1"}}\n')
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "src/__test__/page.test.tsx").resolve()
+
+    def test_jest_testmatch_negation_excludes(self, tmp_path, monkeypatch):
+        # An ordered negation (`!**/src/**`) removes matches; a module under src
+        # is NOT collected co-located -> refuse (no false-green).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps(
+            {"jest": {"testMatch": ["**/*.test.tsx", "!**/src/**"]}}))
+        excluded = _write(tmp_path / "src/page.tsx")
+        included = _write(tmp_path / "lib/widget.tsx")
+        assert find_runner_collected_test_path(excluded) is None
+        got = find_runner_collected_test_path(included)
+        assert Path(got).resolve() == (tmp_path / "lib/__test__/widget.test.tsx").resolve()
+
+    def test_jest_projects_config_refuses(self, tmp_path, monkeypatch):
+        # jest `projects` restructures discovery in ways we do not resolve -> refuse.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"projects": ["<rootDir>/a", "<rootDir>/b"]}}))
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
 
 # ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the

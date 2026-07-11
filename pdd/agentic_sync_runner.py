@@ -326,26 +326,45 @@ def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
 
 
 def _is_adopted_collocated_test_path(test_path: Optional[str]) -> bool:
-    """True only when *test_path* is a co-located (adopted) test, not PDD's own
-    derived ``tests/`` shadow (issue #1903 §B.4).
+    """True only when *test_path* is an IN-REPO, co-located (adopted) test.
 
-    The never-block relief exists to keep a HUMAN-authored co-located test that
-    PDD adopted — NOT to silently swallow coverage loss on a PDD-owned test.
-    Conservative by design: only paths that match a runner co-location
-    convention qualify (a jest/vitest ``.test.``/``.spec.`` file, or any file
-    under a ``__test__``/``__tests__`` directory). Anything else — notably a
-    plain ``tests/test_*.py`` shadow — is NOT proven adopted and keeps the
-    strict test-churn hard-fail even inside the issue-driven runner.
+    The never-block relief exists to keep a co-located test PDD adopted — NOT to
+    silently swallow coverage loss on a PDD-owned test or to act on a path
+    outside the project. This is a NECESSARY (not sufficient) gate: pathname
+    shape alone cannot prove human authorship, so it composes with the
+    ``self.issue_url`` guard and the upstream coverage-preserving auto-accept.
+
+    Rejects (keeps the strict hard-fail) for:
+    - a falsy/blank path, an absolute path (POSIX ``/``, Windows drive/UNC), or a
+      home-relative (``~``) path — provenance of an out-of-tree path is untrusted;
+    - any ``..`` traversal component (CWE-022 — an out-of-root escape);
+    - PDD's derived shadow root: a top-level ``tests/`` directory (e.g.
+      ``tests/test_foo.py`` OR ``tests/foo.test.ts``).
+
+    Accepts only a runner co-location convention: a file under a
+    ``__test__``/``__tests__`` directory, or a basename containing
+    ``.test.``/``.spec.``.
     """
     if not test_path:
         return False
     normalized = test_path.replace("\\", "/").strip()
     if not normalized:
         return False
+    # Absolute / home-relative / Windows drive or UNC — reject.
+    if normalized[0] in "/~\\" or re.match(r"^[A-Za-z]:", normalized):
+        return False
     segments = [seg for seg in normalized.split("/") if seg]
+    if not segments:
+        return False
+    # Traversal escape.
+    if any(seg == ".." for seg in segments):
+        return False
+    # PDD's derived shadow root (top-level ``tests/``) is never "adopted".
+    if segments[0] == "tests":
+        return False
     if "__test__" in segments or "__tests__" in segments:
         return True
-    name = segments[-1].lower() if segments else ""
+    name = segments[-1].lower()
     return ".test." in name or ".spec." in name
 
 
