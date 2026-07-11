@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.301.dev0",
+  "timestamp": "2026-07-11T01:12:43.506970+00:00",
+  "command": "test",
+  "prompt_hash": "f30859a96c97d0b5c370784784b1df7e6957d6254655fce6c49b9e062f79cb64",
+  "code_hash": "36ab6833444e1775a967d2183315c0244e23815b2cc26ff682a70a627d6aa799",
+  "example_hash": "fa64f0b0d58a128e5df176a561026ce73cd5a853ea671cbd1863c103e2033ba3",
+  "test_hash": "d373f17cdf581c39bfe95fd61b3023410b50bcb0738845c2d1b0278c2993d8d9",
+  "test_files": {
+    "test_fingerprint_transaction.py": "d373f17cdf581c39bfe95fd61b3023410b50bcb0738845c2d1b0278c2993d8d9"
+  },
+  "include_deps": {
+    "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/operation_log.py": "d9cf881b67d99c19b76be717e2d57b952ab008a469db97f65f5b6974b0424aef",
+    "pdd/sync_determine_operation.py": "e616ac746674a9f1e8be84bf3093d5e1f45ff0175bc3767b758f2d17b2c54132"
+  }
+}

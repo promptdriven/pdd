@@ -12,6 +12,7 @@ Create a Python module that orchestrates the full PDD sync workflow for one base
 <fix_main_example><include>context/fix_main_example.py</include></fix_main_example>
 <update_main_example><include>context/update_main_example.py</include></update_main_example>
 <get_test_command_example><include>context/get_test_command_example.py</include></get_test_command_example>
+<fingerprint_transaction_example><include>context/fingerprint_transaction_example.py</include></fingerprint_transaction_example>
 
 ## Public API
 
@@ -66,7 +67,7 @@ At function start, coerce `None` for `target_coverage`, `budget`, `max_attempts`
 Implement:
 - `load_sync_log`, `create_sync_log_entry`, `update_sync_log_entry`, `append_sync_log`, `log_sync_event`
 - `save_run_report(report, basename, language, atomic_state=None)` writing `META_DIR / "{safe_basename}_{language.lower()}_run.json"`
-- `_save_operation_fingerprint(..., atomic_state=None)` using `calculate_current_hashes` + `Fingerprint`, writing `META_DIR / "{safe_basename}_{language.lower()}.json"`
+- `_save_operation_fingerprint(..., atomic_state=None)` using `FingerprintTransaction(basename, language, operation, paths=paths, cost=cost, model=model)`. Without an outer `AtomicStateUpdate`, successful context exit commits through the shared transaction. With `atomic_state`, call `transaction.prepare()`, buffer that payload at `transaction.fingerprint_path`, then call `transaction.skip("deferred to AtomicStateUpdate")` so only the outer atomic state owns the final write.
 - `_python_cov_target_for_code_file`, `_python_cov_target_for_test_and_code`
 - `_parse_test_output` for Python, JS/TS, Go, Rust, plus fallback
 - `_detect_example_errors` (traceback + ERROR-log patterns only)
