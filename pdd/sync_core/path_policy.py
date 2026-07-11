@@ -109,12 +109,12 @@ class PathPolicy:
         required: bool = False,
     ) -> PurePosixPath | None:
         configured = self.approved_aliases.get(alias_relpath)
+        if configured is None:
+            return None
         immutable = self._immutable_alias_target(
             alias_relpath,
             required=required or configured is not None,
         )
-        if configured is None:
-            return immutable
         self._validate_relpath(configured)
         if immutable is not None and configured != immutable:
             raise PathPolicyError(f"approved alias target changed: {alias_relpath}")

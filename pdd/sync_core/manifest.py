@@ -22,7 +22,7 @@ from .decommission import (
     load_tombstones,
 )
 from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id
-from .git_io import read_git_blob
+from .git_io import read_git_blob, read_git_tree_entry
 from .language import LanguageRegistry, LanguageRegistryError
 from .types import CandidateId, InventoryStatus, UnitId
 
@@ -840,6 +840,37 @@ def _approved_aliases(
         aliases = parse_protected_alias_policy(base)
     except ValueError as exc:
         return {}, [str(exc)]
+    for alias, canonical in aliases.items():
+        base_entry = read_git_tree_entry(root, base_ref, alias)
+        head_entry = read_git_tree_entry(root, head_ref, alias)
+        if (
+            base_entry is None
+            or head_entry is None
+            or base_entry != head_entry
+            or base_entry.mode != "120000"
+            or base_entry.object_type != "blob"
+        ):
+            return {}, [
+                f"protected alias is not an unchanged symlink: {alias.as_posix()}"
+            ]
+        target = read_git_blob(root, base_ref, alias)
+        if target is None:
+            return {}, [f"protected alias target is unreadable: {alias.as_posix()}"]
+        try:
+            target_text = target.decode("utf-8")
+        except UnicodeDecodeError:
+            return {}, [f"protected alias target is not UTF-8: {alias.as_posix()}"]
+        raw_target = PurePosixPath(target_text)
+        normalized = PurePosixPath(
+            posixpath.normpath((alias.parent / raw_target).as_posix())
+        )
+        if (
+            raw_target.is_absolute()
+            or normalized == PurePosixPath(".")
+            or ".." in normalized.parts
+            or normalized != canonical
+        ):
+            return {}, [f"protected alias target changed: {alias.as_posix()}"]
     return dict(sorted(aliases.items())), []
 
 
