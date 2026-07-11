@@ -209,7 +209,7 @@ def get_log_path(
     upward .pddrc detection seeded by `paths` (Issue #1211).
     """
     ensure_meta_dir(project_root=project_root, paths=paths)
-    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}_sync.log"
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
 
 
 def get_fingerprint_path(
@@ -226,7 +226,7 @@ def get_fingerprint_path(
     run CWD is found), then up from CWD, then falls back to CWD.
     """
     ensure_meta_dir(project_root=project_root, paths=paths)
-    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}.json"
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language.lower()}.json"
 
 
 def get_run_report_path(
@@ -240,7 +240,7 @@ def get_run_report_path(
     Same project-root resolution as get_fingerprint_path (Issue #1211).
     """
     ensure_meta_dir(project_root=project_root, paths=paths)
-    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language}_run.json"
+    return _resolve_meta_dir(project_root, paths=paths) / f"{_safe_basename(basename)}_{language.lower()}_run.json"
 
 
 def infer_module_identity(prompt_file_path: Union[str, Path]) -> Tuple[Optional[str], Optional[str]]:
@@ -578,17 +578,11 @@ def save_fingerprint(
     cost: float = 0.0,
     model: str = "unknown"
 ) -> None:
-    """
-    Save the current fingerprint/state to the state file.
+    """Save current state through the authoritative fingerprint transaction.
 
-    Writes the full Fingerprint dataclass format compatible with read_fingerprint()
-    in sync_determine_operation.py. This ensures manual commands (generate, example)
-    don't break sync's fingerprint tracking.
+    ``FingerprintFinalizeError`` intentionally propagates. A mutating command
+    cannot report success when its fingerprint was not persisted (#1926).
     """
-    from dataclasses import asdict
-    from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-    from . import __version__
 
     # Issue #983: when the caller provides `paths`, use them directly — do
     # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
@@ -602,32 +596,17 @@ def save_fingerprint(
             logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
             paths = {}
 
-    path = get_fingerprint_path(basename, language, paths=paths)
+    from .fingerprint_transaction import FingerprintTransaction
 
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
-    stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
-
-    # Create Fingerprint with same format as _save_fingerprint_atomic
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),
-        include_deps=current_hashes.get('include_deps'),  # Issue #522
-    )
-
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(fingerprint), f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
+    with FingerprintTransaction(
+        basename=basename,
+        language=language,
+        operation=operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+    ):
+        pass
 
 
 def save_run_report(
@@ -795,7 +774,7 @@ def log_operation(
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
                                 basename, language, paths=log_paths
                             )
-                        if updates_fingerprint and fingerprint_allowed:
+                        if updates_fingerprint:
                             # Issue #1305 + #1211: save_fingerprint hashes only
                             # Path values, so a bare {"prompt": <str>} hint
                             # yields all-null hashes (the prompt string is
@@ -843,14 +822,30 @@ def log_operation(
                                     e,
                                 )
                                 fingerprint_paths = {"prompt": Path(prompt_file)}
-                            save_fingerprint(
-                                basename,
-                                language,
-                                operation=operation,
-                                paths=fingerprint_paths,
-                                cost=cost,
-                                model=model,
-                            )
+                            if fingerprint_allowed:
+                                save_fingerprint(
+                                    basename,
+                                    language,
+                                    operation=operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                )
+                            else:
+                                # Even intentional suppression routes through
+                                # the transaction so future mutating paths
+                                # cannot grow a second finalization branch.
+                                from .fingerprint_transaction import FingerprintTransaction
+
+                                with FingerprintTransaction(
+                                    basename,
+                                    language,
+                                    operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                ) as transaction:
+                                    transaction.skip("run report not cleared")
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result, paths=log_paths)
         return wrapper

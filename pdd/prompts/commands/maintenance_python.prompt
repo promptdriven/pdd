@@ -16,6 +16,7 @@
 
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
@@ -99,6 +100,7 @@
        - `--include-docs` (bool flag, default False): Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Pass as `include_docs` to `auto_deps_main`.
        - `--no-dedup` (bool flag, default False): Disable redundant inline content removal after inserting includes. Pass as `no_dedup` to `auto_deps_main`.
        - `--concurrency` (int, default 1): Number of parallel workers for file summarization LLM calls. Pass as `concurrency` to `auto_deps_main`.
+     - Import `FingerprintFinalizeError`. Catch it before the broad exception handler, report it with `handle_error`, and raise `click.exceptions.Exit(1)` so required fingerprint failure cannot become exit code 0.
   5. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
      - Logic: Install shell completion, then run setup utility.

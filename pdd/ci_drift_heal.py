@@ -792,7 +792,8 @@ def _run_metadata_sync_safe(
     ok = bool(getattr(result, "ok", False))
     if ok:
         try:
-            from pdd.operation_log import infer_module_identity, save_fingerprint
+            from pdd.fingerprint_transaction import FingerprintTransaction
+            from pdd.operation_log import infer_module_identity
             from pdd.sync_determine_operation import read_fingerprint
 
             basename, language = infer_module_identity(str(p))
@@ -807,25 +808,15 @@ def _run_metadata_sync_safe(
             if code_p is None:
                 raise ValueError("authoritative prompt/code paths unavailable: code_path not provided")
             paths: Dict[str, Any] = {"prompt": p, "code": code_p}
-            # Preserve the previous user-facing command so the released
-            # `sync_determine_operation._is_workflow_complete` (which only
-            # accepts verify/test/fix/update as complete) keeps recognizing
-            # the workflow as synced after this internal refresh.
-            prev_fp_for_cmd = read_fingerprint(basename, language, paths=paths)
-            prev_cmd = getattr(prev_fp_for_cmd, "command", None) if prev_fp_for_cmd else None
-            preserved_command = (
-                prev_cmd
-                if prev_cmd in ("verify", "test", "fix", "update")
-                else "fix"
-            )
-            save_fingerprint(
+            with FingerprintTransaction(
                 basename=basename,
                 language=language,
-                operation=preserved_command,
+                operation="update",
                 paths=paths,
                 cost=0.0,
-                model="metadata_sync",
-            )
+                model="",
+            ):
+                pass
             fingerprint = read_fingerprint(basename, language, paths=paths)
             if (
                 fingerprint is None

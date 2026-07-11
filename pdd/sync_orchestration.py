@@ -38,12 +38,15 @@ from .operation_log import (
     update_log_entry,
     append_log_entry,
     log_event,
-    save_fingerprint,
     save_run_report,
     clear_run_report,
     get_log_path,
     get_run_report_path,
     get_fingerprint_path,
+)
+from .fingerprint_transaction import (
+    FingerprintFinalizeError,
+    FingerprintTransaction,
 )
 from .sync_determine_operation import (
     sync_determine_operation,
@@ -520,6 +523,8 @@ class AtomicStateUpdate:
         try:
             with os.fdopen(fd, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
 
             # Atomic rename - guaranteed atomic on POSIX systems
             os.replace(temp_path, target_path)
@@ -532,7 +537,14 @@ class AtomicStateUpdate:
         """Commit all pending state updates atomically."""
         # Write fingerprint first (checkpoint), then run_report
         if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+            try:
+                self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+            except Exception as exc:
+                operation = self.pending.fingerprint.get("command", "sync")
+                raise FingerprintFinalizeError(
+                    f"[{operation}] fingerprint finalization failed for "
+                    f"{self.pending.fingerprint_path}: {exc}"
+                ) from exc
         if self.pending.run_report and self.pending.run_report_path:
             self._atomic_write(self.pending.run_report, self.pending.run_report_path)
 
@@ -682,43 +694,24 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
-
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
+    with FingerprintTransaction(
+        basename,
+        language,
+        operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+    ) as transaction:
         if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
-
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+            transaction.set_include_deps_override(include_deps_override)
+        if atomic_state is not None:
+            # The shared transaction owns path resolution, hash calculation,
+            # null validation and serialization. AtomicStateUpdate only
+            # delays the already-validated payload so its run report and
+            # fingerprint can commit together.
+            payload = transaction.prepare()
+            atomic_state.set_fingerprint(payload, transaction.fingerprint_path)
+            transaction.skip("deferred to AtomicStateUpdate")
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -2691,12 +2684,17 @@ def sync_orchestration(
                                         # ``_run.json`` because the prompt
                                         # content just changed. Mirrors the
                                         # clear after generate (line 2272).
-                                        try:
-                                            clear_run_report(basename, language, paths=pdd_files)
-                                        except Exception:
-                                            # Never mask a successful auto-deps
-                                            # result on metadata cleanup errors.
-                                            pass
+                                        from .operation_log import _clear_run_report_before_fingerprint
+
+                                        if not _clear_run_report_before_fingerprint(
+                                            basename,
+                                            language,
+                                            paths=pdd_files,
+                                        ):
+                                            raise FingerprintFinalizeError(
+                                                "[auto-deps] fingerprint finalization failed: "
+                                                "stale run report could not be cleared"
+                                            )
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
@@ -3530,7 +3528,17 @@ def sync_orchestration(
                                 and actual_cost == 0.0
                                 and _model_name_lower_check in ['', 'none', 'unknown', 'n/a']
                             )
-                            if not _is_noop_fix:
+                            if _is_noop_fix:
+                                with FingerprintTransaction(
+                                    basename,
+                                    language,
+                                    operation,
+                                    paths=pdd_files,
+                                    cost=actual_cost,
+                                    model=str(model_name),
+                                ) as transaction:
+                                    transaction.skip("no-op fix — no LLM invocation")
+                            else:
                                 _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
                             if operation_rollback is not None:
                                 operation_rollback.commit()

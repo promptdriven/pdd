@@ -32,6 +32,10 @@ from .update_prompt import update_prompt
 from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
+from .fingerprint_transaction import (
+    FingerprintFinalizeError,
+    FingerprintTransaction,
+)
 from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
 from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
@@ -1078,64 +1082,11 @@ def _finalize_single_file_fingerprint(
     model: str,
     source_prompt_path: Optional[Path] = None,
 ) -> None:
-    """Default fingerprint finalization for single-file/regeneration update modes.
-
-    Writes a current `(prompt, code)` fingerprint via the existing
-    `pdd.operation_log` helpers so a successful `pdd update <code>` is not
-    re-detected as changed on the next run (issue #1007 / PR #1009
-    Requirement 15). Skips with an `[info]` log line — unless `quiet` — for
-    the intentional skip cases (sync_metadata orchestrator owns the stage,
-    dry-run mode, `--output` redirected the write away from the canonical
-    source prompt, or `infer_module_identity` cannot derive
-    basename/language). All failures are best-effort: a `save_fingerprint`
-    exception surfaces as a `[warning]` line but never breaks the caller's
-    success tuple.
-
-    ``source_prompt_path`` is the canonical input prompt for the module. When
-    callers pass a redirected output path via ``--output``, the written file
-    no longer represents the module's canonical prompt, so finalizing a
-    fingerprint against it would let later sync detection treat unrelated
-    canonical prompts as in sync (issue #1007 stale-state class). Skip in
-    that case.
-    """
-    if sync_metadata:
-        if not quiet:
-            rprint(
-                "[info][metadata] Skipping fingerprint finalization: "
-                "orchestrator owns fingerprint stage[/info]"
-            )
-        return
-    if dry_run:
-        if not quiet:
-            rprint(
-                "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
-            )
-        return
-    if source_prompt_path is not None and _is_output_redirected(
-        Path(prompt_path), Path(source_prompt_path)
-    ):
-        if not quiet:
-            rprint(
-                "[info][metadata] Skipping fingerprint finalization: "
-                "output redirected[/info]"
-            )
-        return
-
-    # Wrap the import itself so the user's successful update tuple is never
-    # broken by an import-time failure (e.g. `_clear_run_report_before_fingerprint`
-    # gets renamed in a future operation_log refactor — it's a private
-    # underscore-prefixed name and therefore more fragile than the public
-    # `clear_run_report` / `infer_module_identity` / `save_fingerprint`
-    # alongside it). An ImportError raised here would propagate up to
-    # `update_main`'s outer `except Exception: return None`, converting a
-    # successful `(prompt, cost, model)` tuple to None — which violates the
-    # issue #1106 acceptance criterion: best-effort metadata cleanup must
-    # never fail the successful update tuple.
+    """Finalize one update through the shared commit-or-fail transaction."""
     try:
         from .operation_log import (
             _clear_run_report_before_fingerprint,
             infer_module_identity,
-            save_fingerprint,
         )
     except ImportError as exc:
         if not quiet:
@@ -1153,54 +1104,52 @@ def _finalize_single_file_fingerprint(
             )
         return
 
-    # Reuse the shared helper so the single-file finalize path enforces the
-    # same invariant the `log_operation` decorator and repo-mode block already
-    # do: a fresh fingerprint must never coexist with a stale `_run.json`
-    # (issue #1106). The helper re-checks that the run report is actually
-    # gone after `clear_run_report()` and emits a console warning if a
-    # silent `os.remove` failure left it behind — see
-    # `pdd.operation_log._clear_run_report_before_fingerprint`. The warning
-    # surfaces unconditionally (the helper does not consult `quiet`): the
-    # contract the issue text quotes is "print a warning" without qualifying
-    # on quiet mode, and the user should learn that runtime verification
-    # state still describes the pre-mutation files even when --quiet
-    # suppresses other chatter (why: informational about a real metadata
-    # problem, not status fluff).
-    # Issue #1211: pass the same `paths` hint we use for save_fingerprint so
-    # the clear targets the subproject's .pdd/meta (matched on the prompt's
-    # nearest .pddrc), not a parent CWD orphan. Without this we cleared
-    # parent metadata while writing the fresh fingerprint to the subproject,
-    # leaving stale subproject _run.json beside it.
     update_paths = {"prompt": Path(prompt_path), "code": Path(code_path)}
-    try:
-        fingerprint_allowed = _clear_run_report_before_fingerprint(
-            basename, language, paths=update_paths
-        )
-    except Exception as exc:
-        # Defensive: surrounding pattern in this function treats metadata
-        # cleanup as best-effort; an unexpected raise must not break the
-        # successful update tuple. Warn and skip the save, matching the
-        # `save_fingerprint` except-arm below.
-        if not quiet:
-            rprint(
-                f"[warning][metadata] Run report clear failed: {exc}[/warning]"
-            )
-        return
-    if not fingerprint_allowed:
-        return
+    with FingerprintTransaction(
+        basename,
+        language,
+        operation="update",
+        paths=update_paths,
+        cost=cost,
+        model=model,
+    ) as transaction:
+        skip_reason: Optional[str] = None
+        if sync_metadata:
+            skip_reason = "orchestrator owns fingerprint stage"
+        elif dry_run:
+            skip_reason = "dry-run mode"
+        elif source_prompt_path is not None and _is_output_redirected(
+            Path(prompt_path), Path(source_prompt_path)
+        ):
+            skip_reason = "output redirected"
 
-    try:
-        save_fingerprint(
-            basename,
-            language,
-            operation="update",
-            paths=update_paths,
-            cost=cost,
-            model=model,
-        )
-    except Exception as exc:
-        if not quiet:
-            rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
+        if skip_reason is not None:
+            transaction.skip(skip_reason)
+            if not quiet:
+                rprint(
+                    "[info][metadata] Skipping fingerprint finalization: "
+                    f"{skip_reason}[/info]"
+                )
+            return
+
+        try:
+            fingerprint_allowed = _clear_run_report_before_fingerprint(
+                basename,
+                language,
+                paths=update_paths,
+            )
+        except Exception as exc:
+            transaction.skip("run report clear failed")
+            raise FingerprintFinalizeError(
+                f"[update] fingerprint finalization failed for "
+                f"{transaction.fingerprint_path}: run report clear failed: {exc}"
+            ) from exc
+        if not fingerprint_allowed:
+            transaction.skip("run report not cleared")
+            raise FingerprintFinalizeError(
+                f"[update] fingerprint finalization failed for "
+                f"{transaction.fingerprint_path}: run report not cleared"
+            )
 
 
 def update_main(
@@ -1386,8 +1335,7 @@ def update_main(
                     # Save fingerprint so the file isn't detected as changed next run
                     if "Success" in result.get("status", ""):
                         from .operation_log import (
-                            clear_run_report,
-                            get_run_report_path,
+                            _clear_run_report_before_fingerprint,
                             infer_module_identity,
                             save_fingerprint,
                         )
@@ -1403,67 +1351,30 @@ def update_main(
                                 "prompt": Path(prompt_path),
                                 "code": Path(code_path),
                             }
-                            # Clear stale run report first so it can't outlive
-                            # the prompt/code pair it described. Best-effort:
-                            # never fail the update because of metadata I/O,
-                            # but surface failures as a non-fatal warning so
-                            # the user knows runtime verification state may
-                            # still describe the pre-mutation files.
                             try:
-                                _stale_report_path = get_run_report_path(
-                                    basename, language, paths=_update_paths
+                                _fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                    basename,
+                                    language,
+                                    paths=_update_paths,
                                 )
-                            except Exception:
-                                _stale_report_path = None
-                            _pre_existed = bool(
-                                _stale_report_path is not None
-                                and _stale_report_path.exists()
-                            )
-                            try:
-                                clear_run_report(basename, language, paths=_update_paths)
                             except Exception as exc:
-                                if not quiet:
-                                    rprint(
-                                        f"[warning][metadata] Run report clear failed for "
-                                        f"{basename} ({language}): {exc}[/warning]"
-                                    )
-                            # Defensive: clear_run_report() in pdd.operation_log
-                            # silently swallows OSError on the actual unlink
-                            # (see pdd/operation_log.py:317-320), so if the
-                            # report file existed before the call but still
-                            # exists afterwards, the deletion failed silently.
-                            # Surface that as a non-fatal warning so the user
-                            # knows runtime verification state may still
-                            # describe the pre-mutation files.
-                            _stale_remains = False
-                            if _pre_existed and _stale_report_path is not None:
-                                try:
-                                    _still_there = _stale_report_path.exists()
-                                except Exception:
-                                    _still_there = False
-                                if _still_there:
-                                    _stale_remains = True
-                                    if not quiet:
-                                        rprint(
-                                            f"[warning][metadata] Run report clear failed for "
-                                            f"{basename} ({language}): "
-                                            f"still exists after clear_run_report: "
-                                            f"{_stale_report_path}; skipping fingerprint update so a "
-                                            f"fresh fingerprint does not coexist with a stale "
-                                            f"run report (issue #1057)."
-                                            f"[/warning]"
-                                        )
-                            if not _stale_remains:
-                                try:
-                                    save_fingerprint(
-                                        basename, language,
-                                        operation="update",
-                                        paths=_update_paths,
-                                        cost=result.get("cost", 0.0),
-                                        model=result.get("model", "unknown"),
-                                    )
-                                except Exception:
-                                    pass  # Best-effort; don't fail the update
+                                raise FingerprintFinalizeError(
+                                    f"[update] fingerprint finalization failed for "
+                                    f"{basename}/{language}: run report clear failed: {exc}"
+                                ) from exc
+                            if not _fingerprint_allowed:
+                                raise FingerprintFinalizeError(
+                                    f"[update] fingerprint finalization failed for "
+                                    f"{basename}/{language}: run report not cleared"
+                                )
+                            save_fingerprint(
+                                basename,
+                                language,
+                                operation="update",
+                                paths=_update_paths,
+                                cost=result.get("cost", 0.0),
+                                model=result.get("model", "unknown"),
+                            )
                 else:
                     if "Success" in result.get("status", ""):
                         try:
@@ -2023,6 +1934,10 @@ def update_main(
 
             return modified_prompt, total_cost, model_name
 
+    except FingerprintFinalizeError as e:
+        if not quiet:
+            rprint(f"[bold red]Error:[/bold red] {e}")
+        raise click.exceptions.Exit(1) from e
     except (ValueError, git.InvalidGitRepositoryError) as e:
         if not quiet:
             rprint(f"[bold red]Input error:[/bold red] {str(e)}")

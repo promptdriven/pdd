@@ -12,9 +12,12 @@ from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
 from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
+from .fingerprint_transaction import (
+    FingerprintFinalizeError,
+    FingerprintTransaction,
+)
 from .operation_log import (
     infer_module_identity,
-    save_fingerprint,
     clear_run_report,
     get_run_report_path,
 )
@@ -188,8 +191,8 @@ def auto_deps_main(
             # written (``output_path``); in in-place mode this resolves to the
             # canonical ``<basename>_<language>`` module, in the default CLI
             # flow it resolves to the ``<basename>_<language>_with_deps``
-            # derivative. Errors are surfaced as warnings and never mask a
-            # successful auto-deps result.
+            # derivative. Finalization is part of command success: any
+            # failure is reported as a non-zero command result (#1926).
             #
             # ``_skip_finalization=True`` is set by ``pdd sync`` because it
             # invokes auto-deps with a temp ``<basename>_<language>_with_deps``
@@ -199,77 +202,55 @@ def auto_deps_main(
             # derivative's identity is the wrong target for run-report clears
             # (sync owns the canonical fingerprint write and the canonical
             # run-report clear on its side).
-            if _skip_finalization:
-                return cleaned_prompt, total_cost, model_name
-            try:
-                basename, language = infer_module_identity(Path(output_path))
-                if basename is None or language is None:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: Could not infer module identity for "
-                            f"{output_path}; skipping fingerprint finalization.[/yellow]"
-                        )
-                else:
-                    # Issue #1211: route clear/verify/save through the same
-                    # `paths` hint (the prompt path we just wrote) so all
-                    # three target the subproject's .pdd/meta — not a parent
-                    # CWD orphan — when auto-deps is run from above the
-                    # subproject root.
-                    _autodeps_paths = {"prompt": Path(output_path)}
-                    # Clear stale run report; do not let its failure block fingerprint save
-                    try:
-                        clear_run_report(basename, language, paths=_autodeps_paths)
-                    except Exception as cr_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to clear run report for "
-                                f"{basename}_{language}: {cr_exc}[/yellow]"
-                            )
-                    # Defensive: clear_run_report() in pdd.operation_log silently swallows
-                    # OSError on the actual unlink, so verify the report is really gone.
-                    try:
-                        _stale_report_path = get_run_report_path(
-                            basename, language, paths=_autodeps_paths
-                        )
-                        if _stale_report_path.exists():
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: clear_run_report did not remove "
-                                    f"{_stale_report_path}; downstream sync may still see "
-                                    f"stale results.[/yellow]"
-                                )
-                    except Exception as _vrf_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: could not verify run-report removal: "
-                                f"{_vrf_exc}[/yellow]"
-                            )
-                    try:
-                        save_fingerprint(
-                            basename=basename,
-                            language=language,
-                            operation="auto-deps",
-                            paths=_autodeps_paths,
-                            cost=total_cost,
-                            model=model_name,
-                        )
-                    except Exception as fp_exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Failed to save fingerprint for "
-                                f"{basename}_{language}: {fp_exc}[/yellow]"
-                            )
-            except Exception as meta_exc:
-                # Never mask a successful auto-deps result on metadata errors
+            basename, language = infer_module_identity(Path(output_path))
+            if basename is None or language is None:
                 if not quiet:
                     console.print(
-                        f"[yellow]Warning: Metadata finalization encountered an error: {meta_exc}[/yellow]"
+                        f"[yellow]Warning: Could not infer module identity for "
+                        f"{output_path}; skipping fingerprint finalization.[/yellow]"
                     )
+            else:
+                _autodeps_paths = {"prompt": Path(output_path)}
+                with FingerprintTransaction(
+                    basename=basename,
+                    language=language,
+                    operation="auto-deps",
+                    paths=_autodeps_paths,
+                    cost=total_cost,
+                    model=model_name,
+                ) as transaction:
+                    if _skip_finalization:
+                        transaction.skip("_skip_finalization set by sync")
+                    else:
+                        try:
+                            clear_run_report(
+                                basename,
+                                language,
+                                paths=_autodeps_paths,
+                            )
+                            stale_report_path = get_run_report_path(
+                                basename,
+                                language,
+                                paths=_autodeps_paths,
+                            )
+                        except Exception as exc:
+                            raise FingerprintFinalizeError(
+                                f"[auto-deps] fingerprint finalization failed for "
+                                f"{transaction.fingerprint_path}: run report cleanup: {exc}"
+                            ) from exc
+                        if stale_report_path.exists():
+                            raise FingerprintFinalizeError(
+                                f"[auto-deps] fingerprint finalization failed for "
+                                f"{transaction.fingerprint_path}: stale run report remains "
+                                f"at {stale_report_path}"
+                            )
 
             return cleaned_prompt, total_cost, model_name
 
     except click.Abort:
         # Re-raise to allow orchestrators (e.g. pdd sync) to stop the loop
+        raise
+    except FingerprintFinalizeError:
         raise
     except Exception as exc:
         if not quiet:

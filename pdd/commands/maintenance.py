@@ -9,6 +9,7 @@ from pathlib import Path
 from ..architecture_sync import sync_prompts_to_architecture
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
+from ..fingerprint_transaction import FingerprintFinalizeError
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sync
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
@@ -992,6 +993,9 @@ def auto_deps(
         return result, total_cost, model_name
     except click.Abort:
         raise
+    except FingerprintFinalizeError as exception:
+        handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
+        raise click.exceptions.Exit(1) from exception
     except Exception as exception:
         handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
         return None

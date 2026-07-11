@@ -17,7 +17,8 @@ from .architecture_sync import (
     update_architecture_from_prompt,
 )
 from .architecture_registry import find_architecture_for_project
-from .operation_log import clear_run_report, infer_module_identity, save_fingerprint
+from .fingerprint_transaction import FingerprintTransaction
+from .operation_log import clear_run_report, get_run_report_path, infer_module_identity
 
 
 _THEME = Theme(
@@ -454,6 +455,12 @@ def run_metadata_sync(
                     if code_path is not None:
                         _rr_paths["code"] = code_path
                     clear_run_report(basename, language, paths=_rr_paths)
+                    if get_run_report_path(
+                        basename,
+                        language,
+                        paths=_rr_paths,
+                    ).exists():
+                        raise RuntimeError("run report remains after clear")
                     result.stages["run_report"] = StageStatus(
                         status="ok", detail=f"cleared run report for {detail}"
                     )
@@ -515,14 +522,15 @@ def run_metadata_sync(
                     if _prev_cmd in ("verify", "test", "fix", "update")
                     else "fix"
                 )
-                save_fingerprint(
+                with FingerprintTransaction(
                     basename=basename,
                     language=language,
                     operation=_preserved_command,
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",
-                )
+                ):
+                    pass
                 result.stages["fingerprint"] = StageStatus(
                     status="ok", detail=f"saved fingerprint for {detail}"
                 )

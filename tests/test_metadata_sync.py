@@ -286,7 +286,7 @@ def test_dry_run_does_not_write_to_prompt_file(tmp_path: Path) -> None:
     }), encoding="utf-8")
     with patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()), \
          patch.object(ms, "clear_run_report") as mock_clear, \
-         patch.object(ms, "save_fingerprint") as mock_save:
+         patch.object(ms, "FingerprintTransaction") as mock_save:
         run_metadata_sync(ws["prompt_path"], dry_run=True, architecture_path=arch_path)
     assert ws["prompt_path"].read_text(encoding="utf-8") == original
     mock_clear.assert_not_called()
@@ -302,7 +302,7 @@ def test_dry_run_does_not_call_clear_run_report(tmp_path: Path) -> None:
 
 def test_dry_run_does_not_call_save_fingerprint(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
-    with patch.object(ms, "save_fingerprint") as mock_save:
+    with patch.object(ms, "FingerprintTransaction") as mock_save:
         run_metadata_sync(ws["prompt_path"], dry_run=True)
     mock_save.assert_not_called()
 
@@ -461,7 +461,7 @@ def test_tag_refresh_is_atomic_temp_then_rename(tmp_path: Path) -> None:
 def test_tags_stage_preserves_existing_pdd_tags(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)  # already has tags
     before = ws["prompt_path"].read_text(encoding="utf-8")
-    with patch.object(ms, "save_fingerprint"), patch.object(ms, "clear_run_report"):
+    with patch.object(ms, "FingerprintTransaction"), patch.object(ms, "clear_run_report"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
     after = ws["prompt_path"].read_text(encoding="utf-8")
     assert before == after
@@ -480,7 +480,7 @@ def test_tags_stage_prepends_arch_tags_when_missing(tmp_path: Path) -> None:
     ]), encoding="utf-8")
     with patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()), \
          patch.object(ms, "clear_run_report"), \
-         patch.object(ms, "save_fingerprint"):
+         patch.object(ms, "FingerprintTransaction"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     after = ws["prompt_path"].read_text(encoding="utf-8")
     assert "<pdd-reason>" in after
@@ -521,7 +521,7 @@ def test_architecture_stage_forwards_refreshed_prompt_content_override(tmp_path:
 
     with patch.object(ms, "update_architecture_from_prompt", side_effect=_fake_upd), \
          patch.object(ms, "clear_run_report"), \
-         patch.object(ms, "save_fingerprint"):
+         patch.object(ms, "FingerprintTransaction"):
         run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     # The architecture stage must receive the in-memory (possibly refreshed) prompt content.
     assert "prompt_content_override" in captured
@@ -541,7 +541,7 @@ def test_architecture_stage_handles_update_returning_failure(tmp_path: Path) -> 
                        return_value={"success": False, "updated": False, "changes": {},
                                      "error": "kaboom"}), \
          patch.object(ms, "clear_run_report"), \
-         patch.object(ms, "save_fingerprint") as mock_save:
+         patch.object(ms, "FingerprintTransaction") as mock_save:
         result = run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     assert result.stages["architecture"].status == "failed"
     assert "kaboom" in (result.stages["architecture"].reason or "")
@@ -565,7 +565,7 @@ def test_architecture_stage_skipped_with_correct_reason(tmp_path: Path) -> None:
 def test_run_report_clears_via_clear_run_report(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     with patch.object(ms, "clear_run_report") as mock_clear, \
-         patch.object(ms, "save_fingerprint"):
+         patch.object(ms, "FingerprintTransaction"):
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
     mock_clear.assert_called_once_with("demo", "python", paths=ANY)
     assert result.stages["run_report"].status == "ok"
@@ -575,7 +575,7 @@ def test_run_report_skipped_when_identity_cannot_be_inferred(tmp_path: Path) -> 
     ws = _make_workspace(tmp_path)
     with patch.object(ms, "infer_module_identity", return_value=(None, None)), \
          patch.object(ms, "clear_run_report") as mock_clear, \
-         patch.object(ms, "save_fingerprint") as mock_save:
+         patch.object(ms, "FingerprintTransaction") as mock_save:
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
     assert result.stages["run_report"].status == "skipped"
     mock_clear.assert_not_called()
@@ -595,7 +595,7 @@ def test_fingerprint_gated_on_no_prior_failure(tmp_path: Path) -> None:
     with patch.object(ms, "update_architecture_from_prompt",
                        side_effect=RuntimeError("arch boom")), \
          patch.object(ms, "clear_run_report"), \
-         patch.object(ms, "save_fingerprint") as mock_save:
+         patch.object(ms, "FingerprintTransaction") as mock_save:
         result = run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     assert result.stages["architecture"].status == "failed"
     assert result.stages["fingerprint"].status == "skipped"
@@ -612,9 +612,10 @@ def test_fingerprint_runs_last_after_other_stages(tmp_path: Path) -> None:
 
     def _record_save(*a: Any, **kw: Any) -> None:
         call_order.append("save_fingerprint")
+        return MagicMock(__enter__=MagicMock(return_value=MagicMock()), __exit__=MagicMock(return_value=False))
 
     with patch.object(ms, "clear_run_report", side_effect=_record_clear), \
-         patch.object(ms, "save_fingerprint", side_effect=_record_save):
+         patch.object(ms, "FingerprintTransaction", side_effect=_record_save):
         run_metadata_sync(ws["prompt_path"], dry_run=False)
     # save_fingerprint must run AFTER clear_run_report.
     assert call_order == ["clear_run_report", "save_fingerprint"], call_order
@@ -622,7 +623,7 @@ def test_fingerprint_runs_last_after_other_stages(tmp_path: Path) -> None:
 
 def test_fingerprint_dry_run_does_not_persist(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
-    with patch.object(ms, "save_fingerprint") as mock_save:
+    with patch.object(ms, "FingerprintTransaction") as mock_save:
         result = run_metadata_sync(ws["prompt_path"], dry_run=True)
     mock_save.assert_not_called()
     assert result.stages["fingerprint"].status == "dry_run"
@@ -643,7 +644,7 @@ def test_architecture_stage_skipped_when_tags_failed(tmp_path: Path) -> None:
          patch.object(ms, "update_architecture_from_prompt",
                        return_value=_arch_update_ok()) as mock_upd, \
          patch.object(ms, "clear_run_report") as mock_clear, \
-         patch.object(ms, "save_fingerprint") as mock_fp:
+         patch.object(ms, "FingerprintTransaction") as mock_fp:
         result = run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     assert result.stages["tags"].status == "failed"
     # Architecture stage MUST be gated — no on-disk write when tags failed.

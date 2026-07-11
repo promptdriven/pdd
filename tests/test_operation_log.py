@@ -235,7 +235,10 @@ def test_load_operation_log_compatibility(temp_pdd_env):
 def test_save_fingerprint(temp_pdd_env):
     """Test saving fingerprint state in Fingerprint dataclass format."""
     basename, lang = "state", "go"
-    paths = {"prompt": Path("prompts/state_go.prompt")}
+    prompt_path = temp_pdd_env.parents[1] / "prompts" / "state_go.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    prompt_path.write_text("state prompt", encoding="utf-8")
+    paths = {"prompt": prompt_path}
 
     operation_log.save_fingerprint(basename, lang, "op1", paths, 0.5, "gpt-4")
 
@@ -299,10 +302,12 @@ def test_log_operation_decorator_success(temp_pdd_env):
     def my_command(prompt_file: str):
         return {"status": "ok"}, 0.15, "gpt-3.5"
 
-    prompt_path = "prompts/feat_logic_python.prompt"
+    prompt_path = temp_pdd_env.parents[1] / "prompts" / "feat_logic_python.prompt"
+    prompt_path.parent.mkdir(parents=True)
+    prompt_path.write_text("feature prompt", encoding="utf-8")
     
     # Run
-    result = my_command(prompt_file=prompt_path)
+    result = my_command(prompt_file=str(prompt_path))
     
     assert result == ({"status": "ok"}, 0.15, "gpt-3.5")
     
@@ -471,8 +476,10 @@ def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):
     def ok_example(prompt_file: str):
         return "ok", 0.0, "mock"
 
-    prompt_path = f"prompts/{basename}_{lang}.prompt"
-    ok_example(prompt_file=prompt_path)
+    prompt_path = temp_pdd_env.parents[1] / "prompts" / f"{basename}_{lang}.prompt"
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("example prompt", encoding="utf-8")
+    ok_example(prompt_file=str(prompt_path))
 
     assert not rr_path.exists(), (
         "clears_run_report must remove the stale run report on success"
@@ -600,13 +607,16 @@ def test_fingerprint_path_extension_consistency(tmp_path):
 
     # Patch module to use temp directory
     with patch("pdd.operation_log.META_DIR", str(meta_dir)):
+        prompt_path = tmp_path / "prompts" / "test_python.prompt"
+        prompt_path.parent.mkdir(parents=True)
+        prompt_path.write_text("test prompt", encoding="utf-8")
 
         # Write a fingerprint using operation_log
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_operation",
-            paths={"prompt": Path("prompts/test.prompt")},
+            paths={"prompt": prompt_path},
             cost=0.123,
             model="test-model"
         )
@@ -643,11 +653,15 @@ def test_fingerprint_format_compatibility(tmp_path):
     with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
          patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
 
+        prompt_path = tmp_path / "prompts" / "format_test_python.prompt"
+        prompt_path.parent.mkdir(parents=True)
+        prompt_path.write_text("format prompt", encoding="utf-8")
+
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_op",
-            paths={},
+            paths={"prompt": prompt_path},
             cost=0.1,
             model="test"
         )
@@ -899,18 +913,18 @@ def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pd
         mock_get_paths.assert_not_called()
 
 
-def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_env):
+def test_save_fingerprint_fails_on_path_resolution_failure_issue_983(temp_pdd_env):
     """
-    Issue #983: If get_pdd_file_paths raises a recoverable error during
-    path resolution, save_fingerprint should warn and produce null hashes
-    (graceful degradation) rather than crashing.
+    Issue #1926: unresolved paths may not produce a null-hash fingerprint.
     """
     with patch(
         "pdd.sync_determine_operation.get_pdd_file_paths",
         side_effect=OSError("prompts dir not found"),
     ), patch("pdd.operation_log.logger") as mock_logger:
-        # Should NOT raise
-        operation_log.save_fingerprint("badmod", "python", operation="generate")
+        from pdd.fingerprint_transaction import FingerprintFinalizeError
+
+        with pytest.raises(FingerprintFinalizeError, match="prompt_hash is null"):
+            operation_log.save_fingerprint("badmod", "python", operation="generate")
 
         mock_logger.warning.assert_called_once()
         warning_args = str(mock_logger.warning.call_args)
