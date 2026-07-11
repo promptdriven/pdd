@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 import csv
+import re
+import shlex
 
 from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
@@ -35,28 +37,33 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     Returns (command, config_directory) tuple if a config is found, otherwise None.
     The config_directory is where the test runner config lives — callers must use it as cwd.
 
-    The walk continues up to the JS project root (the nearest ``package.json``)
-    rather than stopping after a fixed number of parents: in Next.js/monorepo
-    layouts a colocated test can live many directories below its runner config
-    (e.g. a page test under
+    The walk continues up to the repository root (the nearest ancestor containing
+    ``.git``) rather than stopping after a fixed number of parents: in
+    Next.js/monorepo layouts a colocated test can live many directories below its
+    runner config (e.g. a page test under
     ``frontend/src/app/hackathon/[eventId]/team/__tests__/`` and the config at
     ``frontend/jest.config.js``), so a shallow cap would miss the config and fall
-    back to a non-test runner. The nearest ancestor config still wins, and the
-    search never escapes above the project root.
+    back to a non-test runner. The nearest ancestor config wins. The repository
+    root — not the nearest ``package.json`` — is the boundary: a workspace leaf
+    package has its own ``package.json`` yet inherits Jest/Vitest/Playwright
+    configuration from the workspace root, so stopping at the leaf manifest would
+    miss it. The search never escapes above the repository root, and a hard
+    iteration cap guards against pathological paths.
 
     Jest is invoked with ``--runTestsByPath`` so the resolved absolute path is
-    matched literally. Jest otherwise treats the trailing path as a regex, and
-    Next.js dynamic-route segments such as ``[eventId]``/``[slug]`` are regex
-    character classes that never match the literal bracketed path — leaving the
-    generated suite unexecutable.
+    matched literally (see ``get_test_command_for_file`` for how the path is
+    escaped/quoted per runner). Jest otherwise treats the trailing path as a
+    regex, and Next.js dynamic-route segments such as ``[eventId]``/``[slug]`` are
+    regex character classes that never match the literal bracketed path — leaving
+    the generated suite unexecutable.
     """
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
-    # Walk up until a config is found or we reach the JS project root (the nearest
-    # ``package.json``). The runner config lives at or below that root, so we
-    # never escape into an unrelated parent project. A hard iteration cap guards
-    # against pathological paths.
-    for _ in range(40):
+    # Walk up until a config is found or we reach the repository root (a directory
+    # holding ``.git``). Continue *through* intermediate ``package.json`` files so
+    # a config that lives at the workspace root is still discovered. A hard
+    # iteration cap guards against pathological paths.
+    for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
             return ("npx playwright test", search_dir)
@@ -64,8 +71,9 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
             return ("npx jest --no-coverage --runTestsByPath", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
             return ("npx vitest run", search_dir)
-        # Stop at the JS project root; the config would have been found by now.
-        if (search_dir / "package.json").exists():
+        # Stop at the repository root; the config would have been found by now.
+        # ``.git`` is a directory in a normal clone and a file in a worktree.
+        if (search_dir / ".git").exists():
             break
         parent = search_dir.parent
         if parent == search_dir:
@@ -126,7 +134,19 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
         runner_result = _detect_ts_test_runner(test_path)
         if runner_result:
             runner_cmd, config_dir = runner_result
-            return TestCommand(command=f"{runner_cmd} {test_path.resolve()}", cwd=config_dir)
+            resolved = str(test_path.resolve())
+            # Playwright treats its positional argument as a regular expression, so
+            # a literal path (e.g. a Next.js dynamic route like ``[slug]``) must be
+            # regex-escaped to match. Jest ``--runTestsByPath`` and Vitest take the
+            # path literally. In every case the argument is shell-quoted because
+            # callers run the command string with ``shell=True`` — an unquoted path
+            # with spaces or shell metacharacters would otherwise be re-split or
+            # (for bracket globs / ``$()``) reinterpreted by the shell.
+            if runner_cmd.startswith("npx playwright"):
+                target = shlex.quote(re.escape(resolved))
+            else:
+                target = shlex.quote(resolved)
+            return TestCommand(command=f"{runner_cmd} {target}", cwd=config_dir)
 
     # 2. Check CSV for run_test_command
     lang_formats = _load_language_format()

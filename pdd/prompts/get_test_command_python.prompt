@@ -9,8 +9,9 @@ You are an expert software engineer implementing the `get_test_command.py` modul
    - Fallback to `None` to trigger agentic logic.
 2. **TypeScript Smart Detection**:
    - For `.ts` and `.tsx` files, search upwards for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
-   - Continue the walk up to the JS project root (the nearest `package.json`), not a fixed number of parents: colocated suites in Next.js/monorepo layouts can live many directories below their runner config (e.g. a page test under `frontend/src/app/hackathon/[eventId]/team/__tests__/` and the config at `frontend/jest.config.js`). Never adopt a config above the project root, and cap the walk defensively against pathological paths.
+   - Continue the walk up to the repository root (the nearest ancestor containing `.git`, which is a directory in a clone and a file in a worktree), not a fixed number of parents: colocated suites in Next.js/monorepo layouts can live many directories below their runner config (e.g. a page test under `frontend/src/app/hackathon/[eventId]/team/__tests__/` and the config at `frontend/jest.config.js`). Walk *through* intermediate `package.json` files: a workspace leaf package has its own manifest but inherits its runner config from the workspace root, so the boundary must be the repository root, not the nearest `package.json`. Never adopt a config above the repository root, and cap the walk defensively against pathological paths.
    - Invoke Jest with `--runTestsByPath` so the resolved absolute test path is matched literally. Jest otherwise treats the trailing path as a regex, and Next.js dynamic-route segments such as `[eventId]`/`[slug]` are regex character classes that never match the literal bracketed path.
+   - When constructing the runner command string, append the resolved absolute test path with per-runner escaping: Playwright treats its positional argument as a regular expression, so regex-escape the path; Jest (`--runTestsByPath`) and Vitest take it literally. In all cases shell-quote the argument, because callers execute the command string with `shell=True` and an unquoted path with spaces or shell metacharacters would be re-split or reinterpreted.
    - If found, return the command with the specific directory containing the config as the `cwd`.
    - Prioritize Playwright for files ending in `.spec.ts` or `.spec.tsx`.
 3. **Data Classes**: Define a `TestCommand` dataclass to bundle the `command` string and an optional `cwd` (Path). Use `__test__ = False` to avoid discovery by pytest.
@@ -34,7 +35,7 @@ You are an expert software engineer implementing the `get_test_command.py` modul
 
 # Instructions
 1. **Implement `_detect_ts_test_runner(test_path: Path)`**:
-   - Walk up the directory tree until a config is found or the JS project root (nearest `package.json`) is reached; apply a defensive iteration cap.
+   - Walk up the directory tree until a config is found or the repository root (a directory holding `.git`) is reached, walking through intermediate `package.json` files; apply a defensive iteration cap.
    - Check for `playwright.config.[ts|js|mjs]` only if the file is a `.spec` file.
    - Check for `jest.config` and `vitest.config` variants.
    - Use `npx jest --no-coverage --runTestsByPath` for Jest so the absolute test path is matched literally.
@@ -46,7 +47,7 @@ You are an expert software engineer implementing the `get_test_command.py` modul
    - This is the main entry point.
    - Use `get_language` if the language is not provided.
    - Execute the resolution order defined in the Requirements.
-   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file.
+   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file, regex-escaped for Playwright and shell-quoted for every runner (see the TypeScript Smart Detection requirement).
    - For CSV commands, replace the `{file}` placeholder with the input file string.
 
 # Deliverables

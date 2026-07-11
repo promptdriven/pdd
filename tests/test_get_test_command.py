@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 import csv
 import io
+import shlex
 import sys
 import os
 
@@ -293,10 +294,11 @@ class TestTypeScriptTestRunnerDetection:
         Regression: the runner detector previously walked up only 5 parents, so a
         page test at frontend/src/app/<route>/<sub>/__tests__/ never reached
         frontend/jest.config.js and fell back to a non-test runner. The walk now
-        continues up to the JS project root (package.json).
+        continues up to the repository root.
         """
         config_dir = tmp_path / "frontend"
         config_dir.mkdir()
+        (config_dir / ".git").mkdir()
         (config_dir / "jest.config.js").write_text("module.exports = {};")
         (config_dir / "package.json").write_text("{}")
         # 7 directories below the config (well past the old 5-parent cap).
@@ -346,26 +348,89 @@ class TestTypeScriptTestRunnerDetection:
         # The resolved absolute path (brackets intact) must appear literally.
         assert str(test_file.resolve()) in result.command, result.command
 
-    def test_walk_stops_at_package_json_project_root(self, tmp_path):
-        """The detector must not escape above the JS project root.
+    def test_walk_finds_workspace_root_config_past_leaf_package_json(self, tmp_path):
+        """A workspace leaf must inherit the workspace-root runner config.
 
-        A jest.config.js in an unrelated ancestor above the nearest package.json
-        must not be adopted; without an in-project config we fall back to CSV.
+        Regression guard for the boundary: a leaf package has its own
+        package.json but the Jest config lives at the workspace/repo root. The
+        walk must pass *through* the leaf manifest and still find the root config.
         """
-        # Stray config above the project root — must be ignored.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")  # leaf manifest, no jest config
+        test_dir = leaf / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "widget.test.ts"
+        test_file.write_text("describe('w', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == repo, returned_dir
+
+    def test_walk_stops_at_repository_root_and_does_not_escape(self, tmp_path):
+        """The detector must not adopt a config above the repository root.
+
+        A jest.config.js in an unrelated ancestor above the .git repo root must
+        be ignored; without an in-repo config we fall back to CSV.
+        """
+        # Stray config above the repo root — must be ignored.
         (tmp_path / "jest.config.js").write_text("module.exports = {};")
-        project = tmp_path / "some_project"
-        project.mkdir()
-        (project / "package.json").write_text("{}")  # project root, no jest config
-        test_file = project / "src" / "test_calculator.ts"
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()  # repo root, no jest config inside
+        test_file = repo / "src" / "test_calculator.ts"
         test_file.parent.mkdir()
         test_file.write_text("console.log('x')")
 
         result = get_test_command_for_file(str(test_file), language="typescript")
 
-        # Falls back to the CSV runner (npx tsx), never the out-of-project Jest.
+        # Falls back to the CSV runner (npx tsx), never the out-of-repo Jest.
         assert result is not None
         assert "npx jest" not in result.command, result.command
+
+    def test_playwright_bracketed_spec_path_is_regex_escaped(self, tmp_path):
+        """Playwright positional args are regexes, so bracketed paths must escape.
+
+        `.spec` files under a Next.js dynamic route ([slug]) would otherwise never
+        match Playwright's regex filter.
+        """
+        repo = tmp_path / "frontend"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "playwright.config.ts").write_text("export default {};")
+        test_dir = repo / "e2e" / "events" / "[slug]"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "landing.spec.ts"
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result.command.startswith("npx playwright test"), result.command
+        # Brackets must be regex-escaped so Playwright matches them literally.
+        assert r"\[slug\]" in result.command, result.command
+
+    def test_resolved_path_is_shell_quoted(self, tmp_path):
+        """The path is shell-quoted so shell=True callers survive spaces/metachars."""
+        repo = tmp_path / "my app"  # space in an ancestor directory
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        test_dir = repo / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "widget.test.ts"
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        # The command must round-trip through a POSIX shell tokenizer back to the
+        # exact resolved path (no re-splitting on the space).
+        argv = shlex.split(result.command)
+        assert str(test_file.resolve()) in argv, (result.command, argv)
 
 
 class TestPlaywrightDetection:
