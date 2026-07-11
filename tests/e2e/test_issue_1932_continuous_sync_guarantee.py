@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List
+from unittest.mock import patch
 
 import pytest
 
@@ -238,6 +239,40 @@ def test_issue_1996_mixed_contexts_keep_implicit_default_prompt_inventory(
     }
 
 
+def test_issue_1996_discovered_context_owns_configured_report_paths(
+    pdd_project: Path,
+) -> None:
+    """Discovery must retain the context identity used for output resolution."""
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: ['**']\n"
+        "    defaults: {}\n"
+        "  frontend:\n"
+        "    paths: ['frontend/**']\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/frontend\n"
+        "      outputs:\n"
+        "        code: {path: 'web/{category}/{name}.{ext}'}\n"
+        "        example: {path: 'demo/{category}/{name}_example.{ext}'}\n"
+        "        test: {path: 'checks/{category}/test_{name}.{ext}'}\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/frontend/components/AssetCard_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text("Build an asset card.\n", encoding="utf-8")
+
+    report = continuous_sync.build_report(consumer="sync", root=pdd_project)
+    unit = next(
+        item for item in report["units"]
+        if item["paths"]["prompt"].endswith(prompt.name)
+    )
+
+    assert unit["paths"]["code"] == "web/components/AssetCard.tsx"
+    assert unit["paths"]["example"] == "demo/components/AssetCard_example.tsx"
+    assert unit["paths"]["test"] == "checks/components/test_AssetCard.tsx"
+
+
 def test_issue_1996_read_only_resolver_uses_full_context_template_contract(
     pdd_project: Path,
 ) -> None:
@@ -309,6 +344,82 @@ def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
     assert paths["test"] == pdd_project / "web/tests/test_page.tsx"
 
 
+def test_issue_1996_nested_architecture_anchors_qualified_filepath_at_owner(
+    pdd_project: Path,
+) -> None:
+    nested = pdd_project / "packages/store"
+    prompt = nested / "prompts/pages/cart_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build cart.\n", encoding="utf-8")
+    (nested / "architecture.json").write_text(
+        json.dumps([
+            {
+                "filename": "pages/cart_typescriptreact.prompt",
+                "filepath": "src/pages/cart.tsx",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        "pages/cart", "typescriptreact", prompt, nested / "prompts"
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == nested / "src/pages/cart.tsx"
+
+
+def test_issue_1996_qualified_prompt_rejects_wrong_directory_architecture_leaf(
+    pdd_project: Path,
+) -> None:
+    prompt = pdd_project / "prompts/bar/page_typescriptreact.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build bar page.\n", encoding="utf-8")
+    (pdd_project / "architecture.json").write_text(
+        json.dumps([
+            {
+                "filename": "foo/page_typescriptreact.prompt",
+                "filepath": "src/foo/page.tsx",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    unit = continuous_sync.SyncUnit(
+        "bar/page", "typescriptreact", prompt, pdd_project / "prompts"
+    )
+
+    paths = continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    assert paths["code"] == pdd_project / "bar/page.tsx"
+
+
+def test_issue_1996_report_templates_do_not_inspect_unvalidated_external_paths(
+    pdd_project: Path,
+) -> None:
+    outside = pdd_project.parent / "outside"
+    outside.mkdir()
+    (pdd_project / ".pddrc").write_text(
+        "contexts:\n  app:\n    paths: ['app/**']\n    defaults:\n"
+        "      prompts_dir: prompts/app\n      outputs:\n"
+        f"        prompt: {{path: '{outside}/{{name}}_{{language}}.prompt'}}\n"
+        f"        test: {{path: '{outside}/test_{{name}}.{{ext}}'}}\n",
+        encoding="utf-8",
+    )
+    prompt = pdd_project / "prompts/app/widget_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build widget.\n", encoding="utf-8")
+    unit = continuous_sync.SyncUnit("app/widget", "python", prompt, prompt.parent)
+
+    with patch(
+        "pdd.sync_main._case_insensitive_prompt_lookup",
+        side_effect=AssertionError("external prompt lookup occurred"),
+    ) as lookup:
+        with pytest.raises(ValueError, match="outside project"):
+            continuous_sync._resolve_report_paths(unit, pdd_project)
+
+    lookup.assert_not_called()
+
+
 def test_issue_1996_duplicate_architecture_leaves_get_distinct_derived_stems(
     pdd_project: Path,
 ) -> None:
@@ -367,6 +478,34 @@ def test_issue_1996_metadata_units_share_command_discovery_budget(
     assert report["ok"] is False
     assert report["summary"]["total"] <= 5
     assert any(item["failure"] == "discovery_budget" for item in report["failures"])
+
+
+def test_issue_1996_metadata_enumeration_stops_at_remaining_budget(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    meta = pdd_project / ".pdd/meta"
+    enumerated = 0
+    original_iterdir = Path.iterdir
+
+    def observing_iterdir(path: Path):
+        nonlocal enumerated
+        if path != meta:
+            yield from original_iterdir(path)
+            return
+        for index in range(20):
+            enumerated += 1
+            yield meta / f"candidate_{index}_python.json"
+
+    monkeypatch.setattr(Path, "iterdir", observing_iterdir)
+    monkeypatch.setattr(continuous_sync, "MAX_PROMPT_DISCOVERY_ENTRIES", 2)
+
+    _identities, failure = continuous_sync._metadata_identities(
+        meta, pdd_project, {"entries": 0, "files": 0}
+    )
+
+    assert failure is not None and failure.failure == "discovery_budget"
+    assert enumerated == 3
 
 
 @pytest.mark.parametrize(
