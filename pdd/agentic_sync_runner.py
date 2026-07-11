@@ -225,6 +225,11 @@ class ModuleState:
     error: Optional[str] = None
     current_phase: Optional[str] = None
     completed_phases: List[str] = field(default_factory=list)
+    # Issue #1903 §B.4: set when an unreconcilable adopted co-located test was
+    # kept unchanged and flagged for review instead of hard-failing the
+    # issue-driven workflow. The module still counts as ``success`` (the PR is
+    # opened); this note surfaces in the progress comment / PR thread.
+    needs_review: Optional[str] = None
 
 
 class DepGraphFromArchitectureResult(NamedTuple):
@@ -306,6 +311,18 @@ _PDD_INTERFACE_DRIFT_MARKER = (
 )
 _PUBLIC_SURFACE_PREFIX = "Public surface regression for "
 _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
+# Issue #1903 §B.4: emitted (stdout) when an unreconcilable adopted co-located
+# test is kept and flagged for review instead of hard-failing the issue workflow.
+_TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
+
+
+def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
+    """Pull the ``output: <test path>`` line out of a test-churn failure block."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    match = re.search(r"^output:\s*(.+)$", combined, re.MULTILINE)
+    if match:
+        return match.group(1).strip() or None
+    return None
 
 
 def _parse_prose_output_failure(
@@ -1928,6 +1945,7 @@ class AsyncSyncRunner:
                     error=s.error,
                     current_phase=s.current_phase,
                     completed_phases=list(s.completed_phases),
+                    needs_review=s.needs_review,
                 )
                 for b, s in self.module_states.items()
             }
@@ -1937,7 +1955,7 @@ class AsyncSyncRunner:
             total_cost += state.cost
 
             if state.status == "success":
-                status_str = "Success"
+                status_str = "Success (needs review)" if state.needs_review else "Success"
                 duration = _format_duration(state.start_time, state.end_time)
                 cost_str = f"${state.cost:.2f}"
                 n = len(state.completed_phases)
@@ -1972,6 +1990,19 @@ class AsyncSyncRunner:
 
         lines.append("")
         lines.append(f"**Total cost:** ${total_cost:.2f}")
+
+        # Issue #1903 §B.4: surface any adopted tests kept and flagged for
+        # review (the workflow shipped the PR instead of hard-failing).
+        needs_review_notes = [
+            states_snapshot[b].needs_review
+            for b in self.basenames
+            if states_snapshot[b].needs_review
+        ]
+        if needs_review_notes:
+            lines.append("")
+            lines.append("### ⚠️ Needs review")
+            for review_note in needs_review_notes:
+                lines.append(f"- {review_note}")
 
         # Status footer
         failed_modules = [
@@ -2270,11 +2301,19 @@ class AsyncSyncRunner:
             return False, msg, total_cost
 
         self._delete_state()
-        return (
-            True,
-            f"All {len(succeeded)} modules synced successfully",
-            total_cost,
-        )
+        # Issue #1903 §B.4: modules whose adopted test could not be reconciled
+        # still succeeded (PR ships), but name them so the caller/report can
+        # relay the "needs review" flag rather than claiming a clean sync.
+        needs_review = [
+            b for b in succeeded if self.module_states[b].needs_review
+        ]
+        summary = f"All {len(succeeded)} modules synced successfully"
+        if needs_review:
+            summary += (
+                f" (needs review: {needs_review} — an adopted test was kept "
+                "unchanged and flagged; see PR body)"
+            )
+        return (True, summary, total_cost)
 
     # ------------------------------------------------------------------
     # Subprocess execution
@@ -2622,14 +2661,52 @@ class AsyncSyncRunner:
                 basename, last_error, last_stdout, last_stderr
             )
         elif last_failure_kind == "test_churn":
-            hard_block = self._build_test_churn_hard_failure(
-                basename, last_error, last_stdout, last_stderr
+            # Issue #1903 §B.4 — never block the issue-driven workflow on an
+            # unreconcilable adopted test. Reaching here means: the child sync
+            # already RESTORED the human-authored co-located test to disk before
+            # re-raising, AND one-session's #2208 coverage-preserving auto-accept
+            # already REFUSED (so this is the coverage-losing case the strict gate
+            # would otherwise hard-fail). Per #1903 the command must still open the
+            # working PR and flag that one test "needs review" rather than hand
+            # work back to the user. Keep the original test, record the flag, and
+            # report the module as succeeded so the PR is opened. (Standalone
+            # `pdd sync <module>` / `pdd test`, which do not run through this
+            # issue-driven runner, keep the strict hard-fail.)
+            note = self._register_test_churn_needs_review(
+                basename, last_stdout, last_stderr
             )
+            if not self.quiet:
+                console.print(f"[yellow]{note}[/yellow]")
+            return True, total_cost, ""
         else:
             hard_block = self._build_conformance_hard_failure(
                 basename, last_error, last_stdout, last_stderr
             )
         return False, total_cost, hard_block
+
+    def _register_test_churn_needs_review(
+        self, basename: str, stdout: str, stderr: str
+    ) -> str:
+        """Flag an unreconcilable adopted test for review instead of failing (#1903).
+
+        The child sync already restored the human-authored test to disk before
+        re-raising the churn error; the issue workflow opens the PR with the test
+        flagged for review. Records the note on the module state (surfaced in the
+        progress comment / PR thread), emits a machine-readable marker to stdout,
+        and returns the operator-facing note.
+        """
+        test_path = _extract_test_churn_output_path(stdout, stderr) or "the adopted test"
+        note = (
+            f"`{basename}`: test churn could not be reconciled after bounded "
+            f"repair — kept the existing test (`{test_path}`) unchanged and "
+            f"flagged it for review (issue #1903); the PR still ships."
+        )
+        print(f"{_TEST_CHURN_NEEDS_REVIEW_MARKER}: {test_path}", flush=True)
+        with self.lock:
+            state = self.module_states.get(basename)
+            if state is not None:
+                state.needs_review = note
+        return note
 
     def _build_prose_output_hard_failure(
         self,
