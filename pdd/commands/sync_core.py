@@ -208,6 +208,9 @@ def certify(
                 raise ValueError("global --replay-ledger must be a directory")
             replay_ledger.mkdir(parents=True, exist_ok=True)
             candidate_policy = candidate_artifact_policy_from_environment()
+            candidate_policy.replay_ledger_path = (
+                replay_ledger / "candidate-artifacts.json"
+            )
             report = build_global_certificate(
                 targets,
                 GlobalCertificateOptions(
