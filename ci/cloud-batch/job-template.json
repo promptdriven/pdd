@@ -13,7 +13,7 @@
                                 "VERTEX_PROJECT": "{{PROJECT_ID}}",
                                 "PDD_TEST_HEADLESS": "1",
                                 "GCS_BUCKET_NAME": "litellm_cache",
-                                "SKIP_INDEX": "54",
+                                "SKIP_INDEXES": "54,68,69,70,71,72,73,74,75",
                                 "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
                                 "PDD_ENV": "staging",
                                 "PDD_CLOUD_TIMEOUT": "1200",
@@ -56,8 +56,8 @@
                     }
                 ]
             },
-            "taskCount": "76",
-            "parallelism": "76"
+            "taskCount": "68",
+            "parallelism": "68"
         }
     ],
     "allocationPolicy": {

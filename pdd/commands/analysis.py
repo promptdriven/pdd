@@ -34,13 +34,24 @@ def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
     """Safely retrieve the context object, defaulting to empty dict if None."""
     return ctx.obj or {}
 
+
+def _mark_command_failed(ctx: click.Context) -> None:
+    """Mark handled command exceptions so the result callback exits non-zero."""
+    if isinstance(ctx.obj, dict):
+        ctx.obj["_command_failed"] = True
+
+
 @click.command("detect")
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--output",
     type=click.Path(writable=True),
     default=None,
-    help="Specify where to save the analysis results (CSV file).",
+    help=(
+        "Specify where to save the analysis results (CSV file). "
+        "This is not supported with --stories; use --evidence for "
+        "machine-readable story validation run evidence."
+    ),
 )
 @click.option(
     "--stories",
@@ -122,6 +133,8 @@ def detect_change(
                     validation={"detect_stories": "passed" if passed else "failed"},
                     basename="stories",
                 )
+            if not passed and ctx.parent is None:
+                raise click.exceptions.Exit(1)
             return {"passed": passed, "results": results}, total_cost, model_name
 
         if len(files) < 2:
@@ -147,9 +160,10 @@ def detect_change(
                 temperature=get_context_obj(ctx).get("temperature", 0.0),
             )
         return result, total_cost, model_name
-    except (click.Abort, click.ClickException):
+    except (click.Abort, click.ClickException, click.exceptions.Exit):
         raise
     except Exception as exception:
+        _mark_command_failed(ctx)
         handle_error(exception, "detect", get_context_obj(ctx).get("quiet", False))
         return None
 
@@ -184,6 +198,7 @@ def conflicts(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
+        _mark_command_failed(ctx)
         handle_error(exception, "conflicts", get_context_obj(ctx).get("quiet", False))
         return None
 
@@ -306,6 +321,7 @@ def bug(
     except (click.Abort, click.ClickException, click.exceptions.Exit):
         raise
     except Exception as exception:
+        _mark_command_failed(ctx)
         handle_error(exception, "bug", get_context_obj(ctx).get("quiet", False))
         return None
 
@@ -381,6 +397,7 @@ def crash(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
+        _mark_command_failed(ctx)
         handle_error(exception, "crash", get_context_obj(ctx).get("quiet", False))
         return None
 
@@ -418,5 +435,6 @@ def trace(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
+        _mark_command_failed(ctx)
         handle_error(exception, "trace", get_context_obj(ctx).get("quiet", False))
         return None

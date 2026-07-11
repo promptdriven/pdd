@@ -1,3 +1,32 @@
+<pdd-reason>LLM oracle for user story validation, generation, and story-driven prompt fixing; owns the story_id filename-slug identity convention and cross-unit story metadata helpers.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "STORY_DEV_UNITS_METADATA_KEY", "value": "pdd-story-dev-units"}
+    ],
+    "functions": [
+      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
+      {"name": "discover_story_files", "signature": "(stories_dir: Optional[str] = None)", "returns": "List[Path]"},
+      {"name": "discover_prompt_files", "signature": "(...)", "returns": "List[Path]"},
+      {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
+      {"name": "run_user_story_fix", "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "generate_user_story", "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]", "returns": "Tuple[bool, str, float, str, str, List[str]]"},
+      {"name": "cache_story_prompt_links", "signature": "(...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "parse_story_dev_unit_metadata", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"},
+      {"name": "story_is_cross_unit", "signature": "(story_text: str) -> bool", "returns": "bool"},
+      {"name": "get_cross_unit_stories_for_prompt", "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]", "returns": "list[dict]"},
+      {"name": "get_all_dev_units_for_story", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>detect_change_python.prompt</pdd-dependency>
+<pdd-dependency>change_main_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to implement and maintain
 % `pdd/user_story_tests.py`, which provides user story validation, story generation,
 % and user story-driven prompt fixing for PDD.
@@ -12,6 +41,13 @@ Implement user story utilities that:
   (`pdd test --issue <url|number|issue.md> <*.prompt>`), linking the story to the
   prompt files it validates, without any deterministic story-generation fallback
 - apply prompt fixes for a single story by orchestrating `change_main`
+
+This module owns the **`story_id` identity/convention** (the `story__<slug>.md`
+filename slug) but remains the **LLM oracle** (it validates stories against
+prompts with `detect_change`). The deterministic, runnable-pytest story↔test
+traceability lives in the separate `story_regression` module, which reuses the
+`story_id` helper exposed here — this is a cross-reference only, not a merge of
+the two mechanisms.
 
 % Issue #820 — contract-aware story template (epic #833)
 User stories are **example-level coverage** for named contract rules. Keep the
@@ -49,10 +85,14 @@ contract from the edited Story + the issue recorded in the `issue-ref` header
 Story is a no-op.
 
 Validation (`run_user_story_tests` / `detect_change`) uses the human Story AND
-its contract combined as the oracle. `discover_story_files()` only matches
-top-level `story__*.md`, so contract files under `contracts/` are never treated
-as separate stories. Do not emit `## Prompt Scope`; list scoped prompts in the
-contract `## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+its contract combined as the oracle. `discover_story_files()` matches
+`story__*.md` **recursively** (`rglob`), so nested layouts
+(`user_stories/<sub>/story__*.md`) are supported — a nested story is either fully
+supported or rejected everywhere, never evaluated by one path yet flagged
+nonexistent by another. Contract files under `contracts/` do not match the
+`story__*.md` pattern and are never treated as separate stories. Do not emit
+`## Prompt Scope`; list scoped prompts in the contract `## Context` and in
+`<!-- pdd-story-prompts: ... -->` metadata.
 
 **Durability.** The generator must instruct the model to describe behavior by the
 user's stable goal and observable outcome, NEVER by comparison to a specific
@@ -154,12 +194,72 @@ varies during normal development goes in `## Non-Oracle`.
   - returns: success, message, cost, model, generated story path, linked prompt refs
 - `cache_story_prompt_links(...) -> Tuple[bool, str, float, str, List[str]]`
 
+% Cross-dev-unit story support (issue #1769)
+A story is **cross-unit** when it spans ≥2 dev units — determined by ≥2 entries in
+either `<!-- pdd-story-prompts: ... -->` or the new optional
+`<!-- pdd-story-dev-units: ... -->` HTML comment. The two fields are OR-combined: if
+either field lists ≥2 names, the story is cross-unit.
+
+`<!-- pdd-story-dev-units: prompt_a_python.prompt, prompt_b_python.prompt -->` is an
+optional second metadata comment that explicitly lists the dev-unit prompt filenames
+the story spans. It is written by `generate_user_story()` whenever ≥2 prompt files
+are passed by the user.
+
+The **deduplication key** for cross-unit stories is the story slug: the filename stem
+after `story__` (e.g., `story__my_feature.md` → slug `my_feature`). This key is
+stable across path changes and matches the identifier used in the contract-generation
+path.
+
+**New constants:**
+- `STORY_DEV_UNITS_METADATA_KEY = "pdd-story-dev-units"` — the HTML comment key for
+  the dev-units metadata field.
+- `_STORY_DEV_UNITS_META_RE` — compiled regex to extract the value from
+  `<!-- pdd-story-dev-units: ... -->` comments (mirrors `_STORY_PROMPTS_META_RE`).
+
+**New public API functions (traceability, issue #1769):**
+- `parse_story_dev_unit_metadata(story_text: str) -> list[str]` — extracts the
+  comma-separated dev-unit names from `<!-- pdd-story-dev-units: ... -->`. Returns
+  an empty list when the comment is absent. Mirrors `_parse_story_prompt_metadata`.
+- `story_is_cross_unit(story_text: str) -> bool` — returns `True` when either
+  `pdd-story-prompts` or `pdd-story-dev-units` lists ≥2 entries.
+- `get_cross_unit_stories_for_prompt(prompt_name: str, stories_dir: Path | str) -> list[dict]`
+  — forward lookup: discovers all `story__*.md` files in `stories_dir` whose
+  `pdd-story-dev-units` or `pdd-story-prompts` metadata lists `prompt_name` AND is
+  cross-unit. Returns a list of dicts with keys `path`, `slug`, `dev_units`.
+- `get_all_dev_units_for_story(story_text: str) -> list[str]` — returns the union of
+  `pdd-story-prompts` and `pdd-story-dev-units` entries (deduplicated, order-preserved
+  from pdd-story-dev-units first, then pdd-story-prompts).
+
+**`generate_user_story()` cross-unit extension:**
+When ≥2 prompt files are passed to `generate_user_story()`, after writing
+`<!-- pdd-story-prompts: ... -->`, also write
+`<!-- pdd-story-dev-units: basename1.prompt, basename2.prompt -->` using the basenames
+of the passed prompt files. Single-prompt stories do NOT get a `pdd-story-dev-units`
+comment.
+
+**Regression test generation path (issue #1700):**
+When generating regression tests for a cross-unit story (one whose
+`get_all_dev_units_for_story` returns ≥2 names), the generated test scaffold's comment
+header MUST name all linked dev units. Single-unit stories are unchanged.
+
+**Lane summary (issue #1701):**
+When building the story lane summary, group rows by story slug. Cross-unit stories
+appear exactly once with a comma-separated "Scope" column listing all dev units.
+Single-unit stories appear normally. Do not double-count a cross-unit story across
+multiple dev-unit lanes.
+
 % Requirements
 1. **Story and prompt discovery**
    - Story directory defaults to `user_stories` and supports `PDD_USER_STORIES_DIR`.
    - Prompt directory defaults to `prompts` and supports `PDD_PROMPTS_DIR`.
    - Discover story files using `story__*.md`.
    - Discover prompt files recursively and support `include_llm=False` default; when false, exclude `*_llm.prompt`.
+   - Expose a **public, documented `story_id` helper** that returns the `<slug>`
+     of a `story__<slug>.md` path (accepting a `str` or `Path`), so the
+     `@pytest.mark.story` marker mechanism and the story files share one identity
+     space. Keep the internal `_slug_from_story_path()` as the implementation; the
+     public helper may wrap it. Behavior MUST be byte-identical to the current
+     slug extraction. This is purely additive — no existing signature changes.
 
 2. **Story validation**
    - For each story file, read content and call:
@@ -215,7 +315,25 @@ varies during normal development goes in `## Non-Oracle`.
    - While calling `change_main` from story fix flow, set `ctx.obj["skip_user_stories"] = True` and restore original value afterward.
    - Ensure restoration runs via `finally` block even on errors.
 
-6. **Error handling and diagnostics**
+6. **Cross-unit metadata parsing and traceability (issue #1769)**
+   - Implement `STORY_DEV_UNITS_METADATA_KEY` and `_STORY_DEV_UNITS_META_RE` mirroring
+     the existing `_STORY_PROMPTS_META_RE` pattern.
+   - Implement `parse_story_dev_unit_metadata(story_text)` by applying `_STORY_DEV_UNITS_META_RE`
+     and splitting the captured group on commas, stripping whitespace, and filtering empty
+     strings. Return `[]` when the comment is absent.
+   - Implement `story_is_cross_unit(story_text)`: call both `_parse_story_prompt_metadata`
+     and `parse_story_dev_unit_metadata`; return `True` when either result has length ≥2.
+   - Implement `get_cross_unit_stories_for_prompt(prompt_name, stories_dir)`: glob all
+     `story__*.md` under `stories_dir`, read each file, filter to those where `prompt_name`
+     appears in the union of both metadata fields AND `story_is_cross_unit` is `True`.
+     Return a list of dicts: `{"path": str, "slug": str, "dev_units": list[str]}`.
+   - Implement `get_all_dev_units_for_story(story_text)`: return the ordered union of
+     `parse_story_dev_unit_metadata(story_text)` and `_parse_story_prompt_metadata(story_text)`,
+     preserving order (dev-units first) and deduplicating by first occurrence.
+   - All four functions are pure (no file I/O except `get_cross_unit_stories_for_prompt`);
+     import lazily to avoid cycles.
+
+7. **Error handling and diagnostics**
    - Return actionable messages for missing story file, missing prompts, unresolved prompt path, missing mapped code file, and failed post-fix validation.
    - Keep a module logger (`logging.getLogger(__name__)`) for debug traces.
    - Use type annotations and concise docstrings.
@@ -232,12 +350,23 @@ varies during normal development goes in `## Non-Oracle`.
 - `pdd/prompts/generate_user_story_LLM.prompt` — the story-generation meta-prompt
 - `rich.print` for PASS/FAIL output when not quiet
 
-% Deliverables (issue #820, #1356)
+% Deliverables (issue #820, #1356, #1769)
 - `user_stories/story__template.md`
 - `pdd/user_story_tests.py`
 - `pdd/prompts/generate_user_story_LLM.prompt` (story-generation meta-prompt, #1356)
 - `tests/test_user_story_tests.py` and `tests/fixtures/contract_rules_python.prompt`
 - `README.md` and `docs/prompting_guide.md` (targeted edits)
+
+Required tests in `tests/test_user_story_tests.py` for issue #1769:
+1. `test_parse_story_dev_unit_metadata_present` — extracts names from `pdd-story-dev-units` comment
+2. `test_parse_story_dev_unit_metadata_absent` — returns `[]` when comment is absent
+3. `test_story_is_cross_unit_via_prompts` — `True` when `pdd-story-prompts` has ≥2 entries
+4. `test_story_is_cross_unit_via_dev_units` — `True` when `pdd-story-dev-units` has ≥2 entries
+5. `test_story_is_cross_unit_single` — `False` when both fields have ≤1 entry
+6. `test_get_cross_unit_stories_for_prompt_found` — forward lookup returns matching cross-unit story
+7. `test_get_cross_unit_stories_for_prompt_not_found` — returns empty list when no match
+8. `test_get_all_dev_units_for_story_union` — union of both fields, dev-units first, deduplicated
+9. `test_generate_user_story_writes_dev_units_comment` — when ≥2 prompts passed, `pdd-story-dev-units` comment is written
 
 % Verification
 ```bash

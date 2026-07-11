@@ -1,0 +1,177 @@
+{
+  "budget_met": true,
+  "core_loc": 108,
+  "core_tokens": 1004,
+  "distractor_loc": 867,
+  "distractor_tokens_on_disk": 8811,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g3598de18",
+      "loc": 77,
+      "mode": "regrow",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "g6eeb5704",
+      "loc": 66,
+      "mode": "regrow",
+      "sha256": "3f48c9f1d209d09754f53f07c6196288ae8ff0e239e8020f4b370ddf36285f45",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 820,
+      "upstream_path": "src/pdd/get_lint_commands.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "ga888d780",
+      "loc": 59,
+      "mode": "regrow",
+      "sha256": "1e464b0e63e8f7a48727a0b2c0cd5e91ae766bd8182c205bf069aa8f6ad81351",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 438,
+      "upstream_path": "src/pdd/json_atomic.py"
+    },
+    {
+      "content_path": null,
+      "import_group": "gdb0528fa",
+      "loc": 36,
+      "mode": "regrow",
+      "sha256": "f57d79ea91e3a07e2581215a56ab6fd12e51b6841484e06499ea0f967b2d5593",
+      "source_path": "src/pdd/comment_line.py",
+      "tier": "same-package",
+      "tokens": 460,
+      "upstream_path": "src/pdd/comment_line.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/compression_reporting_row.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "8cd316a144d4736f68afc1c9205ac585f41160a904d5c8600c852d00916bf02c",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 676,
+      "upstream_path": "src/pdd/compression_reporting_row.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/get_lint_commands_language.py",
+      "import_group": "g-mutate",
+      "loc": 66,
+      "mode": "mutate",
+      "sha256": "2c3e1898aa8ab7115b4b7820d8c789d06145cd22e60332bb7d068e63995bbe1e",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 842,
+      "upstream_path": "src/pdd/get_lint_commands_language.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/json_atomic_common.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "de5746eabcfc8fa6efb90083b790512059a252b89c548231fc74a28e3a06dfdb",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 441,
+      "upstream_path": "src/pdd/json_atomic_common.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/comment_line_leading.py",
+      "import_group": "g-mutate",
+      "loc": 41,
+      "mode": "mutate",
+      "sha256": "60d1fd45cfa33eaa4718f917f78c6585da841668cdae086abcd72461ed62ede4",
+      "source_path": "src/pdd/comment_line.py",
+      "tier": "same-package",
+      "tokens": 496,
+      "upstream_path": "src/pdd/comment_line_leading.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/compression_reporting_reader.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "9cbaadee70e80b0da83fbc94ac4182ddda0c3557c1e2a4ccea654233469ca01d",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 682,
+      "upstream_path": "src/pdd/compression_reporting_reader.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/get_lint_commands_exc.py",
+      "import_group": "g-mutate",
+      "loc": 66,
+      "mode": "mutate",
+      "sha256": "06cd3be463deba26bd7f807bc2eb36606f1d3b1a0761c0f3730ebbaa4cd2b934",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 830,
+      "upstream_path": "src/pdd/get_lint_commands_exc.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/json_atomic_values.py",
+      "import_group": "g-mutate",
+      "loc": 59,
+      "mode": "mutate",
+      "sha256": "ec6e3e97fbae12d29554efcab26a0892bc23e51b1e85ecf2042e2b1f91d662f5",
+      "source_path": "src/pdd/json_atomic.py",
+      "tier": "same-package",
+      "tokens": 441,
+      "upstream_path": "src/pdd/json_atomic_values.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/comment_line_file.py",
+      "import_group": "g-mutate",
+      "loc": 41,
+      "mode": "mutate",
+      "sha256": "35152b230e8fdcf72a4a811e342c162275d973363899f58a81fafa4a558fdd66",
+      "source_path": "src/pdd/comment_line.py",
+      "tier": "same-package",
+      "tokens": 492,
+      "upstream_path": "src/pdd/comment_line_file.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/compression_reporting_languages.py",
+      "import_group": "g-mutate",
+      "loc": 77,
+      "mode": "mutate",
+      "sha256": "5e96565b9ea0dc6699b6b3ecba797c05727535664def4fa89e576eaff8956def",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 687,
+      "upstream_path": "src/pdd/compression_reporting_languages.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/10x/src/pdd/get_lint_commands_lookup.py",
+      "import_group": "g-mutate",
+      "loc": 66,
+      "mode": "mutate",
+      "sha256": "fe7a591a3fbf266b1d0f51f7c7d9acabf1667715e216e6864aa9f71907599b1e",
+      "source_path": "src/pdd/get_lint_commands.py",
+      "tier": "same-package",
+      "tokens": 837,
+      "upstream_path": "src/pdd/get_lint_commands_lookup.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 10,
+    "regrow": 4,
+    "template": 0
+  },
+  "realized_total_tokens": 9815,
+  "rejected": [],
+  "scenario_id": "pdd-language-extensions",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "10x",
+  "size_token_target": 9036,
+  "size_token_tolerance_pct": 10.0,
+  "tokenizer": "chars/4-v1"
+}

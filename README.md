@@ -68,7 +68,10 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
-For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+For a rule-to-story/test coverage matrix (`pdd checkup coverage`), including the
+`@pytest.mark.story` regression marker and the per-story `has_regression_test`
+dimension, see [docs/coverage_contracts.md](docs/coverage_contracts.md) and
+[docs/generating_user_stories.md](docs/generating_user_stories.md).
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
@@ -749,11 +752,16 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
+- `pdd story add <issue-source> --devunit <name> [--devunit <name>]` creates a story file from a GitHub issue URL, issue number, or local Markdown file, linked to one or more dev units. Use `--text "..."` to supply the story source as inline text instead of a URL or file path. Supports `--prompt <path>` for explicit prompt selection, `--from-changed-files` to link currently changed `.prompt` files, `--dry-run` for a no-write preview, `--update` to merge prompt links into an existing story, and `--generate-regression` to print the follow-up `pdd test --from-story` command.
+- `pdd story list [--with-regression-status]` lists all stories in `user_stories/` with their slug, file path, linked prompts, and (when the traceability API is available) `missing` / `has-test` / `stale` regression status. This is a presence/freshness signal only: `has-test` means a fresh, marker-linked regression test exists (or a legacy hashless traceability link), not that it passed — pass/fail is verified separately by the story lane (`pytest -m story`).
+- `pdd story link <story-file> --prompt <path>` adds a prompt link to an existing story file without regenerating the story body. Validates that the story file is inside `user_stories/`.
+- `pdd test --from-story user_stories/story__*.md --output tests/story_regression/test_story_*.py` generates deterministic pytest regression tests from the story contract. When the contract declares a machine-readable `## Entry Point`, the generated test is behavioral (preferred): it imports and calls the entry point and asserts the `## Oracle` / `## Negative Cases` bullets as Python expressions over `result`. Without an `## Entry Point`, it falls back to a text-pin test that pins the story/contract hash and clauses. Either way, generated tests are tagged with `@pytest.mark.story(...)`. See [docs/generating_user_stories.md](docs/generating_user_stories.md) Step 8.
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
+- Story validation prints PASS/FAIL and exits non-zero if any story fails. `pdd detect --stories` does not support `--output`; use `--evidence` to write machine-readable run evidence.
 
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:
@@ -761,6 +769,9 @@ Story prompt linkage:
 - If metadata is missing, `pdd detect --stories` validates against the full prompt set.
 - `pdd test --issue ... <*.prompt>` links the prompt files passed on the command line directly in story metadata; it does not run `detect_change` during story authoring.
 - In `--stories` mode, existing story metadata scopes validation; when metadata is missing, validation falls back to the full prompt set.
+- **Cross-dev-unit stories:** When ≥2 prompt files are passed to `pdd test --issue`, a second metadata comment is also written alongside `pdd-story-prompts`:
+  `<!-- pdd-story-dev-units: basename1.prompt, basename2.prompt -->`
+  This marks the story as spanning multiple dev units (cross-unit). Single-prompt stories do not receive a `pdd-story-dev-units` comment. Cross-unit traceability is exposed via `get_cross_unit_stories_for_prompt` (forward lookup: which cross-unit stories include a given prompt) and `story_is_cross_unit` (returns `True` when the deduplicated union of the `pdd-story-prompts` and `pdd-story-dev-units` entries has ≥2 names — so one prompt link plus one distinct dev-unit link already counts as cross-unit). `pdd checkup coverage` reports cross-unit stories separately and counts each story once globally to prevent double-counting.
 
 Template:
 - See `user_stories/story__template.md` for a starter format.
@@ -770,6 +781,16 @@ Contract coverage:
   Document rule IDs under each story's `## Covers` section (for example `R1` or
   `prompts/module_python.prompt#R2`). See `docs/coverage_contracts.md` and
   `docs/contract_check.md`.
+
+Executable regression suite:
+- Beyond drift validation, a story can carry a generated executable regression
+  test marked `@pytest.mark.story`. Run the suite with `make regression-stories`
+  (i.e. `pytest -m story`) in the public-safe, no-secrets lane.
+- Generate a test for a story with
+  `pdd test --from-story user_stories/story__<slug>.md`.
+- Seed coverage ships for the top flows (`generate`, `sync`, `fix`, `change`,
+  `update`) plus a batch of previously-fixed-bug regressions. See
+  [docs/generating_user_stories.md](docs/generating_user_stories.md#story-regression-suite-executable-oracles).
 
 ## Global Options
 
@@ -2794,6 +2815,7 @@ Options:
 - `--prompts-dir DIR`: Directory containing `.prompt` files (stories mode only).
 - `--include-llm`: Include `*_llm.prompt` files in stories mode.
 - `--fail-fast/--no-fail-fast`: Stop on the first failing story in stories mode (default: `--fail-fast`).
+- In stories mode, `--output` is unavailable because the CSV change report applies only to standard detect mode; use PASS/FAIL output and `--evidence` for machine-readable run evidence.
   - In stories mode, PDD reads optional `pdd-story-prompts` metadata from each story to run prompt-subset (multi-prompt) validation.
   - If metadata is missing, validation uses all prompts and can auto-cache detected prompt links in the story file.
 

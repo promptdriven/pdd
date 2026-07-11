@@ -483,13 +483,14 @@ def test_cli_generate_directory_path_raises_error(mock_main, mock_auto_update, r
     mock_main.assert_not_called()
 
 
-def test_real_generate_command(create_dummy_files, tmp_path):
+def test_real_generate_command(create_dummy_files, tmp_path, monkeypatch):
     """Test the 'generate' command with real files by calling the function directly."""
     if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
         pytest.skip(
             "Real LLM integration tests require network/API access; set "
             "PDD_RUN_REAL_LLM_TESTS=1 or use --run-all / PDD_RUN_ALL_TESTS=1."
         )
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
     import sys
     import click

@@ -1,0 +1,45 @@
+{
+  "budget_met": true,
+  "core_loc": 108,
+  "core_tokens": 1004,
+  "distractor_loc": 121,
+  "distractor_tokens_on_disk": 981,
+  "files": [
+    {
+      "content_path": null,
+      "import_group": "g3598de18",
+      "loc": 77,
+      "mode": "regrow",
+      "sha256": "a66b689039669cef255205263fbe39d0b5c7b6a24653b1e3e887ac75ee0c774e",
+      "source_path": "src/pdd/compression_reporting.py",
+      "tier": "same-package",
+      "tokens": 669,
+      "upstream_path": "src/pdd/compression_reporting.py"
+    },
+    {
+      "content_path": "generated/pdd-language-extensions/2x/src/service/dict_service_0.py",
+      "import_group": "g-template",
+      "loc": 44,
+      "mode": "template",
+      "sha256": "85788753c0db141e2a9e78f3c6cc42fd666b6cb2daf1311f26cf080fb8d05dd3",
+      "source_path": null,
+      "tier": "same-layer",
+      "tokens": 312,
+      "upstream_path": "src/service/dict_service_0.py"
+    }
+  ],
+  "mode_counts": {
+    "mutate": 0,
+    "regrow": 1,
+    "template": 1
+  },
+  "realized_total_tokens": 1985,
+  "rejected": [],
+  "scenario_id": "pdd-language-extensions",
+  "schema_version": 3,
+  "selection_seed": 1209,
+  "size": "2x",
+  "size_token_target": 1004,
+  "size_token_tolerance_pct": 10.0,
+  "tokenizer": "chars/4-v1"
+}

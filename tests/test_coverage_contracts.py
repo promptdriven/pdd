@@ -1133,3 +1133,194 @@ class TestEdgeCases:
         assert s["unchecked"] == 1
         assert s["waived"] == 1
         assert s["failed"] == 1
+
+
+# ===========================================================================
+# Orthogonal story-regression dimension (#1699): has_regression_test per story
+# ===========================================================================
+
+class TestStoryRegressionDimension:
+    """Story-keyed `has_regression_test`, queried from `pdd.story_regression`.
+
+    This dimension MUST be additive and orthogonal: it never changes the
+    rule-keyed statuses or their priority order.
+    """
+
+    def _setup(self, tmp_path: Path, *, with_test: bool):
+        prompt = _make_prompt(
+            tmp_path,
+            """\
+            <contract_rules>
+            R1 - Foo
+            The system MUST do foo.
+            </contract_rules>
+            """,
+            name="foo_python.prompt",
+        )
+        stories = tmp_path / "user_stories"
+        stories.mkdir()
+        _make_story(
+            stories,
+            """\
+            ## Covers
+            - R1: foo rule
+
+            ## Acceptance Criteria
+            - It works.
+            """,
+            name="story__foo_flow.md",
+        )
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        body = "def test_plain():\n    assert True\n"
+        if with_test:
+            body = (
+                "import pytest\n"
+                '@pytest.mark.story("foo_flow")\n'
+                "def test_foo_flow():\n"
+                "    assert True\n"
+            )
+        _make_test_file(tests_dir, body, name="test_foo.py")
+        return prompt, stories, tests_dir
+
+    def test_story_with_regression_test_is_true(self, tmp_path: Path):
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        ids = {s.story_id: s.has_regression_test for s in result.stories}
+        assert ids == {"foo_flow": True}
+
+    def test_story_without_regression_test_is_false(self, tmp_path: Path):
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=False)
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        ids = {s.story_id: s.has_regression_test for s in result.stories}
+        assert ids == {"foo_flow": False}
+
+    def test_dimension_is_orthogonal_to_rule_status(self, tmp_path: Path):
+        # Whether or not a regression test exists, R1 stays 'story-only' here
+        # (story covers it; no rule-keyed test_R1 evidence).
+        for with_test in (True, False):
+            base = tmp_path / str(with_test)
+            base.mkdir()
+            prompt, stories, tests_dir = self._setup(base, with_test=with_test)
+            result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+            assert result.rules[0].rule_id == "R1"
+            assert result.rules[0].status == STATUS_STORY_ONLY
+
+    def test_summary_carries_story_regression_tally(self, tmp_path: Path):
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        s = result.summary
+        assert s["stories_total"] == 1
+        assert s["stories_with_regression_test"] == 1
+        # Existing rule-status keys remain intact.
+        assert s["total"] == 1 and s["story_only"] == 1
+
+    def test_as_dict_carries_story_dimension(self, tmp_path: Path):
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        d = result.as_dict()
+        assert d["stories"] == [
+            {
+                "story_id": "foo_flow",
+                "has_regression_test": True,
+                "status": "story-regression-present",
+                "tests": ["test_foo.py::test_foo_flow"],
+                "story_hash": "95d7a1ca9e45f480",
+            }
+        ]
+        assert "regression_warnings" in d
+
+    def test_marker_for_nonexistent_story_is_a_warning(self, tmp_path: Path):
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        # A marker that names a story with no story__<slug>.md on disk.
+        _make_test_file(
+            tests_dir,
+            (
+                "import pytest\n"
+                '@pytest.mark.story("ghost_flow")\n'
+                "def test_ghost():\n"
+                "    assert True\n"
+            ),
+            name="test_ghost.py",
+        )
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        assert any("ghost_flow" in w for w in result.regression_warnings)
+        # ...and the no-test gap is the *other* direction, kept distinct:
+        assert all("ghost_flow" not in s.story_id for s in result.stories)
+
+    def test_nested_story_is_supported_not_self_contradicted(self, tmp_path: Path):
+        """G-F5 (pdd#1889): a nested ``user_stories/<sub>/story__baz.md`` is
+        linked+evaluated by the coverage path (rglob), so the orphan check must
+        also see it (recursive) — otherwise the SAME run both evaluates ``baz``
+        AND warns it "references a story with no story__baz.md on disk"."""
+        prompt, stories, tests_dir = self._setup(tmp_path, with_test=True)
+        # A metadata-less nested story that applies to the prompt set, plus a
+        # marker test that claims it.
+        (stories / "nested").mkdir(exist_ok=True)
+        _make_story(
+            stories / "nested",
+            """\
+            ## Covers
+            - R1: nested rule
+
+            ## Acceptance Criteria
+            - It works nested.
+            """,
+            name="story__baz.md",
+        )
+        _make_test_file(
+            tests_dir,
+            (
+                "import pytest\n"
+                '@pytest.mark.story(story_id="baz")\n'
+                "def test_baz():\n"
+                "    assert True\n"
+            ),
+            name="test_baz.py",
+        )
+        result = build_coverage(prompt, stories_dir=stories, tests_dir=tests_dir)
+        # baz is evaluated as a real story...
+        assert "baz" in {s.story_id for s in result.stories}
+        # ...so it must NOT be reported as a nonexistent-story orphan.
+        assert not any("baz" in w for w in result.regression_warnings), (
+            f"nested story evaluated AND warned as missing: {result.regression_warnings}"
+        )
+
+    def test_directory_mode_shares_one_story_map(self, tmp_path: Path):
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        _make_prompt(
+            prompts,
+            "<contract_rules>\nR1 - Foo\nThe system MUST foo.\n</contract_rules>\n",
+            name="foo_python.prompt",
+        )
+        stories = tmp_path / "user_stories"
+        stories.mkdir()
+        _make_story(
+            stories,
+            """\
+            <!-- pdd-story-prompts: foo_python.prompt -->
+            ## Covers
+            - R1: foo
+
+            ## Acceptance Criteria
+            - ok
+            """,
+            name="story__foo_flow.md",
+        )
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        _make_test_file(
+            tests_dir,
+            (
+                "import pytest\n"
+                '@pytest.mark.story(story_id="foo_flow")\n'
+                "def test_foo_flow():\n"
+                "    assert True\n"
+            ),
+            name="test_foo.py",
+        )
+        results = build_coverage_directory(prompts, stories_dir=stories, tests_dir=tests_dir)
+        by_name = {r.path.name: r for r in results}
+        foo = by_name["foo_python.prompt"]
+        assert {s.story_id: s.has_regression_test for s in foo.stories} == {"foo_flow": True}
