@@ -12,7 +12,7 @@ import pytest
 
 from pdd import cli
 from pdd.continuous_sync import SyncUnit, classify_unit
-from pdd.sync_determine_operation import calculate_current_hashes
+from pdd.sync_determine_operation import calculate_current_hashes, get_pdd_file_paths
 
 
 def _write_fingerprint(project: Path, basename: str, hashes: dict) -> None:
@@ -425,6 +425,105 @@ def test_default_context_templates_preserve_nested_basename(tmp_path: Path) -> N
     assert report["paths"]["code"] == "src/core/cloud.py"
     assert report["paths"]["example"] == "usage/core/cloud_demo.py"
     assert report["paths"]["test"] == "spec/core/cloud_spec.py"
+
+
+def test_report_and_live_resolver_share_leaf_name_semantics(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    prompt = project / "prompts" / "core" / "cloud_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("cloud\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      outputs:\n        code: {path: 'src/{name}.py'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    report = classify_unit(SyncUnit("core/cloud", "python", prompt, project / "prompts"), project)
+    live = get_pdd_file_paths("core/cloud", "python", "prompts")
+
+    assert report["paths"]["code"] == "src/cloud.py"
+    assert live["code"] == Path("src/cloud.py")
+
+
+def test_live_flat_basename_uses_discovered_nested_prompt_context(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    prompt = project / "prompts" / "frontend" / "app" / "page_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("page\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      outputs:\n        code: {path: 'src/{category}/{name}.py'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    live = get_pdd_file_paths("page", "python", "prompts")
+
+    assert live["code"] == Path("src/frontend/app/page.py")
+
+
+@pytest.mark.parametrize("malformed", ["contexts: []\n", "contexts:\n  local:\n    defaults: []\n", "contexts:\n  local:\n    defaults:\n      prompts_dir: []\n"])
+def test_nested_malformed_config_fails_closed(tmp_path: Path, monkeypatch, malformed: str) -> None:
+    project = tmp_path / "project"
+    prompt = project / "prompts" / "nested" / "widget_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("widget\n", encoding="utf-8")
+    (prompt.parent / ".pddrc").write_text(malformed, encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
+    report = json.loads(result.output)
+
+    assert report["failures"][0]["failure"] == "invalid_pddrc"
+
+
+def test_metadata_inference_is_bounded_and_validates_before_stat(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    meta = project / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    safe_name = "_".join("x" for _ in range(40))
+    (meta / f"{safe_name}_python.json").write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_METADATA_INFERENCE_CANDIDATES", 3, raising=False)
+    calls = []
+
+    def guarded_exists(path: Path) -> bool:
+        calls.append(path)
+        assert path.resolve(strict=False).is_relative_to(project.resolve())
+        return False
+
+    with patch("pdd.continuous_sync._validated_artifact_exists", side_effect=guarded_exists, create=True):
+        result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert len(calls) <= 9
+
+
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_metadata_symlink_is_rejected_without_target_stat(tmp_path: Path, monkeypatch, target_exists: bool) -> None:
+    project = tmp_path / "project"
+    (project / ".pdd").mkdir(parents=True)
+    target = tmp_path / "outside-meta"
+    if target_exists:
+        target.mkdir()
+    try:
+        (project / ".pdd" / "meta").symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    monkeypatch.chdir(project)
+    meta_root = project / ".pdd" / "meta"
+    real_exists = Path.exists
+
+    def guarded_exists(path: Path) -> bool:
+        assert path != meta_root, "metadata exists() followed the symlink before lstat validation"
+        return real_exists(path)
+
+    with patch.object(Path, "exists", guarded_exists):
+        result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
+    report = json.loads(result.output)
+
+    assert report["failures"][0]["failure"] == "unsafe_metadata"
 
 
 def test_architecture_duplicate_leaves_match_relative_prompt_path(tmp_path: Path) -> None:
