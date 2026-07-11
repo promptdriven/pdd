@@ -85,6 +85,17 @@ JEST_LOCAL_ARRAY_CONFIG_KEYS = (
     "snapshotSerializers",
     "watchPlugins",
 )
+_JAVASCRIPT_SUFFIXES = (
+    ".js",
+    ".cjs",
+    ".mjs",
+    ".ts",
+    ".cts",
+    ".mts",
+    ".tsx",
+    ".jsx",
+    ".json",
+)
 
 
 @dataclass(frozen=True)
@@ -606,13 +617,54 @@ def _local_javascript_imports(
     )
     resolved: set[PurePosixPath] = set()
     for item in imports:
-        candidate = source_path.parent / PurePosixPath(item)
-        candidates = [candidate]
-        if not candidate.suffix:
-            candidates.extend(candidate.with_suffix(suffix) for suffix in (".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx", ".json"))
-            candidates.extend(candidate / f"index{suffix}" for suffix in (".js", ".ts", ".tsx"))
-        resolved.update(path for path in candidates if read_git_blob(root, ref, path) is not None)
+        candidate = _normalize_repo_relative_path(
+            source_path.parent / PurePosixPath(item)
+        )
+        if candidate is None:
+            continue
+        candidates = list(_javascript_path_candidates(candidate))
+        resolved.update(
+            path for path in candidates if read_git_blob(root, ref, path) is not None
+        )
     return resolved
+
+
+def _normalize_repo_relative_path(path: PurePosixPath) -> PurePosixPath | None:
+    """Collapse dot segments and reject paths that escape the repository."""
+    parts: list[str] = []
+    for part in path.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+            continue
+        parts.append(part)
+    return PurePosixPath(*parts) if parts else PurePosixPath(".")
+
+
+def _javascript_path_candidates(path: PurePosixPath) -> tuple[PurePosixPath, ...]:
+    """Return file and directory-index candidates for a JS import target."""
+    candidates = [path]
+    if not path.suffix:
+        candidates.extend(path.with_suffix(suffix) for suffix in _JAVASCRIPT_SUFFIXES)
+        candidates.extend(path / f"index{suffix}" for suffix in _JAVASCRIPT_SUFFIXES)
+    return tuple(candidates)
+
+
+def _read_javascript_support_blob(
+    root: Path, ref: str, path: PurePosixPath
+) -> tuple[PurePosixPath, bytes] | tuple[PurePosixPath, None]:
+    """Read a JS support path after applying file and index candidates."""
+    normalized = _normalize_repo_relative_path(path)
+    if normalized is None:
+        return path, None
+    for candidate in _javascript_path_candidates(normalized):
+        source = read_git_blob(root, ref, candidate)
+        if source is not None:
+            return candidate, source
+    return normalized, None
 
 
 def _jest_support_closure(
@@ -628,7 +680,7 @@ def _jest_support_closure(
         if path in visited:
             continue
         visited.add(path)
-        source = read_git_blob(root, ref, path)
+        path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Jest support path is missing: {path.as_posix()}")
         paths.add(path)
@@ -641,7 +693,11 @@ def _jest_support_closure(
                 nested_config = nested_config.get("jest", {})
             pending.extend(_jest_config_references(nested_config) - visited)
         pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
-    return tuple((path, read_git_blob(root, ref, path)) for path in sorted(paths) if read_git_blob(root, ref, path) is not None)
+    return tuple(
+        (path, read_git_blob(root, ref, path))
+        for path in sorted(paths)
+        if read_git_blob(root, ref, path) is not None
+    )
 
 
 def jest_validator_config_digest(
