@@ -31,6 +31,9 @@ PYTEST_VALIDATOR_CONFIG_DIGEST = (
     "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963"
 )
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
+FOUNDATION_PROFILE_DIGEST = (
+    "131cbf8dbabd0c244539bcc768a10582eb0c4dd3e94db1912d6833126e682fb4"
+)
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
         "tests": (
@@ -218,6 +221,7 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         for profile in profiles.profiles
         if profile.unit_id.prompt_relpath.as_posix() == FOUNDATION_PROFILE
     )
+    assert foundation_profile.profile_digest == FOUNDATION_PROFILE_DIGEST
     foundation_pytest = {
         obligation.obligation_id: obligation
         for obligation in foundation_profile.obligations
