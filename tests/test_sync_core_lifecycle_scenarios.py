@@ -113,6 +113,27 @@ def test_lifecycle_predicate_requires_dependency_environment_digest() -> None:
     assert result.dependency_environment_digest == "b" * 64
 
 
+def test_lifecycle_result_binds_recomputable_runtime_measurement() -> None:
+    result = LifecycleResult(
+        0, 0, 0, 0, 0, 0,
+        candidate_wheel_sha256="a" * 64,
+        dependency_environment_digest="b" * 64,
+        runtime_lock_sha256="c" * 64,
+        interpreter={
+            "implementation": "CPython",
+            "version": "3.12.3",
+            "abi": "cp312",
+            "platform": "macosx_14_0_arm64",
+        },
+        installed_files=(("pdd", "1.0", "pdd/__init__.py", "d" * 64),),
+        measurement_authority="pdd-released-checker-v1",
+    )
+    assert result.runtime_lock_sha256 == "c" * 64
+    assert result.interpreter["abi"] == "cp312"
+    assert result.installed_files[0][2] == "pdd/__init__.py"
+    assert result.measurement_authority == "pdd-released-checker-v1"
+
+
 def test_lifecycle_matrix_fails_closed_without_hash_pinned_wheelhouse(
     tmp_path,
 ) -> None:
