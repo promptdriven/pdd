@@ -42,12 +42,13 @@ def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
     (root / "tests/test_widget.py").write_text("def test_widget(): pass\n")
     (root / "tests/test_widget_e2e.py").write_text("def test_e2e(): pass\n")
     (root / "notes.md").write_text("Human-owned release notes\n")
+    (root / "release.md").write_text("Unrelated human-owned file\n")
     (root / ".pdd/sync-ownership.json").write_text(
         json.dumps(
             {
                 "rules": [
                     {
-                        "pattern": "notes.md",
+                        "pattern": "*.md",
                         "inventory": "HUMAN_OWNED",
                         "role": "documentation",
                         "owner": "docs@example.com",
@@ -147,8 +148,8 @@ def test_unrelated_human_owned_change_does_not_invalidate_unit_snapshot(tmp_path
         root, first_manifest, first_manifest.managed_units[0], first_profile
     )
 
-    (root / "notes.md").write_text("Unrelated human-owned update\n")
-    _git(root, "add", "notes.md")
+    (root / "release.md").write_text("Unrelated human-owned update\n")
+    _git(root, "add", "release.md")
     _git(root, "commit", "-q", "-m", "update release notes")
     head = _git(root, "rev-parse", "HEAD")
     second_manifest = build_unit_manifest(root, base_ref=base, head_ref=head)

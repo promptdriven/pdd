@@ -334,7 +334,8 @@ def _has_dynamic_pytest_plugins(
 
 
 def _has_external_pytest_plugins(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> bool:
     """Return whether a literal plugin declaration lacks protected repo bytes."""
     remaining = list(tuple(test_paths) + tuple(_pytest_config_paths(root, ref, test_paths)))
@@ -365,7 +366,10 @@ def _has_external_pytest_plugins(
                 )
                 if not any(read_git_blob(root, ref, item) is not None for item in candidates):
                     return True
-        discovered, _dynamic = _local_module_paths(root, ref, path, source)
+        discovered, _dynamic = _local_module_paths(
+            root, ref, path, source,
+            code_under_test_paths=frozenset(code_under_test_paths),
+        )
         remaining.extend(discovered - visited)
     return False
 
@@ -923,8 +927,10 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "dynamic pytest_plugins declarations are not bound by this adapter",
         )
-    if _has_external_pytest_plugins(root, base_sha, obligation.artifact_paths) or (
-        _has_external_pytest_plugins(root, head_sha, obligation.artifact_paths)
+    if _has_external_pytest_plugins(
+        root, base_sha, obligation.artifact_paths, obligation.code_under_test_paths
+    ) or _has_external_pytest_plugins(
+        root, head_sha, obligation.artifact_paths, obligation.code_under_test_paths
     ):
         return RunnerExecution(
             obligation.obligation_id,

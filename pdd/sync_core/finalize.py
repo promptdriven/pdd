@@ -214,6 +214,24 @@ def _reusable_result(
     return FinalizeResult(transaction, envelope.attestation_id, fingerprint)
 
 
+def _checkout_is_clean_for_finalization(root: Path) -> bool:
+    """Allow only checker-owned durable state from an earlier finalization."""
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root, capture_output=True, text=True, check=False,
+    )
+    if status.returncode != 0:
+        return False
+    allowed = (
+        ".pdd/meta/v2/", ".pdd/evidence/v2/", ".pdd/locks/transactions/",
+        ".pdd/transactions/",
+    )
+    return all(
+        len(line) >= 4 and line[3:].replace('"', "").startswith(allowed)
+        for line in status.stdout.splitlines()
+    )
+
+
 def finalize_unit(
     root: Path,
     module: PurePosixPath,
@@ -252,6 +270,8 @@ def finalize_unit(
     verifier = load_trust_policy(
         repository_root, base_sha, replay_ledger_path=replay
     ).verifier
+    if not _checkout_is_clean_for_finalization(repository_root):
+        raise ValueError("canonical finalization requires a completely clean checkout")
     reusable = _reusable_result(
         repository_root,
         snapshot,
@@ -264,12 +284,6 @@ def finalize_unit(
     )
     if reusable is not None:
         return reusable
-    cleanliness = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=repository_root, capture_output=True, text=True, check=False,
-    )
-    if cleanliness.returncode != 0 or cleanliness.stdout:
-        raise ValueError("canonical finalization requires a completely clean checkout")
     transaction_id = f"finalize-{uuid.uuid4()}"
     attestation_id = f"attestation-{uuid.uuid4()}"
     envelope, executions = run_profile(

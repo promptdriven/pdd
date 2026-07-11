@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -42,6 +43,29 @@ def _supervised_descendants(token: str) -> set[int]:
     return found
 
 
+def _process_descendants(root_pid: int) -> set[int]:
+    """Return the current transitive process tree without trusting child state."""
+    listing = subprocess.run(
+        ["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, check=False,
+    )
+    children: dict[int, set[int]] = {}
+    for line in listing.stdout.splitlines():
+        try:
+            pid, parent = (int(value) for value in line.split())
+        except (ValueError, TypeError):
+            continue
+        children.setdefault(parent, set()).add(pid)
+    found: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, ()):
+            if child not in found:
+                found.add(child)
+                pending.append(child)
+    return found
+
+
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...]
 ) -> tuple[list[str], Path | None]:
@@ -56,9 +80,15 @@ def _sandbox_command(
         profile = Path(name)
         profile.write_text("\n".join(rules), encoding="utf-8")
         return ["sandbox-exec", "-f", str(profile), *command], profile
-    if sys.platform.startswith("linux") and shutil.which("bwrap"):
-        argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
-                "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+    if (sys.platform.startswith("linux") and shutil.which("bwrap")
+            and shutil.which("unshare")):
+        # util-linux creates the network namespace but does not configure its
+        # loopback device, avoiding the RTM_NEWADDR operation denied by hosted
+        # GitHub runners. Bubblewrap supplies the mount and PID containment.
+        argv = ["unshare", "--user", "--map-root-user", "--net", "--",
+                "bwrap", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
+                "--die-with-parent", "--new-session", "--ro-bind", "/", "/",
+                "--dev", "/dev", "--proc", "/proc"]
         for item in writable_roots:
             resolved = str(item.resolve())
             argv.extend(("--bind", resolved, resolved))
@@ -71,7 +101,7 @@ def run_supervised(
     writable_roots: tuple[Path, ...],
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
-    # pylint: disable=consider-using-with,too-many-locals,too-many-branches
+    # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
         argv, profile = _sandbox_command(command, writable_roots)
     except RuntimeError as exc:
@@ -88,6 +118,15 @@ def run_supervised(
     )
     timed_out = False
     surviving = False
+    tracked: set[int] = set()
+    tracking_done = threading.Event()
+
+    def track_process_tree() -> None:
+        while not tracking_done.wait(0.005):
+            tracked.update(_process_descendants(process.pid))
+
+    tracker = threading.Thread(target=track_process_tree, daemon=True)
+    tracker.start()
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -117,6 +156,8 @@ def run_supervised(
                         pass
                 stdout, stderr = process.communicate()
                 break
+    tracking_done.set()
+    tracker.join(timeout=1)
     if not timed_out and os.name != "nt":
         try:
             os.killpg(process.pid, 0)
@@ -124,7 +165,7 @@ def run_supervised(
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    descendants = _supervised_descendants(token) - {process.pid}
+    descendants = (_supervised_descendants(token) | tracked) - {process.pid}
     if descendants:
         surviving = True
         for pid in descendants:

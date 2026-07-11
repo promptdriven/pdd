@@ -57,13 +57,14 @@ def test_detached_session_descendant_is_terminated(tmp_path: Path) -> None:
 def test_detached_descendant_cannot_escape_by_removing_marker(tmp_path: Path) -> None:
     marker = tmp_path / "escaped-without-marker"
     child = (
-        "import os,sys,time; os.environ.pop('PDD_SUPERVISION_TOKEN', None); "
-        "os.setsid(); os.close(1); os.close(2); time.sleep(1); "
+        "import os,sys,time; os.setsid(); os.close(1); os.close(2); time.sleep(1); "
         "open(sys.argv[1], 'w').write('escaped')"
     )
     parent = (
-        "import subprocess,sys; "
-        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])"
+        "import os,subprocess,sys,time; child_env=dict(os.environ); "
+        "child_env.pop('PDD_SUPERVISION_TOKEN', None); "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+        "env=child_env); time.sleep(0.1)"
     )
     result, surviving = run_supervised(
         [sys.executable, "-c", parent, child, str(marker)], cwd=tmp_path,
