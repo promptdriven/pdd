@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -47,3 +48,44 @@ def test_checker_owned_replay_root_rejects_symlinked_descendant(tmp_path) -> Non
         )
 
     assert not (outside / "replay.json").exists()
+
+
+def test_existing_writable_replay_root_is_rejected_without_repair(tmp_path) -> None:
+    replay_root = tmp_path / "checker-owned"
+    replay_root.mkdir(mode=0o700)
+    ledger = replay_root / "replay.json"
+    ledger.write_text('["preserved-nonce"]\n', encoding="utf-8")
+    ledger.chmod(0o600)
+    replay_root.chmod(0o777)
+
+    with pytest.raises(DescriptorStoreError, match="root is unsafe"):
+        update_json(
+            ledger,
+            [],
+            lambda records: [*records, "new-nonce"],
+            trust_root=replay_root,
+        )
+
+    assert replay_root.stat().st_mode & 0o777 == 0o777
+    assert json.loads(ledger.read_text(encoding="utf-8")) == ["preserved-nonce"]
+
+
+def test_foreign_owned_replay_leaves_are_rejected(tmp_path, monkeypatch) -> None:
+    replay_root = tmp_path / "checker-owned"
+    replay_root.mkdir(mode=0o700)
+    ledger = replay_root / "replay.json"
+    ledger.write_text("[]\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    original_fstat = os.fstat
+
+    def foreign_regular(descriptor):
+        metadata = original_fstat(descriptor)
+        if not os.path.isfile(f"/dev/fd/{descriptor}"):
+            return metadata
+        fields = list(metadata)
+        fields[4] = metadata.st_uid + 1
+        return os.stat_result(fields)
+
+    monkeypatch.setattr("pdd.sync_core.descriptor_store.os.fstat", foreign_regular)
+    with pytest.raises(DescriptorStoreError, match="unsafe"):
+        update_json(ledger, [], lambda records: records, trust_root=replay_root)
