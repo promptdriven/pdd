@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from pdd.sync_core import build_unit_manifest
-from pdd.sync_core.alias_policy import load_protected_aliases
+from pdd.sync_core.alias_policy import load_committed_aliases, load_protected_aliases
 from pdd.sync_core.identity import initialize_repository_identity
 
 
@@ -76,3 +76,29 @@ def test_protected_alias_policy_requires_unchanged_candidate_copy(tmp_path) -> N
 
     with pytest.raises(ValueError, match="candidate changed protected alias policy"):
         load_protected_aliases(root, manifest)
+
+
+def test_protected_alias_policy_rejects_overlapping_authorities(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "aliases@example.com")
+    _git(root, "config", "user.name", "Alias Test")
+    (root / ".pdd").mkdir()
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {"alias_path": "src", "canonical_path": "canonical"},
+                    {"alias_path": "src/nested", "canonical_path": "other"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".pdd/sync-aliases.json")
+    _git(root, "commit", "-qm", "overlapping aliases")
+
+    with pytest.raises(ValueError, match="overlap"):
+        load_committed_aliases(root)

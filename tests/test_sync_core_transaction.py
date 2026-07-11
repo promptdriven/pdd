@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import PurePosixPath
+from unittest.mock import patch
 
 from click.testing import CliRunner
 import pytest
@@ -372,6 +373,49 @@ def test_plan_rejects_duplicate_canonical_destinations_through_alias(tmp_path) -
         manager.prepare("tx-duplicate-canonical", writes)
 
     assert not (tmp_path / ".pdd/transactions/tx-duplicate-canonical").exists()
+
+
+def test_alias_and_canonical_transactions_share_destination_lock(tmp_path) -> None:
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare(
+        "tx-alias-lock",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"alias\n", "100644"),),
+    )
+    manager.prepare(
+        "tx-canonical-lock",
+        (PlannedWrite(PurePosixPath("canonical/widget.py"), b"canonical\n", "100644"),),
+    )
+
+    class RecordingLock:
+        paths: list[str] = []
+
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+        def __enter__(self):
+            self.paths.append(self.path)
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    alias_payload = json.loads(
+        (tmp_path / ".pdd/transactions/tx-alias-lock/journal.json").read_text()
+    )
+    canonical_payload = json.loads(
+        (tmp_path / ".pdd/transactions/tx-canonical-lock/journal.json").read_text()
+    )
+    with patch("pdd.sync_core.transaction.FileLock", RecordingLock):
+        with manager._locks(alias_payload):  # pylint: disable=protected-access
+            alias_locks = set(RecordingLock.paths)
+        RecordingLock.paths.clear()
+        with manager._locks(canonical_payload):  # pylint: disable=protected-access
+            canonical_locks = set(RecordingLock.paths)
+
+    assert alias_locks & canonical_locks
 
 
 def test_descriptor_time_approved_alias_swap_cannot_redirect_commit(tmp_path, monkeypatch) -> None:
