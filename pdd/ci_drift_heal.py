@@ -792,31 +792,47 @@ def _run_metadata_sync_safe(
     ok = bool(getattr(result, "ok", False))
     if ok:
         try:
-            from pdd.fingerprint_transaction import FingerprintTransaction
-            from pdd.operation_log import infer_module_identity
+            from pdd.operation_log import (
+                infer_module_identity,
+                resolve_fingerprint_paths,
+                save_fingerprint,
+            )
             from pdd.sync_determine_operation import read_fingerprint
 
             basename, language = infer_module_identity(str(p))
             if basename is None or language is None:
                 raise ValueError("could not determine module identity from prompt path")
-            # Issue #1211: build paths directly from the known subproject
-            # paths rather than calling get_pdd_file_paths (which resolves
-            # from CWD and would return parent-repo paths in parent-CWD mode).
-            # Example/test-file hash validation is skipped here since those
-            # keys are not present in this minimal paths dict; that gap is
-            # tracked at issue #870 alongside LLM-first tag refresh.
+            # Issue #1211: seed resolution with the known subproject paths.
+            # The shared resolver anchors discovery at the real prompt, keeps
+            # these explicit paths authoritative, and adds existing
+            # example/test files so their hashes are not erased (#1926).
             if code_p is None:
                 raise ValueError("authoritative prompt/code paths unavailable: code_path not provided")
-            paths: Dict[str, Any] = {"prompt": p, "code": code_p}
-            with FingerprintTransaction(
+            paths: Dict[str, Any] = resolve_fingerprint_paths(
+                basename,
+                language,
+                p,
+                paths={"prompt": p, "code": code_p},
+            )
+            # Preserve the previous user-facing command so the released
+            # `sync_determine_operation._is_workflow_complete` (which only
+            # accepts verify/test/fix/update as complete) keeps recognizing
+            # the workflow as synced after this internal refresh.
+            prev_fp_for_cmd = read_fingerprint(basename, language, paths=paths)
+            prev_cmd = getattr(prev_fp_for_cmd, "command", None) if prev_fp_for_cmd else None
+            preserved_command = (
+                prev_cmd
+                if prev_cmd in ("verify", "test", "fix", "update")
+                else "fix"
+            )
+            save_fingerprint(
                 basename=basename,
                 language=language,
-                operation="update",
+                operation=preserved_command,
                 paths=paths,
                 cost=0.0,
-                model="",
-            ):
-                pass
+                model="metadata_sync",
+            )
             fingerprint = read_fingerprint(basename, language, paths=paths)
             if (
                 fingerprint is None
@@ -824,9 +840,12 @@ def _run_metadata_sync_safe(
                 or not fingerprint.code_hash
             ):
                 raise ValueError("fingerprint missing prompt/code hashes")
-        except Exception:
+        except Exception as exc:
             basename = str(prompt_path)
-            print(f"metadata finalization failed: fingerprint refresh failed for {basename}")
+            print(
+                "metadata finalization failed: fingerprint refresh failed for "
+                f"{basename}: {exc}"
+            )
             return False
         meta_rel = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
         print(f"metadata finalized for {basename}: {meta_rel}")

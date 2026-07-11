@@ -17,8 +17,12 @@ from .architecture_sync import (
     update_architecture_from_prompt,
 )
 from .architecture_registry import find_architecture_for_project
-from .fingerprint_transaction import FingerprintTransaction
-from .operation_log import clear_run_report, get_run_report_path, infer_module_identity
+from .operation_log import (
+    clear_run_report,
+    infer_module_identity,
+    resolve_fingerprint_paths,
+    save_fingerprint,
+)
 
 
 _THEME = Theme(
@@ -455,12 +459,6 @@ def run_metadata_sync(
                     if code_path is not None:
                         _rr_paths["code"] = code_path
                     clear_run_report(basename, language, paths=_rr_paths)
-                    if get_run_report_path(
-                        basename,
-                        language,
-                        paths=_rr_paths,
-                    ).exists():
-                        raise RuntimeError("run report remains after clear")
                     result.stages["run_report"] = StageStatus(
                         status="ok", detail=f"cleared run report for {detail}"
                     )
@@ -489,12 +487,18 @@ def run_metadata_sync(
         basename, language = infer_module_identity(prompt_path)
         if not basename or not language:
             reason = "could not infer (basename, language) for fingerprint"
-            result.stages["fingerprint"] = StageStatus(status="skipped", reason=reason)
-            _stage_log_exit("fingerprint", "skipped", reason)
+            result.stages["fingerprint"] = StageStatus(status="failed", reason=reason)
+            _stage_log_exit("fingerprint", "failed", reason)
         else:
             paths: Dict[str, Path] = {"prompt": prompt_path}
             if code_path is not None:
                 paths["code"] = code_path
+            paths = resolve_fingerprint_paths(
+                basename,
+                language,
+                prompt_path,
+                paths=paths,
+            )
             detail = f"basename={basename} language={language}"
             if dry_run:
                 result.stages["fingerprint"] = StageStatus(
@@ -522,15 +526,14 @@ def run_metadata_sync(
                     if _prev_cmd in ("verify", "test", "fix", "update")
                     else "fix"
                 )
-                with FingerprintTransaction(
+                save_fingerprint(
                     basename=basename,
                     language=language,
                     operation=_preserved_command,
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",
-                ):
-                    pass
+                )
                 result.stages["fingerprint"] = StageStatus(
                     status="ok", detail=f"saved fingerprint for {detail}"
                 )

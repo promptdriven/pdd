@@ -1,38 +1,59 @@
-"""Minimal local example for :mod:`pdd.fingerprint_transaction`."""
-
+"""Examples of the shared fingerprint finalization boundary."""
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
+from typing import Any
 
 from pdd.fingerprint_transaction import FingerprintTransaction
 
 
-def run_fingerprint_transaction_example() -> dict[str, object]:
-    """Finalize a tiny unit and return its persisted fingerprint payload."""
-
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        (root / ".pddrc").write_text("{}", encoding="utf-8")
-        prompt = root / "prompts" / "hello_python.prompt"
-        code = root / "src" / "hello.py"
-        prompt.parent.mkdir(parents=True)
-        code.parent.mkdir(parents=True)
-        prompt.write_text("Write a hello function.\n", encoding="utf-8")
-        code.write_text("def hello(): return 'hello'\n", encoding="utf-8")
-
-        with FingerprintTransaction(
-            "hello",
-            "python",
-            "generate",
-            paths={"prompt": prompt, "code": code},
-        ) as transaction:
-            destination = transaction.fingerprint_path
-
-        return json.loads(destination.read_text(encoding="utf-8"))
+def finalize_generated_unit(
+    prompt_path: Path,
+    code_path: Path,
+    *,
+    dry_run: bool = False,
+) -> Path:
+    """Persist a complete fingerprint, or explicitly skip a dry run."""
+    transaction = FingerprintTransaction(
+        "sample",
+        "python",
+        "generate",
+        paths={"prompt": prompt_path, "code": code_path},
+        cost=0.01,
+        model="example-model",
+    )
+    with transaction:
+        if dry_run:
+            transaction.skip("dry-run")
+    return transaction.fingerprint_path
 
 
-if __name__ == "__main__":
-    payload = run_fingerprint_transaction_example()
-    print(payload["command"], payload["prompt_hash"], payload["code_hash"])
+class FingerprintBuffer:
+    """Minimal duck-typed buffer used by an outer atomic-state context."""
+
+    def __init__(self) -> None:
+        self.pending: tuple[dict[str, Any], Path, str | None] | None = None
+
+    def set_fingerprint(
+        self,
+        payload: dict[str, Any],
+        path: Path,
+        *,
+        operation: str | None = None,
+    ) -> None:
+        self.pending = (payload, path, operation)
+
+
+def buffer_sync_fingerprint(
+    paths: dict[str, Path],
+    buffer: FingerprintBuffer,
+) -> None:
+    """Build the canonical payload while deferring persistence to sync."""
+    with FingerprintTransaction(
+        "sample",
+        "python",
+        "sync",
+        paths=paths,
+        atomic_state=buffer,
+    ):
+        pass

@@ -29,7 +29,6 @@ from .construct_paths import (
 )
 from .sync_determine_operation import get_pdd_file_paths, AmbiguousModuleError
 from .operation_log import get_run_report_path
-from .fingerprint_transaction import FingerprintTransaction
 from .architecture_include_validation import print_architecture_include_validation_warnings
 from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
 from .sync_orchestration import sync_orchestration
@@ -1228,19 +1227,12 @@ def sync_main(
 
                         # Post-sync: save fingerprint so next sync sees files as up-to-date
                         if one_session_result.get("success"):
-                            with FingerprintTransaction(
-                                basename,
-                                resolved_language,
-                                "fix",
-                                paths=pdd_files,
-                                cost=one_session_result.get("total_cost", 0.0),
-                                model=(
-                                    one_session_result.get("model_name", "unknown")
-                                    or pre_model
-                                    or "unknown"
-                                ),
-                            ):
-                                pass
+                            from .operation_log import save_fingerprint
+                            save_fingerprint(
+                                basename, resolved_language, "fix",
+                                pdd_files, one_session_result.get("total_cost", 0.0),
+                                one_session_result.get("model_name", "unknown") or pre_model or "unknown",
+                            )
 
                         # Post-sync: auto-submit example to cloud on success
                         if one_session_result.get("success") and not local:

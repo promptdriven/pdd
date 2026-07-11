@@ -9,12 +9,12 @@ from pathlib import Path
 from ..architecture_sync import sync_prompts_to_architecture
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
-from ..fingerprint_transaction import FingerprintFinalizeError
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sync
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..sync_determine_operation import AmbiguousModuleError
+from ..fingerprint_transaction import FingerprintFinalizeError
 from ..core.utils import _run_setup_utility, echo_model_line
 from ..evidence_manifest import (
     collect_sync_evidence_paths,
@@ -994,8 +994,7 @@ def auto_deps(
     except click.Abort:
         raise
     except FingerprintFinalizeError as exception:
-        handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
-        raise click.exceptions.Exit(1) from exception
+        raise click.ClickException(str(exception)) from exception
     except Exception as exception:
         handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
         return None

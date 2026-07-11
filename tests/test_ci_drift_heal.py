@@ -3288,7 +3288,7 @@ class TestRunMetadataSyncSafe:
                    return_value=("foo", "python")), \
              patch("pdd.sync_determine_operation.read_fingerprint",
                    return_value=fingerprint), \
-             patch("pdd.fingerprint_transaction.FingerprintTransaction") as mock_save:
+             patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), str(code)) is True
         mock_save.assert_called_once()
         saved_paths = mock_save.call_args.kwargs["paths"]

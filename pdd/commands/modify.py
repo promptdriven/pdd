@@ -16,7 +16,6 @@ from ..change_main import change_main
 from ..agentic_change import run_agentic_change
 from ..update_main import update_main
 from ..track_cost import track_cost
-from ..fingerprint_transaction import FingerprintFinalizeError
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
@@ -635,9 +634,6 @@ def update(
         # update_main). Letting `except Exception` swallow it would silently
         # convert it to exit 0 and re-introduce the bug fixed for #871.
         raise
-    except FingerprintFinalizeError as e:
-        handle_error(e, "update", ctx.obj.get("quiet", False))
-        raise click.exceptions.Exit(1) from e
     except Exception as e:
         handle_error(e, "update", ctx.obj.get("quiet", False))
         return None

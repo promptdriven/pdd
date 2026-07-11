@@ -14,12 +14,10 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
-import tempfile
 import sys
 
 import click
 import logging
-from .fingerprint_transaction import FingerprintTransaction
 
 # --- Constants ---
 MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
@@ -53,6 +51,7 @@ from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
+from .json_atomic import atomic_write_json
 
 
 # --- Helper Functions ---
@@ -68,6 +67,7 @@ class PendingStateUpdate:
     fingerprint: Optional[Dict[str, Any]] = None
     run_report_path: Optional[Path] = None
     fingerprint_path: Optional[Path] = None
+    fingerprint_operation: Optional[str] = None
 
 
 class AtomicStateUpdate:
@@ -106,39 +106,39 @@ class AtomicStateUpdate:
         self.pending.run_report = report
         self.pending.run_report_path = path
 
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+    def set_fingerprint(
+        self,
+        fingerprint: Dict[str, Any],
+        path: Path,
+        *,
+        operation: Optional[str] = None,
+    ):
         """Buffer a fingerprint for atomic write."""
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
+        self.pending.fingerprint_operation = operation
 
     def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
         """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
+        atomic_write_json(target_path, data)
 
     def _commit(self):
         """Commit all pending state updates atomically."""
         # Write fingerprint first (checkpoint), then run_report
         if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+            try:
+                self._atomic_write(
+                    self.pending.fingerprint,
+                    self.pending.fingerprint_path,
+                )
+            except Exception as exc:
+                from .fingerprint_transaction import FingerprintFinalizeError
+
+                raise FingerprintFinalizeError(
+                    self.pending.fingerprint_operation or "unknown",
+                    self.pending.fingerprint_path,
+                    exc,
+                ) from exc
         if self.pending.run_report and self.pending.run_report_path:
             self._atomic_write(self.pending.run_report, self.pending.run_report_path)
 
@@ -247,20 +247,18 @@ def _save_operation_fingerprint(basename: str, language: str, operation: str,
         model: The model used.
         atomic_state: Optional AtomicStateUpdate for atomic writes (Issue #159 fix).
     """
+    from .fingerprint_transaction import FingerprintTransaction
+
     with FingerprintTransaction(
-        basename,
-        language,
-        operation,
+        basename=basename,
+        language=language,
+        operation=operation,
         paths=paths,
         cost=cost,
         model=model,
-    ) as transaction:
-        if atomic_state is not None:
-            atomic_state.set_fingerprint(
-                transaction.prepare(),
-                transaction.fingerprint_path,
-            )
-            transaction.skip("deferred to AtomicStateUpdate")
+        atomic_state=atomic_state,
+    ):
+        pass
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
