@@ -47,9 +47,9 @@ def main() -> None:
     codex_model = resolve_model_for_tier(config.model_tier, provider="openai")
     claude_model = resolve_model_for_tier(config.model_tier, provider="anthropic")
     print(f"tier-{config.model_tier} model: openai={codex_model} "
-          f"anthropic={claude_model}")
-    assert codex_model == "gpt-5.6"          # Codex platform default
-    assert claude_model != "gpt-5.6"         # non-Codex keeps the manifest model
+          f"anthropic={claude_model}")  # e.g. openai=gpt-5.6-sol anthropic=gpt-5.5
+    assert codex_model == "gpt-5.6-sol"      # Codex platform default
+    assert claude_model != "gpt-5.6-sol"     # non-Codex keeps the manifest model
 
     # 3. Escalate once on a verifier failure to get the next bounded config.
     next_config, next_record = escalate(policy, record, "fail", None, None)

@@ -2,6 +2,7 @@ import pytest
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -3018,7 +3019,7 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
 
 
 def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
-    """Real (non-mocked) resolver: tier-1 gives Codex the gpt-5.6 platform
+    """Real (non-mocked) resolver: tier-1 gives Codex the gpt-5.6-sol platform
     default via CODEX_MODEL, while a non-Codex harness keeps the manifest
     tier-1 model (gpt-5.5) unchanged from main.
 
@@ -3037,12 +3038,12 @@ def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
     monkeypatch.delenv("CODEX_MODEL", raising=False)
     monkeypatch.delenv("CLAUDE_MODEL", raising=False)
 
-    # openai harness at tier 1 -> Codex platform default (gpt-5.6) in CODEX_MODEL.
+    # openai harness at tier 1 -> Codex platform default (gpt-5.6-sol) in CODEX_MODEL.
     originals_openai: dict = {}
     _apply_routing_model_env(
         "openai", RoutingConfig(harness="openai", model_tier=1), originals_openai
     )
-    assert os.environ.get("CODEX_MODEL") == CODEX_MODEL_DEFAULT == "gpt-5.6"
+    assert os.environ.get("CODEX_MODEL") == CODEX_MODEL_DEFAULT == "gpt-5.6-sol"
     _restore_routing_model_env(originals_openai)
 
     # anthropic harness at tier 1 -> manifest tier-1 model, NOT the Codex default.
@@ -6405,7 +6406,8 @@ def test_codex_gpt_5_6_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load
 
 
 def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CODEX_MODEL is unset, PDD pins the shared GPT-5.6 default."""
+    """When CODEX_MODEL is unset, PDD pins the shared Codex default
+    (``gpt-5.6-sol``, the slug the Codex CLI/ChatGPT backend accepts)."""
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
@@ -6432,8 +6434,56 @@ def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_lo
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     model_idx = cmd.index("--model")
-    assert cmd[model_idx + 1] == "gpt-5.6"
+    assert cmd[model_idx + 1] == "gpt-5.6-sol"
     assert model_idx < cmd.index("exec")
+
+
+# gpt-5.6-sol is the runtime-verified GPT-5.6 slug on Codex 0.144.1; the bare
+# gpt-5.6 slug is rejected by the Codex ChatGPT-account backend (HTTP 400) and
+# must never be the shared default (PR #1989 review, blocker 1 & 3).
+_CODEX_BACKEND_REJECTED_SLUGS = {"gpt-5.6"}
+
+
+def test_codex_model_default_is_runtime_verified_slug():
+    """Blocker guard: the shared Codex default forwarded to ``codex --model``
+    must be the runtime-verified GPT-5.6 slug ``gpt-5.6-sol`` and must NOT be a
+    slug the Codex ChatGPT-account backend rejects (bare ``gpt-5.6`` -> HTTP 400
+    "model is not supported ... with a ChatGPT account"). Mocked-argv tests
+    alone cannot catch a backend model rejection; see the opt-in live smoke
+    ``test_codex_default_model_live_smoke`` for real-backend proof."""
+    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+    assert CODEX_MODEL_DEFAULT == "gpt-5.6-sol", CODEX_MODEL_DEFAULT
+    assert CODEX_MODEL_DEFAULT not in _CODEX_BACKEND_REJECTED_SLUGS
+
+
+@pytest.mark.skipif(
+    not (shutil.which("codex") and os.environ.get("PDD_CODEX_LIVE_SMOKE")),
+    reason="live Codex smoke needs the codex CLI, a Codex/ChatGPT login, and PDD_CODEX_LIVE_SMOKE=1",
+)
+def test_codex_default_model_live_smoke():
+    """Real-backend smoke (opt-in): drive the shared Codex default through the
+    actual ``codex ... exec`` argv shape PDD builds and assert the backend does
+    NOT reject the model. This is the coverage that would have caught the
+    ``gpt-5.6`` -> HTTP 400 rejection that mocked-argv tests miss. Enable with a
+    Codex/ChatGPT login and ``PDD_CODEX_LIVE_SMOKE=1``."""
+    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+
+    cmd = [
+        "codex", "--model", CODEX_MODEL_DEFAULT,
+        "-c", "model_reasoning_effort=low",
+        "exec", "--sandbox", "read-only", "--ignore-user-config", "--json", "-",
+    ]
+    proc = subprocess.run(
+        cmd,
+        input="Reply with exactly: PDD_SMOKE_OK",
+        capture_output=True,
+        text=True,
+        timeout=240,
+    )
+    combined = f"{proc.stdout}\n{proc.stderr}".lower()
+    assert "not supported" not in combined, combined
+    assert "model metadata for" not in combined, combined  # "... not found"
+    assert proc.returncode == 0, combined
 
 
 # ---------------------------------------------------------------------------
