@@ -497,8 +497,8 @@ def _finalize_hosted_agentic_artifact(
             if payload.get("status") == "passed":
                 payload["status"] = "failed"
             verdict["decision"] = "block"
-            verdict.setdefault(
-                "reason", "Canonical final gate did not produce a shippable verdict."
+            verdict["reason"] = (
+                "Canonical final gate did not produce a shippable verdict."
             )
 
         _atomic_publish(payload)

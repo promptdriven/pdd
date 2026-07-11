@@ -966,6 +966,10 @@ class TestRunAgenticCheckup:
         assert payload["status"] == "failed"
         assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
         assert payload["verdict"]["decision"] == "block"
+        assert payload["verdict"]["reason"] == (
+            "Canonical final gate did not produce a shippable verdict."
+        )
+        assert payload["verdict"]["reason"] != "clean"
 
     def test_finalize_hosted_artifact_failclosed_when_publish_fails(self, tmp_path):
         """Issue #1788: a canonical FAILURE must never leave a consumable pass,
