@@ -167,6 +167,82 @@ def test_reassociated_mock_field_is_new_when_global_count_is_unchanged(
     assert report.findings[0].resource == "user_waitlist"
 
 
+def test_reassigned_mock_is_new_when_both_resources_remain_in_file(
+    tmp_path: Path,
+) -> None:
+    """Mock target identity disambiguates multi-resource test modules."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    shared_resources = (
+        "WAITLIST_RESOURCE = 'user_waitlist'\n"
+        "OTHER_RESOURCE = 'other_collection'\n"
+    )
+    baseline_test = shared_resources + (
+        "mock_other.return_value = [{'userId': 'legacy'}]\n"
+    )
+    current_test = shared_resources + (
+        "mock_waitlist.return_value = [{'userId': 'fabricated'}]\n"
+    )
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_reader.py": current_test},
+        baseline_production_sources={"reader.py": _BROKEN_CODE},
+        baseline_test_sources={"tests/test_reader.py": baseline_test},
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].resource == "user_waitlist"
+
+
+def test_nested_mock_payload_matches_dotted_query_field(tmp_path: Path) -> None:
+    """Nested mock dictionaries retain qualified field paths."""
+    _write_waitlist_schema(tmp_path, "email", "profile")
+    code = _BROKEN_CODE.replace("userId", "profile.userId")
+    test = (
+        "RESOURCE = 'user_waitlist'\n"
+        "mock_query.return_value = "
+        "[{'profile': {'userId': 'fabricated'}}]\n"
+    )
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": code},
+        test_sources={"tests/test_reader.py": test},
+        baseline_production_sources={"reader.py": code},
+        baseline_test_sources={"tests/test_reader.py": "def test_old(): pass\n"},
+    )
+
+    assert "profile.userId" in {item.field_name for item in report.mock_fields}
+    assert report.status == "diverged"
+    assert report.findings[0].field_name == "profile.userId"
+
+
+@pytest.mark.parametrize("excluded_dir", ["generated", "vendor", "vendors"])
+def test_generated_and_vendor_trees_cannot_certify_query_fields(
+    tmp_path: Path,
+    excluded_dir: str,
+) -> None:
+    """Copied/generated readers are not independent production evidence."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    copied_reader = tmp_path / excluded_dir / "client.py"
+    copied_reader.parent.mkdir(parents=True)
+    copied_reader.write_text(_BROKEN_CODE, encoding="utf-8")
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"backend/new_reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_reader.py": _BROKEN_TEST},
+    )
+
+    assert report.status == "diverged"
+    assert all(
+        not item.source_path.startswith(f"{excluded_dir}/")
+        for item in report.contracts
+        if item.kind == "sibling"
+    )
+
+
 def test_missing_contract_is_inconclusive_not_a_name_heuristic(tmp_path: Path) -> None:
     report = validate_mock_contracts(
         project_root=tmp_path,

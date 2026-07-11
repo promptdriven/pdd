@@ -40,9 +40,12 @@ _SKIP_DIRS = {
     "__pycache__",
     "build",
     "dist",
+    "generated",
     "node_modules",
     "research",
     "staging",
+    "vendor",
+    "vendors",
     "venv",
 }
 
@@ -66,6 +69,7 @@ class MockFieldUse:
     source_path: str
     line: int
     target: str
+    scope: str = "<module>"
 
 
 @dataclass(frozen=True)
@@ -237,16 +241,41 @@ def extract_query_fields(  # pylint: disable=too-many-locals
     return tuple(uses)
 
 
-def _dict_fields(node: ast.AST) -> list[tuple[str, int]]:
+def _dict_fields(node: ast.AST, prefix: str = "") -> list[tuple[str, int]]:
+    """Return literal dictionary paths, preserving nested dotted structure."""
     found: list[tuple[str, int]] = []
-    for child in ast.walk(node):
-        if not isinstance(child, ast.Dict):
-            continue
-        for key in child.keys:
+    if isinstance(node, ast.Dict):
+        for key, value_node in zip(node.keys, node.values):
             value = _literal_string(key)
-            if value:
-                found.append((value, getattr(key, "lineno", child.lineno)))
+            if not value:
+                continue
+            field_path = f"{prefix}.{value}" if prefix else value
+            found.append((field_path, getattr(key, "lineno", node.lineno)))
+            found.extend(_dict_fields(value_node, field_path))
+        return found
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for child in node.elts:
+            found.extend(_dict_fields(child, prefix))
+        return found
+    for child in ast.iter_child_nodes(node):
+        found.extend(_dict_fields(child, prefix))
     return found
+
+
+def _scope_map(tree: ast.AST) -> dict[int, str]:
+    """Map AST nodes to their qualified lexical function/class scope."""
+    scopes: dict[int, str] = {}
+
+    def visit(node: ast.AST, scope: str) -> None:
+        scopes[id(node)] = scope
+        child_scope = scope
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            child_scope = node.name if scope == "<module>" else f"{scope}.{node.name}"
+        for child in ast.iter_child_nodes(node):
+            visit(child, child_scope)
+
+    visit(tree, "<module>")
+    return scopes
 
 
 def _assignment_target(node: ast.AST) -> str:
@@ -267,6 +296,7 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
         tree = ast.parse(source, filename=source_path)
     except SyntaxError:
         return ()
+    scopes = _scope_map(tree)
 
     functions = {
         node.name: node
@@ -276,7 +306,7 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
     relevant_functions: set[str] = {
         name for name in functions if name.lower().startswith(("fake", "mock"))
     }
-    payload_nodes: list[tuple[ast.AST, str]] = []
+    payload_nodes: list[tuple[ast.AST, str, str]] = []
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -288,7 +318,7 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                 if lower.endswith((".return_value", ".side_effect")) or lower.startswith(
                     ("mock", "fake")
                 ):
-                    payload_nodes.append((value, target))
+                    payload_nodes.append((value, target, scopes.get(id(node), "<module>")))
                     if lower.endswith(".side_effect") and isinstance(value, ast.Name):
                         relevant_functions.add(value.id)
         elif isinstance(node, ast.Call):
@@ -298,7 +328,9 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                 continue
             for item in node.keywords:
                 if item.arg in {"return_value", "side_effect"}:
-                    payload_nodes.append((item.value, f"{tail}.{item.arg}"))
+                    payload_nodes.append(
+                        (item.value, f"{tail}.{item.arg}", scopes.get(id(node), "<module>"))
+                    )
                     if item.arg == "side_effect" and isinstance(item.value, ast.Name):
                         relevant_functions.add(item.value.id)
 
@@ -307,13 +339,15 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
         if function is not None:
             for node in ast.walk(function):
                 if isinstance(node, ast.Return) and node.value is not None:
-                    payload_nodes.append((node.value, name))
+                    payload_nodes.append(
+                        (node.value, name, scopes.get(id(node), name))
+                    )
 
     uses: list[MockFieldUse] = []
-    seen: set[tuple[str, int, str]] = set()
-    for payload, target in payload_nodes:
+    seen: set[tuple[str, int, str, str]] = set()
+    for payload, target, scope in payload_nodes:
         for field_name, line in _dict_fields(payload):
-            key = (field_name, line, target)
+            key = (field_name, line, target, scope)
             if key in seen:
                 continue
             seen.add(key)
@@ -323,6 +357,7 @@ def extract_mock_fields(  # pylint: disable=too-many-branches,too-many-locals
                     source_path=source_path,
                     line=line,
                     target=target,
+                    scope=scope,
                 )
             )
     return tuple(uses)
@@ -594,16 +629,16 @@ def _normalize_sources(sources: Mapping[str | Path, str]) -> dict[str, str]:
 def _mock_association_counts(
     sources: Mapping[str, str],
     resources: set[str],
-) -> Counter[tuple[str, str]]:
-    """Count mock fields only for resources named by the same test source."""
-    counts: Counter[tuple[str, str]] = Counter()
+) -> Counter[tuple[str, str, str, str, str]]:
+    """Count resource/mock associations by path, field, target, and scope."""
+    counts: Counter[tuple[str, str, str, str, str]] = Counter()
     for path, source in sources.items():
         source_resources = {resource for resource in resources if resource in source}
         if not source_resources:
             continue
         for use in extract_mock_fields(source, path):
             for resource in source_resources:
-                counts[(resource, use.field_name)] += 1
+                counts[(resource, use.field_name, path, use.target, use.scope)] += 1
     return counts
 
 
@@ -648,9 +683,10 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
     baseline_mock_counts = _mock_association_counts(baseline_tests, query_resources)
     current_mock_counts = _mock_association_counts(tests, query_resources)
     new_mock_pairs = {
-        pair
-        for pair, count in current_mock_counts.items()
-        if count > baseline_mock_counts[pair]
+        (resource, field_name)
+        for association, count in current_mock_counts.items()
+        if count > baseline_mock_counts[association]
+        for resource, field_name, _path, _target, _scope in (association,)
     }
 
     candidates: list[QueryFieldUse] = []

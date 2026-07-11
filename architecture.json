@@ -11687,7 +11687,7 @@
   },
   {
     "reason": "Rejects green fixes whose generated mocks contradict repository-backed schema and interface evidence.",
-    "description": "Diff-aware AST and schema gate that extracts Python query fields and mock payload shapes, compares resource/field associations rather than global field counts, recognizes both pytest Python filename conventions, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
+    "description": "Diff-aware AST and schema gate that extracts Python query fields and nested mock payload paths, compares resource/field associations by source path, mock target, and lexical scope rather than global or file-level field counts, recognizes both pytest Python filename conventions, excludes generated/vendor trees from evidence, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
     "dependencies": [],
     "priority": 5,
     "filename": "mock_contract_validation_python.prompt",
