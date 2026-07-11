@@ -20,7 +20,6 @@ from .sync_determine_operation import (
     calculate_current_hashes,
     calculate_sha256,
     get_pdd_file_paths,
-    read_fingerprint,
 )
 from .sync_core import CanonicalReportOptions, build_canonical_report
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
@@ -508,6 +507,24 @@ def _load_fingerprint_json(path: Path) -> tuple[Optional[Dict[str, Any]], Option
     return data, None
 
 
+def _fingerprint_from_payload(payload: Dict[str, Any]) -> Optional[Fingerprint]:
+    """Decode the legacy fingerprint without invoking its directory-creating reader."""
+    try:
+        return Fingerprint(
+            pdd_version=payload["pdd_version"],
+            timestamp=payload["timestamp"],
+            command=payload["command"],
+            prompt_hash=payload.get("prompt_hash"),
+            code_hash=payload.get("code_hash"),
+            example_hash=payload.get("example_hash"),
+            test_hash=payload.get("test_hash"),
+            test_files=payload.get("test_files"),
+            include_deps=payload.get("include_deps"),
+        )
+    except (KeyError, TypeError):
+        return None
+
+
 def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     for key, value in paths.items():
@@ -736,7 +753,7 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "paths": {"prompt": str(unit.prompt_path)},
         }
 
-    fingerprint = read_fingerprint(unit.basename, unit.language, paths=paths)
+    fingerprint = _fingerprint_from_payload(_raw_fp)
     if fingerprint is None:
         return {
             "basename": unit.basename,
