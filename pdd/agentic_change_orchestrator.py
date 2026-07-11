@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from pdd.agentic_common import (
+    provider_failure_workflow,
     branch_checked_out_worktree,
     clean_restart_fallback_branch,
     current_worktree_branch,
@@ -2312,6 +2313,7 @@ def _existing_pr_matches_remote_head(
     return bool(pr_oid) and pr_oid.lower() == remote_oid.lower()
 
 
+@provider_failure_workflow
 def run_agentic_change_orchestrator(
     issue_url: str,
     issue_content: str,

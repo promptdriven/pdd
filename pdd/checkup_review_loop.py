@@ -48,7 +48,11 @@ from .agentic_checkup_orchestrator import (
     _refresh_pr_base_ref,
     _setup_pr_worktree,
 )
-from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
+from .agentic_common import (
+    DEFAULT_MAX_RETRIES,
+    provider_failure_workflow,
+    run_agentic_task,
+)
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
 
@@ -970,6 +974,7 @@ def _degraded_role_independence_note(unavailable_reviewer: Optional[str]) -> str
     return f"degraded ({role} unavailable)"
 
 
+@provider_failure_workflow
 def run_checkup_review_loop(
     *,
     context: ReviewLoopContext,

@@ -1,0 +1,16 @@
+{
+  "pdd_version": "0.0.301.dev0",
+  "timestamp": "2026-07-11T20:13:58.087488+00:00",
+  "command": "fix",
+  "prompt_hash": "38d36818bb40cab97145d9d92d484e1066c90d194e2b0311e8b1947338de38db",
+  "code_hash": "75eebbcab0f52fdeee132dbfe2760d1161738ea8509e0017c8f58d192bc78024",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {
+    "context/agentic_common_example.py": "c1538a115a3a33da228e7f6cc048f2a99023cd2c83a0efef382e49c477b24ad3",
+    "context/auto_update_example.py": "4fc8ab0da96c0e8abe793d195dbc64b6b9771631be818eecde059769e5914fc9",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/track_cost_example.py": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6"
+  }
+}

@@ -22,6 +22,7 @@ import time
 
 # Reuse existing animation logic
 from .sync_animation import AnimationState, _render_animation_frame, DEEP_NAVY, ELECTRIC_CYAN
+from .agentic_common import get_disabled_providers, provider_failure_scope
 from . import logo_animation
 from rich.style import Style
 
@@ -1163,6 +1164,10 @@ class SyncApp(App):
         self.basename = basename
         self.budget = budget
         self.worker_func = worker_func
+        # ContextVars do not propagate into Textual's worker thread. Snapshot
+        # the parent workflow state now and seed a thread-owned scope when the
+        # worker starts so every agentic step shares the same health epoch.
+        self._initial_disabled_providers = get_disabled_providers()
 
         # Shared state refs
         self.function_name_ref = function_name_ref
@@ -1385,7 +1390,8 @@ class SyncApp(App):
             self._stdin_redirector = None
 
         try:
-            self.worker_result = self.worker_func()
+            with provider_failure_scope(self._initial_disabled_providers):
+                self.worker_result = self.worker_func()
         except EOFError as e:
             # Handle EOF from stdin redirector - input was needed but cancelled/failed
             self.worker_exception = e

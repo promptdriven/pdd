@@ -40,6 +40,8 @@
 Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
 
 % Requirements
+
+Decorate `run_agentic_change_orchestrator` with `provider_failure_workflow` so direct library calls own one provider-health epoch across all steps, while nested CLI calls share the existing outer epoch.
 1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, clean_restart: bool = False) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
 3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)

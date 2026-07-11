@@ -1896,7 +1896,9 @@ def reset_disabled_providers() -> None:
 
 
 @contextmanager
-def provider_failure_scope() -> Iterator[None]:
+def provider_failure_scope(
+    initial_disabled: Optional[Dict[str, str]] = None,
+) -> Iterator[None]:
     """Create one isolated provider-health epoch for a logical workflow.
 
     Nested scopes share the outer workflow's failures.  A new outer scope
@@ -1908,7 +1910,10 @@ def provider_failure_scope() -> Iterator[None]:
     depth_token = _disabled_provider_scope_depth.set(depth + 1)
     registry_token = None
     if depth == 0:
-        registry_token = _disabled_providers.set(_parse_disabled_providers_env())
+        initial = _parse_disabled_providers_env()
+        if initial_disabled:
+            initial.update(initial_disabled)
+        registry_token = _disabled_providers.set(initial)
     try:
         yield
     finally:
@@ -1917,7 +1922,7 @@ def provider_failure_scope() -> Iterator[None]:
             _disabled_providers.reset(registry_token)
 
 
-def _provider_failure_scoped(func: Callable) -> Callable:
+def provider_failure_workflow(func: Callable) -> Callable:
     """Run a direct agentic call in a fresh scope unless a workflow owns one."""
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -5014,7 +5019,7 @@ def build_agentic_task_instruction(
     )
 
 
-@_provider_failure_scoped
+@provider_failure_workflow
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -5114,46 +5119,16 @@ def run_agentic_task(
     elif task_class is not None:
         candidates = select_harness_for_task(task_class, candidates)
 
-    if routing_policy is not None:
-        routing_config, routing_record = select_config(
-            routing_policy,
-            task_class,
-            budget_remaining=None,
-            deadline=deadline,
-        )
-        if routing_config is not None:
-            if routing_config.harness in candidates:
-                candidates = [routing_config.harness]
-                max_retries = max(1, int(routing_config.repeat_runs))
-                reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
-                _apply_routing_model_env(
-                    routing_config.harness,
-                    routing_config,
-                    routing_model_env_originals,
-                )
-            elif routing_record is not None:
-                routing_record.fallback_reason = (
-                    f"selected_harness_unavailable:{routing_config.harness}"
-                )
-
-    # Issue #1936: drop providers that already failed permanently earlier in this
-    # run so a dead provider is not re-burned per step, and the
-    # single_provider_attempt / cloud one-session paths fall through to a still
-    # healthy provider. Applied AFTER the PDD_AGENTIC_PROVIDER preference filter
-    # (candidates already reflect the hard filter) and BEFORE the
-    # single_provider_attempt truncation so the one feasible provider that
-    # survives is a healthy one, not a known-dead first entry.
+    # Drop providers that failed permanently before routing selects/pins a
+    # harness. If the policy's preferred harness is disabled, the normal
+    # selected-harness-unavailable path keeps the remaining healthy candidates
+    # available instead of collapsing the run to a known-dead provider.
     disabled_providers = get_disabled_providers()
     if disabled_providers:
         healthy = [p for p in candidates if p not in disabled_providers]
         if healthy != candidates:
             dropped = [p for p in candidates if p in disabled_providers]
             if not healthy:
-                # Every feasible provider has already failed permanently this
-                # run. Fail fast with an aggregated, per-provider reason instead
-                # of re-attempting a dead provider (or surfacing the generic
-                # "no agent providers are available" message, which would hide
-                # that the providers exist but are auth-dead).
                 detail = "; ".join(
                     f"{p}: {disabled_providers[p]}" for p in dropped
                 )
@@ -5178,6 +5153,28 @@ def run_agentic_task(
                     f"this run: {', '.join(dropped)}[/dim]"
                 )
             candidates = healthy
+
+    if routing_policy is not None:
+        routing_config, routing_record = select_config(
+            routing_policy,
+            task_class,
+            budget_remaining=None,
+            deadline=deadline,
+        )
+        if routing_config is not None:
+            if routing_config.harness in candidates:
+                candidates = [routing_config.harness]
+                max_retries = max(1, int(routing_config.repeat_runs))
+                reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
+                _apply_routing_model_env(
+                    routing_config.harness,
+                    routing_config,
+                    routing_model_env_originals,
+                )
+            elif routing_record is not None:
+                routing_record.fallback_reason = (
+                    f"selected_harness_unavailable:{routing_config.harness}"
+                )
 
     if single_provider_attempt:
         candidates = candidates[:1]
