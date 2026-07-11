@@ -3591,7 +3591,7 @@
           {
             "name": "comment_line",
             "signature": "(code_line, comment_characters)",
-            "returns": "None",
+            "returns": "str",
             "sideEffects": [
               "None"
             ]

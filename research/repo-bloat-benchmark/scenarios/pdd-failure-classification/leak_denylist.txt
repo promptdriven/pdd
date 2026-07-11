@@ -1,0 +1,6 @@
+classify_failure(text) == FailureKind.TIMEOUT_FLAKY
+timeout wins
+wins over
+ERROR collecting tests/test_slow.py
+No module named 'heavy_dep'
+deadline exceeded while importing
