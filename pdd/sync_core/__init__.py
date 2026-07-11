@@ -71,6 +71,7 @@ from .manifest import (
     ManifestUnit,
     UnitManifest,
     build_unit_manifest,
+    require_valid_manifest,
 )
 from .path_policy import PathPolicy, PathPolicyError, ResolvedPath
 from .alias_policy import ALIAS_POLICY_PATH, load_committed_aliases, load_protected_aliases
@@ -235,6 +236,7 @@ __all__ = [
     "CheckerIdentity",
     "checker_identity_from_environment",
     "build_unit_manifest",
+    "require_valid_manifest",
     "build_unit_snapshot",
     "attestation_signer_from_environment",
     "count_vendored_sync_semantics",

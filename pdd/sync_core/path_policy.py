@@ -18,6 +18,31 @@ class PathPolicyError(ValueError):
     """Raised when a managed path violates protected repository policy."""
 
 
+def validate_canonical_alias_path(
+    checkout_root: Path,
+    canonical_relpath: PurePosixPath,
+    *,
+    base_ref: str | None = None,
+    head_ref: str | None = None,
+) -> None:
+    """Reject unapproved symlinks along an approved alias's canonical side."""
+    root = Path(checkout_root)
+    for index in range(1, len(canonical_relpath.parts) + 1):
+        relpath = PurePosixPath(*canonical_relpath.parts[:index])
+        component = root.joinpath(*relpath.parts)
+        if component.is_symlink():
+            raise PathPolicyError(f"unapproved managed symlink: {relpath}")
+        if base_ref is None or head_ref is None:
+            continue
+        base_entry = read_git_tree_entry(root, base_ref, relpath)
+        head_entry = read_git_tree_entry(root, head_ref, relpath)
+        if any(
+            entry is not None and entry.mode == "120000"
+            for entry in (base_entry, head_entry)
+        ):
+            raise PathPolicyError(f"unapproved managed symlink: {relpath}")
+
+
 @dataclass(frozen=True)
 class ResolvedPath:
     """Logical identity and prevalidated canonical target for a managed path."""
@@ -122,6 +147,12 @@ class PathPolicy:
         self._validate_relpath(configured)
         if immutable is not None and configured != immutable:
             raise PathPolicyError(f"approved alias target changed: {alias_relpath}")
+        validate_canonical_alias_path(
+            self.checkout_root,
+            configured,
+            base_ref=self.base_ref,
+            head_ref=self.head_ref,
+        )
         return configured
 
     def resolve(self, relpath: PurePosixPath, *, allow_missing: bool = False) -> ResolvedPath:

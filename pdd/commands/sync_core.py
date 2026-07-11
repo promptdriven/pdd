@@ -35,6 +35,7 @@ from ..sync_core import (
     finalize_unit,
     load_committed_aliases,
     load_verification_profiles,
+    require_valid_manifest,
     run_lifecycle_matrix,
     signer_from_environment,
 )
@@ -347,6 +348,10 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     root = Path.cwd().resolve()
     head = resolve_git_commit(root, "HEAD")
     manifest = build_unit_manifest(root, base_ref=head, head_ref=head)
+    try:
+        require_valid_manifest(manifest)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     wanted = PurePosixPath(module)
     matches = [
         unit for unit in manifest.managed_units if unit.unit_id.prompt_relpath == wanted

@@ -24,6 +24,7 @@ from .decommission import (
 from .identity import REPOSITORY_ID_RELPATH, canonical_repository_id
 from .git_io import read_git_blob, read_git_tree_entry
 from .language import LanguageRegistry, LanguageRegistryError
+from .path_policy import PathPolicyError, validate_canonical_alias_path
 from .types import CandidateId, InventoryStatus, UnitId
 
 
@@ -235,6 +236,13 @@ class UnitManifest:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
+
+
+def require_valid_manifest(manifest: UnitManifest) -> None:
+    """Fail closed before a caller uses an invalid manifest for mutation."""
+    if manifest.invalid_reasons:
+        detail = "; ".join(manifest.invalid_reasons)
+        raise ManifestError(f"manifest is invalid: {detail}")
 
 
 def _unit_payload(unit_id: UnitId | None) -> dict[str, str] | None:
@@ -884,6 +892,12 @@ def _approved_aliases(
             or normalized != canonical
         ):
             return {}, [f"protected alias target changed: {alias.as_posix()}"]
+        try:
+            validate_canonical_alias_path(
+                root, canonical, base_ref=base_ref, head_ref=head_ref
+            )
+        except PathPolicyError as exc:
+            return {}, [str(exc)]
     return dict(sorted(aliases.items())), []
 
 
