@@ -196,6 +196,27 @@ def test_candidate_modified_helper_outside_tests_is_protected(tmp_path) -> None:
     assert "support/fixtures.py" in executions[0].detail
 
 
+def test_candidate_modified_package_initializer_is_protected(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "from support.fixtures import expected\n"
+        "def test_widget(): assert expected() == 1\n",
+    )
+    (root / "support").mkdir()
+    (root / "support/__init__.py").write_text("FLAG = 1\n")
+    (root / "support/fixtures.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "support/__init__.py").write_text("FLAG = 2\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate initializer")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "support/__init__.py" in executions[0].detail
+
+
 def test_collection_time_protected_test_rewrite_fails_closed(tmp_path) -> None:
     root, _initial = _repository(
         tmp_path,
@@ -252,6 +273,22 @@ def test_dynamic_repo_local_import_fails_closed(tmp_path) -> None:
     (root / "support/helper.py").write_text("def expected(): return 1\n")
     _git(root, "add", "tests/test_widget.py", "support/helper.py")
     _git(root, "commit", "-q", "-m", "dynamic helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_aliased_dynamic_repo_local_import_fails_closed(tmp_path) -> None:
+    root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/test_widget.py").write_text(
+        "from importlib import import_module as load\n"
+        "helper = load('support.helper')\n"
+        "def test_widget(): assert helper.expected() == 1\n"
+    )
+    (root / "support").mkdir()
+    (root / "support/helper.py").write_text("def expected(): return 1\n")
+    _git(root, "add", "tests/test_widget.py", "support/helper.py")
+    _git(root, "commit", "-q", "-m", "aliased dynamic helper")
     head = _git(root, "rev-parse", "HEAD")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.ERROR

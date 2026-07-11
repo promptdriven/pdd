@@ -132,6 +132,45 @@ def test_stale_or_replayed_build_attestation_is_rejected(tmp_path) -> None:
         provenance.verify(policy, expected_source_sha=SOURCE_SHA)
 
 
+def test_overlong_build_attestation_is_rejected(tmp_path) -> None:
+    authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
+    issued = datetime.now(timezone.utc)
+    with pytest.raises(CandidateArtifactProvenanceError, match="lifetime"):
+        _load(
+            tmp_path,
+            wheel,
+            authority,
+            issued_at=issued.isoformat(),
+            expires_at=(issued + timedelta(days=1)).isoformat(),
+        )
+
+
+@pytest.mark.parametrize("link_parent", [False, True])
+def test_durable_replay_ledger_rejects_symlink_components(tmp_path, link_parent) -> None:
+    authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if link_parent:
+        linked = tmp_path / "linked"
+        linked.symlink_to(outside, target_is_directory=True)
+        replay_ledger = linked / "replay.json"
+    else:
+        target = outside / "replay.json"
+        target.write_text("[]")
+        replay_ledger = tmp_path / "replay.json"
+        replay_ledger.symlink_to(target)
+    provenance = _load(tmp_path, wheel, authority)
+    with pytest.raises(CandidateArtifactProvenanceError, match="unsafe"):
+        provenance.verify(
+            _policy_with_replay_ledger(authority, replay_ledger),
+            expected_source_sha=SOURCE_SHA,
+        )
+
+
 def test_replayed_build_attestation_is_rejected_across_policy_instances(tmp_path) -> None:
     authority = AttestationSigner("candidate-builder", b"a" * 32)
     wheel = tmp_path / "candidate.whl"
