@@ -6,6 +6,8 @@ from __future__ import annotations
 import hashlib
 import ast
 import json
+import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -22,7 +24,7 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import untrusted_child_environment
+from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
 from .git_io import read_git_blob
 from .types import (
     EvidenceOutcome,
@@ -51,6 +53,24 @@ JEST_CONFIG_PATHS = (
 )
 JEST_DYNAMIC_CONFIG_NAMES = (
     "jest.config.js", "jest.config.cjs", "jest.config.mjs", "jest.config.ts"
+)
+JEST_LOCAL_SCALAR_CONFIG_KEYS = (
+    "dependencyExtractor",
+    "globalSetup",
+    "globalTeardown",
+    "prettierPath",
+    "resolver",
+    "runner",
+    "snapshotResolver",
+    "testEnvironment",
+    "testResultsProcessor",
+    "testRunner",
+)
+JEST_LOCAL_ARRAY_CONFIG_KEYS = (
+    "reporters",
+    "setupFiles",
+    "setupFilesAfterEnv",
+    "watchPlugins",
 )
 
 
@@ -422,7 +442,7 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
     if not isinstance(config, dict):
         return set()
     references: set[PurePosixPath] = set()
-    for key in ("setupFiles", "setupFilesAfterEnv", "reporters"):
+    for key in JEST_LOCAL_ARRAY_CONFIG_KEYS:
         value = config.get(key, [])
         if not isinstance(value, list):
             raise ValueError(f"Jest {key} must be an array")
@@ -434,13 +454,15 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
             if path is None:
                 raise ValueError(f"Jest {key} plugin is not bound by this adapter")
             references.add(path)
-    resolver = config.get("resolver")
-    if resolver is not None:
-        if not isinstance(resolver, str):
-            raise ValueError("Jest resolver must be a string")
-        path = _jest_local_path(resolver)
+    for key in JEST_LOCAL_SCALAR_CONFIG_KEYS:
+        value = config.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"Jest {key} must be a string")
+        path = _jest_local_path(value)
         if path is None:
-            raise ValueError("Jest resolver is not bound by this adapter")
+            raise ValueError(f"Jest {key} is not bound by this adapter")
         references.add(path)
     transforms = config.get("transform", {})
     if not isinstance(transforms, dict):
@@ -498,7 +520,7 @@ def _jest_support_closure(
     """Return static config and transitive local Jest support modules."""
     config_path, config = _jest_config(root, ref)
     paths = {config_path}
-    pending = list(_jest_config_references(config))
+    pending = list(test_paths) + list(_jest_config_references(config))
     visited: set[PurePosixPath] = set()
     while pending:
         path = pending.pop()
@@ -525,9 +547,8 @@ def jest_validator_config_digest(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> str:
     """Hash static Jest config and executable local support closure."""
-    del test_paths
     digest = hashlib.sha256()
-    for path, content in _jest_support_closure(root, ref, ()):
+    for path, content in _jest_support_closure(root, ref, test_paths):
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
 
@@ -815,15 +836,11 @@ def _jest_environment(home: Path) -> dict[str, str]:
     }
 
 
-def _jest_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     """Return an explicit local Jest argv prefix; never invoke an npm script."""
     if config.jest_command is not None:
         return config.jest_command
-    node = shutil.which("node")
-    binary = root / "node_modules" / "jest" / "bin" / "jest.js"
-    if node is None or not binary.is_file():
-        return None
-    return (node, str(binary))
+    return None
 
 
 _JEST_REPORTER = """class PddTrustedReporter {
@@ -878,8 +895,10 @@ def _run_jest(
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run exact protected Jest paths using a temporary trusted reporter."""
-    command_prefix = _jest_command(root, config)
+    command_prefix = _jest_command(config)
     if command_prefix is None:
+        if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
+            return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
         return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
     try:
         config_path, _config_data = _jest_config(root, "HEAD")

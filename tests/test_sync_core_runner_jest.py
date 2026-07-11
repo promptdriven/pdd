@@ -121,7 +121,7 @@ def test_jest_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "remove protected test")
     _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
-    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
 @pytest.mark.parametrize("path", ["jest.config.json", "setup.js", "transform.js"])
