@@ -49,7 +49,7 @@ def evidence_relpath(attestation_id: str) -> PurePosixPath:
 def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
     """Convert a signed envelope to stable JSON data without altering its payload."""
     binding = envelope.binding
-    return {
+    payload = {
         "attestation_id": envelope.attestation_id,
         "issuer": envelope.issuer,
         "binding": {
@@ -79,6 +79,9 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         },
         "signature": envelope.signature,
     }
+    if binding.playwright_command is not None:
+        payload["binding"]["playwright_command"] = list(binding.playwright_command)
+    return payload
 
 
 def encode_attestation(envelope: AttestationEnvelope) -> bytes:
@@ -109,6 +112,13 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             PurePosixPath(_string(subject_data, "prompt_relpath")),
             _string(subject_data, "language_id"),
         )
+        command_data = binding_data.get("playwright_command")
+        if command_data is not None and (
+            not isinstance(command_data, list)
+            or len(command_data) != 2
+            or not all(isinstance(item, str) and item for item in command_data)
+        ):
+            raise TypeError("playwright_command must be two non-empty strings")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -117,10 +127,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "tool_version"),
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
-            tuple(binding_data["playwright_command"])
-            if isinstance(binding_data.get("playwright_command"), list)
-            and all(isinstance(item, str) for item in binding_data["playwright_command"])
-            else None,
+            tuple(command_data) if command_data is not None else None,
         )
         results = tuple(
             ObligationEvidence(
