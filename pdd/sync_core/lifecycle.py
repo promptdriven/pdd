@@ -294,7 +294,6 @@ def run_lifecycle_matrix(
             )
         except (OSError, CandidateArtifactProvenanceError):
             return _failed_result()
-        output = temporary / "result.json"
         (temporary / "home").mkdir(mode=0o700)
         installed_candidate = _install_candidate_wheel(
             temporary,
@@ -323,7 +322,7 @@ def run_lifecycle_matrix(
             "-m",
             "pdd.sync_core.scenario_harness",
             "--output",
-            str(output),
+            "-",
             "--cloud-root",
             str(Path(cloud_root).resolve()),
             "--cloud-base-ref",
@@ -339,7 +338,8 @@ def run_lifecycle_matrix(
         if completed.returncode == 124:
             return _failed_result(timeout=True)
         try:
-            results = _normalized_results(json.loads(output.read_text(encoding="utf-8")))
+            lines = [line for line in completed.stdout.splitlines() if line.strip()]
+            results = _normalized_results(json.loads(lines[-1]))
         except (OSError, ValueError, json.JSONDecodeError):
             return _failed_result()
         missing = tuple(

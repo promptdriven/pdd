@@ -1779,7 +1779,24 @@ def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
     return {item.relpath.as_posix(): item.digest for item in closure.artifacts}
 
 
-def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str]] = None) -> Optional[str]:
+def _legacy_dependency_path(prompt_path: Path, declared: str) -> Optional[Path]:
+    """Resolve a legacy include from prompt ancestry, never the process CWD."""
+    candidate = Path(declared)
+    if candidate.is_absolute():
+        return candidate if candidate.is_file() else None
+    for parent in (prompt_path.parent, *prompt_path.parent.parents):
+        resolved = parent / candidate
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def calculate_prompt_hash(
+    prompt_path: Path,
+    stored_deps: Optional[Dict[str, str]] = None,
+    *,
+    hash_version: int = 1,
+) -> Optional[str]:
     """Hash a prompt file including the content of all its <include> dependencies.
 
     If the prompt has <include> tags, extracts and hashes those dependencies.
@@ -1804,27 +1821,33 @@ def calculate_prompt_hash(prompt_path: Path, stored_deps: Optional[Dict[str, str
     from pdd.sync_core.includes import parse_include_references
 
     references = parse_include_references(prompt_content)
-    if references:
-        try:
-            dependencies = extract_include_deps(prompt_path)
-        except (FileNotFoundError, ValueError):
+    declared_dependencies = (
+        [reference.path for reference in references]
+        if references else list((stored_deps or {}).keys())
+    )
+    resolved_dependencies = []
+    for declared in declared_dependencies:
+        candidate = _legacy_dependency_path(prompt_path.resolve(), declared)
+        if candidate is None:
             return None
-    else:
-        dependencies = dict(stored_deps or {})
-        for path, expected_digest in dependencies.items():
-            candidate = Path(path)
-            if not candidate.is_absolute():
-                candidate = Path.cwd() / candidate
-            if calculate_sha256(candidate) != expected_digest:
-                if not candidate.is_file():
-                    return None
-                dependencies[path] = calculate_sha256(candidate) or ""
+        resolved_dependencies.append(candidate.resolve())
 
     hasher = hashlib.sha256()
     hasher.update(prompt_path.read_bytes())
-    for path, digest in sorted(dependencies.items()):
-        hasher.update(path.encode("utf-8"))
-        hasher.update(digest.encode("ascii"))
+    if hash_version == 1:
+        for dependency in resolved_dependencies:
+            hasher.update(dependency.read_bytes())
+    elif hash_version == 2:
+        anchor = prompt_path.resolve().parent
+        for dependency in sorted(resolved_dependencies):
+            try:
+                key = dependency.relative_to(anchor).as_posix()
+            except ValueError:
+                key = dependency.as_posix()
+            hasher.update(key.encode("utf-8") + b"\0")
+            hasher.update(bytes.fromhex(calculate_sha256(dependency) or ""))
+    else:
+        raise ValueError(f"unsupported prompt hash version: {hash_version}")
 
     return hasher.hexdigest()
 

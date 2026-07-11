@@ -37,7 +37,10 @@ CHECKER = CheckerIdentity(
 )
 OBSERVATION = NightlyObservation(True, True, 0, True, "BLOCKED", 0)
 CANDIDATE_WHEEL_SHA256 = "d" * 64
-DEPENDENCY_ENVIRONMENT_DIGEST = "e" * 64
+INSTALLED_FILES = (("pdd", "1.0", "pdd/__init__.py", "f" * 64),)
+DEPENDENCY_ENVIRONMENT_DIGEST = hashlib.sha256(
+    json.dumps(INSTALLED_FILES, separators=(",", ":")).encode()
+).hexdigest()
 CANDIDATE_BUILDER = AttestationSigner("candidate-builder", b"h" * 32)
 CANDIDATE_POLICY = CandidateArtifactPolicy(
     CANDIDATE_BUILDER.issuer,
@@ -53,7 +56,7 @@ MEASURED_CLOSURE = {
     "runtime_lock_sha256": DEPENDENCY_ENVIRONMENT_DIGEST,
     "interpreter": {"implementation": "CPython", "version": "3.12.3",
                     "abi": "cp312", "platform": "manylinux_2_17_x86_64"},
-    "installed_files": (("pdd", "1.0", "pdd/__init__.py", "f" * 64),),
+    "installed_files": INSTALLED_FILES,
     "measurement_authority": "pdd-released-checker-v1",
 }
 

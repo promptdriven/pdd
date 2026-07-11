@@ -18,7 +18,7 @@ from pdd.sync_core.supervisor import run_supervised
 def test_detached_session_descendant_is_terminated(tmp_path: Path) -> None:
     marker = tmp_path / "escaped"
     child = (
-        "import os,sys,time; os.setsid(); time.sleep(1); "
+        "import os,sys,time; os.setsid(); os.close(1); os.close(2); time.sleep(1); "
         "open(sys.argv[1], 'w').write('escaped')"
     )
     parent = (

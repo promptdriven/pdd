@@ -264,6 +264,12 @@ def finalize_unit(
     )
     if reusable is not None:
         return reusable
+    cleanliness = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=repository_root, capture_output=True, text=True, check=False,
+    )
+    if cleanliness.returncode != 0 or cleanliness.stdout:
+        raise ValueError("canonical finalization requires a completely clean checkout")
     transaction_id = f"finalize-{uuid.uuid4()}"
     attestation_id = f"attestation-{uuid.uuid4()}"
     envelope, executions = run_profile(

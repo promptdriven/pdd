@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import ast
+import hashlib
 import json
 import os
 import subprocess
@@ -394,7 +395,11 @@ def _complete_nightly(
     row: Any,
     policy: _NightlyVerificationPolicy,
 ) -> bool:
-    if not isinstance(row, dict) or row.get("scan_ok") is not True:
+    if (
+        not isinstance(row, dict)
+        or row.get("schema_version") != 4
+        or row.get("scan_ok") is not True
+    ):
         return False
     repositories = row.get("repositories")
     counts = row.get("counts")
@@ -474,7 +479,11 @@ def _nightly_candidate_artifact_valid(
         )
     except (CandidateArtifactProvenanceError, ValueError):
         return False
-    return artifact.wheel_sha256 == lifecycle.get("candidate_wheel_sha256")
+    if artifact.wheel_sha256 != lifecycle.get("candidate_wheel_sha256"):
+        return False
+    return _measurement_payload_bound(
+        lifecycle, policy.candidate_artifact_policy, artifact
+    )
 
 
 def _nightly_observation_complete(payload: Any) -> bool:
@@ -618,6 +627,57 @@ def _lifecycle_measurement_complete(lifecycle: LifecycleResult) -> bool:
     )
 
 
+def _installed_closure_digest(installed_files: Any) -> str | None:
+    """Return the canonical checker-owned installed-file closure digest."""
+    if not isinstance(installed_files, (list, tuple)) or not installed_files:
+        return None
+    normalized = [list(item) for item in installed_files]
+    return hashlib.sha256(
+        json.dumps(normalized, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _measurement_payload_bound(
+    lifecycle: dict[str, Any],
+    policy: CandidateArtifactPolicy,
+    artifact: CandidateArtifactProvenance,
+) -> bool:
+    """Cross-bind every runtime measurement to policy and provenance."""
+    expected_interpreter = {
+        "implementation": policy.python_implementation,
+        "version": policy.python_version,
+        "abi": policy.python_abi,
+        "platform": policy.python_platform,
+    }
+    digest = _installed_closure_digest(lifecycle.get("installed_files"))
+    return (
+        digest is not None
+        and lifecycle.get("dependency_environment_digest") == digest
+        and lifecycle.get("runtime_lock_sha256") == policy.dependency_lock_sha256
+        and lifecycle.get("interpreter") == expected_interpreter
+        and lifecycle.get("interpreter") == artifact.python
+        and artifact.dependency_lock_sha256 == policy.dependency_lock_sha256
+    )
+
+
+def _lifecycle_measurement_bound(
+    lifecycle: LifecycleResult,
+    policy: CandidateArtifactPolicy,
+) -> bool:
+    if lifecycle.candidate_artifact is None:
+        return False
+    return _measurement_payload_bound(
+        {
+            "dependency_environment_digest": lifecycle.dependency_environment_digest,
+            "runtime_lock_sha256": lifecycle.runtime_lock_sha256,
+            "interpreter": lifecycle.interpreter,
+            "installed_files": lifecycle.installed_files,
+        },
+        policy,
+        lifecycle.candidate_artifact,
+    )
+
+
 def _predicate(
     counts: dict[str, int], lifecycle: LifecycleResult, extra: dict[str, int],
     *, require_measurement: bool = True,
@@ -688,6 +748,7 @@ def _canonical_report_predicate(report: dict[str, Any]) -> bool:
 
 def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]:
     # pylint: disable=too-many-locals,too-many-return-statements,too-many-branches
+    # pylint: disable=too-many-statements
     schema_version = body.get("schema_version")
     if schema_version not in {3, 4}:
         return False, False
@@ -784,6 +845,26 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
     except (CandidateArtifactProvenanceError, ValueError):
         return False, False
     if candidate_artifact.wheel_sha256 != digests["candidate_wheel_sha256"]:
+        return False, False
+    policy_payload = body.get("candidate_artifact_policy")
+    if not isinstance(policy_payload, dict):
+        return False, False
+    try:
+        embedded_policy = CandidateArtifactPolicy(
+            str(policy_payload.get("issuer", "")),
+            b"0" * 32,
+            str(policy_payload.get("builder_workflow_identity", "")),
+            str(policy_payload.get("dependency_lock_sha256", "")),
+            str(policy_payload.get("python_implementation", "")),
+            str(policy_payload.get("python_version", "")),
+            str(policy_payload.get("python_abi", "")),
+            str(policy_payload.get("python_platform", "")),
+        )
+    except (CandidateArtifactProvenanceError, ValueError):
+        return False, False
+    if schema_version == 4 and not _measurement_payload_bound(
+        lifecycle_payload, embedded_policy, candidate_artifact
+    ):
         return False, False
     pdd_report = next(
         (
@@ -917,7 +998,9 @@ def _build_global_certificate_from_targets(
     }
     lifecycle = (
         options.lifecycle_result
-        if candidate_artifact_valid
+        if candidate_artifact_valid and _lifecycle_measurement_bound(
+            options.lifecycle_result, options.candidate_artifact_policy
+        )
         else replace(options.lifecycle_result, candidate_artifact=None)
     )
     body: dict[str, Any] = {
@@ -1082,6 +1165,10 @@ def verify_global_certificate(
             consume_replay=False,
         )
     except (CandidateArtifactProvenanceError, AttributeError, ValueError):
+        return False
+    if not _measurement_payload_bound(
+        lifecycle, expected_candidate_artifact_policy, artifact
+    ):
         return False
     try:
         checked_at = datetime.fromisoformat(str(certificate["checked_at"]))

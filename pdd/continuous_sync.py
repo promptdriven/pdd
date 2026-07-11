@@ -110,6 +110,8 @@ def canonical_sync_enabled(root: Path) -> bool:
         check=False,
     )
     if identity.returncode != 0:
+        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
+            raise ValueError("explicit protected sync identity cannot be resolved")
         return False
     policy = subprocess.run(
         ["git", "show", f"{protected_ref}:.pdd/sync-policy.json"],
@@ -119,12 +121,19 @@ def canonical_sync_enabled(root: Path) -> bool:
         check=False,
     )
     if policy.returncode != 0:
+        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
+            raise ValueError("explicit protected sync policy cannot be resolved")
         return False
     try:
         payload = json.loads(policy.stdout)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
+            raise ValueError("explicit protected sync policy is malformed") from exc
         return False
-    return payload == {"schema_version": 1, "enforcement": "active"}
+    active = payload == {"schema_version": 1, "enforcement": "active"}
+    if not active and os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
+        raise ValueError("explicit protected sync policy is not active")
+    return active
 
 
 def _prompts_dir_for(prompt_path: Path) -> Path:

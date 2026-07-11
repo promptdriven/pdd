@@ -305,7 +305,8 @@ def pytest_validator_config_digest(
 
 
 def _has_dynamic_pytest_plugins(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> bool:
     """Fail closed when pytest plugin declarations cannot be statically bound."""
     config_paths = _pytest_config_paths(root, ref, test_paths)
@@ -324,6 +325,7 @@ def _has_dynamic_pytest_plugins(
             ref,
             path,
             source,
+            code_under_test_paths=frozenset(code_under_test_paths),
         )
         if dynamic:
             return True
@@ -910,8 +912,10 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "declared validator config digest does not match protected closure",
         )
-    if _has_dynamic_pytest_plugins(root, base_sha, obligation.artifact_paths) or (
-        _has_dynamic_pytest_plugins(root, head_sha, obligation.artifact_paths)
+    if _has_dynamic_pytest_plugins(root, base_sha, obligation.artifact_paths,
+                                   obligation.code_under_test_paths) or (
+        _has_dynamic_pytest_plugins(root, head_sha, obligation.artifact_paths,
+                                    obligation.code_under_test_paths)
     ):
         return RunnerExecution(
             obligation.obligation_id,
@@ -1032,6 +1036,19 @@ def run_obligation(
     config: RunnerConfig,
 ) -> RunnerExecution:
     """Run an obligation in an ephemeral exact-head execution tree."""
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"], cwd=root,
+        capture_output=True, text=True, check=False,
+    )
+    dirty_all = tuple(line[3:] for line in status.stdout.splitlines() if len(line) >= 4)
+    if status.returncode != 0 or dirty_all:
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.QUARANTINED,
+            obligation.validator_config_digest,
+            "dirty checkout cannot receive committed-head evidence: "
+            + ", ".join(dirty_all),
+        )
     dirty = _dirty_pytest_support(root)
     if dirty:
         return RunnerExecution(
