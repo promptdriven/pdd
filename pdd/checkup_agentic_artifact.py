@@ -148,6 +148,9 @@ class AgenticV1Artifact(BaseModel):
     """
 
     schema_version: Literal["pdd.checkup.agentic.v1"] = AGENTIC_V1_SCHEMA
+    # Transport metadata. The pure builder leaves this unset; the standalone
+    # publisher fills the exact nonce-scoped public path before persistence.
+    artifact_path: Optional[str] = None
     owner: str = ""
     repo: str = ""
     pr_number: int = 0

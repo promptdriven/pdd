@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -474,10 +475,17 @@ def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
                 ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
                 obj={"quiet": False, "verbose": False},
             )
+        payload_in_fs = json.loads(result.output)
+        public_path = Path(payload_in_fs["artifact_path"])
+        public_exists = public_path.exists()
+        persisted_payload = json.loads(public_path.read_text(encoding="utf-8"))
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1"
     assert payload["authority"] == "canonical_pass_agentic_mirror_clean"
+    assert public_path.name.startswith("pdd-checkup-agentic-7-")
+    assert public_exists
+    assert persisted_payload == payload
 
 
 def test_agentic_review_loop_blocking_artifact_exits_nonzero() -> None:
@@ -683,6 +691,8 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     second_payload = json.loads(capsys.readouterr().out)
     assert second_payload["schema_version"] == "pdd.checkup.agentic.v1"
     assert second_payload["status"] == "passed"
+    assert second_payload["artifact_path"] == str(second_public)
+    assert json.loads(second_public.read_text(encoding="utf-8")) == second_payload
 
 
 def test_concurrent_standalone_later_crash_cannot_steal_older_pass(
@@ -775,9 +785,7 @@ def test_agentic_atomic_publish_failure_clears_stale_pass(
         encoding="utf-8",
     )
 
-    with patch(
-        "pdd.commands.checkup.Path.replace", side_effect=OSError("no rename")
-    ):
+    with patch("pdd.commands.checkup.Path.replace", side_effect=OSError("no rename")):
         emitted = _emit_agentic_review_loop_json(
             artifact_path=private,
             published_artifact_path=public,

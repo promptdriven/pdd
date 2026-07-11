@@ -192,7 +192,10 @@ def _emit_agentic_review_loop_json(
     advertises a structured stdout contract. The review loop writes the bounded
     ``pdd.checkup.agentic.v1`` artifact to an invocation-private file. This
     verifies and atomically publishes that file to
-    ``./pdd-checkup-agentic-{pr}.json`` before printing the artifact verbatim.
+    an invocation-specific ``./pdd-checkup-agentic-{pr}-{nonce}.json`` path.
+    Before publication it records that exact path in the artifact's
+    schema-backed ``artifact_path`` field, so file-based callers can discover
+    the successful artifact from stdout.
     When the private artifact is missing, unparseable, or cannot be published,
     it prints a stable, secret-free failed wrapper and guarantees the public
     path is left non-pass. It fails closed because another invocation's artifact
@@ -214,6 +217,8 @@ def _emit_agentic_review_loop_json(
             verdict = artifact.get("verdict")
             if not isinstance(verdict, dict):
                 raise ValueError("agentic artifact verdict must be a JSON object")
+            artifact["artifact_path"] = str(published_artifact_path)
+            artifact_path.write_text(_json.dumps(artifact, indent=2), encoding="utf-8")
             artifact_path.replace(published_artifact_path)
         except (OSError, ValueError):
             pass
@@ -360,8 +365,8 @@ def _emit_agentic_review_loop_json(
         "Standalone adversarial PR checkup (issue #1788). Implies --review-loop "
         "and --json; requires --pr (--issue optional). Permits --no-fix for "
         "report-only mode. Cannot be combined with --final-gate. Emits the "
-        "bounded pdd.checkup.agentic.v1 artifact to "
-        "./pdd-checkup-agentic-{pr}.json."
+        "bounded pdd.checkup.agentic.v1 artifact to an invocation-specific "
+        "./pdd-checkup-agentic-{pr}-{nonce}.json path reported in stdout."
     ),
 )
 @click.option(
