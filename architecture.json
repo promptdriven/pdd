@@ -5493,7 +5493,7 @@
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
       "compressed_sync_context_python.prompt",
-      "fingerprint_transaction_python.prompt"
+      "operation_log_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -7437,7 +7437,7 @@
         "functions": [
           {
             "name": "log_operation",
-            "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable",
+            "signature": "(operation: str, updates_fingerprint: bool = False, updates_run_report: bool = False, clears_run_report: bool = False) -> Callable",
             "returns": "Callable"
           },
           {
@@ -7449,6 +7449,11 @@
             "name": "log_event",
             "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None",
             "returns": "None"
+          },
+          {
+            "name": "resolve_fingerprint_paths",
+            "signature": "(basename: str, language: str, prompt_file: Union[str, Path], *, paths: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -8819,8 +8824,7 @@
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "architecture_sync_python.prompt",
-      "metadata_sync_python.prompt",
-      "fingerprint_transaction_python.prompt"
+      "metadata_sync_python.prompt"
     ],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",
@@ -9663,8 +9667,7 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt",
-      "fingerprint_transaction_python.prompt"
+      "operation_log_python.prompt"
     ],
     "priority": 5,
     "filename": "metadata_sync_python.prompt",
@@ -11313,8 +11316,8 @@
     }
   },
   {
-    "reason": "Single enforced code path for all PDD fingerprint writes — atomic temp-file + os.replace with commit-or-fail semantics.",
-    "description": "Context manager that owns: eager identity and path resolution at entry, atomic file write (temp-file + os.replace) at exit, null-hash validation, commit-or-fail exit semantics, and dry-run/redirect skip control. Used by every PDD mutating command (sync, generate, example, update, fix, auto-deps, ci-heal).",
+    "reason": "Single enforced code path for complete, atomic PDD fingerprint finalization with commit-or-fail semantics.",
+    "description": "Context manager that eagerly resolves the fingerprint destination, builds and validates the canonical payload, and either writes through the shared atomic JSON primitive or buffers the identical payload in sync's outer atomic state. Used by every PDD mutating command (sync, generate, example, update, fix, auto-deps, CI heal).",
     "dependencies": [
       "sync_determine_operation_python.prompt"
     ],
@@ -11331,7 +11334,7 @@
         "functions": [
           {
             "name": "FingerprintTransaction.__init__",
-            "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = '') -> None",
+            "signature": "(basename: str, language: str, operation: str, paths: Optional[Dict[str, Path]] = None, cost: float = 0.0, model: str = '', *, atomic_state: Optional[Any] = None) -> None",
             "returns": "None"
           },
           {

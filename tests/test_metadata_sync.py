@@ -579,7 +579,7 @@ def test_run_report_skipped_when_identity_cannot_be_inferred(tmp_path: Path) -> 
         result = run_metadata_sync(ws["prompt_path"], dry_run=False)
     assert result.stages["run_report"].status == "skipped"
     mock_clear.assert_not_called()
-    assert result.stages["fingerprint"].status == "skipped"
+    assert result.stages["fingerprint"].status == "failed"
     mock_save.assert_not_called()
 
 
