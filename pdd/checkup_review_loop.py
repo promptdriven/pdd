@@ -1325,9 +1325,43 @@ def run_checkup_review_loop(
                             f"{fallback_review.status}."
                         )
                         break
+                    # Capture the just-failed primary reviewer BEFORE the
+                    # promotion below rebinds ``reviewer`` so the #1941
+                    # degradation note names the family that actually went down.
+                    failed_primary_reviewer = reviewer
                     review = fallback_review
                     reviewer = fallback
                     state.active_reviewer = fallback
+                    # Issue #1941: AUTO-DEGRADE after the EXPLICIT
+                    # ``reviewer_fallback`` promotion too — not just inside the
+                    # opt-in ``_maybe_run_fallback_reviewer`` else-arm below.
+                    # This is the accepted/live deadlock shape (reviewer=codex,
+                    # fixer=codex, reviewer_fallback=claude): the primary
+                    # reviewer's family (codex) hard-failed, the configured
+                    # fixer IS that same dead family, and the fallback reviewer
+                    # (claude) just produced actionable findings. Falling
+                    # straight through to the fix round would target the dead
+                    # configured fixer and re-deadlock with "findings remain"
+                    # (``_maybe_run_fallback_fixer`` can't help — it excludes
+                    # the now-active reviewer). Promote the surviving fallback
+                    # family to a fresh SAME-family fixer session, stamp the
+                    # weaker guarantee, and let the normal fix + fresh-verify
+                    # path run. Automatic + disclosed for every consumer — no
+                    # ``--fallback-reviewer-on-failure`` opt-in required. Narrow
+                    # trigger: only when the configured fixer IS the identity
+                    # that just demonstrably failed, so a genuinely independent
+                    # cross-family fixer is still preferred and never bypassed.
+                    if (
+                        fixer
+                        and fixer == failed_primary_reviewer
+                        and fallback != fixer
+                        and _actionable_findings(state, fallback_review.findings)
+                    ):
+                        state.active_fixer = fallback
+                        state.same_role_review_fix = True
+                        state.role_independence = _degraded_role_independence_note(
+                            failed_primary_reviewer
+                        )
                 else:
                     fallback_result = None
                     if not fallback_used:
