@@ -4377,6 +4377,27 @@ class TestMainDryRunJson:
             result = main(dry_run=True, as_json=True)
         assert result == 1
 
+    def test_dry_run_json_redacts_secret_bearing_failure_data(self, capsys):
+        """The machine-readable dry-run report must not emit embedded secrets."""
+        token = "ghp_" + "a" * 36
+        report = {
+            "ok": False,
+            "summary": {
+                "metadata_stale": 0,
+                "conflicts": 0,
+                "unbaselined": 0,
+                "failures": 1,
+            },
+            "failures": [f"remote command failed: Authorization: Bearer {token}"],
+        }
+        with patch("pdd.continuous_sync.build_report", return_value=report):
+            result = main(dry_run=True, as_json=True)
+
+        assert result == 1
+        output = capsys.readouterr().out
+        assert token not in output
+        assert "[REDACTED]" in output
+
 
 class TestHealModuleConflict:
     def test_conflict_operation_returns_false(self):

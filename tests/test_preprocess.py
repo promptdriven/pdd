@@ -775,6 +775,21 @@ def test_get_file_path() -> None:
     with pytest.raises(ValueError, match="absolute include path"):
         get_file_path(abs_path)
 
+
+def test_preprocess_resolves_bundled_prompting_guide_outside_checkout(
+    tmp_path, monkeypatch
+) -> None:
+    """Bundled docs remain available when preprocessing from an empty project."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_PATH", raising=False)
+
+    processed = preprocess(
+        "<include>docs/prompting_guide.md</include>",
+        double_curly_brackets=False,
+    )
+
+    assert "PDD Mental Model" in processed
+
 # Test for nested XML tags
 def test_nested_xml_tags() -> None:
     """Test handling of nested XML tags."""
