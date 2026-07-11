@@ -818,7 +818,10 @@ def _module_filepath_matches_basename(
     ``src/app/login/page.tsx``, and ``foo/page`` must NOT map to a root ``page.tsx``).
     A single-component (flat) basename keeps leaf matching.
     """
-    if not module_filepath:
+    # Untrusted metadata may carry a non-string filepath; treat it as no match rather
+    # than letting Path() raise a TypeError that a broad except swallows into a wrong
+    # fallback.
+    if not isinstance(module_filepath, str) or not module_filepath:
         return False
 
     relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
@@ -1881,7 +1884,13 @@ def _architecture_module_choices(
     for module in modules:
         if not isinstance(module, dict):
             continue
-        filepath = str(module.get("filepath") or "").strip()
+        filepath_value = module.get("filepath")
+        # A non-string filepath is malformed metadata, not a real output: skip it so
+        # it cannot be stringified (e.g. 123 -> "123") into a bogus distinct target
+        # that falsely raises AmbiguousModuleError and blocks a valid mapping.
+        if not isinstance(filepath_value, str):
+            continue
+        filepath = filepath_value.strip()
         if not filepath:
             continue
         filename_value = module.get("filename")

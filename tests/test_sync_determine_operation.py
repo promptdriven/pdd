@@ -2314,6 +2314,47 @@ def test_find_named_file_case_collision_is_deterministic(tmp_path):
     assert found is not None and found.name == "FOO_example.py"
 
 
+def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """A bare basename that architecture.json maps to two DISTINCT valid outputs MUST
+    raise AmbiguousModuleError before any prompt/fallback resolution (positive R11)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "page_Python.prompt", "filepath": "a/page.py"},
+            {"filename": "page_Python.prompt", "filepath": "b/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("page", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_non_string_filepath_does_not_block_valid_module(tmp_path, monkeypatch):
+    """A malformed row with a non-string filepath is ignored, not stringified into a
+    bogus distinct output that would falsely raise AmbiguousModuleError for a valid row."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "page_Python.prompt").write_text("% page\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "page_Python.prompt", "filepath": 123},
+            {"filename": "page_Python.prompt", "filepath": "src/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("src/page.py")
+
+
 def _write_two_context_pddrc(root):
     (root / ".pdd" / "meta").mkdir(parents=True)
     (root / ".pdd" / "locks").mkdir(parents=True)
