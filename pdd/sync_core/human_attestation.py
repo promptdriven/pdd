@@ -191,6 +191,24 @@ def _canonical_payload(approval: Mapping[str, Any]) -> bytes:
     return json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _targets_request(
+    approval: Mapping[str, Any], request: HumanAttestationRequest
+) -> bool:
+    """Select one immutable unit/closure without trusting approval validity."""
+    expected = {
+        "repository_id": request.profile.unit_id.repository_id,
+        "prompt_relpath": request.profile.unit_id.prompt_relpath.as_posix(),
+        "language_id": request.profile.unit_id.language_id,
+        "obligation_id": request.obligation.obligation_id,
+        "snapshot_digest": request.binding.snapshot_digest,
+        "profile_digest": request.profile.profile_digest,
+        "protected_base_sha": request.binding.base_sha,
+        "checked_head_sha": request.binding.head_sha,
+        "artifact_closure_digest": request.binding.artifact_closure_digest,
+    }
+    return all(approval.get(key) == value for key, value in expected.items())
+
+
 class HumanAttestationVerifier:  # pylint: disable=too-few-public-methods
     """Verify external, thresholded human decisions without any signing surface."""
 
@@ -284,7 +302,11 @@ class HumanAttestationVerifier:  # pylint: disable=too-few-public-methods
     ) -> EvidenceOutcome:
         """Return PASS only when distinct authorized humans reach threshold."""
         instant = now or datetime.now(timezone.utc)
-        approvals = self._load_approvals(self.policy.external_store)
+        approvals = [
+            approval
+            for approval in self._load_approvals(self.policy.external_store)
+            if _targets_request(approval, request)
+        ]
         try:
             identities = {
                 self._verify_approval(approval, request, instant) for approval in approvals
