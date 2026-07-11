@@ -19,6 +19,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import jest_validator_config_digest
+from pdd.sync_core.runner import _local_javascript_imports
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_js.prompt"), "javascript")
@@ -183,6 +184,122 @@ def test_jest_side_effect_import_helper_mutation_cannot_pass(tmp_path: Path) -> 
     _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
 
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_jest_parent_directory_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/helper.js").write_text("module.exports = { expected: true };\n")
+    (root / "tests/widget.test.js").write_text(
+        "const { expected } = require('../shared/helper');\n"
+        "test('widget works', () => expect(expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/helper.js").write_text("module.exports = { expected: false };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helper")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_jest_parent_directory_side_effect_import_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/setup.js").write_text("global.expected = true;\n")
+    (root / "tests/widget.test.js").write_text(
+        "import '../shared/setup';\n"
+        "test('widget works', () => expect(global.expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/setup.js").write_text("global.expected = false;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent side effect helper")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_jest_parent_directory_index_import_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared/helpers").mkdir(parents=True)
+    (root / "shared/helpers/index.ts").write_text("export const expected = true;\n")
+    (root / "tests/widget.test.js").write_text(
+        "import { expected } from '../shared/helpers';\n"
+        "test('widget works', () => expect(expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent index helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/helpers/index.ts").write_text("export const expected = false;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent index helper")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_jest_parent_directory_imports_change_validator_digest(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    (root / "shared/helpers").mkdir(parents=True)
+    (root / "shared/helpers/index.ts").write_text("export const expected = true;\n")
+    (root / "shared/setup.js").write_text("global.expected = true;\n")
+    (root / "tests/widget.test.js").write_text(
+        "import { expected } from '../shared/helpers';\n"
+        "import '../shared/setup';\n"
+        "test('widget works', () => expect(expected && global.expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helpers")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = jest_validator_config_digest(root, base, paths)
+
+    (root / "shared/helpers/index.ts").write_text("export const expected = false;\n")
+    (root / "shared/setup.js").write_text("global.expected = false;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helpers")
+    head_digest = jest_validator_config_digest(root, _git(root, "rev-parse", "HEAD"), paths)
+
+    assert head_digest != base_digest
+
+
+def test_jest_config_reference_index_candidate_changes_validator_digest(tmp_path: Path) -> None:
+    config = '{"setupFilesAfterEnv":["<rootDir>/support/setup"]}'
+    root, _commit = _repository(tmp_path, config=config)
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    (root / "support/setup").mkdir(parents=True)
+    (root / "support/setup/index.ts").write_text("global.expected = true;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add extensionless setup index")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = jest_validator_config_digest(root, base, paths)
+
+    (root / "support/setup/index.ts").write_text("global.expected = false;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate extensionless setup index")
+    head_digest = jest_validator_config_digest(root, _git(root, "rev-parse", "HEAD"), paths)
+
+    assert head_digest != base_digest
+
+
+def test_jest_repository_escape_import_is_not_bound(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    source = b"import '../../outside.js';\n"
+    imports = _local_javascript_imports(
+        root,
+        commit,
+        PurePosixPath("tests/widget.test.js"),
+        source,
+    )
+    assert imports == set()
 
 
 @pytest.mark.parametrize("config_key", ["globalSetup", "globalTeardown", "testEnvironment"])
