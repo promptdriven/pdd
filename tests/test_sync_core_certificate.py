@@ -1,6 +1,7 @@
 """Tests for the signed cross-repository certificate predicate."""
 
 import base64
+import hashlib
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -104,6 +105,7 @@ def _nightly(
     include_observation=True,
     candidate_artifact=None,
     start=None,
+    schema_version=4,
 ):
     start = start or datetime.now(timezone.utc) - timedelta(days=count - 1)
     rows = []
@@ -150,9 +152,10 @@ def _nightly(
             "candidate_wheel_sha256": CANDIDATE_WHEEL_SHA256,
             "dependency_environment_digest": DEPENDENCY_ENVIRONMENT_DIGEST,
             "candidate_artifact": row_candidate_artifact.payload(),
+            **MEASURED_CLOSURE,
         }
         body = {
-            "schema_version": 3,
+            "schema_version": schema_version,
             "checked_at": checked_at.isoformat(),
             "checker": CHECKER.payload(),
             "candidate_artifact_policy": CANDIDATE_POLICY.identity(),
@@ -328,6 +331,10 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         signer=signer,
     )
     assert certificate["ok"] is True
+    measured_digest = hashlib.sha256(
+        json.dumps(MEASURED_CLOSURE["installed_files"], separators=(",", ":")).encode()
+    ).hexdigest()
+    assert certificate["lifecycle"]["dependency_environment_digest"] == measured_digest
     assert certificate["counts"]["managed_units"] == 2
     assert certificate["counts"]["verification_profile_coverage"] == 100
     assert certificate["counts"]["trusted_current_evidence_coverage"] == 100
@@ -787,6 +794,18 @@ def test_historical_nightly_candidate_artifact_uses_row_checked_at(tmp_path) -> 
             CANDIDATE_POLICY,
         ),
     ) == 1
+
+
+def test_schema_v3_history_cannot_extend_schema_v4_nightly_streak(tmp_path) -> None:
+    signer = AttestationSigner("certificate-ci", b"g" * 32)
+    nightly = tmp_path / "nightly.jsonl"
+    _nightly(nightly, signer, schema_version=3)
+    assert _nightly_streak(
+        nightly,
+        _NightlyVerificationPolicy(
+            signer.public_key_bytes(), signer.issuer, (), CHECKER, CANDIDATE_POLICY
+        ),
+    ) == 0
 
 
 def test_nightly_lineage_requires_identity_and_ancestry(tmp_path) -> None:

@@ -177,6 +177,38 @@ def test_candidate_modified_product_code_can_be_certified_by_protected_tests(tmp
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
+def test_dirty_declared_product_code_cannot_receive_committed_head_evidence(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.expected() == 1\n"
+    )
+    (root / "product.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "product")
+    head = _git(root, "rev-parse", "HEAD")
+    (root / "product.py").write_text("def expected(): return 2\n")
+    _envelope, executions = _run(
+        root, head, head, (PurePosixPath("product.py"),)
+    )
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "dirty" in executions[0].detail
+
+
+def test_declared_product_reflection_is_not_an_unbound_test_loader(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.expected() == 1\n"
+    )
+    (root / "product.py").write_text(
+        "def expected():\n    return getattr(type('X', (), {'value': 1}), 'value')\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "reflective product")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(
+        root, head, head, (PurePosixPath("product.py"),)
+    )
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
 def test_candidate_modified_helper_outside_tests_is_protected(tmp_path) -> None:
     root, _initial = _repository(
         tmp_path,

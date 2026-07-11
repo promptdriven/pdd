@@ -336,6 +336,20 @@ def test_repository_identity_does_not_activate_enforcement_without_policy(
     assert canonical_sync_enabled(root) is False
 
 
+@pytest.mark.parametrize("protected_ref", ["missing-ref", "HEAD"])
+def test_explicit_protected_mode_invalid_trust_input_fails_closed(
+    tmp_path, monkeypatch, protected_ref
+) -> None:
+    root, _commit = _repository(tmp_path)
+    if protected_ref == "HEAD":
+        (root / ".pdd/sync-policy.json").write_text("{not-json")
+        _git(root, "add", ".pdd/sync-policy.json")
+        _git(root, "commit", "-q", "-m", "malformed protected policy")
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", protected_ref)
+    with pytest.raises(ValueError, match="protected"):
+        canonical_sync_enabled(root)
+
+
 def test_code_drift_cannot_reuse_old_attestation(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     _finalize_trusted_baseline(root, commit)

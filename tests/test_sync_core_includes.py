@@ -147,6 +147,28 @@ def test_optional_missing_include_is_bound_but_not_failed(tmp_path) -> None:
     assert closure.artifacts == ()
 
 
+@pytest.mark.parametrize(
+    "attribute,value",
+    [
+        ("path", "docs/optional.md"),
+        ("select", "optional"),
+        ("query", "please expand this"),
+    ],
+)
+def test_boolean_attribute_names_inside_quotes_do_not_make_include_optional(
+    tmp_path, attribute, value
+) -> None:
+    (tmp_path / "prompts").mkdir()
+    attrs = f'{attribute}="{value}"'
+    if attribute != "path":
+        attrs = f'path="missing.md" {attrs}'
+    (tmp_path / "prompts/a.prompt").write_text(
+        f"<include {attrs} />", encoding="utf-8"
+    )
+    with pytest.raises(IncludeGraphError, match="missing"):
+        build_include_closure(PurePosixPath("prompts/a.prompt"), PathPolicy(tmp_path))
+
+
 def test_query_include_marks_closure_nondeterministic(tmp_path) -> None:
     (tmp_path / "prompts").mkdir()
     (tmp_path / "docs").mkdir()
