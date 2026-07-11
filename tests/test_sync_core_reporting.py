@@ -340,6 +340,106 @@ def test_nested_config_cannot_bypass_repository_canonical_finalizer(
     )
 
 
+def test_legacy_finalizers_preserve_approved_prompt_alias_identity(
+    tmp_path, monkeypatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    canonical = root / "canonical-prompts"
+    canonical.mkdir()
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.rename(canonical / prompt.name)
+    prompt.symlink_to("../canonical-prompts/widget_python.prompt")
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected prompt alias")
+    head = _git(root, "rev-parse", "HEAD")
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", head)
+    signer = object()
+
+    with patch(
+        "pdd.sync_core.finalize.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.sync_core.finalize.finalize_unit") as legacy_finalize:
+        save_fingerprint("widget", "python", "generate", {"prompt": prompt})
+    legacy_finalize.assert_called_once_with(
+        root,
+        PurePosixPath("prompts/widget_python.prompt"),
+        base_ref=head,
+        head_ref="HEAD",
+        signer=signer,
+    )
+
+    with patch(
+        "pdd.sync_core.attestation_signer_from_environment", return_value=signer
+    ), patch("pdd.sync_core.finalize_unit") as orchestration_finalize:
+        from pdd.sync_orchestration import _save_fingerprint_atomic
+
+        _save_fingerprint_atomic(
+            "widget", "python", "generate", {"prompt": prompt}, 0.0, "test"
+        )
+    orchestration_finalize.assert_called_once_with(
+        root,
+        PurePosixPath("prompts/widget_python.prompt"),
+        base_ref=head,
+        head_ref="HEAD",
+        signer=signer,
+    )
+
+
+def test_prompt_alias_uses_canonical_prompt_requirements_and_finalizes(tmp_path) -> None:
+    root, _commit = _repository(tmp_path)
+    canonical = root / "canonical-prompts"
+    canonical.mkdir()
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.rename(canonical / prompt.name)
+    prompt.symlink_to("../canonical-prompts/widget_python.prompt")
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected prompt alias")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profiles = load_verification_profiles(root, manifest)
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert not profiles.invalid_reasons
+    assert profiles.profiles[0].required_requirement_ids == ("REQ-1",)
+    assert report["counts"]["invalid"] == 0
+    result = finalize_unit(
+        root,
+        PurePosixPath("prompts/widget_python.prompt"),
+        base_ref=commit,
+        head_ref=commit,
+        signer=SIGNER,
+        replay_ledger_path=tmp_path / "external-trust/prompt-alias.json",
+    )
+    assert result.transaction.phase.value == "COMMITTED"
+
+
 def test_repository_identity_does_not_activate_enforcement_without_policy(
     tmp_path,
 ) -> None:
@@ -950,6 +1050,47 @@ def test_finalizer_rejects_invalid_alias_manifest_before_validation_or_writes(
     prepare.assert_not_called()
     assert not (root / ".pdd/meta/v2").exists()
     assert not (root / ".pdd/evidence/v2").exists()
+
+
+def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    ownership = json.loads((root / ".pdd/sync-ownership.json").read_text())
+    ownership["rules"].append(
+        {
+            "pattern": "canonical/**",
+            "inventory": "HUMAN_OWNED",
+            "role": "excluded-project",
+            "owner": "vendor@example.com",
+        }
+    )
+    (root / ".pdd/sync-ownership.json").write_text(json.dumps(ownership))
+    _git(root, "add", ".pdd/sync-ownership.json")
+    _git(root, "commit", "-q", "-m", "exclude canonical project")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    errors = "\n".join(manifest.invalid_reasons)
+    assert "canonical/widget.py" in errors
+    assert "ownership" in errors
+    assert report["counts"]["invalid"] > 0
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile, patch(
+        "pdd.sync_core.finalize.TransactionManager.prepare"
+    ) as prepare:
+        with pytest.raises(ValueError, match="manifest is invalid"):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=commit,
+                head_ref=commit,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / "external-trust/excluded-alias.json",
+            )
+    run_profile.assert_not_called()
+    prepare.assert_not_called()
 
 
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:

@@ -334,6 +334,33 @@ def test_path_policy_rejects_alias_retarget(repository) -> None:
         policy.resolve(PurePosixPath("alias/widget.py"))
 
 
+@pytest.mark.parametrize("outside", [False, True])
+def test_path_policy_rejects_live_alias_retarget_with_same_terminal(
+    tmp_path, outside
+) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "protected alias")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    middle = tmp_path.parent / "outside-middle" if outside else tmp_path / "middle"
+    middle.symlink_to(tmp_path / "canonical", target_is_directory=True)
+    (tmp_path / "alias").unlink()
+    (tmp_path / "alias").symlink_to(middle, target_is_directory=True)
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("canonical")},
+        base_ref=commit,
+        head_ref=commit,
+    )
+
+    with pytest.raises(PathPolicyError, match="target changed"):
+        policy.resolve(PurePosixPath("alias/widget.py"))
+
+
 def test_path_policy_rejects_special_file(repository) -> None:
     fifo = repository / "src/events"
     os.mkfifo(fifo)
