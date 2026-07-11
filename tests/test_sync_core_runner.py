@@ -296,6 +296,22 @@ def test_nested_external_pytest_plugin_fails_closed(tmp_path) -> None:
     assert "external pytest_plugins" in executions[0].detail
 
 
+def test_product_pytest_plugins_declaration_is_not_traversed_as_support(tmp_path) -> None:
+    root, _base = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.VALUE == 1\n"
+    )
+    (root / "product.py").write_text(
+        'VALUE = 1\npytest_plugins = "vendor.runtime"\n'
+    )
+    _git(root, "add", "product.py", "tests/test_widget.py")
+    _git(root, "commit", "-q", "-m", "declared product")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(
+        root, head, head, (PurePosixPath("product.py"),)
+    )
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
 def test_dynamic_repo_local_import_fails_closed(tmp_path) -> None:
     root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
     (root / "tests/test_widget.py").write_text(

@@ -4201,6 +4201,24 @@ class TestFingerprintIncludeDependencies:
             hashes.append(calculate_prompt_hash(prompt))
         assert hashes == [expected, expected]
 
+    def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        create_file(
+            prompt,
+            "Build.\n<include>b.py</include>\n<include>a.py</include>\n"
+            "<include>a.py</include>\n",
+        )
+        expected = hashlib.sha256(
+            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
+        ).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
