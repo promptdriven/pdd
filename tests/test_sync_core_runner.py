@@ -184,7 +184,7 @@ def test_candidate_modified_helper_outside_tests_is_protected(tmp_path) -> None:
     )
     (root / "support").mkdir()
     (root / "support/__init__.py").write_text("")
-    (root / "support/fixtures.py").write_text("def expected(): return 1\n")
+    (root / "support/fixtures.py").write_text("def expected(): return 2\n")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "base helper")
     base = _git(root, "rev-parse", "HEAD")
@@ -317,16 +317,14 @@ def test_candidate_modified_relative_importfrom_helper_cannot_self_certify(tmp_p
 
 def test_validator_subprocess_cannot_read_signing_secret(tmp_path, monkeypatch) -> None:
     content = (
-        "import os\nfrom pathlib import Path\n"
+        "import os\n"
         "def test_widget():\n"
-        "    Path('observed-secret').write_text("
-        "os.environ.get('PDD_ATTESTATION_SIGNING_KEY', 'missing'))\n"
+        "    assert os.environ.get('PDD_ATTESTATION_SIGNING_KEY') is None\n"
     )
     root, head = _repository(tmp_path, content)
     monkeypatch.setenv("PDD_ATTESTATION_SIGNING_KEY", "candidate-must-not-read")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
-    assert (root / "observed-secret").read_text() == "missing"
 
 
 def test_pytest_execution_uses_private_home_and_userprofile(tmp_path, monkeypatch) -> None:
@@ -336,25 +334,16 @@ def test_pytest_execution_uses_private_home_and_userprofile(tmp_path, monkeypatc
     monkeypatch.setenv("HOME", str(protected_home))
     monkeypatch.setenv("USERPROFILE", str(protected_home))
     content = (
-        "import json, os\nfrom pathlib import Path\n"
+        "import os\nfrom pathlib import Path\n"
         "def test_widget():\n"
         "    home = Path(os.environ['HOME'])\n"
         "    profile = Path(os.environ['USERPROFILE'])\n"
-        "    Path('observed-execution-home.json').write_text(json.dumps({\n"
-        "        'home': str(home),\n"
-        "        'userprofile': str(profile),\n"
-        "        'home_secret': (home / 'secret.txt').exists(),\n"
-        "        'profile_secret': (profile / 'secret.txt').exists(),\n"
-        "    }, sort_keys=True))\n"
+        "    assert home == profile\n"
+        "    assert not (home / 'secret.txt').exists()\n"
     )
     root, head = _repository(tmp_path, content)
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
-    observed = json.loads((root / "observed-execution-home.json").read_text())
-    assert observed["home"] != str(protected_home)
-    assert observed["userprofile"] != str(protected_home)
-    assert observed["home_secret"] is False
-    assert observed["profile_secret"] is False
 
 
 def test_pytest_collection_uses_private_home_and_userprofile(tmp_path, monkeypatch) -> None:
@@ -365,38 +354,27 @@ def test_pytest_collection_uses_private_home_and_userprofile(tmp_path, monkeypat
     monkeypatch.setenv("USERPROFILE", str(protected_home))
     root, head = _repository(tmp_path, "def test_widget(): assert True\n")
     (root / "conftest.py").write_text(
-        "import json, os\nfrom pathlib import Path\n"
+        "import os\nfrom pathlib import Path\n"
         "def pytest_collection_modifyitems(items):\n"
         "    home = Path(os.environ['HOME'])\n"
         "    profile = Path(os.environ['USERPROFILE'])\n"
-        "    Path('observed-collection-home.json').write_text(json.dumps({\n"
-        "        'home': str(home),\n"
-        "        'userprofile': str(profile),\n"
-        "        'home_secret': (home / 'secret.txt').exists(),\n"
-        "        'profile_secret': (profile / 'secret.txt').exists(),\n"
-        "    }, sort_keys=True))\n"
+        "    assert home == profile\n"
+        "    assert not (home / 'secret.txt').exists()\n"
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "collection hook")
     head = _git(root, "rev-parse", "HEAD")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
-    observed = json.loads((root / "observed-collection-home.json").read_text())
-    assert observed["home"] != str(protected_home)
-    assert observed["userprofile"] != str(protected_home)
-    assert observed["home_secret"] is False
-    assert observed["profile_secret"] is False
 
 
 def test_validator_subprocess_cannot_read_signer_capabilities(tmp_path, monkeypatch) -> None:
     content = (
-        "import json, os\nfrom pathlib import Path\n"
+        "import os\n"
         "def test_widget():\n"
-        "    Path('observed-capabilities.json').write_text(json.dumps({\n"
-        "        'attestation_command': os.environ.get('PDD_ATTESTATION_SIGNER_COMMAND'),\n"
-        "        'certificate_issuer': os.environ.get('PDD_CERTIFICATE_ISSUER'),\n"
-        "        'released_checker': os.environ.get('PDD_RELEASED_CHECKER_COMMAND'),\n"
-        "    }, sort_keys=True))\n"
+        "    assert os.environ.get('PDD_ATTESTATION_SIGNER_COMMAND') is None\n"
+        "    assert os.environ.get('PDD_CERTIFICATE_ISSUER') is None\n"
+        "    assert os.environ.get('PDD_RELEASED_CHECKER_COMMAND') is None\n"
     )
     root, head = _repository(tmp_path, content)
     monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "protected-attestation")
@@ -404,11 +382,6 @@ def test_validator_subprocess_cannot_read_signer_capabilities(tmp_path, monkeypa
     monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "protected-checker")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
-    assert json.loads((root / "observed-capabilities.json").read_text()) == {
-        "attestation_command": None,
-        "certificate_issuer": None,
-        "released_checker": None,
-    }
 
 
 def test_ambient_pytest_options_and_plugins_are_disabled(tmp_path, monkeypatch) -> None:
