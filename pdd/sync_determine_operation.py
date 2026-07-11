@@ -1825,6 +1825,8 @@ def calculate_prompt_hash(
         [reference.path for reference in references]
         if references else list((stored_deps or {}).keys())
     )
+    if hash_version == 1:
+        declared_dependencies = sorted(set(declared_dependencies))
     resolved_dependencies = []
     for declared in declared_dependencies:
         candidate = _legacy_dependency_path(prompt_path.resolve(), declared)

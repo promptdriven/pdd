@@ -53,6 +53,8 @@ def build_unit_snapshot(
         for path in unit.artifact_paths:
             add("code", path)
         for obligation in profile.obligations:
+            for path in obligation.code_under_test_paths:
+                add("code", path)
             role = _obligation_role(obligation.kind)
             for path in obligation.artifact_paths:
                 add(role, path, required=obligation.required)

@@ -56,8 +56,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
-          bwrap --unshare-all --die-with-parent --new-session \
-            --ro-bind / / --dev /dev --proc /proc -- /bin/true
+          unshare --user --map-root-user --net -- \
+            bwrap --unshare-pid --unshare-ipc --unshare-uts \
+            --die-with-parent --new-session --ro-bind / / \
+            --dev /dev --proc /proc -- /bin/true
 
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
