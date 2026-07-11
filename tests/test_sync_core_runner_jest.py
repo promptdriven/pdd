@@ -231,6 +231,31 @@ def test_jest_additional_executable_config_mutation_cannot_pass(
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
+def test_jest_module_directories_bare_import_cannot_pass_unbound(
+    tmp_path: Path,
+) -> None:
+    config = '{"moduleDirectories":["src","node_modules"]}'
+    root, _commit = _repository(tmp_path, config=config)
+    (root / "src").mkdir()
+    (root / "src/helper.js").write_text("module.exports = { expected: true };\n")
+    (root / "tests/widget.test.js").write_text(
+        "const { expected } = require('helper');\n"
+        "test('widget works', () => expect(expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add moduleDirectories support")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "src/helper.js").write_text("module.exports = { expected: false };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate moduleDirectories support")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
 def test_default_candidate_node_modules_jest_is_not_trusted(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     binary = root / "node_modules" / "jest" / "bin" / "jest.js"
