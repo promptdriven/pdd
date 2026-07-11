@@ -13,7 +13,6 @@ import os
 import platform
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -531,6 +530,7 @@ def _jest_local_path(value: str) -> PurePosixPath | None:
 
 
 def _jest_config_references(config: object) -> set[PurePosixPath]:
+    # pylint: disable=too-many-branches,too-many-statements
     """Find local executable support named by static Jest config keys."""
     if not isinstance(config, dict):
         return set()
@@ -864,8 +864,10 @@ def runner_identity_digest(
         ],
     }
     if root is not None:
+        support_closure_digest = _support_digest(root, ref, profile)[0]
+        jest_support_digest = _jest_support_digest(root, ref, profile)[0]
         payload["support_closure_digest"] = hashlib.sha256(
-            (_support_digest(root, ref, profile)[0] + _jest_support_digest(root, ref, profile)[0]).encode()
+            (support_closure_digest + jest_support_digest).encode()
         ).hexdigest()
         payload["validator_command_digest"] = _validator_command_identity_digest(
             root, config
@@ -1296,6 +1298,7 @@ module.exports = PddTrustedReporter;
 def _jest_result(
     output: Path, returncode: int, expected: tuple[str, ...] | None
 ) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    # pylint: disable=too-many-return-statements
     """Validate trusted reporter data and normalize every non-pass state."""
     try:
         payload = json.loads(output.read_text(encoding="utf-8"))
@@ -1311,19 +1314,39 @@ def _jest_result(
         return EvidenceOutcome.COLLECTION_ERROR, "trusted Jest reporter produced malformed JSON", ()
     identities = tuple(sorted(item["identity"] for item in tests))
     if not identities:
-        return EvidenceOutcome.NOT_COLLECTED, "zero protected Jest test identities collected", ()
+        return (
+            EvidenceOutcome.NOT_COLLECTED,
+            "zero protected Jest test identities collected",
+            (),
+        )
     if len(set(identities)) != len(identities):
-        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter emitted duplicate test identities", ()
+        return (
+            EvidenceOutcome.COLLECTION_ERROR,
+            "Jest reporter emitted duplicate test identities",
+            (),
+        )
     if expected is not None and identities != expected:
-        return EvidenceOutcome.QUARANTINED, "checked-head Jest identities differ from protected base", identities
+        return (
+            EvidenceOutcome.QUARANTINED,
+            "checked-head Jest identities differ from protected base",
+            identities,
+        )
     statuses = {item["status"] for item in tests}
     if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
-        return EvidenceOutcome.COLLECTION_ERROR, "Jest reporter emitted an unsupported status", identities
+        return (
+            EvidenceOutcome.COLLECTION_ERROR,
+            "Jest reporter emitted an unsupported status",
+            identities,
+        )
     if returncode or "failed" in statuses:
         return EvidenceOutcome.FAIL, "Jest reported failed protected tests", identities
     if statuses - {"passed"}:
         return EvidenceOutcome.SKIP, "Jest reported skipped or todo protected tests", identities
-    return EvidenceOutcome.PASS, f"{len(identities)} protected Jest tests passed", identities
+    return (
+        EvidenceOutcome.PASS,
+        f"{len(identities)} protected Jest tests passed",
+        identities,
+    )
 
 
 def _run_jest(
@@ -1334,8 +1357,18 @@ def _run_jest(
     command_prefix = _jest_command(config)
     if command_prefix is None:
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
-            return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
-        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
+            return RunnerExecution(
+                "jest",
+                EvidenceOutcome.ERROR,
+                "jest-untrusted",
+                "candidate node_modules Jest runner is not trusted",
+            ), ()
+        return RunnerExecution(
+            "jest",
+            EvidenceOutcome.ERROR,
+            "jest-unavailable",
+            "no local Jest binary is available",
+        ), ()
     command_error = _protected_command_error(root, command_prefix)
     if command_error is not None:
         return RunnerExecution(
@@ -1344,18 +1377,39 @@ def _run_jest(
     try:
         config_path, _config_data = _jest_config(root, "HEAD")
     except ValueError as exc:
-        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-config", str(exc)), ()
+        return RunnerExecution(
+            "jest", EvidenceOutcome.ERROR, "jest-config", str(exc)
+        ), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-jest-") as directory:
         temporary = Path(directory)
         reporter = temporary / "reporter.cjs"
         output = temporary / "results.json"
         reporter.write_text(_JEST_REPORTER, encoding="utf-8")
-        command = [*command_prefix, *(path.as_posix() for path in paths), "--runInBand", f"--config={root / config_path}", f"--reporters={reporter}"]
-        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+        command = [
+            *command_prefix,
+            *(path.as_posix() for path in paths),
+            "--runInBand",
+            f"--config={root / config_path}",
+            f"--reporters={reporter}",
+        ]
+        digest = hashlib.sha256(
+            json.dumps(command, separators=(",", ":")).encode()
+        ).hexdigest()
         try:
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False, timeout=timeout_seconds, env=_jest_environment(temporary) | {"PDD_TRUSTED_JEST_OUTPUT": str(output)})
+            result = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+                env=_jest_environment(temporary)
+                | {"PDD_TRUSTED_JEST_OUTPUT": str(output)},
+            )
         except subprocess.TimeoutExpired:
-            return RunnerExecution("jest", EvidenceOutcome.TIMEOUT, digest, "Jest execution timed out"), ()
+            return RunnerExecution(
+                "jest", EvidenceOutcome.TIMEOUT, digest, "Jest execution timed out"
+            ), ()
         outcome, detail, identities = _jest_result(output, result.returncode, expected)
         return RunnerExecution("jest", outcome, digest, detail), identities
 
@@ -1658,14 +1712,23 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
         )
-    digest_function = pytest_validator_config_digest if obligation.validator_id == "pytest" else jest_validator_config_digest
+    digest_function = (
+        pytest_validator_config_digest
+        if obligation.validator_id == "pytest"
+        else jest_validator_config_digest
+    )
     try:
         expected_config_digests = {
             digest_function(root, ref, obligation.artifact_paths)
             for ref in (base_sha, head_sha)
         }
     except ValueError as exc:
-        return RunnerExecution(obligation.obligation_id, EvidenceOutcome.ERROR, obligation.validator_config_digest, str(exc))
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            str(exc),
+        )
     if expected_config_digests != {obligation.validator_config_digest}:
         if obligation.validator_id == "pytest":
             support_paths = tuple(
@@ -1747,15 +1810,33 @@ def _obligation_preflight(
 
 
 def _collect_jest_at_base(
-    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+    root: Path,
+    base_sha: str,
+    paths: tuple[PurePosixPath, ...],
+    config: RunnerConfig,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run protected-base Jest with the trusted reporter to establish identities."""
     with tempfile.TemporaryDirectory(prefix="pdd-jest-protected-base-") as directory:
         clone = Path(directory) / "repository"
-        cloned = subprocess.run(["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)], capture_output=True, text=True, check=False)
-        checked_out = cloned.returncode == 0 and subprocess.run(["git", "checkout", "-q", "--detach", base_sha], cwd=clone, capture_output=True, check=False).returncode == 0
+        cloned = subprocess.run(
+            ["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        checked_out = cloned.returncode == 0 and subprocess.run(
+            ["git", "checkout", "-q", "--detach", base_sha],
+            cwd=clone,
+            capture_output=True,
+            check=False,
+        ).returncode == 0
         if not checked_out:
-            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Jest clone"), ()
+            return RunnerExecution(
+                "protected-base-collection",
+                EvidenceOutcome.COLLECTION_ERROR,
+                hashlib.sha256(base_sha.encode()).hexdigest(),
+                "cannot create protected-base Jest clone",
+            ), ()
         return _run_jest(clone, paths, config.timeout_seconds, config)
 
 
@@ -1801,18 +1882,24 @@ def _run_obligation_in_tree(
     head_sha: str,
     config: RunnerConfig,
 ) -> RunnerExecution:
-    # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals,too-many-return-statements
     """Run one protected obligation with changed-test self-certification guards."""
     preflight = _obligation_preflight(root, obligation, base_sha, head_sha)
     if preflight is not None:
         return preflight
     if obligation.validator_id == "jest":
         profile = VerificationProfile(
-            UnitId("runner-closure", PurePosixPath("closure.prompt"), "javascript"),
-            (obligation,), obligation.requirement_ids, "closure",
+            UnitId(
+                "runner-closure", PurePosixPath("closure.prompt"), "javascript"
+            ),
+            (obligation,),
+            obligation.requirement_ids,
+            "closure",
         )
         _digest, support_paths = _jest_support_digest(root, head_sha, profile)
-        protected_paths = tuple(sorted(set(obligation.artifact_paths) | set(support_paths)))
+        protected_paths = tuple(
+            sorted(set(obligation.artifact_paths) | set(support_paths))
+        )
         changed = _changed_paths(root, base_sha, head_sha, protected_paths)
         changed.update(_dirty_jest_support(root))
         if changed:
@@ -1822,11 +1909,29 @@ def _run_obligation_in_tree(
                 "candidate-modified Jest support cannot solely certify itself: "
                 + ", ".join(sorted(changed)),
             )
-        base_execution, base_ids = _collect_jest_at_base(root, base_sha, obligation.artifact_paths, config)
+        base_execution, base_ids = _collect_jest_at_base(
+            root, base_sha, obligation.artifact_paths, config
+        )
         if base_execution.outcome is not EvidenceOutcome.PASS:
-            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
-        head_execution, _head_ids = _run_jest(root, obligation.artifact_paths, config.timeout_seconds, config, base_ids)
-        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
+            return RunnerExecution(
+                obligation.obligation_id,
+                base_execution.outcome,
+                base_execution.command_digest,
+                base_execution.detail,
+            )
+        head_execution, _head_ids = _run_jest(
+            root,
+            obligation.artifact_paths,
+            config.timeout_seconds,
+            config,
+            base_ids,
+        )
+        return RunnerExecution(
+            obligation.obligation_id,
+            head_execution.outcome,
+            head_execution.command_digest,
+            head_execution.detail,
+        )
     profile = VerificationProfile(
         UnitId("runner-closure", PurePosixPath("closure.prompt"), "python"),
         (obligation,),
@@ -1887,7 +1992,11 @@ def run_obligation(
             "dirty checkout cannot receive committed-head evidence: "
             + ", ".join(dirty_all),
         )
-    dirty = _dirty_pytest_support(root)
+    dirty = (
+        _dirty_jest_support(root)
+        if obligation.validator_id == "jest"
+        else _dirty_pytest_support(root)
+    )
     if dirty:
         return RunnerExecution(
             obligation.obligation_id,
@@ -1896,6 +2005,15 @@ def run_obligation(
             "candidate-modified test cannot solely certify itself: "
             + ", ".join(sorted(dirty)),
         )
+    if obligation.validator_id == "jest" and config.jest_command is not None:
+        command_error = _protected_command_error(root, config.jest_command)
+        if command_error is not None:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                command_error,
+            )
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(

@@ -38,7 +38,7 @@ from ..sync_core import (
     signer_from_environment,
 )
 from ..sync_core.git_io import resolve_git_commit
-from ..sync_core.runner import RunnerConfig
+from ..sync_core.runner import RunnerConfig, _protected_command_error
 from .. import __version__
 
 
@@ -151,20 +151,9 @@ def _protected_command(value: str | None, option: str, cwd: Path) -> tuple[str, 
         raise click.ClickException(f"{option} is malformed") from exc
     if not command:
         return None
-    first = Path(command[0]).expanduser()
-    if not first.is_absolute():
-        raise click.ClickException(f"{option} must start with an absolute executable path")
-    root = cwd.resolve()
-    for part in command:
-        path = Path(part).expanduser()
-        if not path.is_absolute() and "/" not in part:
-            continue
-        resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            continue
-        raise click.ClickException(f"{option} must not reference the candidate checkout")
+    error = _protected_command_error(cwd, command)
+    if error is not None:
+        raise click.ClickException(f"{option}: {error}")
     return command
 
 
