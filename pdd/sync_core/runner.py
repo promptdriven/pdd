@@ -567,6 +567,32 @@ def _local_javascript_imports(
     return resolved
 
 
+def _bare_javascript_imports(source: bytes) -> set[str]:
+    """Return bare JS package imports that are not repository-relative paths."""
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError:
+        return set()
+    imports = re.findall(
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]([^'\"]+)['\"]",
+        text,
+    )
+    return {
+        item
+        for item in imports
+        if not item.startswith((".", "/", "node:", "data:", "file:"))
+    }
+
+
+def _unbound_playwright_bare_imports(source: bytes) -> set[str]:
+    """Return bare imports that could resolve through candidate dependencies."""
+    return {
+        item
+        for item in _bare_javascript_imports(source)
+        if item != "@playwright/test"
+    }
+
+
 def _normalize_repo_relative_path(path: PurePosixPath) -> PurePosixPath | None:
     """Collapse dot segments and reject paths that escape the repository."""
     parts: list[str] = []
@@ -835,6 +861,12 @@ def _playwright_support_closure(
         paths.add(path)
         if path.suffix in _JAVASCRIPT_SUFFIXES:
             pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
+            unbound_bare = _unbound_playwright_bare_imports(source)
+            if unbound_bare:
+                raise ValueError(
+                    "Playwright bare package imports are not bound by this adapter: "
+                    + ", ".join(sorted(unbound_bare))
+                )
             try:
                 text = source.decode("utf-8")
             except UnicodeDecodeError as exc:
@@ -1054,6 +1086,21 @@ def _file_identity(path: Path) -> str:
     return hashlib.sha256(str(path).encode() + b"\0" + data).hexdigest()
 
 
+def _directory_identity(path: Path) -> str:
+    """Return a stable digest for files under a protected dependency directory."""
+    digest = hashlib.sha256()
+    if not path.is_dir():
+        digest.update(str(path).encode() + b"\0<missing>")
+        return digest.hexdigest()
+    for item in sorted(child for child in path.rglob("*") if child.is_file()):
+        try:
+            data = item.read_bytes()
+        except OSError:
+            data = b"<unreadable>"
+        digest.update(item.relative_to(path).as_posix().encode() + b"\0" + data + b"\0")
+    return digest.hexdigest()
+
+
 def _command_part_identity(root: Path, part: str) -> str:
     """Return literal argv text or a digest for an explicit path operand."""
     path = Path(part).expanduser()
@@ -1066,6 +1113,32 @@ def _command_part_identity(root: Path, part: str) -> str:
 def _is_script_like_operand(value: str) -> bool:
     """Return true for argv operands that are likely executable script paths."""
     return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
+
+
+def _external_node_modules_root(
+    root: Path, command: tuple[str, ...] | None
+) -> Path | None:
+    """Derive a non-candidate node_modules root from explicit validator argv."""
+    if command is None:
+        return None
+    candidate_root = root.resolve()
+    for part in command:
+        path = Path(part).expanduser()
+        if not path.is_absolute():
+            continue
+        resolved = path.resolve()
+        if _path_is_relative_to(resolved, candidate_root):
+            continue
+        parts = resolved.parts
+        if "node_modules" not in parts:
+            continue
+        index = parts.index("node_modules")
+        node_modules = Path(*parts[: index + 1])
+        if node_modules.is_dir() and not _path_is_relative_to(
+            node_modules.resolve(), candidate_root
+        ):
+            return node_modules
+    return None
 
 
 def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
@@ -1083,6 +1156,12 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
         payload["playwright"] = [
             _command_part_identity(root, part) for part in config.playwright_command
         ]
+        node_modules = _external_node_modules_root(root, config.playwright_command)
+        if node_modules is not None:
+            payload["playwright_dependency_environment"] = {
+                "node_modules": str(node_modules),
+                "node_modules_sha256": _directory_identity(node_modules),
+            }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1531,7 +1610,9 @@ def _playwright_candidate_toolchain(root: Path) -> bool:
     )
 
 
-def _playwright_environment(home: Path, module_root: Path) -> dict[str, str]:
+def _playwright_environment(
+    home: Path, node_modules: Path | None
+) -> dict[str, str]:
     """Return an isolated credential-free environment for Playwright."""
     environment = {
         key: value for key, value in os.environ.items()
@@ -1542,12 +1623,11 @@ def _playwright_environment(home: Path, module_root: Path) -> dict[str, str]:
         "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_CACHE_HOME": str(home / "cache"), "NODE_ENV": "test",
     }
-    node_modules = module_root / "node_modules"
-    if node_modules.is_dir():
+    if node_modules is not None and node_modules.is_dir():
         environment["NODE_PATH"] = str(node_modules)
-    local_browsers = node_modules / "playwright-core" / ".local-browsers"
-    if local_browsers.is_dir():
-        environment["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+        local_browsers = node_modules / "playwright-core" / ".local-browsers"
+        if local_browsers.is_dir():
+            environment["PLAYWRIGHT_BROWSERS_PATH"] = "0"
     return environment
 
 
@@ -1631,6 +1711,7 @@ def _run_playwright(
         return RunnerExecution(
             "playwright", EvidenceOutcome.ERROR, "playwright-untrusted", command_error
         ), ()
+    node_modules = _external_node_modules_root(root, prefix)
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
@@ -1650,7 +1731,7 @@ def _run_playwright(
                 timeout=timeout_seconds,
                 env=_playwright_environment(
                     Path(directory),
-                    command_root or root,
+                    node_modules,
                 ),
             )
         except subprocess.TimeoutExpired:
