@@ -65,8 +65,12 @@ def _repository(tmp_path: Path, *, mode: str = "pass", config: str = '{"testMatc
 
 def _run(root: Path, base: str, head: str, fake_jest: Path, timeout: int = 2):
     paths = (PurePosixPath("tests/widget.test.js"),)
+    try:
+        config_digest = jest_validator_config_digest(root, base, paths)
+    except ValueError:
+        config_digest = "invalid-jest-config"
     obligation = VerificationObligation(
-        "jest", "test", "jest", jest_validator_config_digest(root, base, paths),
+        "jest", "test", "jest", config_digest,
         ("REQ-1",), paths,
     )
     profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
