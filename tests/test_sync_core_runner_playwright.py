@@ -25,6 +25,7 @@ from pdd.sync_core.runner import (
     _playwright_environment,
     _playwright_command_error,
     _playwright_result,
+    _toolchain_manifest_identity,
     playwright_validator_config_digest,
 )
 
@@ -223,6 +224,17 @@ def test_playwright_rejects_non_declarative_config_shapes(
         )
 
 
+def test_playwright_rejects_semantic_config_indirection(tmp_path: Path) -> None:
+    root, commit = _repository(
+        tmp_path,
+        config="export default Object.fromEntries([['global' + 'Setup', './setup.ts']]);\n",
+    )
+    with pytest.raises(ValueError, match="declarative"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -239,6 +251,50 @@ def test_playwright_rejects_dynamic_or_aliased_module_loading(
     _git(root, "commit", "-q", "-m", "dynamic loader")
     commit = _git(root, "rev-parse", "HEAD")
     with pytest.raises(ValueError, match="module loading"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "const path = './helper'; require(path);\n",
+        "const path = './helper'; module.require(path);\n",
+        "const load = globalThis['require']; load('./helper');\n",
+    ],
+)
+def test_playwright_rejects_all_non_literal_module_loading(
+    tmp_path: Path, source: str
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "dynamic loader")
+    commit = _git(root, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="module loading"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "const matcher = 'toHave' + 'Screenshot'; expect(page)[matcher]('widget.png');\n",
+        "process.getBuiltinModule('fs').readFileSync('oracle.json');\n",
+        "process.getBuiltinModule('child_process').execFileSync('./helper');\n",
+    ],
+)
+def test_playwright_rejects_reflective_runtime_resource_access(
+    tmp_path: Path, source: str
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "reflective resource access")
+    commit = _git(root, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="runtime resource"):
         playwright_validator_config_digest(
             root, commit, (PurePosixPath("tests/widget.spec.ts"),)
         )
@@ -279,6 +335,47 @@ def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
     (dependencies / "helper").unlink()
     (dependencies / "helper").symlink_to(tmp_path / "missing", target_is_directory=True)
     assert _directory_identity(dependencies) != before
+
+
+def test_toolchain_manifest_binds_transitive_and_stable_symlink_target_bytes(
+    tmp_path: Path,
+) -> None:
+    toolchain = tmp_path / "toolchain"
+    target = tmp_path / "packages" / "helper"
+    target.mkdir(parents=True)
+    (target / "index.js").write_text("module.exports = 1", encoding="utf-8")
+    toolchain.mkdir()
+    (toolchain / "node").write_bytes(b"node")
+    (toolchain / "cli.js").write_text("require('./modules/helper')", encoding="utf-8")
+    (toolchain / "modules").mkdir()
+    (toolchain / "modules/helper").symlink_to(target, target_is_directory=True)
+    manifest = tmp_path / "playwright-toolchain.json"
+    manifest.write_text(
+        '{"version":1,"files":["toolchain/node","toolchain/cli.js",'
+        '"toolchain/modules/helper"]}',
+        encoding="utf-8",
+    )
+    before = _toolchain_manifest_identity(manifest)
+    (target / "index.js").write_text("module.exports = 2", encoding="utf-8")
+    assert _toolchain_manifest_identity(manifest) != before
+
+
+@pytest.mark.parametrize("launcher_kind", ["missing", "directory", "non_executable"])
+def test_playwright_launch_failures_are_normalized(
+    tmp_path: Path, launcher_kind: str
+) -> None:
+    root, commit = _repository(tmp_path)
+    launcher = tmp_path / launcher_kind
+    if launcher_kind == "directory":
+        launcher.mkdir()
+    elif launcher_kind == "non_executable":
+        launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    entrypoint = _fake_playwright(tmp_path)
+    _envelope, executions = _run(
+        root, commit, commit, (str(launcher), str(entrypoint))
+    )
+    assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert "launch" in executions[0].detail.lower()
 
 
 @pytest.mark.parametrize("option", ["--require=helper", "--import=helper", "--loader=helper"])
