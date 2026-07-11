@@ -57,6 +57,7 @@ def untrusted_child_environment(
     }
     if home is not None:
         environment["HOME"] = str(home)
+        environment["USERPROFILE"] = str(home)
         environment["XDG_CONFIG_HOME"] = str(home / ".config")
         environment["XDG_CACHE_HOME"] = str(home / ".cache")
     for key in drop or set():

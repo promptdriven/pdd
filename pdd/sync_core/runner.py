@@ -78,16 +78,64 @@ class AttestationIssue:
     issued_at: datetime
 
 
+def _pytest_plugin_modules(node: ast.AST) -> tuple[set[str], bool]:
+    """Return statically declared pytest plugin modules and dynamic status."""
+    modules: set[str] = set()
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        modules.add(node.value)
+        return modules, False
+    if isinstance(node, (ast.List, ast.Tuple)):
+        for item in node.elts:
+            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                return modules, True
+            modules.add(item.value)
+        return modules, False
+    return modules, True
+
+
+def _pytest_plugin_declaration_targets(node: ast.AST) -> tuple[ast.AST, ...]:
+    """Return assignment targets that may declare pytest plugins."""
+    if isinstance(node, ast.Assign):
+        return tuple(node.targets)
+    if isinstance(node, ast.AnnAssign):
+        return (node.target,)
+    return ()
+
+
+def _declares_pytest_plugins(targets: tuple[ast.AST, ...]) -> bool:
+    """Return whether assignment targets include the pytest_plugins sentinel."""
+    return any(
+        isinstance(target, ast.Name) and target.id == "pytest_plugins"
+        for target in targets
+    )
+
+
+def _is_pytest_support_path(path: PurePosixPath) -> bool:
+    """Return whether a path is pytest support rather than product code."""
+    return (
+        path.name == "conftest.py"
+        or path in PYTEST_CONFIG_PATHS
+        or "tests" in path.parts
+        or path.name.startswith("test_")
+    )
+
+
 def _local_module_paths(
-    root: Path, ref: str, source_path: PurePosixPath, source: bytes
-) -> set[PurePosixPath]:
+    root: Path,
+    ref: str,
+    source_path: PurePosixPath,
+    source: bytes,
+    *,
+    support_only: bool = False,
+) -> tuple[set[PurePosixPath], bool]:
     # pylint: disable=too-many-locals
     """Resolve repository-local Python imports without executing candidate code."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, UnicodeDecodeError):
-        return set()
+        return set(), False
     modules: set[str] = set()
+    dynamic_pytest_plugins = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
@@ -101,15 +149,10 @@ def _local_module_paths(
                     continue
                 separator = "" if not module or module.endswith(".") else "."
                 modules.add(f"{module}{separator}{alias.name}")
-        elif isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "pytest_plugins"
-            for target in node.targets
-        ):
-            values = node.value.elts if isinstance(node.value, (ast.List, ast.Tuple)) else ()
-            modules.update(
-                item.value for item in values if isinstance(item, ast.Constant)
-                and isinstance(item.value, str)
-            )
+        elif _declares_pytest_plugins(_pytest_plugin_declaration_targets(node)):
+            declared, dynamic = _pytest_plugin_modules(node.value)
+            modules.update(declared)
+            dynamic_pytest_plugins = dynamic_pytest_plugins or dynamic
     resolved: set[PurePosixPath] = set()
     for module in modules:
         level = len(module) - len(module.lstrip("."))
@@ -125,9 +168,12 @@ def _local_module_paths(
             module_path / "__init__.py",
         )
         resolved.update(
-            path for path in candidates if read_git_blob(root, ref, path) is not None
+            path
+            for path in candidates
+            if read_git_blob(root, ref, path) is not None
+            and (not support_only or _is_pytest_support_path(path))
         )
-    return resolved
+    return resolved, dynamic_pytest_plugins
 
 
 def _pytest_support_closure(
@@ -140,6 +186,7 @@ def _pytest_support_closure(
         ref,
         pending=tuple(test_paths) + tuple(config_paths),
         included=config_paths,
+        test_artifacts=test_paths,
     )
 
 
@@ -170,10 +217,12 @@ def _transitive_support_blobs(
     *,
     pending: tuple[PurePosixPath, ...],
     included: set[PurePosixPath],
+    test_artifacts: tuple[PurePosixPath, ...] = (),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Resolve local Python imports from protected runner support paths."""
     paths = set(included)
     remaining = list(pending)
+    test_artifact_set = set(test_artifacts)
     visited: set[PurePosixPath] = set()
     while remaining:
         path = remaining.pop()
@@ -183,7 +232,14 @@ def _transitive_support_blobs(
         source = read_git_blob(root, ref, path)
         if source is None or path.suffix != ".py":
             continue
-        discovered = _local_module_paths(root, ref, path, source) - visited
+        discovered, _dynamic = _local_module_paths(
+            root,
+            ref,
+            path,
+            source,
+            support_only=path in test_artifact_set,
+        )
+        discovered -= visited
         paths.update(discovered)
         remaining.extend(discovered)
     blobs = ((path, read_git_blob(root, ref, path)) for path in sorted(paths))
@@ -205,6 +261,35 @@ def pytest_validator_config_digest(
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
+
+
+def _has_dynamic_pytest_plugins(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> bool:
+    """Fail closed when pytest plugin declarations cannot be statically bound."""
+    config_paths = _pytest_config_paths(root, ref, test_paths)
+    remaining = list(tuple(test_paths) + tuple(config_paths))
+    test_artifact_set = set(test_paths)
+    visited: set[PurePosixPath] = set()
+    while remaining:
+        path = remaining.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = read_git_blob(root, ref, path)
+        if source is None or path.suffix != ".py":
+            continue
+        discovered, dynamic = _local_module_paths(
+            root,
+            ref,
+            path,
+            source,
+            support_only=path in test_artifact_set,
+        )
+        if dynamic:
+            return True
+        remaining.extend(discovered - visited)
+    return False
 
 
 def _support_digest(
@@ -355,9 +440,10 @@ def _junit_outcome(
     return outcome, detail
 
 
-def _pytest_environment() -> dict[str, str]:
+def _pytest_environment(home: Path) -> dict[str, str]:
     """Return the protected credential-free pytest process environment."""
     return untrusted_child_environment(
+        home=home,
         extra={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONNOUSERSITE": "1"},
         drop={"PYTEST_ADDOPTS", "PYTHONPATH"},
     )
@@ -421,6 +507,8 @@ def _trusted_collection_runner(
                 "_SPEC.loader.exec_module(_MODULE)",
                 "",
                 "import pytest",
+                "if _ROOT not in sys.path:",
+                "    sys.path.insert(0, _ROOT)",
                 "raise SystemExit(pytest.main(_ARGS, plugins=[_MODULE]))",
                 "",
             )
@@ -447,7 +535,10 @@ def _run_test_node(
         json.dumps(command, separators=(",", ":")).encode()
     ).hexdigest()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-runner-") as directory:
-        junit = Path(directory) / "junit.xml"
+        temporary = Path(directory)
+        home = temporary / "home"
+        home.mkdir(mode=0o700)
+        junit = temporary / "junit.xml"
         try:
             result = subprocess.run(
                 [*command, f"--junitxml={junit}"],
@@ -456,7 +547,7 @@ def _run_test_node(
                 text=True,
                 check=False,
                 timeout=timeout_seconds,
-                env=_pytest_environment(),
+                env=_pytest_environment(home),
             )
         except subprocess.TimeoutExpired:
             return RunnerExecution(
@@ -479,9 +570,12 @@ def _collect_node_ids(
     path: PurePosixPath,
     timeout_seconds: int,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
+    # pylint: disable=too-many-locals
     """Collect exact pytest node IDs through the protected adapter."""
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-collection-") as directory:
         temporary = Path(directory)
+        home = temporary / "home"
+        home.mkdir(mode=0o700)
         collection_output = temporary / "node-ids.json"
         pytest_args = [
             "--collect-only",
@@ -512,7 +606,7 @@ def _collect_node_ids(
                 text=True,
                 check=False,
                 timeout=timeout_seconds,
-                env=_pytest_environment()
+                env=_pytest_environment(home)
                 | {
                     "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
                 },
@@ -654,6 +748,7 @@ def _obligation_preflight(
     base_sha: str,
     head_sha: str,
 ) -> RunnerExecution | None:
+    # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
     if obligation.kind.casefold() != "test" or obligation.validator_id != "pytest":
         return RunnerExecution(
@@ -674,11 +769,40 @@ def _obligation_preflight(
         for ref in (base_sha, head_sha)
     }
     if expected_config_digests != {obligation.validator_config_digest}:
+        support_paths = tuple(
+            path
+            for path, _content in _pytest_support_closure(
+                root, head_sha, obligation.artifact_paths
+            )
+        )
+        changed_support = _changed_paths(root, base_sha, head_sha, support_paths)
+        direct_config = {
+            path.as_posix()
+            for path in _pytest_config_paths(root, head_sha, obligation.artifact_paths)
+        }
+        plugin_support = sorted(set(changed_support) - direct_config)
+        if plugin_support:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified pytest support cannot solely certify itself: "
+                + ", ".join(plugin_support),
+            )
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
             obligation.validator_config_digest,
             "declared validator config digest does not match protected closure",
+        )
+    if _has_dynamic_pytest_plugins(root, base_sha, obligation.artifact_paths) or (
+        _has_dynamic_pytest_plugins(root, head_sha, obligation.artifact_paths)
+    ):
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "dynamic pytest_plugins declarations are not bound by this adapter",
         )
     if _config_loads_plugin(root, base_sha) or _config_loads_plugin(root, head_sha):
         return RunnerExecution(
