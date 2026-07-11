@@ -46,6 +46,7 @@ uvicorn[standard]>=0.32.0
 websockets>=13.0
 watchdog>=4.0.0
 tiktoken>=0.7.0
+tree-sitter-language-pack==1.12.5
 
 # Dev dependencies
 build
