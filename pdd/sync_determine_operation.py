@@ -447,7 +447,12 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
     if PureWindowsPath(raw).drive:
         return None
     filename = PurePosixPath(raw)
-    if filename.is_absolute() or ".." in filename.parts:
+    if (
+        not filename.parts
+        or filename.as_posix() != raw
+        or filename.is_absolute()
+        or ".." in filename.parts
+    ):
         return None
     return filename
 
@@ -1178,20 +1183,21 @@ def _find_prompt_file(
         direct_relative = PurePosixPath(
             f"{candidate_basename}_{language}.prompt"
         )
+        direct_candidate = prompts_root.joinpath(*direct_relative.parts)
+        if context_prefix and not _prompt_path_has_context_prefix(
+            direct_candidate, prompts_root, context_prefix
+        ):
+            continue
         resolved, contained = _walk_prompt_relative_path(
             prompts_root,
             tuple(direct_relative.parts),
         )
         if not contained:
             raise UnsafePromptPathError(
-                prompts_root.joinpath(*direct_relative.parts),
+                direct_candidate,
                 resolved_prompts_root,
             )
         if resolved:
-            if context_prefix and not _prompt_path_has_context_prefix(
-                resolved, prompts_root, context_prefix
-            ):
-                continue
             return resolved
 
     # --- Step 3: Architecture.json hint → recursive search ---
@@ -2212,7 +2218,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     """
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"get_pdd_file_paths called: basename={basename}, language={language}, prompts_dir={prompts_dir}")
 
     try:
         # Use construct_paths to get configuration-aware paths
@@ -2225,6 +2230,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             raise UnsafePromptPathError(
                 Path(str(language)), prompts_root.resolve(strict=False)
             )
+        logger.info(
+            "get_pdd_file_paths called: basename=%s, language=%s, prompts_dir=%s",
+            basename,
+            language,
+            prompts_dir,
+        )
         name = basename.split('/')[-1] if '/' in basename else basename
 
         # Anchor configuration lookups (architecture.json, .pddrc) at the resolved

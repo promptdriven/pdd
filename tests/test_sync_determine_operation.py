@@ -3431,6 +3431,64 @@ def test_get_pdd_file_paths_rejects_noncanonical_or_control_input(
         get_pdd_file_paths(basename, language, prompts_dir="prompts")
 
 
+def test_get_pdd_file_paths_unsafe_root_direct_candidate_does_not_block_context(
+    tmp_path,
+    monkeypatch,
+):
+    """Containment is not evaluated for a direct candidate outside explicit context."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    assert external.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("basename", [".", "./", "foo/", "foo/.", "./foo", "foo//bar"])
+def test_get_pdd_file_paths_rejects_degenerate_basename(
+    tmp_path,
+    monkeypatch,
+    basename,
+):
+    """Noncanonical or empty normalized basenames cannot create hidden artifacts."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+
+@pytest.mark.parametrize("basename", ["foo\nFORGED", "foo\rFORGED", "foo\x1b[31m"])
+def test_get_pdd_file_paths_validates_before_logging_raw_input(
+    tmp_path,
+    monkeypatch,
+    caplog,
+    basename,
+):
+    """Rejected control characters never reach the INFO log record."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+    assert not caplog.records
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
