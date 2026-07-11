@@ -1,5 +1,6 @@
 """Tests for pass-only trusted runner normalization and self-certification guards."""
 
+import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -137,6 +138,49 @@ def test_candidate_modified_imported_test_helper_cannot_self_certify(tmp_path) -
         "from tests.helper import expected\ndef test_widget(): assert expected() == 1\n",
     )
     (root / "tests/__init__.py").write_text("")
+    (root / "tests/helper.py").write_text("def expected():\n    return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "tests/helper.py" in executions[0].detail
+
+
+def test_candidate_modified_importfrom_alias_helper_cannot_self_certify(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "from tests import helper\ndef test_widget(): assert helper.expected() == 1\n",
+    )
+    (root / "tests/__init__.py").write_text("")
+    (root / "tests/helper.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.py").write_text("def expected():\n    return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "tests/helper.py" in executions[0].detail
+
+
+def test_candidate_modified_relative_importfrom_helper_cannot_self_certify(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/__init__.py").write_text("")
+    (root / "tests/test_widget.py").write_text(
+        "from . import helper\ndef test_widget(): assert helper.expected() == 1\n"
+    )
+    (root / "tests/helper.py").write_text("def expected(): return 2\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base helper")
+    base = _git(root, "rev-parse", "HEAD")
     (root / "tests/helper.py").write_text("def expected(): return 1\n")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "candidate helper")
@@ -158,6 +202,29 @@ def test_validator_subprocess_cannot_read_signing_secret(tmp_path, monkeypatch) 
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert (root / "observed-secret").read_text() == "missing"
+
+
+def test_validator_subprocess_cannot_read_signer_capabilities(tmp_path, monkeypatch) -> None:
+    content = (
+        "import json, os\nfrom pathlib import Path\n"
+        "def test_widget():\n"
+        "    Path('observed-capabilities.json').write_text(json.dumps({\n"
+        "        'attestation_command': os.environ.get('PDD_ATTESTATION_SIGNER_COMMAND'),\n"
+        "        'certificate_issuer': os.environ.get('PDD_CERTIFICATE_ISSUER'),\n"
+        "        'released_checker': os.environ.get('PDD_RELEASED_CHECKER_COMMAND'),\n"
+        "    }, sort_keys=True))\n"
+    )
+    root, head = _repository(tmp_path, content)
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "protected-attestation")
+    monkeypatch.setenv("PDD_CERTIFICATE_ISSUER", "protected-issuer")
+    monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "protected-checker")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert json.loads((root / "observed-capabilities.json").read_text()) == {
+        "attestation_command": None,
+        "certificate_issuer": None,
+        "released_checker": None,
+    }
 
 
 def test_ambient_pytest_options_and_plugins_are_disabled(tmp_path, monkeypatch) -> None:

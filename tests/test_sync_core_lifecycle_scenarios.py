@@ -1,5 +1,6 @@
 """Process-level merge, wheel, and real-consumer lifecycle scenarios."""
 
+import argparse
 import os
 import json
 import subprocess
@@ -8,6 +9,10 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from pdd.sync_core.certificate import LifecycleResult
+from pdd.sync_core.lifecycle import _isolated_lifecycle_environment
+from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS
+from pdd.sync_core import scenario_harness
 from pdd.sync_core import (
     PlannedWrite,
     TransactionConflict,
@@ -42,6 +47,64 @@ def _record_metric(name: str, value: int) -> None:
     payload = json.loads(path.read_text()) if path.exists() else {}
     payload[name] = value
     path.write_text(json.dumps(payload, sort_keys=True))
+
+
+def test_lifecycle_contract_requires_public_repair_injection_scenarios() -> None:
+    required = {
+        "public-prompt-only-repair-zero-write-rerun",
+        "public-code-only-repair-zero-write-rerun",
+        "public-test-only-repair-zero-write-rerun",
+        "public-include-only-repair-zero-write-rerun",
+        "public-simultaneous-edit-repair-block",
+    }
+    assert required <= REQUIRED_SCENARIOS
+
+
+def test_lifecycle_predicate_requires_dependency_environment_digest() -> None:
+    result = LifecycleResult(
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        candidate_wheel_sha256="a" * 64,
+        dependency_environment_digest="b" * 64,
+    )
+    assert result.dependency_environment_digest == "b" * 64
+
+
+def test_lifecycle_environment_strips_signer_capabilities(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "protected-attestation")
+    monkeypatch.setenv("PDD_CERTIFICATE_ISSUER", "protected-issuer")
+    monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "protected-checker")
+    environment = _isolated_lifecycle_environment(tmp_path)
+    assert "PDD_ATTESTATION_SIGNER_COMMAND" not in environment
+    assert "PDD_CERTIFICATE_ISSUER" not in environment
+    assert "PDD_RELEASED_CHECKER_COMMAND" not in environment
+
+
+def test_candidate_scenario_environment_strips_signer_capabilities(
+    tmp_path, monkeypatch
+) -> None:
+    captured = {}
+
+    def fake_run(*_args, **kwargs):
+        captured.update(kwargs["env"])
+        return subprocess.CompletedProcess(_args[0], 0, "", "")
+
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "protected-attestation")
+    monkeypatch.setenv("PDD_CERTIFICATE_ISSUER", "protected-issuer")
+    monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "protected-checker")
+    monkeypatch.setattr(scenario_harness.subprocess, "run", fake_run)
+    scenario_harness._candidate(
+        argparse.Namespace(candidate_python=sys.executable),
+        tmp_path,
+        "--version",
+    )
+    assert "PDD_ATTESTATION_SIGNER_COMMAND" not in captured
+    assert "PDD_CERTIFICATE_ISSUER" not in captured
+    assert "PDD_RELEASED_CHECKER_COMMAND" not in captured
 
 
 def test_merge_base_movement_blocks_stale_repair_and_converges(tmp_path) -> None:

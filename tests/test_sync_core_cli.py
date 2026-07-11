@@ -5,8 +5,8 @@ from click.testing import CliRunner
 from pdd.cli import cli
 
 
-def test_documented_sync_certify_spelling_is_registered() -> None:
-    result = CliRunner().invoke(cli, ["sync", "certify", "--help"])
+def test_root_certify_command_is_registered() -> None:
+    result = CliRunner().invoke(cli, ["certify", "--help"])
     assert result.exit_code == 0, result.output
     assert "--repos" in result.output
     assert "--run-lifecycle-matrix" in result.output
@@ -17,7 +17,6 @@ def test_global_certify_requires_complete_acceptance_inputs(tmp_path) -> None:
     result = CliRunner().invoke(
         cli,
         [
-            "sync",
             "certify",
             "--repos",
             "pdd,pdd_cloud",
@@ -28,6 +27,13 @@ def test_global_certify_requires_complete_acceptance_inputs(tmp_path) -> None:
     assert result.exit_code == 1
     assert "global certification requires" in result.output
     assert "--full-inventory" in result.output
+
+
+def test_sync_certify_remains_available_as_sync_basename() -> None:
+    result = CliRunner().invoke(cli, ["sync", "certify", "--dry-run", "--json"])
+    assert result.exit_code == 0, result.output
+    assert "global certification requires" not in result.output
+    assert "--repos" not in result.output
 
 
 def test_reviewed_baseline_command_is_registered() -> None:
