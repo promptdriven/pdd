@@ -760,7 +760,7 @@ def _collect_node_ids(
             env=_pytest_environment(home) | {
                 "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
             }, writable_roots=(home.parent,), writable_files=(collection_output,),
-            readable_roots=(root,),
+            readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:
             return (
