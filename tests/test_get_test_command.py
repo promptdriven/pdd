@@ -805,3 +805,123 @@ class TestIssue1080MonorepoCwd:
         assert result is not None
         # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
         assert result.cwd is None
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestTestCommandDataclass:
+    """Tests for the TestCommand dataclass itself."""
+
+    def test_testcommand_default_cwd_is_none(self):
+        tc = TestCommand(command="pytest foo.py")
+        assert tc.command == "pytest foo.py"
+        assert tc.cwd is None
+
+    def test_testcommand_with_explicit_cwd(self, tmp_path):
+        tc = TestCommand(command="npx jest", cwd=tmp_path)
+        assert tc.cwd == tmp_path
+
+    def test_testcommand_not_collected_by_pytest(self):
+        # __test__ = False prevents pytest from treating it as a test class
+        assert getattr(TestCommand, "__test__", True) is False
+
+
+class TestAdditionalRunnerDetection:
+    """Additional coverage for runner detection edge cases."""
+
+    def test_vitest_mjs_config_detected(self, tmp_path):
+        (tmp_path / "vitest.config.mjs").write_text("export default {};")
+        (tmp_path / "package.json").write_text("{}")
+        test_file = tmp_path / "src" / "foo.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, cfg_dir = result
+        assert "npx vitest" in cmd
+        assert cfg_dir == tmp_path
+
+    def test_jest_mjs_config_detected(self, tmp_path):
+        (tmp_path / "jest.config.mjs").write_text("export default {};")
+        test_file = tmp_path / "foo.test.ts"
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx jest" in cmd
+
+    def test_playwright_js_config_for_spec_file(self, tmp_path):
+        (tmp_path / "playwright.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "login.spec.ts"
+        test_file.write_text("test('login', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx playwright" in cmd
+
+    def test_playwright_mjs_config_for_spec_file(self, tmp_path):
+        (tmp_path / "playwright.config.mjs").write_text("export default {};")
+        test_file = tmp_path / "login.spec.tsx"
+        test_file.write_text("test('x', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx playwright" in cmd
+
+    def test_nearest_config_wins_over_ancestor(self, tmp_path):
+        """A closer jest.config should be preferred over a more distant one."""
+        (tmp_path / "vitest.config.ts").write_text("export default {};")
+        (tmp_path / "package.json").write_text("{}")
+        inner = tmp_path / "packages" / "app"
+        inner.mkdir(parents=True)
+        (inner / "jest.config.js").write_text("module.exports = {};")
+        test_file = inner / "src" / "foo.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, cfg_dir = result
+        assert "npx jest" in cmd
+        assert cfg_dir == inner
+
+    def test_absolute_resolved_path_used_in_command(self, tmp_path, monkeypatch):
+        """The command should embed the resolved absolute path of the test file."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / "package.json").write_text("{}")
+        sub = tmp_path / "src"
+        sub.mkdir()
+        test_file = sub / "foo.test.ts"
+        test_file.write_text("test('x', () => {});")
+
+        # Change into the directory and pass a relative path
+        monkeypatch.chdir(sub)
+        result = get_test_command_for_file("foo.test.ts", language="typescript")
+        assert result is not None
+        assert str(test_file.resolve()) in result.command
+
+
+class TestLoadLanguageFormatIntegration:
+    """Integration tests that exercise CSV loading via public entry point."""
+
+    def test_rust_extension_uses_cargo_test_from_csv(self):
+        result = get_test_command_for_file("/tmp/lib.rs", language="rust")
+        # CSV has 'cargo test' for .rs with no {file} placeholder
+        assert result is not None
+        assert "cargo test" in result.command
+
+    def test_go_extension_uses_go_test_from_csv(self):
+        result = get_test_command_for_file("/tmp/foo_test.go", language="go")
+        assert result is not None
+        assert "go test" in result.command
+        assert "/tmp/foo_test.go" in result.command
