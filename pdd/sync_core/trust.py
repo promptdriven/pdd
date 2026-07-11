@@ -208,9 +208,12 @@ class AttestationEnvelope:
     results: tuple[ObligationEvidence, ...]
     validity: AttestationValidity
     signature: str = ""
+    payload_version: int = 2
 
     def payload(self) -> bytes:
         """Return canonical signed bytes, excluding the signature itself."""
+        if self.payload_version not in {1, 2}:
+            raise AttestationError("attestation payload version is unsupported")
         data = {
             "attestation_id": self.attestation_id,
             "issuer": self.issuer,
@@ -226,7 +229,6 @@ class AttestationEnvelope:
                 "tool_version": self.binding.tool_version,
                 "base_sha": self.binding.base_sha,
                 "checked_sha": self.binding.checked_sha,
-                "artifact_closure_digest": self.binding.artifact_closure_digest,
             },
             "results": [
                 {
@@ -241,6 +243,11 @@ class AttestationEnvelope:
                 "nonce": self.validity.nonce,
             },
         }
+        if self.payload_version == 2:
+            data["payload_version"] = 2
+            data["binding"]["artifact_closure_digest"] = (
+                self.binding.artifact_closure_digest
+            )
         if self.binding.playwright_command is not None:
             data["binding"]["playwright_command"] = list(
                 self.binding.playwright_command

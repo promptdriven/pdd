@@ -50,6 +50,7 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
     """Convert a signed envelope to stable JSON data without altering its payload."""
     binding = envelope.binding
     payload = {
+        "payload_version": envelope.payload_version,
         "attestation_id": envelope.attestation_id,
         "issuer": envelope.issuer,
         "binding": {
@@ -86,6 +87,8 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["playwright_toolchain_manifest"] = (
             binding.playwright_toolchain_manifest
         )
+    if envelope.payload_version == 1:
+        payload["binding"].pop("artifact_closure_digest")
     return payload
 
 
@@ -107,6 +110,13 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
     """Decode untrusted JSON into a typed envelope without granting trust."""
     try:
         binding_data = payload["binding"]
+        version_data = payload.get("payload_version")
+        if version_data is None:
+            payload_version = 1 if "artifact_closure_digest" not in binding_data else 2
+        elif type(version_data) is int and version_data in {1, 2}:
+            payload_version = version_data
+        else:
+            raise ValueError("attestation payload version is unsupported")
         subject_data = binding_data["subject"]
         validity_data = payload["validity"]
         results_data = payload["results"]
@@ -155,6 +165,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             results,
             validity,
             _string(payload, "signature"),
+            payload_version,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise EvidenceStoreError(f"attestation envelope is malformed: {exc}") from exc
