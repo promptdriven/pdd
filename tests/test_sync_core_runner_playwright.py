@@ -128,6 +128,11 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
     browsers = directory / "browsers"
     dependencies.mkdir(exist_ok=True)
     browsers.mkdir(exist_ok=True)
+    package = dependencies / "@playwright/test"
+    package.mkdir(parents=True, exist_ok=True)
+    installed_entrypoint = package / f"cli{entrypoint.suffix}"
+    if entrypoint.resolve() != installed_entrypoint.resolve():
+        installed_entrypoint.write_bytes(entrypoint.read_bytes())
     lockfile = directory / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
     manifest = directory / "playwright-toolchain.json"
@@ -136,7 +141,7 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
             "version": 2,
             "roles": {
                 "launcher": str(launcher.resolve()),
-                "entrypoint": str(entrypoint.resolve()),
+                "entrypoint": str(installed_entrypoint.resolve()),
                 "dependencies": str(dependencies.resolve()),
                 "browser_runtime": str(browsers.resolve()),
                 "lockfile": str(lockfile.resolve()),
@@ -147,11 +152,15 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
     return manifest
 
 
+def _manifest_entrypoint(manifest: Path) -> Path:
+    return Path(json.loads(manifest.read_text(encoding="utf-8"))["roles"]["entrypoint"])
+
+
 def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
     tmp_path: Path,
 ) -> None:
     root, _commit = _repository(tmp_path)
-    resource = root / "tests/oracle.js"
+    resource = root / "oracle.js"
     resource.write_text("window.expected = true;\n", encoding="utf-8")
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
@@ -260,7 +269,9 @@ def test_playwright_resource_objects_require_exact_schema(
         )
 
 
-@pytest.mark.parametrize("target", ["oracle.js", "widget.spec.ts-snapshots/oracle.txt"])
+@pytest.mark.parametrize(
+    "target", ["oracle.js", "tests/widget.spec.ts-snapshots/oracle.txt"]
+)
 def test_playwright_rejects_symlinked_closure_members(
     tmp_path: Path, target: str
 ) -> None:
@@ -269,7 +280,9 @@ def test_playwright_rejects_symlinked_closure_members(
     actual.write_text("trusted", encoding="utf-8")
     link = root / target
     link.parent.mkdir(parents=True, exist_ok=True)
-    link.symlink_to(Path("actual.txt") if link.parent == root else Path("../actual.txt"))
+    link.symlink_to(
+        Path("actual.txt") if link.parent == root else Path("../../actual.txt")
+    )
     if target == "oracle.js":
         (root / "tests/widget.spec.ts").write_text(
             "import { test } from '@playwright/test';\n"
@@ -342,6 +355,9 @@ def test_playwright_toolchain_entrypoint_must_resolve_inside_declared_package(
     manifest = _toolchain_manifest(
         tmp_path / "unrelated-toolchain", Path(sys.executable), entrypoint
     )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["entrypoint"] = str(entrypoint.resolve())
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="entrypoint|dependency|package"):
         _playwright_toolchain_identity(
             root, (sys.executable, str(entrypoint)), manifest
@@ -470,6 +486,7 @@ def _run(
     head: str,
     fake: Path | tuple[str, ...],
     timeout: int = 2,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ):
     command = fake if isinstance(fake, tuple) else (sys.executable, str(fake))
     entrypoint = Path(command[1])
@@ -479,13 +496,18 @@ def _run(
         declared = "protected-playwright-tool"
         (manifest_root / declared).write_bytes(b"protected")
     manifest = _toolchain_manifest(manifest_root, Path(command[0]), manifest_root / declared)
+    if not entrypoint.is_relative_to(root):
+        command = (command[0], str(_manifest_entrypoint(manifest)))
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     try:
-        config_digest = playwright_validator_config_digest(root, base, paths)
+        config_digest = playwright_validator_config_digest(
+            root, base, paths, code_under_test_paths
+        )
     except ValueError:
         config_digest = "invalid-playwright-config"
     obligation = VerificationObligation(
-        "playwright", "test", "playwright", config_digest, ("REQ-1",), paths
+        "playwright", "test", "playwright", config_digest, ("REQ-1",), paths,
+        code_under_test_paths=code_under_test_paths,
     )
     profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
     return run_profile(
@@ -504,6 +526,27 @@ def _run(
             playwright_toolchain_manifest=manifest,
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("candidate_mode", "expected"),
+    [("candidate-pass", EvidenceOutcome.PASS), ("fail", EvidenceOutcome.FAIL)],
+)
+def test_playwright_candidate_product_changes_execute_instead_of_quarantine(
+    tmp_path: Path, candidate_mode: str, expected: EvidenceOutcome
+) -> None:
+    root, base = _repository(tmp_path)
+    (root / "source.ts").write_text(candidate_mode, encoding="utf-8")
+    _git(root, "add", "source.ts")
+    _git(root, "commit", "-q", "-m", "candidate product")
+    _envelope, executions = _run(
+        root,
+        base,
+        _git(root, "rev-parse", "HEAD"),
+        _fake_playwright(tmp_path),
+        code_under_test_paths=(PurePosixPath("source.ts"),),
+    )
+    assert executions[0].outcome is expected
 
 
 def _run_default_playwright(root: Path, base: str, head: str, timeout: int = 2):
@@ -925,17 +968,15 @@ def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
     root, commit = _repository(tmp_path)
     runner = _fake_playwright(tmp_path)
     manifest = _toolchain_manifest(tmp_path / "protected-toolchain", Path(sys.executable), runner)
-    original_run = subprocess.run
+    installed = _manifest_entrypoint(manifest)
+    original_supervised = runner_module.run_supervised
 
     def mutate_after_playwright(*args, **kwargs):
-        kwargs.setdefault("check", False)
-        result = original_run(*args, **kwargs)
-        command = args[0] if args else kwargs.get("args", ())
-        if isinstance(command, (list, tuple)) and str(runner) in command:
-            runner.write_text(runner.read_text(encoding="utf-8") + "# changed\n")
+        result = original_supervised(*args, **kwargs)
+        installed.write_text(installed.read_text(encoding="utf-8") + "# changed\n")
         return result
 
-    monkeypatch.setattr("pdd.sync_core.runner.subprocess.run", mutate_after_playwright)
+    monkeypatch.setattr(runner_module, "run_supervised", mutate_after_playwright)
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     obligation = VerificationObligation(
         "playwright", "test", "playwright",
@@ -950,7 +991,7 @@ def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
         ),
         config=RunnerConfig(
             timeout_seconds=2,
-            playwright_command=(sys.executable, str(runner)),
+            playwright_command=(sys.executable, str(installed)),
             playwright_toolchain_manifest=manifest,
         ),
     )
@@ -971,7 +1012,12 @@ def test_playwright_rechecks_one_identity_after_the_complete_protocol(
         result = original(*args, **kwargs)
         calls += 1
         if calls == 3:
-            runner.write_text(runner.read_text(encoding="utf-8") + "# post-run drift\n")
+            installed = next(
+                tmp_path.glob("**/node_modules/@playwright/test/cli*")
+            )
+            installed.write_text(
+                installed.read_text(encoding="utf-8") + "# post-run drift\n"
+            )
         return result
 
     monkeypatch.setattr("pdd.sync_core.runner._run_playwright", mutate_after_final_run)
