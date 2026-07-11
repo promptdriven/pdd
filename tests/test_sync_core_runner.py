@@ -240,6 +240,24 @@ def test_ambient_pytest_options_and_plugins_are_disabled(tmp_path, monkeypatch) 
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
+def test_collection_probe_is_checker_owned_not_candidate_shadow(tmp_path) -> None:
+    root, head = _repository(tmp_path, "def test_widget(): assert True\n")
+    candidate_probe = root / "pdd/sync_core/pytest_probe.py"
+    candidate_probe.parent.mkdir(parents=True)
+    (root / "pdd/__init__.py").write_text("", encoding="utf-8")
+    (root / "pdd/sync_core/__init__.py").write_text("", encoding="utf-8")
+    candidate_probe.write_text(
+        "from pathlib import Path\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    Path('candidate-probe-loaded').write_text('shadowed')\n"
+        "    items[:] = []\n",
+        encoding="utf-8",
+    )
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert not (root / "candidate-probe-loaded").exists()
+
+
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
     content = "def test_keep(): assert True\ndef test_drop(): assert True\n"
     root, head = _repository(tmp_path, content)

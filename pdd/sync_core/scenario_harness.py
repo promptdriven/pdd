@@ -691,7 +691,6 @@ def _candidate_public_report(arguments: argparse.Namespace) -> ScenarioResult:
         result = _candidate(
             arguments,
             root,
-            "sync",
             "certify",
             "--base-ref",
             commit,
@@ -766,7 +765,6 @@ def _cloud_canary(arguments: argparse.Namespace) -> ScenarioResult:
         candidate = _candidate(
             arguments,
             cloud,
-            "sync",
             "certify",
             "--base-ref",
             arguments.cloud_base_ref,
