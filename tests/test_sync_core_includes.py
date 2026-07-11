@@ -61,6 +61,13 @@ def test_literal_include_tag_in_prose_does_not_consume_later_markup() -> None:
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
+@pytest.mark.timeout(1)
+def test_malformed_include_text_is_bounded() -> None:
+    """Unterminated include markup cannot trigger superlinear parser backtracking."""
+    text = "<include " + ('path="docs/a.md" ' * 20_000)
+    assert parse_include_references(text) == ()
+
+
 def test_preprocess_and_sync_order_use_the_same_parser(tmp_path) -> None:
     prompt = tmp_path / "widget_python.prompt"
     prompt.write_text(PROMPT, encoding="utf-8")
