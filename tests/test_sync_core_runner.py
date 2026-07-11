@@ -147,6 +147,65 @@ def test_candidate_modified_imported_test_helper_cannot_self_certify(tmp_path) -
     assert "tests/helper.py" in executions[0].detail
 
 
+def test_candidate_modified_product_code_can_be_certified_by_protected_tests(tmp_path) -> None:
+    root, base = _repository(
+        tmp_path,
+        "import product\n\ndef test_widget(): assert product.expected() >= 1\n",
+    )
+    (root / "product.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base product")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "product.py").write_text("def expected(): return 2\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate product")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_string_pytest_plugins_are_bound_as_protected_support(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "def test_widget(value): assert value in {1, 2}\n",
+    )
+    (root / "tests/__init__.py").write_text("")
+    (root / "tests/plugin.py").write_text(
+        "import pytest\n@pytest.fixture\ndef value(): return 1\n"
+    )
+    (root / "conftest.py").write_text('pytest_plugins = "tests.plugin"\n')
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "base string plugin")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/plugin.py").write_text(
+        "import pytest\n@pytest.fixture\ndef value(): return 2\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate plugin change")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, base, head)
+    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert "tests/plugin.py" in executions[0].detail
+
+
+def test_dynamic_pytest_plugins_fail_closed(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path,
+        "def test_widget(value): assert value == 1\n",
+    )
+    (root / "tests/__init__.py").write_text("")
+    (root / "tests/plugin.py").write_text(
+        "import pytest\n@pytest.fixture\ndef value(): return 1\n"
+    )
+    (root / "conftest.py").write_text("pytest_plugins = tuple(['tests.plugin'])\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "dynamic plugin declaration")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "dynamic pytest_plugins" in executions[0].detail
+
+
 def test_candidate_modified_importfrom_alias_helper_cannot_self_certify(tmp_path) -> None:
     root, _initial = _repository(
         tmp_path,
@@ -202,6 +261,65 @@ def test_validator_subprocess_cannot_read_signing_secret(tmp_path, monkeypatch) 
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert (root / "observed-secret").read_text() == "missing"
+
+
+def test_pytest_execution_uses_private_home_and_userprofile(tmp_path, monkeypatch) -> None:
+    protected_home = tmp_path / "protected-home"
+    protected_home.mkdir()
+    (protected_home / "secret.txt").write_text("protected-secret")
+    monkeypatch.setenv("HOME", str(protected_home))
+    monkeypatch.setenv("USERPROFILE", str(protected_home))
+    content = (
+        "import json, os\nfrom pathlib import Path\n"
+        "def test_widget():\n"
+        "    home = Path(os.environ['HOME'])\n"
+        "    profile = Path(os.environ['USERPROFILE'])\n"
+        "    Path('observed-execution-home.json').write_text(json.dumps({\n"
+        "        'home': str(home),\n"
+        "        'userprofile': str(profile),\n"
+        "        'home_secret': (home / 'secret.txt').exists(),\n"
+        "        'profile_secret': (profile / 'secret.txt').exists(),\n"
+        "    }, sort_keys=True))\n"
+    )
+    root, head = _repository(tmp_path, content)
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    observed = json.loads((root / "observed-execution-home.json").read_text())
+    assert observed["home"] != str(protected_home)
+    assert observed["userprofile"] != str(protected_home)
+    assert observed["home_secret"] is False
+    assert observed["profile_secret"] is False
+
+
+def test_pytest_collection_uses_private_home_and_userprofile(tmp_path, monkeypatch) -> None:
+    protected_home = tmp_path / "protected-home"
+    protected_home.mkdir()
+    (protected_home / "secret.txt").write_text("protected-secret")
+    monkeypatch.setenv("HOME", str(protected_home))
+    monkeypatch.setenv("USERPROFILE", str(protected_home))
+    root, head = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "conftest.py").write_text(
+        "import json, os\nfrom pathlib import Path\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    home = Path(os.environ['HOME'])\n"
+        "    profile = Path(os.environ['USERPROFILE'])\n"
+        "    Path('observed-collection-home.json').write_text(json.dumps({\n"
+        "        'home': str(home),\n"
+        "        'userprofile': str(profile),\n"
+        "        'home_secret': (home / 'secret.txt').exists(),\n"
+        "        'profile_secret': (profile / 'secret.txt').exists(),\n"
+        "    }, sort_keys=True))\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "collection hook")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    observed = json.loads((root / "observed-collection-home.json").read_text())
+    assert observed["home"] != str(protected_home)
+    assert observed["userprofile"] != str(protected_home)
+    assert observed["home_secret"] is False
+    assert observed["profile_secret"] is False
 
 
 def test_validator_subprocess_cannot_read_signer_capabilities(tmp_path, monkeypatch) -> None:
