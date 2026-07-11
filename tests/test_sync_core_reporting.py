@@ -30,6 +30,7 @@ from pdd.sync_core import (
     encode_attestation,
     encode_fingerprint,
     evidence_relpath,
+    finalize_legacy_paths,
     finalize_unit,
     load_verification_profiles,
     runner_identity_digest,
@@ -615,6 +616,30 @@ def test_validate_command_wires_protected_human_attestation_config(
     assert call.kwargs["signer"] is signer
     assert call.kwargs["config"].human_attestation_store == store.resolve()
     assert call.kwargs["config"].human_attestation_replay_ledger == ledger.resolve()
+
+
+def test_legacy_finalizer_wires_protected_human_attestation_environment(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    store = tmp_path / "external-human-store"
+    ledger = tmp_path / "external-human-replay.json"
+    store.mkdir()
+    prompt = root / "prompts/widget_python.prompt"
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", commit)
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_STORE", str(store))
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER", str(ledger))
+    with patch(
+        "pdd.sync_core.finalize.canonical_root_for_paths", return_value=root
+    ), patch(
+        "pdd.sync_core.finalize.attestation_signer_from_environment",
+        return_value=object(),
+    ), patch("pdd.sync_core.finalize.finalize_unit") as mocked_finalize:
+        assert finalize_legacy_paths({"prompt": prompt}) is True
+
+    config = mocked_finalize.call_args.kwargs["config"]
+    assert config.human_attestation_store == store.resolve()
+    assert config.human_attestation_replay_ledger == ledger.resolve()
 
 
 def test_validate_command_rejects_candidate_local_human_attestation_paths(
