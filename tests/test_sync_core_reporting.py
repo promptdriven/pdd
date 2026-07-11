@@ -161,7 +161,7 @@ def _finalize_trusted_baseline(
         TRUSTED_RUNNER_VERSION,
         commit,
         commit,
-        artifact_closure_digest or snapshot.digest(),
+        artifact_closure_digest=artifact_closure_digest or snapshot.digest(),
     )
     envelope = SIGNER.issue(
         AttestationRequest(
