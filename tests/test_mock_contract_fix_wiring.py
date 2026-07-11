@@ -212,3 +212,14 @@ def test_agentic_success_gate_runs_before_commit_and_push() -> None:
     gate = source.index("_validate_changed_mock_contracts(", success_branch)
     commit = source.index("_commit_and_push(", gate)
     assert success_branch < gate < commit
+
+
+def test_post_validation_repair_paths_recheck_before_push() -> None:
+    """CI and pre-checkup mutations cannot bypass the terminal contract gate."""
+    source = inspect.getsource(run_agentic_e2e_fix_orchestrator)
+    ci_hook = source.index("pre_commit_check=")
+    pre_checkup = source.index("_run_pre_checkup_gate_with_remediation(", ci_hook)
+    final_gate = source.index("final_contract_error =", pre_checkup)
+    gate_sync_push = source.index("_commit_and_push(", final_gate)
+
+    assert ci_hook < pre_checkup < final_gate < gate_sync_push

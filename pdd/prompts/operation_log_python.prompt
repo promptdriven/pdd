@@ -57,6 +57,7 @@ The decorator must:
 - Extract module identity from the `prompt_file` parameter, falling back to the first `.prompt`-suffixed value in an `args` tuple (for `nargs=-1` commands)
 - Handle cases where module identity cannot be inferred (skip logging to disk)
 - Extract cost/model from result tuples via helpers in `sync_orchestration`
+- Treat metadata finalization as part of command success: do not append a `success: true` log entry until run-report clearing, fingerprint persistence, and run-report persistence finish. If one of those post-command operations raises, update the entry to `success: false` with the finalization error, append that failed entry, then re-raise so the CLI remains fail-closed.
 
 % Dependencies
 <module_dependencies>

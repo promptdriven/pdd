@@ -1136,6 +1136,23 @@ def _validate_changed_mock_contracts(
     )
 
 
+def _changed_mock_contract_error(
+    *,
+    cwd: Path,
+    changed_files: Sequence[str],
+    baseline_ref: Optional[str],
+) -> Optional[str]:
+    """Return a rendered divergence error, or ``None`` when the gate permits."""
+    report = _validate_changed_mock_contracts(
+        cwd=cwd,
+        changed_files=changed_files,
+        baseline_ref=baseline_ref,
+    )
+    if report.diverged:
+        return format_mock_contract_report(report)
+    return None
+
+
 def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identified_units_str: str) -> Dict[str, Any]:
     """Updates dev unit states based on Step 8 output."""
     identified_units = [u.strip() for u in identified_units_str.split(",") if u.strip()]
@@ -1849,6 +1866,7 @@ def _run_pre_checkup_gate_with_remediation(
     timeout: float,
     initial_file_hashes: Dict[str, str],
     quiet: bool,
+    initial_sha: str = "",
 ) -> Tuple[bool, str, float, List[str]]:
     """Run the local pre-checkup gate and remediate actionable gate failures."""
     total_cost = 0.0
@@ -1930,6 +1948,23 @@ def _run_pre_checkup_gate_with_remediation(
                 ),
                 total_cost,
                 latest_changed_files,
+            )
+
+        remediation_changed_files = (
+            _detect_changed_files(cwd, initial_file_hashes) or latest_changed_files
+        )
+        remediation_contract_error = _changed_mock_contract_error(
+            cwd=cwd,
+            changed_files=remediation_changed_files,
+            baseline_ref=initial_sha,
+        )
+        if remediation_contract_error:
+            return (
+                False,
+                "pre_checkup_gate fix failed mock-contract validation: "
+                f"{remediation_contract_error}",
+                total_cost,
+                remediation_changed_files,
             )
 
         commit_success, commit_message = _commit_ci_fix(
@@ -3711,6 +3746,14 @@ def run_agentic_e2e_fix_orchestrator(
                 run_agentic_task_fn=run_agentic_task,
                 timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                 quiet=quiet,
+                pre_commit_check=lambda: _changed_mock_contract_error(
+                    cwd=cwd,
+                    changed_files=(
+                        _detect_changed_files(cwd, initial_file_hashes)
+                        or changed_files
+                    ),
+                    baseline_ref=initial_sha,
+                ),
             )
             total_cost += ci_cost
             changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
@@ -3794,6 +3837,7 @@ def run_agentic_e2e_fix_orchestrator(
                         ci_retries=ci_retries,
                         timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                         initial_file_hashes=initial_file_hashes,
+                        initial_sha=initial_sha,
                         quiet=quiet,
                     )
                 )
@@ -3812,6 +3856,24 @@ def run_agentic_e2e_fix_orchestrator(
                 # fingerprint finalization stays with the post-merge sync, per the
                 # PR plan). It is a safe no-op (returns success) when the gate
                 # healed nothing.
+                final_contract_error = _changed_mock_contract_error(
+                    cwd=cwd,
+                    changed_files=(
+                        _detect_changed_files(cwd, initial_file_hashes)
+                        or changed_files
+                    ),
+                    baseline_ref=initial_sha,
+                )
+                if final_contract_error:
+                    return (
+                        False,
+                        "pre_checkup_gate drift-sync failed mock-contract validation: "
+                        f"{final_contract_error}",
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+
                 gate_sync_ok, gate_sync_message = _commit_and_push(
                     cwd=cwd,
                     issue_number=issue_number,

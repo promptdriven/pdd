@@ -1345,6 +1345,7 @@ def run_ci_validation_loop(
     timeout: float,
     quiet: bool,
     expected_head_sha_override: Optional[str] = None,
+    pre_commit_check: Optional[Callable[[], Optional[str]]] = None,
 ) -> Tuple[bool, str, float]:
     """Poll required PR checks and iterate on CI-only failures until they pass.
 
@@ -1355,6 +1356,11 @@ def run_ci_validation_loop(
     SHA via this override makes the poll wait for the correct head and
     prevents the timeout from burning while ``cwd``'s stale HEAD is compared
     to the advanced remote.
+
+    ``pre_commit_check`` is a fail-closed hook for caller-owned invariants that
+    must be re-evaluated after the CI repair agent edits the worktree but before
+    those edits are committed or pushed. It returns ``None`` when clean, or an
+    actionable failure message when the candidate must be rejected.
     """
     total_cost = 0.0
     max_retries = max(0, int(max_retries))
@@ -1688,6 +1694,18 @@ def run_ci_validation_loop(
                 cwd=cwd,
             )
             return False, "CI fix task did not apply an actionable fix", total_cost
+
+        if pre_commit_check is not None:
+            try:
+                pre_commit_error = pre_commit_check()
+            except Exception as exc:  # pylint: disable=broad-except
+                pre_commit_error = f"pre-commit validation raised: {exc}"
+            if pre_commit_error:
+                return (
+                    False,
+                    f"CI fix failed pre-commit validation: {pre_commit_error}",
+                    total_cost,
+                )
 
         commit_success, commit_message = _commit_ci_fix(
             cwd=cwd,
