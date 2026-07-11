@@ -1081,11 +1081,7 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
         ]
     if config.playwright_command is not None:
         payload["playwright"] = [
-            _file_identity(Path(part).resolve())
-            if (Path(part).is_absolute() or "/" in part)
-            and Path(part).expanduser().exists()
-            else part
-            for part in config.playwright_command
+            _command_part_identity(root, part) for part in config.playwright_command
         ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -1630,8 +1626,11 @@ def _run_playwright(
     prefix = _playwright_command(config)
     if prefix is None:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
-    if _command_uses_candidate_checkout(root, prefix):
-        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "explicit Playwright command inside the candidate checkout is not trusted"), ()
+    command_error = _protected_command_error(root, prefix)
+    if command_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR, "playwright-untrusted", command_error
+        ), ()
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
