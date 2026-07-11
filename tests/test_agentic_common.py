@@ -6335,7 +6335,7 @@ def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_d
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
     os.environ["OPENAI_API_KEY"] = "key"
-    os.environ["CODEX_MODEL"] = "o3-pro"
+    os.environ["CODEX_MODEL"] = "gpt-5.6"
 
     jsonl_output = [
         json.dumps({"type": "init"}),
@@ -6358,8 +6358,11 @@ def test_codex_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load_model_d
     cmd = args[0]
     assert "--model" in cmd, f"Expected --model in command, got: {cmd}"
     model_idx = cmd.index("--model")
-    assert cmd[model_idx + 1] == "o3-pro", (
-        f"Expected 'o3-pro' after --model, got: {cmd[model_idx + 1]}"
+    assert cmd[model_idx + 1] == "gpt-5.6", (
+        f"Expected 'gpt-5.6' after --model, got: {cmd[model_idx + 1]}"
+    )
+    assert model_idx < cmd.index("exec"), (
+        f"--model must be a top-level flag before exec subcommand: {cmd}"
     )
 
 
