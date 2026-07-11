@@ -73,7 +73,7 @@ from .manifest import (
     build_unit_manifest,
 )
 from .path_policy import PathPolicy, PathPolicyError, ResolvedPath
-from .alias_policy import ALIAS_POLICY_PATH, load_protected_aliases
+from .alias_policy import ALIAS_POLICY_PATH, load_committed_aliases, load_protected_aliases
 from .planner import RepairAction, RepairPlan, RepairPolicy, plan_repair
 from .snapshot import SnapshotError, build_unit_snapshot
 from .reporting import (
@@ -243,6 +243,7 @@ __all__ = [
     "load_attestation",
     "load_candidate_artifact_provenance",
     "load_protected_aliases",
+    "load_committed_aliases",
     "load_trust_policy",
     "load_sync_waivers",
     "initialize_repository_identity",

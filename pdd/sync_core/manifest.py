@@ -646,8 +646,15 @@ def _candidate_records(
     candidates: list[CandidateRecord] = []
     accounted: set[PurePosixPath] = set()
     invalid: list[str] = []
+    alias_counterparts = _managed_alias_counterparts(
+        {**sources.prompt_owner, **sources.output_owner}, sources.approved_aliases
+    )
     for path in sorted(set(sources.base_entries) | set(sources.head_entries)):
-        unit_id = sources.prompt_owner.get(path) or sources.output_owner.get(path)
+        unit_id = (
+            sources.prompt_owner.get(path)
+            or sources.output_owner.get(path)
+            or alias_counterparts.get(path)
+        )
         if path in sources.base_entries:
             rule, rule_error = _ownership_for(path, sources.ownership_rules)
         else:
@@ -671,10 +678,10 @@ def _candidate_records(
             role = "approved-alias"
             inventory = InventoryStatus.MANAGED
             provenance = "protected-alias-policy"
-        elif _under_approved_alias_target(path, sources.approved_aliases):
-            role = "approved-alias-target"
+        elif path in alias_counterparts:
+            role = "code"
             inventory = InventoryStatus.MANAGED
-            provenance = "protected-alias-policy"
+            provenance = "architecture:protected-alias-policy"
         elif _is_protected_control(path):
             role = "policy"
             inventory = InventoryStatus.MANAGED
@@ -718,14 +725,21 @@ def _candidate_records(
     return candidates, accounted, invalid
 
 
-def _under_approved_alias_target(
-    path: PurePosixPath,
+def _managed_alias_counterparts(
+    managed_paths: dict[PurePosixPath, UnitId],
     approved_aliases: dict[PurePosixPath, PurePosixPath],
-) -> bool:
-    for canonical in approved_aliases.values():
-        if path == canonical or path.parts[: len(canonical.parts)] == canonical.parts:
-            return True
-    return False
+) -> dict[PurePosixPath, UnitId]:
+    """Map exact managed logical paths to their approved canonical destinations."""
+    counterparts: dict[PurePosixPath, UnitId] = {}
+    for path, unit_id in managed_paths.items():
+        for alias, canonical in approved_aliases.items():
+            if path == alias:
+                counterparts[canonical] = unit_id
+            elif path.parts[: len(alias.parts)] == alias.parts:
+                counterparts[canonical.joinpath(*path.parts[len(alias.parts) :])] = (
+                    unit_id
+                )
+    return counterparts
 
 
 def _is_protected_control(path: PurePosixPath) -> bool:

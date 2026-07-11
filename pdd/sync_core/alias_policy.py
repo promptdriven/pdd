@@ -1,4 +1,5 @@
 """Protected approved-alias policy loading for canonical synchronization."""
+# pylint: disable=duplicate-code
 
 from __future__ import annotations
 
@@ -63,3 +64,13 @@ def load_protected_aliases(
     if head != base:
         raise ValueError("candidate changed protected alias policy")
     return _parse(base)
+
+
+def load_committed_aliases(
+    root: Path, ref: str = "HEAD"
+) -> Mapping[PurePosixPath, PurePosixPath]:
+    """Load approved aliases from a committed protected policy blob."""
+    raw = read_git_blob(root, ref, ALIAS_POLICY_PATH)
+    if raw is None:
+        return MappingProxyType({})
+    return _parse(raw)

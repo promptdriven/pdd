@@ -33,6 +33,7 @@ from ..sync_core import (
     checker_identity_from_environment,
     encode_fingerprint,
     finalize_unit,
+    load_committed_aliases,
     load_verification_profiles,
     run_lifecycle_matrix,
     signer_from_environment,
@@ -315,7 +316,10 @@ def certify(
 def recover(ctx: click.Context, transaction_id: str) -> None:
     """Explicitly recover one crash-durable synchronization transaction."""
     ctx.ensure_object(dict)
-    result = TransactionManager(Path.cwd()).recover(transaction_id)
+    root = Path.cwd()
+    result = TransactionManager(
+        root, approved_aliases=load_committed_aliases(root)
+    ).recover(transaction_id)
     click.echo(
         json.dumps(
             {
