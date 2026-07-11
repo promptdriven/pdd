@@ -6,8 +6,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from pdd.sync_core.manifest import build_unit_manifest
 
 
@@ -24,7 +22,16 @@ def _git(root: Path, *args: str) -> None:
 
 def _commit(root: Path, message: str) -> str:
     _git(root, "add", ".")
-    _git(root, "-c", "user.name=PDD test", "-c", "user.email=pdd@example.test", "commit", "-m", message)
+    _git(
+        root,
+        "-c",
+        "user.name=PDD test",
+        "-c",
+        "user.email=pdd@example.test",
+        "commit",
+        "-m",
+        message,
+    )
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 
 
@@ -61,7 +68,10 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     assert manifest.repository_id == REPOSITORY_ID
     assert not manifest.invalid_reasons
     assert not manifest.unaccounted_tracked_paths
-    assert {(unit.prompt_relpath.as_posix(), unit.language_id) for unit in manifest.expected_managed} == identities
+    assert {
+        (unit.prompt_relpath.as_posix(), unit.language_id)
+        for unit in manifest.expected_managed
+    } == identities
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
 
     managed_prompt_paths = {
@@ -71,7 +81,10 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     tracked = subprocess.check_output(
         ["git", "ls-tree", "-r", "-z", "--name-only", "HEAD"], cwd=ROOT
     ).decode("utf-8").split("\0")[:-1]
-    assert {item.candidate_id.artifact_relpath.as_posix() for item in manifest.candidates} == set(tracked)
+    assert {
+        item.candidate_id.artifact_relpath.as_posix()
+        for item in manifest.candidates
+    } == set(tracked)
 
 
 def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:
@@ -118,4 +131,7 @@ def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -
     removed = _commit(root, "candidate removal")
     removal_manifest = build_unit_manifest(root, base_ref=base, head_ref=removed)
     assert len(removal_manifest.expected_managed) == 2
-    assert any("removed managed unit lacks" in reason for reason in removal_manifest.invalid_reasons)
+    assert any(
+        "removed managed unit lacks" in reason
+        for reason in removal_manifest.invalid_reasons
+    )
