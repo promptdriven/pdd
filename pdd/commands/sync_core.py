@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ from ..sync_core import (
     signer_from_environment,
 )
 from ..sync_core.git_io import resolve_git_commit
+from ..sync_core.runner import RunnerConfig
 from .. import __version__
 
 
@@ -137,6 +139,47 @@ def _load_nightly_observation(path: Path | None) -> NightlyObservation | None:
         payload["post_canary_rerun_writes"],
     )
     return observation
+
+
+def _protected_command(value: str | None, option: str, cwd: Path) -> tuple[str, ...] | None:
+    """Parse a protected validator argv and reject candidate-local path inputs."""
+    if value is None or not value.strip():
+        return None
+    try:
+        command = tuple(shlex.split(value))
+    except ValueError as exc:
+        raise click.ClickException(f"{option} is malformed") from exc
+    if not command:
+        return None
+    first = Path(command[0]).expanduser()
+    if not first.is_absolute():
+        raise click.ClickException(f"{option} must start with an absolute executable path")
+    root = cwd.resolve()
+    for part in command:
+        path = Path(part).expanduser()
+        if not path.is_absolute() and "/" not in part:
+            continue
+        resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        raise click.ClickException(f"{option} must not reference the candidate checkout")
+    return command
+
+
+def _runner_config_from_options(
+    options: dict[str, object], cwd: Path
+) -> RunnerConfig:
+    """Build trusted validator configuration from protected CLI/env options."""
+    jest_command = options.get("jest_command")
+    return RunnerConfig(
+        jest_command=_protected_command(
+            jest_command if isinstance(jest_command, str) else None,
+            "--jest-command",
+            cwd,
+        )
+    )
 
 
 @click.command("certify")
@@ -370,16 +413,32 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
 @click.option("--module", required=True, help="Exact repository-relative prompt path.")
 @click.option("--base-ref", required=True, help="Protected base commit or ref.")
 @click.option("--head-ref", default="HEAD", show_default=True)
+@click.option(
+    "--jest-command",
+    envvar="PDD_SYNC_JEST_COMMAND",
+    help="Protected absolute external Jest command argv.",
+)
 @click.pass_context
-def validate(ctx: click.Context, module: str, base_ref: str, head_ref: str) -> None:
+def validate(
+    ctx: click.Context,
+    module: str,
+    base_ref: str,
+    head_ref: str,
+    jest_command: str | None,
+) -> None:
     """Run protected obligations and transactionally finalize trusted evidence."""
     ctx.ensure_object(dict)
+    root = Path.cwd().resolve()
     result = finalize_unit(
-        Path.cwd(),
+        root,
         PurePosixPath(module),
         base_ref=base_ref,
         head_ref=head_ref,
         signer=attestation_signer_from_environment(),
+        config=_runner_config_from_options(
+            {"jest_command": jest_command},
+            root,
+        ),
     )
     click.echo(
         json.dumps(

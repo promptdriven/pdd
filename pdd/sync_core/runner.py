@@ -504,6 +504,11 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
             parts = tuple(part for part in path.parts if not re.search(r"\$[0-9&]", part))
             if parts:
                 references.add(PurePosixPath(*parts))
+    module_directories = config.get("moduleDirectories", [])
+    if not isinstance(module_directories, list):
+        raise ValueError("Jest moduleDirectories must be an array")
+    if module_directories:
+        raise ValueError("Jest moduleDirectories is not bound by this adapter")
     return references
 
 
