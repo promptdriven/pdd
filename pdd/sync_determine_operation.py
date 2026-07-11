@@ -342,7 +342,7 @@ def _resolve_prompt_path_from_architecture(
             if len(matches) > 1 and context_prefix:
                 ctx_filtered = [
                     m for m in matches
-                    if context_prefix in str(m.relative_to(prompts_root))
+                    if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
                 ]
                 if ctx_filtered:
                     matches = ctx_filtered
@@ -513,6 +513,29 @@ def _prompt_relative_parts_for_root(
     return tuple(arch_parts[overlap:])
 
 
+def _prompt_path_has_context_prefix(
+    candidate: Path,
+    prompts_root: Path,
+    context_prefix: str,
+) -> bool:
+    """Return whether a candidate is under an exact context path prefix.
+
+    Context names are path components, not substrings: ``backend`` must match
+    ``backend/foo.prompt`` but not ``a-backend/foo.prompt``. Comparing components
+    also supports nested prefixes such as ``backend/utils``.
+    """
+    try:
+        relative_parts = candidate.relative_to(prompts_root).parts
+    except ValueError:
+        return False
+    prefix_parts = PurePosixPath(context_prefix.replace("\\", "/")).parts
+    if not prefix_parts or len(prefix_parts) > len(relative_parts):
+        return False
+    return tuple(part.lower() for part in relative_parts[:len(prefix_parts)]) == tuple(
+        part.lower() for part in prefix_parts
+    )
+
+
 def _architecture_prompt_roots(
     prompts_root: Path,
     architecture_path: Path,
@@ -536,9 +559,13 @@ def _architecture_prompt_roots(
                         continue
                     defaults = context.get("defaults", {})
                     configured = defaults.get("prompts_dir") if isinstance(defaults, dict) else None
-                    safe_configured = _safe_architecture_prompt_filename(configured)
-                    if safe_configured is not None:
-                        candidates.append(project_root.joinpath(*safe_configured.parts))
+                    if isinstance(configured, str) and configured.strip():
+                        configured_path = Path(configured.strip())
+                        candidates.append(
+                            configured_path
+                            if configured_path.is_absolute()
+                            else project_root / configured_path
+                        )
         except (KeyError, TypeError, ValueError):
             pass
 
@@ -1078,7 +1105,12 @@ def _find_prompt_file(
                 if len(arch_matches) > 1:
                     # Prefer match within context prefix (e.g., backend/utils)
                     if context_prefix:
-                        ctx_filtered = [m for m in arch_matches if context_prefix in str(m.relative_to(prompts_root))]
+                        ctx_filtered = [
+                            m for m in arch_matches
+                            if _prompt_path_has_context_prefix(
+                                m, prompts_root, context_prefix
+                            )
+                        ]
                         if ctx_filtered:
                             arch_matches = ctx_filtered
                     # Then prefer match matching directory hint from basename
@@ -1112,7 +1144,10 @@ def _find_prompt_file(
     if matches:
         if len(matches) > 1 and context_prefix:
             # Prefer match within context prefix (e.g., backend/utils)
-            ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
+            ctx_filtered = [
+                m for m in matches
+                if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
+            ]
             if ctx_filtered:
                 matches = ctx_filtered
         # Issue #1677: a path-qualified basename (e.g. `app/login/page`) must resolve
@@ -1294,7 +1329,7 @@ def _get_filepath_from_architecture(
             )
 
         def _borrow_ownership_ok(module: Dict[str, Any]) -> bool:
-            """Eligibility for a heuristic (non-exact) architecture borrow.
+            """Eligibility for an architecture row in the resolving context.
 
             A PROVEN row (physical owner IS the resolved prompt) is an explicit
             mapping: trusted even when its code target lies outside the context's own
@@ -1319,7 +1354,7 @@ def _get_filepath_from_architecture(
             if (
                 module.get("filename") == prompt_filename
                 and _aligns(module)
-                and _belongs_to_resolved_prompt(module)
+                and _borrow_ownership_ok(module)
             ):
                 return module.get("filepath"), module.get("filename")
 
@@ -1334,7 +1369,7 @@ def _get_filepath_from_architecture(
             if (
                 str(module.get("filename") or "").lower() == prompt_filename_lower
                 and _aligns(module)
-                and _belongs_to_resolved_prompt(module)
+                and _borrow_ownership_ok(module)
             ):
                 return module.get("filepath"), module.get("filename")
 

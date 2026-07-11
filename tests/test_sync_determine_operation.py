@@ -2798,6 +2798,101 @@ def test_get_pdd_file_paths_flat_hint_selects_requested_context_prompt(tmp_path,
     assert "/prompts/backend/" not in resolved
 
 
+def test_get_pdd_file_paths_exact_flat_row_respects_sibling_territory(tmp_path, monkeypatch):
+    """An exact flat filename row cannot redirect a narrowed root to sibling code."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "functions" / "credits.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_context_prefix_matches_path_components(tmp_path, monkeypatch):
+    """The backend context must not select a lexicographically earlier a-backend prompt."""
+    for context in ("a-backend", "backend"):
+        prompt_dir = tmp_path / "prompts" / context
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credits_Python.prompt").write_text(
+            f"% {context}\n", encoding="utf-8"
+        )
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/backend/" in resolved
+    assert "/prompts/a-backend/" not in resolved
+
+
+def test_get_pdd_file_paths_absolute_sibling_prompt_root_establishes_owner(
+    tmp_path,
+    monkeypatch,
+):
+    """Contained absolute sibling prompt roots participate in ownership discovery."""
+    backend_root = tmp_path / "apps" / "backend" / "specs"
+    frontend_root = tmp_path / "apps" / "frontend" / "specs"
+    backend_root.mkdir(parents=True)
+    (frontend_root / "frontend").mkdir(parents=True)
+    (backend_root / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (frontend_root / "frontend" / "credits_Python.prompt").write_text(
+        "% frontend\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"{backend_root.as_posix()}\"\n"
+        "      generate_output_path: \"backend/generated/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"{frontend_root.as_posix()}\"\n"
+        "      generate_output_path: \"frontend/generated/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "frontend/credits_Python.prompt",
+            "filepath": "backend/foreign/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str(backend_root), context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "generated" / "credits.py"
+    ).resolve(strict=False)
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/foreign/credits.py"
+    )
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
