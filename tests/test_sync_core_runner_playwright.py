@@ -346,6 +346,29 @@ def test_playwright_config_and_support_mutation_cannot_pass(
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
+def test_playwright_side_effect_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import './helper';\n"
+        "test('widget works', async () => expect(globalThis.expected).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate side effect helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_playwright(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
 def test_playwright_dirty_support_cannot_influence_run(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     (root / "ambient.ts").write_text("export {};\n", encoding="utf-8")
@@ -368,6 +391,21 @@ def test_playwright_subprocess_cannot_read_secret(
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
+def test_explicit_candidate_local_playwright_command_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = root / "tools" / "playwright.py"
+    runner.parent.mkdir()
+    runner.write_text(_fake_playwright(tmp_path).read_text(encoding="utf-8"), encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add candidate-local Playwright command")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, runner)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate checkout" in executions[0].detail
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -384,4 +422,27 @@ def test_playwright_rejects_unbound_execution_controls(
 ) -> None:
     root, commit = _repository(tmp_path, config=config)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        'export default { "grep": /widget/ };\n',
+        "export default { 'retries': 1 };\n",
+        'export default { "globalSetup": "./setup.ts" };\n',
+        'export default { "webServer": { command: "npm run dev" } };\n',
+    ],
+)
+def test_playwright_rejects_quoted_execution_control_keys(
+    tmp_path: Path, config: str
+) -> None:
+    root, commit = _repository(tmp_path, config=config)
+    (root / "setup.ts").write_text("export default async function setup() {}\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add quoted control support")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
     assert executions[0].outcome is EvidenceOutcome.ERROR
