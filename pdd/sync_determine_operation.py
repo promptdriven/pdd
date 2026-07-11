@@ -658,6 +658,100 @@ def _module_filepath_matches_basename(
     return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
 
 
+def _filepath_matches_context(normalized: str, context_config: Any) -> Optional[bool]:
+    """Whether a posix filepath lies in one context's declared territory.
+
+    Returns True/False when the context declares a territory (``paths`` globs or
+    configured output locations), or ``None`` when it declares none (no constraint).
+    Shared by :func:`_context_owned_filepath` (the resolving context) and
+    :func:`_filepath_owned_by_other_context` (sibling contexts).
+    """
+    if not isinstance(context_config, dict):
+        return None
+
+    globs = [p for p in context_config.get("paths", []) if isinstance(p, str) and p]
+    prefixes: List[str] = []
+    defaults = context_config.get("defaults", {})
+    if isinstance(defaults, dict):
+        for key in ("generate_output_path", "test_output_path", "example_output_path"):
+            value = defaults.get(key)
+            if isinstance(value, str) and value.strip():
+                prefixes.append(value)
+        outputs = defaults.get("outputs", {})
+        if isinstance(outputs, dict):
+            for spec in outputs.values():
+                template = spec.get("path") if isinstance(spec, dict) else None
+                if isinstance(template, str) and template.strip():
+                    prefixes.append(template)
+
+    if not globs and not prefixes:
+        return None
+
+    for pattern in globs:
+        pattern_norm = pattern.replace("\\", "/")
+        base = pattern_norm.rstrip("*").rstrip("/")
+        if (
+            fnmatch.fnmatch(normalized, pattern_norm)
+            or normalized == base
+            or (base and normalized.startswith(base + "/"))
+        ):
+            return True
+
+    for prefix in prefixes:
+        prefix_norm = prefix.replace("\\", "/")
+        # Output templates such as "backend/functions/{name}.py" contribute only
+        # the directory before the first placeholder.
+        if "{" in prefix_norm:
+            prefix_norm = prefix_norm.split("{", 1)[0]
+        base = prefix_norm.strip().rstrip("/")
+        if base.startswith("./"):
+            base = base[2:]
+        if base in ("", "."):
+            # A repo-root output path imposes no territory constraint.
+            return True
+        if normalized == base or normalized.startswith(base + "/"):
+            return True
+
+    return False
+
+
+def _filepath_owned_by_other_context(
+    architecture_filepath: Optional[str],
+    context_name: Optional[str],
+    pddrc_anchor: Optional[Path] = None,
+) -> bool:
+    """True when the filepath lies in the territory of a DIFFERENT named context.
+
+    A PROVEN-owner architecture row (its physical prompt IS the resolved prompt) may
+    legitimately target code outside its own context's globs — e.g. an intentionally
+    shared path owned by no context. It must still be rejected when that target
+    belongs to a SIBLING context, which is the stale cross-context borrow. The
+    catch-all ``default`` context is ignored so a shared path it happens to match does
+    not read as foreign ownership.
+    """
+    if not isinstance(architecture_filepath, str) or not architecture_filepath.strip():
+        return False
+    if not context_name:
+        return False
+    pddrc_path = _find_pddrc_file(pddrc_anchor)
+    if not pddrc_path:
+        return False
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except (ValueError, KeyError, TypeError):
+        return False
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return False
+    normalized = PurePosixPath(architecture_filepath.strip().replace("\\", "/")).as_posix()
+    for other_name, other_config in contexts.items():
+        if other_name == context_name or other_name == "default":
+            continue
+        if _filepath_matches_context(normalized, other_config) is True:
+            return True
+    return False
+
+
 def _context_owned_filepath(
     architecture_filepath: Optional[str],
     context_name: Optional[str],
@@ -703,51 +797,32 @@ def _context_owned_filepath(
         architecture_filepath.strip().replace("\\", "/")
     ).as_posix()
 
-    globs = [p for p in context_config.get("paths", []) if isinstance(p, str) and p]
-    prefixes: List[str] = []
-    defaults = context_config.get("defaults", {})
-    if isinstance(defaults, dict):
-        for key in ("generate_output_path", "test_output_path", "example_output_path"):
-            value = defaults.get(key)
-            if isinstance(value, str) and value.strip():
-                prefixes.append(value)
-        outputs = defaults.get("outputs", {})
-        if isinstance(outputs, dict):
-            for spec in outputs.values():
-                template = spec.get("path") if isinstance(spec, dict) else None
-                if isinstance(template, str) and template.strip():
-                    prefixes.append(template)
-
+    match = _filepath_matches_context(normalized, context_config)
     # No territory declared for this context — impose no restriction.
-    if not globs and not prefixes:
-        return True
+    return True if match is None else match
 
-    for pattern in globs:
-        pattern_norm = pattern.replace("\\", "/")
-        base = pattern_norm.rstrip("*").rstrip("/")
-        if (
-            fnmatch.fnmatch(normalized, pattern_norm)
-            or normalized == base
-            or (base and normalized.startswith(base + "/"))
-        ):
-            return True
 
-    for prefix in prefixes:
-        prefix_norm = prefix.replace("\\", "/")
-        # Output templates such as "backend/functions/{name}.py" contribute only
-        # the directory before the first placeholder.
-        if "{" in prefix_norm:
-            prefix_norm = prefix_norm.split("{", 1)[0]
-        base = prefix_norm.strip().rstrip("/")
-        if base.startswith("./"):
-            base = base[2:]
-        if base in ("", "."):
-            # A repo-root output path imposes no territory constraint.
-            return True
-        if normalized == base or normalized.startswith(base + "/"):
-            return True
+def _anchor_output_paths_at_project(result: Dict[str, Any], project_root: Path) -> Dict[str, Any]:
+    """Resolve relative output artifact paths against the project root, not the CWD.
 
-    return False
+    Template-generated code/example/test paths are project-relative; a new module
+    resolved from a parent/sibling working directory must still write under the
+    project. Absolute paths and the already-resolved ``prompt`` key are unchanged.
+    """
+    def _anchor(value: Any) -> Any:
+        if isinstance(value, Path) and not value.is_absolute():
+            return project_root / value
+        return value
+
+    anchored: Dict[str, Any] = {}
+    for key, value in result.items():
+        if key == "prompt":
+            anchored[key] = value
+        elif isinstance(value, list):
+            anchored[key] = [_anchor(item) for item in value]
+        else:
+            anchored[key] = _anchor(value)
+    return anchored
 
 
 def _overlay_configured_output_paths(
@@ -757,13 +832,14 @@ def _overlay_configured_output_paths(
     basename: str,
     language: str,
     context_name: Optional[str] = None,
+    pddrc_anchor: Optional[Path] = None,
 ) -> Dict[str, Path]:
     """Overlay construct_paths-derived output locations onto template-derived paths."""
     merged = dict(result)
 
     code_path = output_paths.get("generate_output_path") or output_paths.get("output") or output_paths.get("code_file")
     if "code" not in outputs_config and code_path:
-        relative_basename = _relative_basename_for_context(basename, context_name)
+        relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
         dir_prefix, name_part = _extract_name_part(relative_basename)
         extension = get_extension(language)
         code_path_obj = Path(code_path)
@@ -798,6 +874,17 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
 # and code-path selection so a mid-resolution rewrite of architecture.json cannot
 # produce a torn prompt/code pair (prompt from the old registry, code from the new).
 _ARCH_MODULES_UNSET: Any = object()
+
+# Three-state result of architecture-row ownership relative to the resolved prompt.
+# INELIGIBLE: the row demonstrably names a DIFFERENT prompt (or is unsafe metadata).
+# ELIGIBLE:   a heuristic match with no proven physical owner (canonical / absent) —
+#             additionally constrained to the resolving context's territory.
+# PROVEN:     the row's physical prompt owner IS the resolved prompt (explicit
+#             mapping) — trusted even when its code target is outside the context's
+#             own globs, so long as it is not owned by a SIBLING context.
+_OWNERSHIP_INELIGIBLE = 0
+_OWNERSHIP_ELIGIBLE = 1
+_OWNERSHIP_PROVEN = 2
 
 
 def _find_prompt_file(
@@ -1077,36 +1164,37 @@ def _get_filepath_from_architecture(
                 pddrc_anchor=pddrc_anchor,
             )
 
-        def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> bool:
-            """Reject a same-leaf entry that directly identifies another prompt.
+        def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> int:
+            """Classify a row's ownership relative to the resolved prompt.
 
-            A flat prompt and a nested prompt can share a basename. The nested
-            architecture filename is useful when the nested ``prompts_dir`` strips
-            that prefix, but it must not be borrowed by the flat sibling. A direct,
-            existing architecture-derived prompt path is authoritative evidence of
-            which physical prompt owns the entry. Canonical filepath-derived names
-            may not exist as prompt paths, so those remain eligible for the unique
-            filepath fallback below.
+            Returns one of ``_OWNERSHIP_INELIGIBLE`` / ``_OWNERSHIP_ELIGIBLE`` /
+            ``_OWNERSHIP_PROVEN``. A flat prompt and a nested prompt can share a
+            basename; the nested architecture filename is useful when the nested
+            ``prompts_dir`` strips that prefix, but it must not be borrowed by the flat
+            sibling. A direct, existing architecture-derived prompt path is
+            authoritative evidence (PROVEN) of which physical prompt owns the entry.
+            Canonical filepath-derived names may not exist as prompt paths, so those
+            stay ELIGIBLE for the unique-filepath fallback (still territory-guarded).
             """
             module_filename = module.get("filename")
             if not isinstance(module_filename, str) or not module_filename:
                 # Architecture source-file entries without prompt-style names
                 # are eligible for the filepath-stem compatibility fallback.
-                return True
+                return _OWNERSHIP_ELIGIBLE
             normalized_filename = _safe_architecture_prompt_filename(module_filename)
             if normalized_filename is None:
-                return False
+                return _OWNERSHIP_INELIGIBLE
 
             # Validation must precede this context-free discovery return. The
             # caller may not have found a physical prompt yet, but unsafe
             # architecture metadata must already be ineligible as a hint.
             if prompt_path is None or prompts_root is None:
-                return True
+                return _OWNERSHIP_ELIGIBLE
 
             # Non-prompt source filenames have no prompt ownership identity;
             # their compatibility behavior is governed by filepath stem.
             if not extract_module_from_include(normalized_filename.name):
-                return True
+                return _OWNERSHIP_ELIGIBLE
 
             roots = prompt_roots or (prompts_root.resolve(strict=False),)
             owners, all_contained = _architecture_prompt_owner(
@@ -1114,11 +1202,11 @@ def _get_filepath_from_architecture(
                 roots,
             )
             if not all_contained:
-                return False
+                return _OWNERSHIP_INELIGIBLE
             if not owners:
                 # Canonical filepath-derived names need not exist physically as
                 # prompt paths, so absence of an owner remains eligible.
-                return True
+                return _OWNERSHIP_ELIGIBLE
             # ``owners`` were obtained by contained directory walks above. Map
             # the prompt's validated root-relative identity across trusted roots
             # so aliases such as ``prompts -> pdd/prompts`` compare correctly.
@@ -1127,9 +1215,9 @@ def _get_filepath_from_architecture(
             try:
                 relative_prompt = prompt_path.relative_to(prompts_root)
             except ValueError:
-                return False
+                return _OWNERSHIP_INELIGIBLE
             if relative_prompt.is_absolute() or ".." in relative_prompt.parts:
-                return False
+                return _OWNERSHIP_INELIGIBLE
             expected_keys = {
                 os.path.normcase(
                     os.path.abspath(os.path.normpath(root.joinpath(relative_prompt)))
@@ -1140,7 +1228,30 @@ def _get_filepath_from_architecture(
                 os.path.normcase(os.path.abspath(os.path.normpath(owner)))
                 for owner in owners
             }
-            return owner_keys.issubset(expected_keys)
+            return (
+                _OWNERSHIP_PROVEN
+                if owner_keys.issubset(expected_keys)
+                else _OWNERSHIP_INELIGIBLE
+            )
+
+        def _borrow_ownership_ok(module: Dict[str, Any]) -> bool:
+            """Eligibility for a heuristic (non-exact) architecture borrow.
+
+            A PROVEN row (physical owner IS the resolved prompt) is an explicit
+            mapping: trusted even when its code target lies outside the context's own
+            territory, UNLESS that target belongs to a sibling context (a stale
+            cross-context row). A merely ELIGIBLE (heuristic) row is confined to the
+            resolving context's own territory.
+            """
+            ownership = _belongs_to_resolved_prompt(module)
+            if ownership == _OWNERSHIP_INELIGIBLE:
+                return False
+            filepath = module.get("filepath")
+            if _context_owned_filepath(filepath, resolved_context_name, pddrc_anchor):
+                return True
+            return ownership == _OWNERSHIP_PROVEN and not _filepath_owned_by_other_context(
+                filepath, resolved_context_name, pddrc_anchor
+            )
 
         # Try exact filename match first
         for module in modules:
@@ -1196,10 +1307,7 @@ def _get_filepath_from_architecture(
                 str(module.get("filename", "")).replace("\\", "/")
             ).name.lower() == prompt_leaf_lower
             and _aligns(module)
-            and _belongs_to_resolved_prompt(module)
-            and _context_owned_filepath(
-                module.get("filepath"), resolved_context_name, architecture_path.parent
-            )
+            and _borrow_ownership_ok(module)
         ])
         if leaf_match[0]:
             return leaf_match
@@ -1222,10 +1330,7 @@ def _get_filepath_from_architecture(
                     module_filename = str(module.get("filename") or "")
                     if (
                         module_filename.lower() == expected_filename_lower
-                        and _belongs_to_resolved_prompt(module)
-                        and _context_owned_filepath(
-                            module.get("filepath"), resolved_context_name, architecture_path.parent
-                        )
+                        and _borrow_ownership_ok(module)
                     ):
                         return module.get("filepath"), module.get("filename")
 
@@ -1238,7 +1343,6 @@ def _get_filepath_from_architecture(
                     module for module in modules
                     if isinstance(module, dict)
                     and str(module.get("filename") or "").lower() == simple_filename_lower
-                    and _belongs_to_resolved_prompt(module)
                 ]
                 safe_matches = [
                     module for module in matching_modules
@@ -1246,9 +1350,7 @@ def _get_filepath_from_architecture(
                         module.get("filepath"), basename, context_name=context_name,
                         pddrc_anchor=architecture_path.parent,
                     )
-                    and _context_owned_filepath(
-                        module.get("filepath"), resolved_context_name, architecture_path.parent
-                    )
+                    and _borrow_ownership_ok(module)
                 ]
                 if len(safe_matches) == 1:
                     return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
@@ -1278,10 +1380,7 @@ def _get_filepath_from_architecture(
                     == f".{expected_extension}"
                 )
                 and _aligns(module)
-                and _belongs_to_resolved_prompt(module)
-                and _context_owned_filepath(
-                    module.get("filepath"), resolved_context_name, architecture_path.parent
-                )
+                and _borrow_ownership_ok(module)
             ])
             if filepath_match[0]:
                 return filepath_match
@@ -2091,9 +2190,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # even when prompt doesn't exist
             extension = get_extension(language)
             try:
-                # Call construct_paths with empty input_file_paths to get configured output paths
+                # Pass the (not-yet-existing) prompt path as an anchoring hint so
+                # construct_paths locates the SUBPROJECT .pddrc (walking up from the
+                # prompt dir) and resolves outputs against it — not the process CWD.
+                # Without this, a new module resolved from a parent/sibling CWD writes
+                # code/test under the parent instead of the project. _find_pddrc_file
+                # only walks parent dirs, so the file need not exist.
                 resolved_config, _, output_paths, _ = construct_paths(
-                    input_file_paths={},  # Empty dict since files don't exist yet
+                    input_file_paths={"prompt_file": prompt_path},
                     force=True,
                     quiet=True,
                     command="sync",
@@ -2112,7 +2216,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if outputs_config:
                     logger.info(f"Using template-based paths from outputs config")
                     context_name = context_override or resolved_config.get('_matched_context')
-                    basename_for_templates = _relative_basename_for_context(basename, context_name)
+                    basename_for_templates = _relative_basename_for_context(basename, context_name, prompts_root_anchor)
                     result = _generate_paths_from_templates(
                         basename=basename_for_templates,
                         language=language,
@@ -2127,7 +2231,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         basename,
                         language,
                         context_name=context_name,
+                        pddrc_anchor=prompts_root_anchor,
                     )
+                    # Template paths are project-relative; anchor them at the
+                    # subproject (the .pddrc directory) so a new module resolved from a
+                    # parent/sibling CWD writes under the project, not the CWD.
+                    _new_pddrc = _find_pddrc_file(prompts_root_anchor)
+                    if _new_pddrc is not None:
+                        result = _anchor_output_paths_at_project(result, _new_pddrc.parent)
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
                     return result
 
@@ -2268,7 +2379,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
             context_name = context_override or resolved_config.get('_matched_context')
-            basename_for_templates = _relative_basename_for_context(basename, context_name)
+            basename_for_templates = _relative_basename_for_context(basename, context_name, prompts_root_anchor)
             result = _generate_paths_from_templates(
                 basename=basename_for_templates,
                 language=language,
@@ -2283,6 +2394,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 basename,
                 language,
                 context_name=context_name,
+                pddrc_anchor=prompts_root_anchor,
             )
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
             return result

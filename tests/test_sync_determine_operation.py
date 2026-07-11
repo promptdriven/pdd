@@ -2579,6 +2579,119 @@ def test_architecture_module_choices_defers_containment_to_matches(tmp_path, mon
     assert calls["n"] <= 5  # only the matching row(s), not all 301 modules.
 
 
+def test_get_pdd_file_paths_new_module_outputs_under_subproject_from_parent_cwd(tmp_path, monkeypatch):
+    """A NEW module's outputs must resolve under the subproject, not the parent CWD.
+
+    The missing-prompt branch called construct_paths with no anchoring input and
+    forced ``path_resolution_mode="cwd"``, so from the project's parent the code/test
+    paths resolved under the parent (``<parent>/backend/foo.py``). Passing the prompt
+    path as a hint lets construct_paths find the subproject ``.pddrc`` and resolve
+    against it.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)  # NOTE: no foo prompt (new module)
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "foo", "python",
+        prompts_dir=str((project / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+
+    code = paths["code"].resolve(strict=False)
+    assert str(code).startswith(str(project.resolve()))
+    assert code.as_posix().endswith("backend/functions/foo.py")
+
+
+def test_get_pdd_file_paths_non_architecture_templates_not_duplicated_from_parent_cwd(tmp_path, monkeypatch):
+    """Existing-prompt template paths (no architecture entry) must not duplicate the prefix.
+
+    The non-architecture template branch recomputed the basename without the project
+    anchor, so from a parent CWD a `{category}` template duplicated the context prefix
+    (`backend/examples/backend/foo_example.py`).
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{category}/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/{category}/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    # No architecture entry for foo — exercise the non-architecture template branch.
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "examples/backend/" not in paths["example"].resolve(strict=False).as_posix()
+    assert "tests/backend/" not in paths["test"].resolve(strict=False).as_posix()
+
+
+def test_get_pdd_file_paths_proven_owner_honored_for_shared_target(tmp_path, monkeypatch):
+    """A PROVEN-owner architecture row keeps a shared, no-context code target.
+
+    When an architecture row's physical prompt owner IS the resolved prompt (proven,
+    explicit mapping), its authoritative code target must be honored even when it lies
+    outside the context's own globs — as long as it belongs to NO sibling context
+    (an intentionally shared path). Territory only guards heuristic borrows.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/foo_Python.prompt", "filepath": "shared/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("shared/foo.py")
+
+
+def test_get_pdd_file_paths_proven_owner_still_rejects_sibling_context_target(tmp_path, monkeypatch):
+    """The proven-owner exception must NOT extend to a SIBLING context's territory.
+
+    A stale flat row (`credits_Python.prompt` -> `frontend/credits.py`) leaf-collides
+    with the backend prompt and thus proves ownership, but its target is owned by the
+    frontend context — it must still be rejected, or backend sync overwrites frontend
+    code. This locks in the round-5 behavior against the round-7 proven-owner relaxation.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
