@@ -434,7 +434,11 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
     """
     if not isinstance(value, str):
         return None
-    raw = value.strip()
+    if value != value.strip():
+        return None
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        return None
+    raw = value
     if not raw or "\\" in raw:
         return None
     # Windows drive-qualified metadata (e.g. "D:/x", "D:x") is relative to
@@ -451,7 +455,11 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
 def _safe_prompt_language(value: Any) -> Optional[str]:
     """Return a language safe to interpolate as one prompt filename component."""
     safe = _safe_architecture_prompt_filename(value)
-    if safe is None or len(safe.parts) != 1:
+    if (
+        safe is None
+        or len(safe.parts) != 1
+        or any(char.isspace() for char in safe.parts[0])
+    ):
         return None
     return safe.parts[0]
 
@@ -589,10 +597,9 @@ def _prompt_candidate_aligns_basename(candidate: Path, basename: str) -> bool:
         return True
     module_leaf = extract_module_from_include(candidate.name) or candidate.stem
     module_parts = candidate.parent.parts + (module_leaf,)
-    return (
-        len(basename_parts) <= len(module_parts)
-        and tuple(module_parts[-len(basename_parts):]) == tuple(basename_parts)
-    )
+    return len(basename_parts) <= len(module_parts) and tuple(
+        part.lower() for part in module_parts[-len(basename_parts):]
+    ) == tuple(part.lower() for part in basename_parts)
 
 
 def _context_prefix_for_prompts_root(
@@ -768,8 +775,12 @@ def _module_filepath_matches_basename(
         return False
 
     relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
-    basename_parts = Path(relative_basename).parts
-    filepath_parts = Path(module_filepath).with_suffix("").parts
+    basename_parts = tuple(
+        part.lower() for part in Path(relative_basename).parts
+    )
+    filepath_parts = tuple(
+        part.lower() for part in Path(module_filepath).with_suffix("").parts
+    )
     if not basename_parts or not filepath_parts:
         return False
 
@@ -1164,15 +1175,24 @@ def _find_prompt_file(
     # inside the root and is preserved; an escaping symlink is skipped so a later
     # update cannot open it with "w" and truncate the external target.
     for candidate_basename in basename_candidates:
-        resolved = _case_insensitive_path_lookup(prompts_root / f"{candidate_basename}_{language}.prompt")
+        direct_relative = PurePosixPath(
+            f"{candidate_basename}_{language}.prompt"
+        )
+        resolved, contained = _walk_prompt_relative_path(
+            prompts_root,
+            tuple(direct_relative.parts),
+        )
+        if not contained:
+            raise UnsafePromptPathError(
+                prompts_root.joinpath(*direct_relative.parts),
+                resolved_prompts_root,
+            )
         if resolved:
             if context_prefix and not _prompt_path_has_context_prefix(
                 resolved, prompts_root, context_prefix
             ):
                 continue
-            if _prompt_candidate_within_root(resolved, resolved_prompts_root):
-                return resolved
-            raise UnsafePromptPathError(resolved, resolved_prompts_root)
+            return resolved
 
     # --- Step 3: Architecture.json hint → recursive search ---
     # Use the caller's immutable module snapshot when provided so prompt discovery
@@ -1309,16 +1329,22 @@ def _find_prompt_file(
         # not (and `foo` inside an absolute prefix like /home/foo cannot false-match,
         # since only the suffix is compared).
         if "/" in basename:
-            basename_variants = {Path(basename).parts}
+            basename_variants = {
+                tuple(part.lower() for part in Path(basename).parts)
+            }
             relative_basename = _relative_basename_for_context(
                 basename, context_name, resolved_prompts_root
             )
             if relative_basename != basename:
-                basename_variants.add(Path(relative_basename).parts)
+                basename_variants.add(
+                    tuple(part.lower() for part in Path(relative_basename).parts)
+                )
             aligned = []
             for m in matches:
                 module_leaf = extract_module_from_include(m.name) or m.stem
-                module_parts = m.parent.parts + (module_leaf,)
+                module_parts = tuple(
+                    part.lower() for part in m.parent.parts + (module_leaf,)
+                )
                 if any(
                     len(bp) <= len(module_parts) and tuple(module_parts[-len(bp):]) == bp
                     for bp in basename_variants
@@ -1617,6 +1643,7 @@ def _get_filepath_from_architecture(
                     module_filename = str(module.get("filename") or "")
                     if (
                         module_filename.lower() == expected_filename_lower
+                        and _aligns(module)
                         and _borrow_ownership_ok(module)
                     ):
                         return module.get("filepath"), module.get("filename")

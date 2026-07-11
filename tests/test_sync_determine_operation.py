@@ -3358,6 +3358,79 @@ def test_get_pdd_file_paths_misaligned_direct_arch_join_is_not_returned(
     ).resolve(strict=False)
 
 
+def test_get_pdd_file_paths_nested_exact_arch_filename_still_aligns_filepath(
+    tmp_path,
+    monkeypatch,
+):
+    """An exact nested filename cannot bypass path-qualified filepath alignment."""
+    prompt = tmp_path / "prompts" / "foo" / "page_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% foo page\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo/page_Python.prompt",
+            "filepath": "bar/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == prompt.resolve(strict=False)
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("bar/page.py")
+
+
+def test_get_pdd_file_paths_nested_directories_match_case_insensitively(
+    tmp_path,
+    monkeypatch,
+):
+    """Linux nested lookup reuses an existing differently-cased directory path."""
+    prompt = tmp_path / "prompts" / "foo" / "page_Python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% foo page\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("Foo/Page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == prompt.resolve(strict=False)
+    assert paths["prompt"].parts[-2:] == ("foo", "page_Python.prompt")
+
+
+@pytest.mark.parametrize(
+    ("basename", "language"),
+    [
+        (" foo", "python"),
+        ("foo ", "python"),
+        ("foo\x00bar", "python"),
+        ("foo", " python"),
+        ("foo", "python "),
+        ("foo", "py\x00thon"),
+        ("foo", "py\nthon"),
+    ],
+)
+def test_get_pdd_file_paths_rejects_noncanonical_or_control_input(
+    tmp_path,
+    monkeypatch,
+    basename,
+    language,
+):
+    """Validation rejects controls and whitespace the caller would otherwise retain."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, language, prompts_dir="prompts")
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
