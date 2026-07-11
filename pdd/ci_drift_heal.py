@@ -59,7 +59,7 @@ _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
 
 
 def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the fixed, value-free dry-run JSON schema for CI output."""
+    """Return the fixed dry-run schema without paths or diagnostic payloads."""
     summary = report.get("summary")
     if not isinstance(summary, dict):
         summary = {}
@@ -71,6 +71,20 @@ def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
         )
         return value if valid_count else 0
 
+    units = report.get("units")
+    if not isinstance(units, list):
+        units = []
+    projected_units = []
+    for unit in units:
+        if not isinstance(unit, dict):
+            continue
+        identity = {
+            name: unit.get(name)
+            for name in ("basename", "language", "classification")
+        }
+        if all(isinstance(value, str) and value for value in identity.values()):
+            projected_units.append(identity)
+
     return {
         "ok": report.get("ok") is True,
         "consumer": "ci-heal",
@@ -80,6 +94,7 @@ def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
             "unbaselined": count("unbaselined"),
             "failures": count("failures"),
         },
+        "units": projected_units,
     }
 
 

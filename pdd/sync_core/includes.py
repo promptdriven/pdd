@@ -207,10 +207,10 @@ def _parse_xml_includes(text: str) -> list[IncludeReference]:
                 cursor = opening_end + 1
                 continue
             body = text[opening_end + 1:close_start]
-            if any(character in body for character in "<>\r\n"):
+            path = (attrs.get("path") or body).strip()
+            if any(character in path for character in "<>\r\n"):
                 cursor = opening_end + 1
                 continue
-            path = (attrs.get("path") or body).strip()
             cursor = close_start + len(close_tag)
         if path:
             references.append(
