@@ -81,6 +81,20 @@ def _run(root: Path, base: str, head: str, fake_jest: Path, timeout: int = 2):
     )
 
 
+def _run_default_jest(root: Path, base: str, head: str, timeout: int = 2):
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    obligation = VerificationObligation(
+        "jest", "test", "jest", jest_validator_config_digest(root, base, paths),
+        ("REQ-1",), paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+    return run_profile(
+        root, profile, RunBinding("snapshot-v1", base, head),
+        AttestationIssue(AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce", datetime(2026, 7, 10, tzinfo=timezone.utc)),
+        config=RunnerConfig(timeout_seconds=timeout),
+    )
+
+
 @pytest.mark.parametrize(
     ("mode", "outcome"),
     [("pass", EvidenceOutcome.PASS), ("fail", EvidenceOutcome.FAIL), ("skip", EvidenceOutcome.SKIP), ("todo", EvidenceOutcome.SKIP), ("zero", EvidenceOutcome.NOT_COLLECTED), ("timeout", EvidenceOutcome.TIMEOUT), ("malformed", EvidenceOutcome.COLLECTION_ERROR)],
@@ -131,6 +145,63 @@ def test_jest_dirty_support_cannot_influence_run(tmp_path: Path) -> None:
     (root / "setup.js").write_text("untracked\n")
     _envelope, executions = _run(root, commit, commit, _fake_jest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+
+
+def test_jest_imported_test_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.js").write_text("module.exports = { expected: true };\n")
+    (root / "tests/widget.test.js").write_text(
+        "const { expected } = require('./helper');\n"
+        "test('widget works', () => expect(expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected Jest helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.js").write_text("module.exports = { expected: false };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate imported Jest helper")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+@pytest.mark.parametrize("config_key", ["globalSetup", "globalTeardown", "testEnvironment"])
+def test_jest_executable_config_hook_mutation_cannot_pass(
+    tmp_path: Path, config_key: str
+) -> None:
+    config = '{"%s":"<rootDir>/hook.js"}' % config_key
+    root, _commit = _repository(tmp_path, config=config)
+    (root / "hook.js").write_text("module.exports = {};\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected Jest hook")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "hook.js").write_text("module.exports = { changed: true };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate Jest hook")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_default_candidate_node_modules_jest_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    binary = root / "node_modules" / "jest" / "bin" / "jest.js"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "const fs = require('fs');\n"
+        "fs.writeFileSync(process.env.PDD_TRUSTED_JEST_OUTPUT, "
+        "JSON.stringify({tests:[{identity:'tests/widget.test.js::widget works',status:'passed'}]}));\n"
+    )
+    _git(root, "add", "node_modules/jest/bin/jest.js")
+    _git(root, "commit", "-q", "-m", "add local Jest toolchain")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run_default_jest(root, commit, commit)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in executions[0].detail
 
 
 def test_jest_subprocess_cannot_read_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
