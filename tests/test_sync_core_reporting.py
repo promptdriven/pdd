@@ -659,6 +659,11 @@ def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None
 
 def test_trusted_finalizer_commits_artifact_through_protected_alias(tmp_path) -> None:
     root, commit = _repository(tmp_path, approved_alias=True)
+    report = build_canonical_report(root, _options(tmp_path, commit))
+    assert report["counts"]["invalid"] == 0
+    assert report["counts"]["unaccounted_tracked_paths"] == 0
+    assert ".pdd/sync-aliases.json" not in "\n".join(report["errors"])
+
     result = finalize_unit(
         root,
         PurePosixPath("prompts/widget_python.prompt"),

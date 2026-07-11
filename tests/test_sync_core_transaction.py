@@ -350,6 +350,21 @@ def test_transaction_commits_through_protected_approved_alias(tmp_path) -> None:
     assert target.read_text() == "value = 2\n"
 
 
+def test_plan_rejects_duplicate_canonical_destinations_through_alias(tmp_path) -> None:
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    writes = (
+        PlannedWrite(PurePosixPath("alias/widget.py"), b"alias\n", "100644"),
+        PlannedWrite(PurePosixPath("canonical/widget.py"), b"canonical\n", "100644"),
+    )
+
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    with pytest.raises(TransactionError, match="duplicate canonical destinations"):
+        manager.prepare("tx-duplicate-canonical", writes)
+
+    assert not (tmp_path / ".pdd/transactions/tx-duplicate-canonical").exists()
+
+
 def test_descriptor_time_approved_alias_swap_cannot_redirect_commit(tmp_path, monkeypatch) -> None:
     canonical = tmp_path / "canonical"
     canonical.mkdir()
@@ -408,3 +423,26 @@ def test_committing_recovery_rejects_retargeted_approved_alias(tmp_path) -> None
         manager.recover("tx-recovery-alias")
     assert target.read_text() == "value = 1\n"
     assert other_target.read_text() == "outside = True\n"
+
+
+def test_recovery_requires_protected_alias_authority_not_only_journal(tmp_path) -> None:
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    target = canonical / "widget.py"
+    target.write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    writes = (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare("tx-recovery-authority", writes)
+
+    with pytest.raises(SystemExit):
+        manager.commit(
+            "tx-recovery-authority",
+            crash_hook=lambda event: (_ for _ in ()).throw(SystemExit())
+            if event == "after_committing"
+            else None,
+        )
+
+    with pytest.raises(TransactionConflict, match="alias policy"):
+        TransactionManager(tmp_path).recover("tx-recovery-authority")
+    assert target.read_text() == "value = 1\n"
