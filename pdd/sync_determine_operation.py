@@ -12,6 +12,7 @@ import sys
 import glob
 import json
 import hashlib
+import stat
 import subprocess
 import fnmatch
 from pathlib import Path, PurePosixPath
@@ -1727,7 +1728,45 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-def extract_include_deps(prompt_path: Path, *, version: int = 2) -> Dict[str, str]:
+def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optional[Path]:
+    """Resolve one legacy report include without CWD or symlink traversal."""
+    declared = Path(reference)
+    if declared.is_absolute():
+        raise ValueError(f"absolute include path is unsafe: {reference}")
+    root = root.resolve()
+    candidates = (prompt_path.parent / declared, root / declared)
+    for candidate in dict.fromkeys(candidates):
+        normalized = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
+        try:
+            parts = normalized.relative_to(root).parts
+        except ValueError as exc:
+            raise ValueError(f"include path escapes project: {reference}") from exc
+        cursor = root
+        missing = False
+        for index, part in enumerate(parts):
+            cursor /= part
+            try:
+                mode = cursor.lstat().st_mode
+            except FileNotFoundError:
+                missing = True
+                break
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"invalid include path: {reference}") from exc
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"symlink include path is unsafe: {reference}")
+            if index < len(parts) - 1 and not stat.S_ISDIR(mode):
+                raise ValueError(f"non-directory include ancestor: {reference}")
+            if index == len(parts) - 1 and not stat.S_ISREG(mode):
+                raise ValueError(f"non-regular include path: {reference}")
+        if not missing:
+            return normalized
+    return None
+
+
+def extract_include_deps(
+    prompt_path: Path,
+    dependency_root: Optional[Path] = None,
+) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
@@ -1749,25 +1788,26 @@ def extract_include_deps(prompt_path: Path, *, version: int = 2) -> Dict[str, st
         except OSError:
             return {}
         dependencies: Dict[str, str] = {}
-        declared_paths = (
-            _legacy_include_references(content)
-            if version == 1
-            else [reference.path for reference in parse_include_references(content)]
-        )
-        for declared_text in declared_paths:
-            declared = Path(declared_text.strip())
-            candidates = (
-                (declared,)
-                if declared.is_absolute()
-                else (prompt_path.parent / declared, Path.cwd() / declared)
-            )
-            dependency = next((item for item in candidates if item.is_file()), None)
+        for reference in parse_include_references(content):
+            if dependency_root is not None:
+                dependency = _safe_report_include(
+                    reference.path, prompt_path, dependency_root
+                )
+            else:
+                declared = Path(reference.path)
+                candidates = (
+                    (declared,)
+                    if declared.is_absolute()
+                    else (prompt_path.parent / declared, Path.cwd() / declared)
+                )
+                dependency = next((item for item in candidates if item.is_file()), None)
             if dependency is None:
                 continue
             digest = calculate_sha256(dependency)
             if digest:
                 try:
-                    key = str(dependency.relative_to(Path.cwd()))
+                    key_root = dependency_root or Path.cwd()
+                    key = str(dependency.relative_to(key_root))
                 except ValueError:
                     key = str(dependency)
                 dependencies[key] = digest
@@ -1977,7 +2017,7 @@ def calculate_current_hashes(
                 dependency_root=dependency_root,
             )
             # Also extract current include deps for persistence
-            hashes['include_deps'] = extract_include_deps(file_path, version=1)
+            hashes['include_deps'] = extract_include_deps(file_path, dependency_root)
             # If no deps found in prompt but we have stored deps, preserve them
             if not hashes['include_deps'] and stored_include_deps:
                 # Re-hash stored deps to check for changes

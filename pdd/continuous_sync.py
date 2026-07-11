@@ -365,9 +365,11 @@ def _configured_prompt_roots(base: Path) -> List[Path]:
             defaults = context.get("defaults", {})
             if not isinstance(defaults, dict):
                 raise ValueError(".pddrc defaults must contain a mapping")
-            raw_root = defaults.get("prompts_dir")
-            if not isinstance(raw_root, str) or not raw_root.strip():
+            if "prompts_dir" not in defaults:
                 continue
+            raw_root = defaults["prompts_dir"]
+            if not isinstance(raw_root, str) or not raw_root.strip():
+                raise ValueError(".pddrc prompts_dir must be a non-empty string")
             root = Path(raw_root).expanduser()
             if not root.is_absolute():
                 root = pddrc_path.parent / root
@@ -383,7 +385,7 @@ def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailu
     failures: List[DiscoveryFailure] = []
     try:
         configured_roots = _configured_prompt_roots(base)
-    except (OSError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return [], [
             DiscoveryFailure(
                 prompt_root=base / ".pddrc",
@@ -787,6 +789,8 @@ def _include_dep_violation(dep_path_value: Any, root: Path) -> Optional[Dict[str
         is_leaf = index == len(relative_parts) - 1
         try:
             dep_stat = cursor.lstat()
+        except ValueError:
+            return {"path": dep_path_value, "reason": "invalid_path"}
         except OSError:
             return {"path": dep_path_value, "reason": "missing"}
         if stat.S_ISLNK(dep_stat.st_mode):
@@ -838,13 +842,43 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
     return payload
 
 
+class UnsafeArchitectureError(ValueError):
+    """Raised when architecture metadata is unsafe to inspect."""
+
+
+def _safe_architecture_candidate(path: Path, base: Path) -> bool:
+    """Validate a logical architecture path without following symlinks."""
+    base = base.resolve()
+    candidate = path if path.is_absolute() else base / path
+    candidate = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
+    try:
+        parts = candidate.relative_to(base).parts
+    except ValueError:
+        return False
+    cursor = base
+    for part in parts:
+        cursor /= part
+        try:
+            mode = cursor.lstat().st_mode
+        except FileNotFoundError:
+            return True
+        except (OSError, ValueError):
+            return False
+        if stat.S_ISLNK(mode):
+            return False
+    return True
+
+
 def _architecture_filepath(
     unit: SyncUnit,
     base: Path,
 ) -> Path | None:
+    # pylint: disable=too-many-branches
     """Return an architecture.json filepath match without mutating project state."""
     candidates = (unit.prompts_dir.parent / "architecture.json", base / "architecture.json")
-    for architecture_path in dict.fromkeys(path.resolve(strict=False) for path in candidates):
+    for architecture_path in dict.fromkeys(candidates):
+        if not _safe_architecture_candidate(architecture_path, base):
+            raise UnsafeArchitectureError(f"unsafe architecture config: {architecture_path}")
         if not architecture_path.is_file():
             continue
         try:
@@ -881,20 +915,62 @@ def _architecture_filepath(
     return None
 
 
+def _configured_output_dirs(unit: SyncUnit, base: Path) -> Dict[str, str]:
+    """Return output defaults for the context owning ``unit``, without writes."""
+    pddrc_path = _find_pddrc_file(unit.prompts_dir) or _find_pddrc_file(base)
+    if pddrc_path is None:
+        return {}
+    config = _load_pddrc_config(pddrc_path)
+    contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
+    if not isinstance(contexts, dict):
+        return {}
+    selected: Dict[str, Any] = {}
+    for context in contexts.values():
+        if not isinstance(context, dict):
+            continue
+        defaults = context.get("defaults", {})
+        if not isinstance(defaults, dict):
+            continue
+        raw_prompts = defaults.get("prompts_dir")
+        if not isinstance(raw_prompts, str) or not raw_prompts.strip():
+            continue
+        configured = Path(raw_prompts).expanduser()
+        if not configured.is_absolute():
+            configured = pddrc_path.parent / configured
+        try:
+            unit.prompt_path.resolve().relative_to(configured.resolve())
+        except ValueError:
+            continue
+        selected = defaults
+        break
+    return {
+        key: value
+        for key, value in selected.items()
+        if key in {"generate_output_path", "example_output_path", "test_output_path"}
+        and isinstance(value, str)
+    }
+
+
 def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
     """Resolve report paths without creating directories or files."""
     extension = get_extension(unit.language)
     suffix = f".{extension}" if extension else ""
     code_path = _architecture_filepath(unit, base)
     code_stem = code_path.stem if code_path is not None else Path(unit.basename).name
+    outputs = _configured_output_dirs(unit, base)
+    code_dir = outputs.get("generate_output_path", "")
+    example_dir = outputs.get("example_output_path", "examples")
+    test_dir = outputs.get("test_output_path", "tests")
     if code_path is None:
-        code_path = base / f"{code_stem}{suffix}"
+        code_path = base / code_dir / f"{code_stem}{suffix}"
+    example_path = base / example_dir / f"{code_stem}_example{suffix}"
+    test_path = base / test_dir / f"test_{code_stem}{suffix}"
     return {
         "prompt": unit.prompt_path,
         "code": code_path,
-        "example": base / "examples" / f"{code_stem}_example{suffix}",
-        "test": base / "tests" / f"test_{code_stem}{suffix}",
-        "test_files": [base / "tests" / f"test_{code_stem}{suffix}"],
+        "example": example_path,
+        "test": test_path,
+        "test_files": [test_path],
     }
 
 
@@ -1164,7 +1240,12 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
     fp_path = base / ".pdd" / "meta" / f"{_safe_basename(unit.basename)}_{unit.language}.json"
     try:
         paths = _resolve_report_paths(unit, base)
-    except Exception as exc:  # pragma: no cover - surfaced in JSON report
+    except Exception as exc:  # surfaced in JSON report
+        failure = (
+            "unsafe_architecture"
+            if isinstance(exc, UnsafeArchitectureError)
+            else "path_resolution"
+        )
         return {
             "basename": unit.basename,
             "language": unit.language,
@@ -1175,7 +1256,7 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "metadata_valid": False,
             "fingerprint_path": str(fp_path),
             "paths": {"prompt": str(unit.prompt_path)},
-            "failure": "path_resolution",
+            "failure": failure,
         }
 
     _raw_fp, raw_error = _load_fingerprint_json(fp_path, base)
