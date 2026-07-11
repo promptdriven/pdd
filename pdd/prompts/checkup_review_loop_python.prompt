@@ -1,5 +1,7 @@
 % Write `pdd/checkup_review_loop.py`, implementing `pdd checkup --review-loop`.
 
+Decorate `run_checkup_review_loop` with `provider_failure_workflow` so direct library calls own one provider-health epoch across reviewer, fixer, and verifier rounds.
+
 <include>context/python_preamble.prompt</include>
 
 <pdd-reason>Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.</pdd-reason>

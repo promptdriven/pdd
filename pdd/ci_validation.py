@@ -6,7 +6,7 @@ import subprocess
 import time
 import zipfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from rich.console import Console
 
@@ -1255,8 +1255,9 @@ def _commit_ci_fix(
     repo_owner: str,
     repo_name: str,
     issue_number: int,
+    allowed_files: Optional[Sequence[str]] = None,
 ) -> Tuple[bool, str]:
-    """Stage non-artifact changes, commit them, and push to the PR branch."""
+    """Commit and push CI edits, optionally limited to workflow-owned files."""
     from .agentic_e2e_fix_orchestrator import (
         _get_modified_and_untracked,
         _has_unpushed_commits,
@@ -1264,31 +1265,45 @@ def _commit_ci_fix(
         _push_with_retry,
     )
 
-    files_to_commit = [
+    dirty_files = [
         path
         for path in sorted(_get_modified_and_untracked(cwd))
         if not _is_intermediate_file(path)
     ]
+    if allowed_files is None:
+        files_to_commit = dirty_files
+    else:
+        allowed = set(allowed_files)
+        files_to_commit = [path for path in dirty_files if path in allowed]
 
     if not files_to_commit:
-        if _has_unpushed_commits(cwd):
+        if allowed_files is None and _has_unpushed_commits(cwd):
             push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
             if push_ok:
                 return True, "Pushed existing CI fix commits"
             return False, f"Push failed: {push_err}"
-        return False, "CI fix reported changes, but no committable files were found"
+        return (
+            False,
+            "CI fix reported changes, but no workflow-owned committable files were found",
+        )
 
     for path in files_to_commit:
         stage = _run_command(["git", "add", "--", path], cwd)
         if stage.returncode != 0:
             return False, f"Failed to stage {path}: {stage.stderr.strip()}"
 
-    commit = _run_command(
-        ["git", "commit", "-m", f"ci: fix CI failures for #{issue_number}"],
-        cwd,
-    )
+    commit_cmd = ["git", "commit"]
+    if allowed_files is not None:
+        # ``--only`` prevents unrelated pre-staged changes from entering this
+        # commit. Plain ``git commit`` would commit the entire index even though
+        # the validator and staging loop touched only workflow-owned files.
+        commit_cmd.append("--only")
+    commit_cmd.extend(["-m", f"ci: fix CI failures for #{issue_number}"])
+    if allowed_files is not None:
+        commit_cmd.extend(["--", *files_to_commit])
+    commit = _run_command(commit_cmd, cwd)
     if commit.returncode != 0:
-        if _has_unpushed_commits(cwd):
+        if allowed_files is None and _has_unpushed_commits(cwd):
             push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
             if push_ok:
                 return True, "Pushed existing CI fix commits"
@@ -1345,7 +1360,8 @@ def run_ci_validation_loop(
     timeout: float,
     quiet: bool,
     expected_head_sha_override: Optional[str] = None,
-    pre_commit_check: Optional[Callable[[], Optional[str]]] = None,
+    pre_commit_check: Optional[Callable[[List[str]], Optional[str]]] = None,
+    commit_files: Optional[Callable[[], Sequence[str]]] = None,
 ) -> Tuple[bool, str, float]:
     """Poll required PR checks and iterate on CI-only failures until they pass.
 
@@ -1357,10 +1373,10 @@ def run_ci_validation_loop(
     prevents the timeout from burning while ``cwd``'s stale HEAD is compared
     to the advanced remote.
 
-    ``pre_commit_check`` is a fail-closed hook for caller-owned invariants that
-    must be re-evaluated after the CI repair agent edits the worktree but before
-    those edits are committed or pushed. It returns ``None`` when clean, or an
-    actionable failure message when the candidate must be rejected.
+    ``commit_files`` limits the CI commit to caller-owned paths.
+    ``pre_commit_check`` receives that exact path list after the repair agent
+    edits the worktree but before commit/push, and returns ``None`` when clean
+    or an actionable failure message when the candidate must be rejected.
     """
     total_cost = 0.0
     max_retries = max(0, int(max_retries))
@@ -1695,9 +1711,22 @@ def run_ci_validation_loop(
             )
             return False, "CI fix task did not apply an actionable fix", total_cost
 
+        allowed_files = list(commit_files()) if commit_files is not None else None
         if pre_commit_check is not None:
+            check_files = allowed_files
+            if check_files is None:
+                from .agentic_e2e_fix_orchestrator import (
+                    _get_modified_and_untracked,
+                    _is_intermediate_file,
+                )
+
+                check_files = [
+                    path
+                    for path in sorted(_get_modified_and_untracked(cwd))
+                    if not _is_intermediate_file(path)
+                ]
             try:
-                pre_commit_error = pre_commit_check()
+                pre_commit_error = pre_commit_check(check_files)
             except Exception as exc:  # pylint: disable=broad-except
                 pre_commit_error = f"pre-commit validation raised: {exc}"
             if pre_commit_error:
@@ -1707,12 +1736,15 @@ def run_ci_validation_loop(
                     total_cost,
                 )
 
-        commit_success, commit_message = _commit_ci_fix(
+        commit_kwargs: Dict[str, Any] = dict(
             cwd=cwd,
             repo_owner=repo_owner,
             repo_name=repo_name,
             issue_number=issue_number,
         )
+        if allowed_files is not None:
+            commit_kwargs["allowed_files"] = allowed_files
+        commit_success, commit_message = _commit_ci_fix(**commit_kwargs)
         if not commit_success:
             return False, commit_message, total_cost
 

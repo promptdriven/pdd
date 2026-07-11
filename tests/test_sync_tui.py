@@ -25,6 +25,12 @@ with patch("textual.work", lambda **kwargs: (lambda func: func)):
 
 from textual.widgets import RichLog, ProgressBar, Static
 from textual.app import App
+from pdd.agentic_common import (
+    get_disabled_providers,
+    mark_provider_permanently_failed,
+    provider_failure_scope,
+    reset_disabled_providers,
+)
 
 
 # --- Event loop fixture for sync tests ---
@@ -204,6 +210,33 @@ def test_sync_app_env_isolation():
     assert os.environ.get("FORCE_COLOR") == original_force_color
     assert os.environ.get("TERM") == original_term
     assert os.environ.get("COLUMNS") == original_columns
+
+
+def test_sync_worker_seeds_parent_provider_failure_scope():
+    """Textual worker execution preserves the parent workflow skip-list."""
+    observed = []
+
+    def mock_worker():
+        observed.append(get_disabled_providers())
+        return {"success": True}
+
+    reset_disabled_providers()
+    refs = [[""]] * 10
+    with provider_failure_scope():
+        mark_provider_permanently_failed("openai", "auth")
+        app = SyncApp(
+            "test",
+            1.0,
+            mock_worker,
+            *refs,
+            stop_event=threading.Event(),
+        )
+
+    app._app_ref = [app]
+    app.run_worker_task()
+
+    assert observed == [{"openai": "auth"}]
+    assert get_disabled_providers() == {}
 
 def test_progress_callback_thread_safety():
     """Verify _update_progress schedules a UI update."""

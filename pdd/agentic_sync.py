@@ -21,7 +21,11 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import build_agentic_task_instruction, run_agentic_task
+from .agentic_common import (
+    build_agentic_task_instruction,
+    provider_failure_workflow,
+    run_agentic_task,
+)
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
@@ -2621,6 +2625,7 @@ def _truncate_head_tail(text: str, max_len: int) -> str:
     return result
 
 
+@provider_failure_workflow
 def run_agentic_sync(
     issue_url: str,
     *,

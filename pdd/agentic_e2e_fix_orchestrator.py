@@ -18,6 +18,7 @@ from rich.console import Console
 import re as _re
 
 from .agentic_common import (
+    provider_failure_workflow,
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
@@ -1972,6 +1973,7 @@ def _run_pre_checkup_gate_with_remediation(
             repo_owner=repo_owner,
             repo_name=repo_name,
             issue_number=issue_number,
+            allowed_files=remediation_changed_files,
         )
         if not commit_success:
             return False, commit_message, total_cost, latest_changed_files
@@ -2242,6 +2244,7 @@ def _build_post_loop_state(
     }
 
 
+@provider_failure_workflow
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -3746,13 +3749,14 @@ def run_agentic_e2e_fix_orchestrator(
                 run_agentic_task_fn=run_agentic_task,
                 timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                 quiet=quiet,
-                pre_commit_check=lambda: _changed_mock_contract_error(
+                pre_commit_check=lambda files: _changed_mock_contract_error(
                     cwd=cwd,
-                    changed_files=(
-                        _detect_changed_files(cwd, initial_file_hashes)
-                        or changed_files
-                    ),
+                    changed_files=files,
                     baseline_ref=initial_sha,
+                ),
+                commit_files=lambda: (
+                    _detect_changed_files(cwd, initial_file_hashes)
+                    or changed_files
                 ),
             )
             total_cost += ci_cost

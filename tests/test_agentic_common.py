@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     get_agent_provider_preference,
     get_disabled_providers,
     mark_provider_permanently_failed,
+    provider_failure_workflow,
     provider_failure_scope,
     reset_disabled_providers,
     run_agentic_task,
@@ -14215,3 +14216,49 @@ def test_provider_failure_scope_starts_fresh_logical_workflow():
 
     with provider_failure_scope():
         assert get_disabled_providers() == {}
+
+
+def test_provider_failure_workflow_shares_calls_then_resets(mock_cwd):
+    """A direct multi-step library workflow owns one isolated health epoch."""
+    attempted = []
+
+    @provider_failure_workflow
+    def workflow():
+        mark_provider_permanently_failed("openai", "auth")
+        attempted.append(get_disabled_providers())
+        attempted.append(get_disabled_providers())
+
+    workflow()
+
+    assert attempted == [{"openai": "auth"}, {"openai": "auth"}]
+    assert get_disabled_providers() == {}
+
+
+def test_routing_policy_falls_back_when_selected_harness_is_disabled(mock_cwd):
+    """A dead routed harness cannot hide a healthy feasible provider."""
+    from pdd.routing_policy import default_policy
+
+    attempted, fake_run = _provider_recorder(success_providers={"google"})
+    with provider_failure_scope():
+        mark_provider_permanently_failed("anthropic", "auth")
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic", "google"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic", "google"],
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            side_effect=fake_run,
+        ), patch("pdd.agentic_common.time.sleep"):
+            result = run_agentic_task(
+                "do work",
+                mock_cwd,
+                quiet=True,
+                task_class="bug-fix",
+                routing_policy=default_policy(),
+            )
+
+    assert result.success is True
+    assert result.provider == "google"
+    assert attempted == ["google"]

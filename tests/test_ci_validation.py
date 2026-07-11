@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from pdd.ci_validation import (
+    _commit_ci_fix,
     _check_run_bucket,
     _classify_check_result,
     _classify_external_ci_failure,
@@ -2910,10 +2911,44 @@ def test_ci_fix_runs_caller_pre_commit_check_before_push(tmp_path: Path) -> None
             ),
             timeout=60.0,
             quiet=True,
-            pre_commit_check=lambda: "mock-contract divergence",
+            pre_commit_check=lambda _files: "mock-contract divergence",
+            commit_files=lambda: ["pdd/owned.py"],
         )
 
     assert success is False
     assert cost == 0.25
     assert "mock-contract divergence" in message
     commit_fix.assert_not_called()
+
+
+def test_commit_ci_fix_excludes_unowned_dirty_and_prestaged_files(
+    tmp_path: Path,
+) -> None:
+    """The remediation commit pathspec is identical to its validated allowlist."""
+    completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    with patch(
+        "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+        return_value={"pdd/owned.py", "pdd/preexisting.py"},
+    ), patch(
+        "pdd.agentic_e2e_fix_orchestrator._push_with_retry",
+        return_value=(True, ""),
+    ), patch(
+        "pdd.ci_validation._run_command",
+        return_value=completed,
+    ) as run_command:
+        success, message = _commit_ci_fix(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1939,
+            allowed_files=["pdd/owned.py"],
+        )
+
+    assert success is True
+    assert "1 CI fix file" in message
+    commands = [call.args[0] for call in run_command.call_args_list]
+    assert ["git", "add", "--", "pdd/owned.py"] in commands
+    commit_command = next(command for command in commands if command[:2] == ["git", "commit"])
+    assert "--only" in commit_command
+    assert "pdd/owned.py" in commit_command
+    assert "pdd/preexisting.py" not in commit_command
