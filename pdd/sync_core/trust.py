@@ -179,6 +179,7 @@ class AttestationBinding:
     checked_sha: str
     playwright_command: tuple[str, ...] | None = None
     playwright_toolchain_manifest: str | None = None
+    artifact_closure_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -218,6 +219,7 @@ class AttestationEnvelope:
                 "tool_version": self.binding.tool_version,
                 "base_sha": self.binding.base_sha,
                 "checked_sha": self.binding.checked_sha,
+                "artifact_closure_digest": self.binding.artifact_closure_digest,
             },
             "results": [
                 {

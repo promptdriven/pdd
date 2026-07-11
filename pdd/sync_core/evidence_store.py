@@ -64,6 +64,7 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
             "tool_version": binding.tool_version,
             "base_sha": binding.base_sha,
             "checked_sha": binding.checked_sha,
+            "artifact_closure_digest": binding.artifact_closure_digest,
         },
         "results": [
             {
@@ -133,6 +134,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "checked_sha"),
             tuple(command_data) if command_data is not None else None,
             binding_data.get("playwright_toolchain_manifest"),
+            str(binding_data.get("artifact_closure_digest") or ""),
         )
         results = tuple(
             ObligationEvidence(

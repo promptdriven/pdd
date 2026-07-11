@@ -3344,6 +3344,7 @@ def run_profile(
         config.playwright_command,
         str(config.playwright_toolchain_manifest.resolve())
         if config.playwright_toolchain_manifest is not None else None,
+        binding.artifact_closure_digest,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions

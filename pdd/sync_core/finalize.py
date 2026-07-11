@@ -200,6 +200,7 @@ def _reusable_result(
         envelope.binding.checked_sha,
         envelope.binding.playwright_command,
         envelope.binding.playwright_toolchain_manifest,
+        snapshot.digest(),
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(
@@ -301,7 +302,7 @@ def finalize_unit(
     envelope, executions = run_profile(
         repository_root,
         profile,
-        RunBinding(snapshot.digest(), base_sha, head_sha),
+        RunBinding(snapshot.digest(), base_sha, head_sha, snapshot.digest()),
         AttestationIssue(signer, attestation_id, str(uuid.uuid4()), now),
         config,
     )
