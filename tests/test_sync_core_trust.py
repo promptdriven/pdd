@@ -70,6 +70,13 @@ def test_valid_attestation_produces_sealed_evidence() -> None:
     assert evidence.attestation_id == "attestation-1"
 
 
+def test_boolean_payload_version_is_rejected_by_domain_payload() -> None:
+    envelope = replace(_envelope(), payload_version=True)
+
+    with pytest.raises(AttestationError, match="payload version"):
+        envelope.payload()
+
+
 def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None:
     request = AttestationRequest(
         "remote-attestation",

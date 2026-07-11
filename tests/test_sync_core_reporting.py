@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
@@ -149,7 +150,11 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _finalize_trusted_baseline(
-    root: Path, commit: str, *, artifact_closure_digest: str | None = None
+    root: Path,
+    commit: str,
+    *,
+    artifact_closure_digest: str | None = None,
+    legacy_pre_closure: bool = False,
 ) -> None:
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     profile = load_verification_profiles(root, manifest).profiles[0]
@@ -174,6 +179,15 @@ def _finalize_trusted_baseline(
             NOW,
         )
     )
+    if legacy_pre_closure:
+        envelope = SIGNER.sign(
+            replace(
+                envelope,
+                binding=replace(envelope.binding, artifact_closure_digest=""),
+                signature="",
+                payload_version=1,
+            )
+        )
     provenance = FingerprintProvenance(
         "generated",
         "pdd sync widget",
@@ -239,6 +253,35 @@ def test_canonical_report_rejects_signed_mismatched_artifact_closure(tmp_path) -
 
     assert report["ok"] is False
     assert report["counts"]["trusted_current_evidence"] == 0
+
+
+def test_canonical_report_migrates_fresh_signed_pre_closure_envelope(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(root, commit, legacy_pre_closure=True)
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is True
+    assert report["counts"]["trusted_in_sync"] == 1
+
+
+def test_finalizer_reuses_fresh_signed_pre_closure_envelope(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(root, commit, legacy_pre_closure=True)
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        result = finalize_unit(
+            root,
+            PurePosixPath("prompts/widget_python.prompt"),
+            base_ref=commit,
+            head_ref=commit,
+            signer=SIGNER,
+            replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+        )
+
+    assert result.transaction.no_op is True
+    assert result.attestation_id == "attestation-widget-1"
+    run_profile_mock.assert_not_called()
 
 
 def test_managed_waiver_is_counted_and_blocks_certificate_predicate(tmp_path) -> None:

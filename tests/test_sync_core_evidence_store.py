@@ -100,6 +100,22 @@ def test_unknown_attestation_payload_version_is_rejected() -> None:
         decode_attestation(payload)
 
 
+def test_v1_attestation_rejects_unsigned_artifact_closure() -> None:
+    payload = json.loads(encode_attestation(_envelope()))
+    payload["payload_version"] = 1
+
+    with pytest.raises(EvidenceStoreError, match="artifact_closure_digest"):
+        decode_attestation(payload)
+
+
+def test_v2_attestation_requires_nonempty_artifact_closure() -> None:
+    payload = json.loads(encode_attestation(_envelope()))
+    payload["binding"]["artifact_closure_digest"] = ""
+
+    with pytest.raises(EvidenceStoreError, match="artifact_closure_digest"):
+        decode_attestation(payload)
+
+
 def test_candidate_cannot_replace_protected_base_public_key(tmp_path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
