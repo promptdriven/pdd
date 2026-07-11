@@ -134,6 +134,69 @@ def test_path_policy_rejects_unapproved_symlink_below_approved_target(tmp_path) 
         policy.resolve(PurePosixPath("alias/widget.py"))
 
 
+def test_path_policy_rejects_unapproved_symlink_in_canonical_suffix(tmp_path) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "terminal").mkdir()
+    (tmp_path / "terminal/widget.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "canonical/nested").symlink_to(
+        "../terminal", target_is_directory=True
+    )
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "tracked descendant alias")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("canonical")},
+        base_ref=commit,
+        head_ref=commit,
+    )
+
+    with pytest.raises(
+        PathPolicyError, match="unapproved managed symlink: canonical/nested"
+    ):
+        policy.resolve(PurePosixPath("alias/nested/widget.py"))
+
+
+@pytest.mark.parametrize("replacement_in_head", [False, True])
+def test_path_policy_rejects_canonical_suffix_symlink_replaced_by_directory(
+    tmp_path, replacement_in_head
+) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "terminal").mkdir()
+    (tmp_path / "terminal/widget.py").write_text("terminal = True\n", encoding="utf-8")
+    nested = tmp_path / "canonical/nested"
+    nested.symlink_to("../terminal", target_is_directory=True)
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base descendant alias")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+
+    nested.unlink()
+    nested.mkdir()
+    (nested / "widget.py").write_text("replacement = True\n", encoding="utf-8")
+    head = base
+    if replacement_in_head:
+        _git(tmp_path, "add", "canonical/nested")
+        _git(tmp_path, "commit", "-q", "-m", "replace descendant alias")
+        head = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("canonical")},
+        base_ref=base,
+        head_ref=head,
+    )
+
+    with pytest.raises(
+        PathPolicyError, match="unapproved managed symlink: canonical/nested"
+    ):
+        policy.resolve(PurePosixPath("alias/nested/widget.py"))
+
+
 def _git(root, *args: str) -> str:
     return subprocess.run(
         ["git", *args],

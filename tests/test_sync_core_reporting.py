@@ -834,6 +834,57 @@ def test_unlisted_canonical_symlink_cannot_hide_terminal_owner(tmp_path) -> None
     assert "unapproved" in errors and "middle" in errors
 
 
+def test_descendant_canonical_symlink_cannot_hide_terminal_owner(tmp_path) -> None:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    (root / "canonical/widget.py").unlink()
+    (root / "terminal").mkdir()
+    (root / "terminal/widget.py").write_text("terminal = True\n")
+    (root / "canonical/nested").symlink_to(
+        "../terminal", target_is_directory=True
+    )
+    (root / "prompts/helper_python.prompt").write_text("REQ-2: Build helper\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "widget_python.prompt",
+                    "filepath": "src/nested/widget.py",
+                },
+                {
+                    "filename": "helper_python.prompt",
+                    "filepath": "terminal/widget.py",
+                },
+            ]
+        )
+    )
+    ownership = json.loads((root / ".pdd/sync-ownership.json").read_text())
+    ownership["rules"].append(
+        {
+            "pattern": "canonical/nested",
+            "inventory": "HUMAN_OWNED",
+            "role": "compatibility-link",
+            "owner": "platform@example.com",
+        }
+    )
+    (root / ".pdd/sync-ownership.json").write_text(json.dumps(ownership))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "descendant canonical terminal owner")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=commit,
+            head_ref=commit,
+            replay_ledger_path=tmp_path / "external-trust/descendant-terminal.json",
+        ),
+    )
+
+    assert report["counts"]["invalid"] > 0
+    errors = "\n".join(report["errors"])
+    assert "unapproved" in errors and "canonical/nested" in errors
+
+
 def _alias_collision_repository(tmp_path: Path, *, different_unit: bool) -> tuple[Path, str]:
     root, _commit = _repository(tmp_path, approved_alias=True)
     prompt = "widget_python.prompt"
