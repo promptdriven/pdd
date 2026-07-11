@@ -436,7 +436,12 @@ def test_agentic_review_loop_emits_json_wrapper_on_stdout() -> None:
     payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
     assert payload["status"] == "failed"
-    assert payload["artifact_path"].endswith("pdd-checkup-agentic-7.json")
+    # The public path is invocation-specific (issue #1788): a per-PR stem plus a
+    # unique nonce, never the shared name a concurrent run could have written.
+    artifact_name = os.path.basename(payload["artifact_path"])
+    assert artifact_name.startswith("pdd-checkup-agentic-7-")
+    assert artifact_name.endswith(".json")
+    assert artifact_name != "pdd-checkup-agentic-7.json"
 
 
 def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
@@ -511,6 +516,7 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
 
     runner = CliRunner()
     with runner.isolated_filesystem():
+        # A prior invocation left a PASSING artifact at the legacy shared name.
         with open("pdd-checkup-agentic-7.json", "w", encoding="utf-8") as handle:
             json.dump(
                 {
@@ -533,26 +539,43 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
                 ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
                 obj={"quiet": False, "verbose": False},
             )
-        with open("pdd-checkup-agentic-7.json", encoding="utf-8") as handle:
-            persisted = json.load(handle)
+        payload = json.loads(result.output)
+        # This invocation published to its OWN unique path, not the shared name.
+        unique_name = os.path.basename(payload["artifact_path"])
+        assert unique_name.startswith("pdd-checkup-agentic-7-")
+        assert unique_name != "pdd-checkup-agentic-7.json"
+        # The stale shared-name PASS must not survive (defence in depth).
+        shared_after = None
+        if os.path.exists("pdd-checkup-agentic-7.json"):
+            with open("pdd-checkup-agentic-7.json", encoding="utf-8") as handle:
+                shared_after = json.load(handle)
+        # The unique path holds a secret-safe blocking tombstone (or nothing).
+        unique_after = None
+        if os.path.exists(unique_name):
+            with open(unique_name, encoding="utf-8") as handle:
+                unique_after = json.load(handle)
     assert result.exit_code == 1
-    payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
     assert payload["status"] == "failed"
-    assert persisted == {
-        "schema_version": "pdd.checkup.agentic.v1.wrapper",
-        "success": False,
-        "status": "failed",
-    }
-    assert "ghp_sensitive_runtime_token" not in json.dumps(persisted)
-    assert "sensitive-provider-model" not in json.dumps(persisted)
-    assert "12.34" not in json.dumps(persisted)
-    # P1/security (issue #1788): the stdout wrapper must not carry raw provider/
-    # runtime diagnostics either — hosted job logs retain stdout even when the
-    # tombstone on disk is scrubbed.
-    assert "ghp_sensitive_runtime_token" not in result.output
-    assert "sensitive-provider-model" not in result.output
-    assert "12.34" not in result.output
+    assert shared_after is None or (
+        shared_after.get("status") != "passed"
+        and shared_after.get("verdict", {}).get("decision") != "pass"
+    )
+    assert unique_after in (
+        None,
+        {
+            "schema_version": "pdd.checkup.agentic.v1.wrapper",
+            "success": False,
+            "status": "failed",
+        },
+    )
+    # P1/security (issue #1788): neither stdout nor any persisted artifact may
+    # carry raw provider/runtime diagnostics — hosted job logs retain stdout
+    # even when the tombstone on disk is scrubbed.
+    persisted_blob = json.dumps(shared_after) + json.dumps(unique_after)
+    for secret in ("ghp_sensitive_runtime_token", "sensitive-provider-model", "12.34"):
+        assert secret not in persisted_blob
+        assert secret not in result.output
     assert "message" not in payload
     assert "cost" not in payload
     assert "model" not in payload
@@ -629,7 +652,9 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     assert first_private is not None
     assert second_private is not None
     assert first_private != second_private
-    assert first_public == second_public
+    # Issue #1788 P1: each invocation owns a DISJOINT public path — there is no
+    # shared slot for one invocation to consume or clobber the other's verdict.
+    assert first_public != second_public
 
     second_private.write_text(
         json.dumps(
@@ -658,6 +683,59 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     second_payload = json.loads(capsys.readouterr().out)
     assert second_payload["schema_version"] == "pdd.checkup.agentic.v1"
     assert second_payload["status"] == "passed"
+
+
+def test_concurrent_standalone_later_crash_cannot_steal_older_pass(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Issue #1788 P1: the exact later-start/crash/older-pass interleaving.
+
+    A later-starting invocation that crashes before it emits must never let an
+    earlier invocation's PASS land in the later one's slot. Because each
+    invocation owns a unique public path, the older PASS is confined to the
+    older path and a file-based consumer handling the newer invocation reads the
+    newer (empty) slot — never the older verdict.
+    """
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    pr_url = "https://github.com/org/repo/pull/7"
+    older_private, older_public = _prepare_agentic_review_loop_artifact(pr_url)
+    newer_private, newer_public = _prepare_agentic_review_loop_artifact(pr_url)
+
+    assert older_private is not None and newer_private is not None
+    # Disjoint slots: the later "claim" cannot target the earlier invocation's
+    # publication path.
+    assert older_public != newer_public
+
+    # The newer invocation crashes before emitting: its private file is never
+    # written and it never publishes to newer_public.
+    # The older invocation then finishes with a PASS.
+    older_private.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _emit_agentic_review_loop_json(
+        artifact_path=older_private,
+        published_artifact_path=older_public,
+    )
+    capsys.readouterr()
+
+    # The older PASS landed ONLY in the older invocation's slot.
+    older_persisted = json.loads(older_public.read_text(encoding="utf-8"))
+    assert older_persisted["status"] == "passed"
+    # A file-based consumer handling the newer invocation reads the newer slot,
+    # which must NOT contain the older invocation's PASS.
+    if newer_public.exists():
+        newer_persisted = json.loads(newer_public.read_text(encoding="utf-8"))
+        assert newer_persisted.get("status") != "passed"
+        assert newer_persisted.get("verdict", {}).get("decision") != "pass"
 
 
 def test_agentic_atomic_publish_failure_clears_stale_pass(

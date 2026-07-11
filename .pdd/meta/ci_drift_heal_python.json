@@ -1,7 +1,7 @@
 {
-  "pdd_version": "0.0.300.dev0",
-  "timestamp": "2026-07-10T23:35:31+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.302.dev0",
+  "timestamp": "2026-07-11T21:57:18.792441+00:00",
+  "command": "test",
   "prompt_hash": "9cf9a8b90906afb95cba983fde17068cec556c6a7c3c3094c2a6686077eee920",
   "code_hash": "22113055b68097b9550f3e3ddb7764211a352a27de045b4622393784c79c83d2",
   "example_hash": "550e750fb041fb73dc92462d4f266bc999102ddd8e4efd3b40dbab0bb1d0d879",

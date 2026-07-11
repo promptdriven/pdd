@@ -368,9 +368,23 @@ def _publish_hosted_agentic_artifact(
         return None
     try:
         if canonical_passed is not None:
-            _finalize_hosted_agentic_artifact(
+            finalized = _finalize_hosted_agentic_artifact(
                 str(reservation.private_path), canonical_passed=canonical_passed
             )
+            # Canonical finalization is authoritative and terminal. It either
+            # atomically downgrades/labels the private artifact IN PLACE (and
+            # returns that same private path) or it fails closed. A ``None`` or
+            # wrong-path result means the private payload was NOT finalized:
+            # publishing it here could move a pre-finalization ``status="passed"``
+            # into the public slot even though the canonical gate did not produce
+            # a shippable verdict. Stop before any publication; the public path
+            # retains its blocking placeholder, and the ``finally`` clause drops
+            # the un-finalized private payload (issue #1788).
+            if (
+                finalized is None
+                or Path(finalized).resolve() != reservation.private_path.resolve()
+            ):
+                return None
         payload = json.loads(reservation.private_path.read_text(encoding="utf-8"))
         if (
             not isinstance(payload, dict)

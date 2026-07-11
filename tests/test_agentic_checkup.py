@@ -1022,6 +1022,93 @@ class TestRunAgenticCheckup:
         assert result is None
         assert path.read_text(encoding="utf-8") == original
 
+    def _seed_passing_hosted_reservation(self, tmp_path):
+        """Reserve a hosted slot whose private artifact holds a mirror PASS.
+
+        This models the review loop having written a passing
+        ``pdd.checkup.agentic.v1`` mirror to the invocation-private path before
+        the outer final gate downgrades authority.
+        """
+        path = tmp_path / "agentic.json"
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        assert reservation is not None
+        payload = json.loads(reservation.private_path.read_text(encoding="utf-8"))
+        payload.update(
+            status="passed",
+            authority="canonical_unknown_agentic_fallback_pass",
+            layer1={"status": "unknown", "blockers": []},
+            verdict={"decision": "pass", "reason": "mirror clean"},
+        )
+        reservation.private_path.write_text(json.dumps(payload), encoding="utf-8")
+        return path, reservation
+
+    def test_publish_hosted_artifact_terminal_when_finalization_fails_canonical_fail(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: when canonical finalization cannot downgrade the
+        private artifact (returns None), the pre-finalization payload — a stale
+        PASS — must NEVER be published. Regression through
+        ``_publish_hosted_agentic_artifact``, not the isolated finalizer: the
+        public slot must retain its blocking placeholder."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        # Canonical gate FAILED and finalization could neither downgrade nor
+        # tombstone the artifact (returns None, private payload unchanged).
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            return_value=None,
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=False
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+        assert public_payload.get("verdict", {}).get("decision") == "block"
+
+    def test_publish_hosted_artifact_terminal_when_finalization_fails_canonical_pass(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: a canonical PASS whose finalization fails (returns
+        None) is also terminal — the un-finalized private payload must not be
+        published; the public slot keeps its blocking placeholder."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            return_value=None,
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=True
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+        assert public_payload.get("verdict", {}).get("decision") == "block"
+
+    def test_publish_hosted_artifact_terminal_when_finalization_returns_wrong_path(
+        self, tmp_path
+    ):
+        """Issue #1788 P1: a finalizer result that is not this invocation's
+        private path is terminal — never publish the original private payload."""
+        path, reservation = self._seed_passing_hosted_reservation(tmp_path)
+
+        with patch(
+            "pdd.agentic_checkup._finalize_hosted_agentic_artifact",
+            return_value=str(tmp_path / "somewhere-else.json"),
+        ):
+            result = _publish_hosted_agentic_artifact(
+                reservation, canonical_passed=False
+            )
+
+        assert result is None
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload.get("status") != "passed"
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(

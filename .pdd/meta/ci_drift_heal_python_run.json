@@ -1,13 +1,13 @@
 {
-  "timestamp": "2026-07-10T03:00:34.511047+00:00",
+  "timestamp": "2026-07-11T21:57:18.793092+00:00",
   "exit_code": 0,
-  "tests_passed": 198,
+  "tests_passed": 202,
   "tests_failed": 0,
   "tests_skipped": 0,
-  "coverage": 75.0,
-  "test_hash": "01e31d79988648e26b9b5db06dcee8ee0309b8d546818abb35f04d1724947314",
+  "coverage": 83.3,
+  "test_hash": "e446e7a5b77cee16d9def89cad971211bb66fbab36bae0c83d2958da47c2fd23",
   "test_files": {
-    "test_ci_drift_heal.py": "01e31d79988648e26b9b5db06dcee8ee0309b8d546818abb35f04d1724947314",
+    "test_ci_drift_heal.py": "e446e7a5b77cee16d9def89cad971211bb66fbab36bae0c83d2958da47c2fd23",
     "test_ci_drift_heal_e2e.py": "dfcd225cc5a6442ba11e9cd41b79568a57d97b7804ee6ea66f4191aa068478e3"
   }
 }

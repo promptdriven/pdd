@@ -4,6 +4,7 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 
 # pylint: disable=unknown-option-value
 import math
+import secrets
 import sys
 import tempfile
 from pathlib import Path
@@ -62,7 +63,11 @@ def _forward_subcommand_json(
 
 
 def _agentic_review_loop_artifact_path(pr_url: Optional[str]) -> Optional[Path]:
-    """Return the standalone agentic artifact path for ``pr_url``."""
+    """Return the per-PR base (stem) artifact path for ``pr_url``.
+
+    This is the legacy shared name; the invocation-specific public path is
+    derived from it by :func:`_prepare_agentic_review_loop_artifact`.
+    """
     if pr_url is None:
         return None
     parsed = _parse_pr_url(pr_url)
@@ -75,28 +80,38 @@ def _agentic_review_loop_artifact_path(pr_url: Optional[str]) -> Optional[Path]:
 def _prepare_agentic_review_loop_artifact(
     pr_url: Optional[str],
 ) -> Tuple[Optional[Path], Optional[Path]]:
-    """Reserve an invocation-private artifact path and its public destination.
+    """Reserve an invocation-private artifact path and a UNIQUE public path.
 
     The review loop writes only to the private path.  The later reader verifies
-    that file and atomically publishes it to the stable per-PR destination, so
-    concurrent invocations can never consume each other's verdicts.
+    that file and atomically publishes it to this invocation's own public path.
 
-    Provenance (issue #1788): a prior invocation may have left a *passing*
-    artifact at the public path.  Claim the public path up front by removing any
-    pre-existing artifact before the review loop runs.  This establishes this
-    invocation's verdict slot before running, so if the run later crashes, or
-    reservation/publication fails, the public path is already non-consumable and
-    a stale pass can never be mistaken for the current result.
+    Concurrency safety (issue #1788): the public destination is
+    invocation-specific — ``pdd-checkup-agentic-{pr}-{nonce}.json`` — never a
+    shared per-PR slot.  Two concurrent same-PR invocations therefore own
+    disjoint verdict files: neither can consume or overwrite the other's
+    artifact, and a crashed or failed invocation simply leaves no consumable
+    verdict at its unique path (fail-closed by construction — there is no shared
+    slot to claim and no pre-existing PASS to clobber).  The caller receives the
+    unique public path and reports it on stdout, so a file-based consumer reads
+    exactly this invocation's verdict rather than a shared name a concurrent run
+    could have written.
+
+    As defence in depth for any consumer still reading the legacy shared name,
+    remove a pre-existing shared-name artifact up front so a stale
+    ``status="passed"`` can never be mistaken for a current verdict.
     """
-    published_path = _agentic_review_loop_artifact_path(pr_url)
-    if published_path is None:
+    base_path = _agentic_review_loop_artifact_path(pr_url)
+    if base_path is None:
         return None, None
-    # Claim the public path: a prior verdict (possibly a stale PASS) must not
-    # outlive this invocation, even if every later step fails.
+    # Defence in depth: a stale shared-name artifact from before per-invocation
+    # paths must never survive as a consumable PASS.
     try:
-        published_path.unlink(missing_ok=True)
+        base_path.unlink(missing_ok=True)
     except OSError:
         pass
+    published_path = base_path.with_name(
+        f"{base_path.stem}-{secrets.token_hex(16)}{base_path.suffix}"
+    )
     try:
         reserved = tempfile.NamedTemporaryFile(
             mode="w",
