@@ -8,13 +8,12 @@ import re
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
-from pdd.sync_core import build_unit_manifest, load_verification_profiles
+from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
 from pdd.sync_core.git_io import read_git_blob
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.runner import pytest_validator_config_digest
 from pdd.sync_core.types import InventoryStatus
 from pdd.sync_core.verification import PROFILE_PATH
-import pdd.sync_core.verification as verification
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,8 +45,8 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
     payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     rows = payload["profiles"]
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
-    assert manifest.invalid_reasons == ()
-    assert manifest.unaccounted_tracked_paths == ()
+    assert not manifest.invalid_reasons
+    assert not manifest.unaccounted_tracked_paths
     expected = {
         (unit.prompt_relpath.as_posix(), unit.language_id)
         for unit in manifest.expected_managed
@@ -88,7 +87,7 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
     )
     _profile_bytes_as_protected_base(monkeypatch, profile_bytes)
     profiles = load_verification_profiles(ROOT, protected_manifest)
-    assert profiles.invalid_reasons == ()
+    assert not profiles.invalid_reasons
     assert profiles.coverage == 1.0
     assert len(profiles.profiles) == EXPECTED_PROFILE_COUNT
 
