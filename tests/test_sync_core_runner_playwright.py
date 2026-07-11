@@ -1,6 +1,7 @@
 """Contract tests for the fail-closed trusted Playwright adapter."""
 
 import json
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -89,7 +90,13 @@ def _repository(
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _run(root: Path, base: str, head: str, fake: Path, timeout: int = 2):
+def _run(
+    root: Path,
+    base: str,
+    head: str,
+    fake: Path | tuple[str, ...],
+    timeout: int = 2,
+):
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     try:
         config_digest = playwright_validator_config_digest(root, base, paths)
@@ -110,7 +117,10 @@ def _run(root: Path, base: str, head: str, fake: Path, timeout: int = 2):
             datetime(2026, 7, 10, tzinfo=timezone.utc),
         ),
         config=RunnerConfig(
-            timeout_seconds=timeout, playwright_command=(sys.executable, str(fake))
+            timeout_seconds=timeout,
+            playwright_command=fake
+            if isinstance(fake, tuple)
+            else (sys.executable, str(fake)),
         ),
     )
 
@@ -133,11 +143,14 @@ def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
     _git(root, "commit", "-q", "-m", "ignore local node modules")
     commit = _git(root, "rev-parse", "HEAD")
 
+    node = shutil.which("node")
+    assert node is not None
+
     _envelope, executions = _run(
         root,
         commit,
         commit,
-        _fake_node_playwright(tmp_path),
+        (node, str(_fake_node_playwright(tmp_path))),
     )
 
     assert executions[0].outcome is EvidenceOutcome.PASS
