@@ -2480,6 +2480,7 @@ def run_obligation(
     dirty = {
         "jest": _dirty_jest_support,
         "vitest": _dirty_vitest_support,
+        "playwright": _dirty_playwright_support,
     }.get(obligation.validator_id, _dirty_pytest_support)(root)
     if dirty:
         return RunnerExecution(
@@ -2510,6 +2511,23 @@ def run_obligation(
             )
         if config.vitest_command is not None:
             command_error = _protected_command_error(root, config.vitest_command)
+            if command_error is not None:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.ERROR,
+                    obligation.validator_config_digest,
+                    command_error,
+                )
+    if obligation.validator_id == "playwright":
+        if _playwright_candidate_toolchain(root):
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                "candidate node_modules Playwright toolchain is not trusted",
+            )
+        if config.playwright_command is not None:
+            command_error = _playwright_command_error(root, config.playwright_command)
             if command_error is not None:
                 return RunnerExecution(
                     obligation.obligation_id,
