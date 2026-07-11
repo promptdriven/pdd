@@ -178,6 +178,13 @@ class PathPolicy:
             if stat.S_ISLNK(mode):
                 if approved_target is None:
                     raise PathPolicyError(f"unapproved managed symlink: {logical_component}")
+                canonical_relpath = approved_target.joinpath(*parts[index:])
+                validate_canonical_alias_path(
+                    self.checkout_root,
+                    canonical_relpath,
+                    base_ref=self.base_ref,
+                    head_ref=self.head_ref,
+                )
                 target = component.resolve(strict=True)
                 expected = self.checkout_root.joinpath(*approved_target.parts).resolve(strict=True)
                 if target != expected or not self._within_root(target):

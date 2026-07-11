@@ -764,6 +764,37 @@ def _managed_alias_counterparts(
     return counterparts, invalid
 
 
+def _validate_managed_alias_counterparts(
+    root: Path,
+    managed_paths: set[PurePosixPath],
+    approved_aliases: dict[PurePosixPath, PurePosixPath],
+    *,
+    base_ref: str,
+    head_ref: str,
+) -> list[str]:
+    """Validate complete canonical identities derived for managed alias paths."""
+    invalid: list[str] = []
+    for path in sorted(managed_paths):
+        for alias, canonical in approved_aliases.items():
+            if path == alias:
+                suffix: tuple[str, ...] = ()
+            elif path.parts[: len(alias.parts)] == alias.parts:
+                suffix = path.parts[len(alias.parts) :]
+            else:
+                continue
+            counterpart = canonical.joinpath(*suffix)
+            try:
+                validate_canonical_alias_path(
+                    root,
+                    counterpart,
+                    base_ref=base_ref,
+                    head_ref=head_ref,
+                )
+            except PathPolicyError as exc:
+                invalid.append(str(exc))
+    return sorted(set(invalid))
+
+
 def _is_protected_control(path: PurePosixPath) -> bool:
     """Return whether a path is an intrinsic canonical policy/config input."""
     under_canonical_state = _is_dynamic_canonical_state(path)
@@ -1099,6 +1130,21 @@ def build_unit_manifest(
         )
         approved_aliases, alias_invalid = _approved_aliases(
             repository_root, base_ref, head_ref
+        )
+        managed_paths = (
+            set(base.units)
+            | set(head.units)
+            | set(base.outputs)
+            | set(head.outputs)
+        )
+        alias_invalid.extend(
+            _validate_managed_alias_counterparts(
+                repository_root,
+                managed_paths,
+                approved_aliases,
+                base_ref=base_ref,
+                head_ref=head_ref,
+            )
         )
     except ValueError as exc:
         raise ManifestError(str(exc)) from exc
