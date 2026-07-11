@@ -1538,7 +1538,7 @@ def _playwright_result(
                         raise ValueError("malformed Playwright spec")
                     spec_file = Path(spec["file"])
                     if not spec_file.is_absolute():
-                        spec_file = root / spec_file
+                        spec_file = Path(os.path.abspath(root / spec_file))
                     filename = spec_file.resolve().relative_to(root.resolve()).as_posix()
                     title_path = " > ".join(next_parents + (spec["title"],))
                     for item in spec.get("tests", []):
