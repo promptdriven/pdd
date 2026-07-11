@@ -597,6 +597,7 @@ def _prompt_basename_candidates(
     basename: str,
     context_name: Optional[str] = None,
     include_simple_name: bool = False,
+    pddrc_anchor: Optional[Path] = None,
 ) -> List[str]:
     """Return prompt-relative basename candidates ordered from most to least specific."""
     candidates: List[str] = []
@@ -608,7 +609,7 @@ def _prompt_basename_candidates(
     _add(basename)
 
     if context_name:
-        _add(_relative_basename_for_context(basename, context_name))
+        _add(_relative_basename_for_context(basename, context_name, pddrc_anchor))
 
     if include_simple_name:
         _add(basename.split("/")[-1] if "/" in basename else basename)
@@ -620,6 +621,7 @@ def _module_filepath_matches_basename(
     module_filepath: Optional[str],
     basename: str,
     context_name: Optional[str] = None,
+    pddrc_anchor: Optional[Path] = None,
 ) -> bool:
     """Return True when a flat architecture filename still clearly maps to a nested basename.
 
@@ -633,7 +635,7 @@ def _module_filepath_matches_basename(
     if not module_filepath:
         return False
 
-    relative_basename = _relative_basename_for_context(basename, context_name)
+    relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
     basename_parts = Path(relative_basename).parts
     filepath_parts = Path(module_filepath).with_suffix("").parts
     if not basename_parts or not filepath_parts:
@@ -1038,7 +1040,14 @@ def _get_filepath_from_architecture(
         if not modules:
             return None, None
 
-        context_name = _resolve_context_name_for_basename(basename) if basename else None
+        # Prefer the caller's resolved context (CWD-independent) over re-detecting it
+        # from the CWD: a resolution driven from a parent/sibling directory would
+        # otherwise mis-detect the context, mis-strip the basename prefix, and miss a
+        # canonical path-qualified architecture target (falling back to the default).
+        context_name = resolved_context_name or (
+            _resolve_context_name_for_basename(basename) if basename else None
+        )
+        pddrc_anchor = architecture_path.parent if architecture_path is not None else None
 
         # Issue #1677: a path-qualified basename (e.g. `foo/page`) must only match a
         # module whose filepath aligns with its directory. Otherwise an exact match on
@@ -1051,7 +1060,8 @@ def _get_filepath_from_architecture(
             if not path_qualified:
                 return True
             return _module_filepath_matches_basename(
-                module.get("filepath"), basename, context_name=context_name
+                module.get("filepath"), basename, context_name=context_name,
+                pddrc_anchor=pddrc_anchor,
             )
 
         def _belongs_to_resolved_prompt(module: Dict[str, Any]) -> bool:
@@ -1187,6 +1197,7 @@ def _get_filepath_from_architecture(
                 basename,
                 context_name=context_name,
                 include_simple_name="/" not in basename,
+                pddrc_anchor=pddrc_anchor,
             )
 
             for candidate_basename in basename_candidates:
@@ -1199,6 +1210,9 @@ def _get_filepath_from_architecture(
                     if (
                         module_filename.lower() == expected_filename_lower
                         and _belongs_to_resolved_prompt(module)
+                        and _context_owned_filepath(
+                            module.get("filepath"), resolved_context_name, architecture_path.parent
+                        )
                     ):
                         return module.get("filepath"), module.get("filename")
 
@@ -1215,7 +1229,13 @@ def _get_filepath_from_architecture(
                 ]
                 safe_matches = [
                     module for module in matching_modules
-                    if _module_filepath_matches_basename(module.get("filepath"), basename, context_name=context_name)
+                    if _module_filepath_matches_basename(
+                        module.get("filepath"), basename, context_name=context_name,
+                        pddrc_anchor=architecture_path.parent,
+                    )
+                    and _context_owned_filepath(
+                        module.get("filepath"), resolved_context_name, architecture_path.parent
+                    )
                 ]
                 if len(safe_matches) == 1:
                     return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
@@ -1226,7 +1246,7 @@ def _get_filepath_from_architecture(
             # need not share directory segments. A unique, language-compatible
             # filepath identity is still safe to use.
             expected_extension = get_extension(language).lower()
-            relative_basename = _relative_basename_for_context(basename, context_name)
+            relative_basename = _relative_basename_for_context(basename, context_name, pddrc_anchor)
             target_leaf = PurePosixPath(relative_basename).name
             filepath_match = _unique_match([
                 module
@@ -1352,12 +1372,17 @@ def _architecture_module_choices(
         filepath = str(module.get("filepath") or "").strip()
         if not filepath:
             continue
+        # An unsafe OUTPUT path (absolute, parent traversal, backslash, Windows drive,
+        # or symlink escape) is rejected before it can reach generation; it must not
+        # count toward ambiguity either. Otherwise a valid ``foo -> src/foo.py`` row
+        # plus a same-filename ``foo -> ../../outside/foo.py`` row read as two distinct
+        # targets and raise AmbiguousModuleError, blocking the valid module.
+        if _contained_architecture_code_path(architecture_path.parent, filepath) is None:
+            continue
         filename_value = module.get("filename")
         # An unsafe metadata filename (absolute, parent traversal, backslash, Windows
-        # drive) is rejected elsewhere before it can reach generation; it must not
-        # count toward ambiguity either, or its same-leaf collision with a VALID row
-        # raises AmbiguousModuleError and blocks the valid module. A null/empty
-        # filename is left to the filepath-stem branch (the module is filepath-owned).
+        # drive) is likewise excluded from ambiguity counting. A null/empty filename is
+        # left to the filepath-stem branch (the module is filepath-owned).
         if (
             isinstance(filename_value, str)
             and filename_value.strip()
@@ -1572,12 +1597,23 @@ def _resolve_prompts_root(prompts_dir: str) -> Path:
     return prompts_root
 
 
-def _relative_basename_for_context(basename: str, context_name: Optional[str]) -> str:
-    """Strip context-specific prefixes from basename when possible."""
+def _relative_basename_for_context(
+    basename: str,
+    context_name: Optional[str],
+    pddrc_anchor: Optional[Path] = None,
+) -> str:
+    """Strip context-specific prefixes from basename when possible.
+
+    ``pddrc_anchor`` anchors the ``.pddrc`` lookup at the project instead of the
+    process CWD; without it a resolution driven from a parent/sibling directory with
+    an absolute prompts root cannot strip the context prefix, so a path-qualified
+    basename fails to align with its canonical architecture filepath and silently
+    falls back to the default output path.
+    """
     if not context_name:
         return basename
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = _find_pddrc_file(pddrc_anchor)
     if not pddrc_path:
         return basename
 

@@ -2348,6 +2348,102 @@ def test_get_pdd_file_paths_null_filename_uses_architecture_filepath(tmp_path, m
     assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
 
 
+def test_get_pdd_file_paths_flat_legacy_row_respects_context_territory(tmp_path, monkeypatch):
+    """A FLAT legacy same-leaf row must not bypass context ownership.
+
+    The leaf-match and filepath-stem borrows already apply territory, but the
+    basename+language match loop did not. A stale sibling row with a flat
+    ``credits_Python.prompt`` filename pointing at ``frontend/credits.py`` could be
+    borrowed by a backend resolution, overwriting sibling-context code.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_canonical_target_resolves_from_parent_cwd(tmp_path, monkeypatch):
+    """A path-qualified canonical target must resolve when run from a parent CWD.
+
+    `_get_filepath_from_architecture` re-detected the context and stripped the
+    basename prefix via a CWD-based `.pddrc` lookup. From the project's parent with an
+    absolute prompts root, that missed the context, so the canonical
+    ``backend/services/foo.py`` row failed to align with ``backend/foo`` and resolution
+    fell back to the default ``backend/functions/foo.py``. The lookup must anchor at
+    the project and prefer the resolved context.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% backend foo\n", encoding="utf-8")
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/services/foo_Python.prompt", "filepath": "backend/services/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT of the project.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("backend/services/foo.py")
+
+
+@pytest.mark.parametrize(
+    "unsafe_filepath",
+    ["../../outside/foo.py", "/tmp/pdd-outside-foo.py", "D:/outside/foo.py"],
+)
+def test_get_pdd_file_paths_unsafe_filepath_row_does_not_block_valid_module(
+    tmp_path, monkeypatch, unsafe_filepath
+):
+    """An unsafe OUTPUT path on a same-filename row must not cause false ambiguity.
+
+    A valid ``foo_Python.prompt -> src/foo.py`` row plus a same-filename row targeting
+    an unsafe filepath (absolute, ``..``, or Windows drive) must not read as two
+    distinct targets — the unsafe row is rejected before generation and must be
+    excluded from ambiguity counting so the valid module still resolves.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+            {"filename": "foo_Python.prompt", "filepath": unsafe_filepath},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")  # must NOT raise
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
