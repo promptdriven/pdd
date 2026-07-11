@@ -9,7 +9,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from itertools import combinations
+from itertools import combinations, islice
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -18,7 +18,8 @@ from .operation_log import (
 )
 from .sync_determine_operation import (
     Fingerprint,
-    _generate_paths_from_templates,
+    _expand_output_templates,
+    _module_filepath_matches_basename,
     _relative_basename_for_context,
     _resolve_context_name_for_basename,
     calculate_current_hashes,
@@ -65,6 +66,8 @@ class SyncUnit:
     language: str
     prompt_path: Path
     prompts_dir: Path
+    context_name: str | None = None
+    pddrc_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -353,15 +356,28 @@ def _prompt_units(
         stem, separator, language = prompt_path.stem.rpartition("_")
         if not separator or not stem or not language:
             continue
-        relative_parent = prompt_path.parent.relative_to(owner)
-        basename = (relative_parent / stem).as_posix() if relative_parent.parts else stem
+        try:
+            basename, context_name, pddrc_path, owner = _prompt_ownership(
+                prompt_path, stem, owner, base
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            failures.append(
+                DiscoveryFailure(
+                    prompt_path,
+                    f"invalid owning config: {exc}",
+                    "invalid_pddrc",
+                )
+            )
+            continue
         language = language.lower()
         units.append(
             SyncUnit(
                 basename=basename,
                 language=language,
                 prompt_path=prompt_path,
-                prompts_dir=_prompts_dir_for(prompt_path),
+                prompts_dir=owner,
+                context_name=context_name,
+                pddrc_path=pddrc_path,
             )
         )
     return units, failures
@@ -393,6 +409,54 @@ def _project_config(base: Path) -> tuple[Path | None, Dict[str, Any]]:
     if not stat.S_ISREG(mode):
         raise UnsafeConfigError(f"unsafe project config: {path}")
     return path, _load_pddrc_config(path)
+
+
+def _prompt_ownership(
+    prompt_path: Path,
+    stem: str,
+    fallback_root: Path,
+    base: Path,
+) -> tuple[str, str | None, Path | None, Path]:
+    """Return basename and nearest validated config/context ownership."""
+    config_candidates = [
+        parent / ".pddrc"
+        for parent in (prompt_path.parent, *prompt_path.parents)
+        if _is_within_root(parent, base)
+    ]
+    for pddrc_path in config_candidates:
+        if not pddrc_path.exists():
+            continue
+        if not _safe_control_file(pddrc_path, base):
+            raise UnsafeConfigError(f"unsafe nested config: {pddrc_path}")
+        config = _load_pddrc_config(pddrc_path)
+        contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
+        owned: list[tuple[int, str, Path]] = []
+        if isinstance(contexts, dict):
+            for context_name, context in contexts.items():
+                if not isinstance(context_name, str) or not isinstance(context, dict):
+                    continue
+                defaults = context.get("defaults", {})
+                if not isinstance(defaults, dict):
+                    continue
+                raw_root = defaults.get("prompts_dir", "prompts")
+                if not isinstance(raw_root, str) or not raw_root:
+                    continue
+                prompt_root = Path(raw_root).expanduser()
+                if not prompt_root.is_absolute():
+                    prompt_root = pddrc_path.parent / prompt_root
+                prompt_root = prompt_root.resolve(strict=False)
+                if _is_safe_prompt_root(base, prompt_root) and _is_within_root(
+                    prompt_path, prompt_root
+                ):
+                    owned.append((len(prompt_root.parts), context_name, prompt_root))
+        if owned:
+            _depth, context_name, prompt_root = max(owned)
+            parent = prompt_path.parent.relative_to(prompt_root)
+            basename = (parent / stem).as_posix() if parent.parts else stem
+            return basename, context_name, pddrc_path, prompt_root
+    parent = prompt_path.parent.relative_to(fallback_root)
+    basename = (parent / stem).as_posix() if parent.parts else stem
+    return basename, None, None, fallback_root
 
 
 def _configured_prompt_roots(
@@ -654,10 +718,13 @@ def _metadata_identities(
             reason=f"unsafe metadata directory: {violation}",
             failure="unsafe_metadata",
         )
+    remaining = max(0, MAX_PROMPT_DISCOVERY_ENTRIES - budget["entries"])
     try:
-        paths = sorted(meta_root.iterdir())
+        paths = list(islice(meta_root.iterdir(), remaining + 1))
     except OSError as exc:
         return [], DiscoveryFailure(meta_root, f"metadata traversal failed: {exc}", "metadata_traversal_error")
+    exhausted = len(paths) > remaining
+    paths = sorted(paths[:remaining])
     for path in paths:
         budget["entries"] += 1
         if budget["entries"] > MAX_PROMPT_DISCOVERY_ENTRIES:
@@ -672,6 +739,12 @@ def _metadata_identities(
         budget["files"] += 1
         if budget["files"] > MAX_PROMPT_DISCOVERY_FILES:
             return identities[:-1], DiscoveryFailure(meta_root, "command discovery unit budget exhausted", "discovery_budget")
+    if exhausted:
+        return identities, DiscoveryFailure(
+            meta_root,
+            "command discovery entry budget exhausted",
+            "discovery_budget",
+        )
     return identities, None
 
 
@@ -957,7 +1030,8 @@ def _safe_architecture_candidate(path: Path, base: Path) -> bool:
 def _architecture_filepath(
     unit: SyncUnit,
     base: Path,
-) -> tuple[Path | None, str | None]:
+    context_name: str | None = None,
+) -> tuple[Path | None, str | None, Path | None]:
     # pylint: disable=too-many-branches
     """Return an architecture.json filepath match without mutating project state."""
     candidates: list[Path] = []
@@ -996,7 +1070,17 @@ def _architecture_filepath(
                 prompt_relative.as_posix().lower(),
                 configured_name,
             }
-            if is_exact or filename_path.name.lower() == unit.prompt_path.name.lower():
+            path_aligned = _module_filepath_matches_basename(
+                _module_token_basename(filename, unit.language),
+                unit.basename,
+                context_name=context_name or unit.context_name,
+            )
+            flat_basename = len(Path(unit.basename).parts) == 1
+            leaf_match = (
+                flat_basename
+                and filename_path.name.lower() == unit.prompt_path.name.lower()
+            )
+            if (is_exact and (flat_basename or path_aligned)) or leaf_match:
                 output = Path(filepath)
                 if output.is_absolute() or ".." in output.parts:
                     raise ValueError(f"architecture output is invalid: {filepath}")
@@ -1018,23 +1102,40 @@ def _architecture_filepath(
                 if duplicate_leaf
                 else matched.stem
             )
-            return matched, derived_stem
-    return None, None
+            return matched, derived_stem, architecture_path.parent
+    return None, None, None
 
 
 def _configured_output_defaults(
     unit: SyncUnit, base: Path
 ) -> tuple[Dict[str, Any], str | None, Path | None, Dict[str, Any]]:
     """Return complete output defaults for the context owning ``unit``."""
-    pddrc_path, config = _project_config(base)
+    if unit.pddrc_path is not None:
+        if not _safe_control_file(unit.pddrc_path, base):
+            raise UnsafeConfigError(f"unsafe unit config: {unit.pddrc_path}")
+        pddrc_path = unit.pddrc_path
+        config = _load_pddrc_config(pddrc_path)
+    else:
+        pddrc_path, config = _project_config(base)
     if pddrc_path is None:
         return {}, None, None, config
     contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
     if not isinstance(contexts, dict):
         return {}, None, pddrc_path, config
     context_name = _resolve_context_name_for_basename(
-        unit.basename, pddrc_path=pddrc_path, config=config
+        unit.basename,
+        context_override=unit.context_name,
+        pddrc_path=pddrc_path,
+        config=config,
     )
+    if context_name is None:
+        stem, separator, language = unit.prompt_path.stem.rpartition("_")
+        if separator and stem and language:
+            _basename, owned_context, owned_config, _root = _prompt_ownership(
+                unit.prompt_path, stem, unit.prompts_dir, base
+            )
+            if owned_config == pddrc_path:
+                context_name = owned_context
     context = contexts.get(context_name, {}) if context_name else {}
     defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
     if not isinstance(defaults, dict):
@@ -1046,10 +1147,12 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
     """Resolve report paths without creating directories or files."""
     extension = get_extension(unit.language)
     suffix = f".{extension}" if extension else ""
-    architecture_filepath, architecture_stem = _architecture_filepath(unit, base)
+    defaults, context_name, pddrc_path, config = _configured_output_defaults(unit, base)
+    architecture_filepath, architecture_stem, architecture_root = _architecture_filepath(
+        unit, base, context_name
+    )
     code_path = architecture_filepath
     architecture_path = code_path
-    defaults, context_name, pddrc_path, config = _configured_output_defaults(unit, base)
     relative_basename = _relative_basename_for_context(
         unit.basename, context_name, pddrc_path=pddrc_path, config=config
     )
@@ -1062,24 +1165,53 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
             raise ValueError("configured output directory must be a string")
     if code_path is not None:
         if code_path.parent == Path(".") and code_dir:
-            code_path = base / code_dir / code_path
+            code_path = (architecture_root or base) / code_dir / code_path
         else:
-            code_path = base / code_path
+            code_path = (architecture_root or base) / code_path
     else:
         code_path = base / code_dir / f"{code_stem}{suffix}"
     example_path = base / example_dir / f"{code_stem}_example{suffix}"
     test_path = base / test_dir / f"test_{code_stem}{suffix}"
     outputs = defaults.get("outputs")
     if isinstance(outputs, dict) and outputs:
-        generated = _generate_paths_from_templates(
-            relative_basename, unit.language, extension, outputs, str(unit.prompt_path)
+        generated = _expand_output_templates(
+            relative_basename,
+            unit.language,
+            extension,
+            outputs,
+            str(unit.prompt_path),
+            path_aware_name=True,
         )
+        for output_name, rendered in generated.items():
+            if output_name not in {"prompt", "code", "example", "test"}:
+                continue
+            raw_config = outputs.get(output_name, {})
+            raw_template = (
+                raw_config.get("path", "") if isinstance(raw_config, dict) else ""
+            )
+            if ".." in Path(raw_template).parts:
+                raise ValueError(f"configured {output_name} path is outside project")
+            candidate = rendered if rendered.is_absolute() else base / rendered
+            if not _safe_architecture_candidate(candidate, base):
+                raise ValueError(f"configured {output_name} path is outside project")
         if architecture_path is None and "code" in outputs:
-            code_path = base / generated["code"]
+            code_path = (
+                generated["code"]
+                if generated["code"].is_absolute()
+                else base / generated["code"]
+            )
         if "example" in outputs:
-            example_path = base / generated["example"]
+            example_path = (
+                generated["example"]
+                if generated["example"].is_absolute()
+                else base / generated["example"]
+            )
         if "test" in outputs:
-            test_path = base / generated["test"]
+            test_path = (
+                generated["test"]
+                if generated["test"].is_absolute()
+                else base / generated["test"]
+            )
     return {
         "prompt": unit.prompt_path,
         "code": code_path,

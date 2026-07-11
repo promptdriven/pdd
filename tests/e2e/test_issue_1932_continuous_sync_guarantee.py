@@ -339,7 +339,7 @@ def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
 
     paths = continuous_sync._resolve_report_paths(unit, pdd_project)
 
-    assert paths["code"] == pdd_project / "web/src/page.tsx"
+    assert paths["code"] == pdd_project / "prompts/frontend/web/src/page.tsx"
     assert paths["example"] == pdd_project / "web/examples/page_example.tsx"
     assert paths["test"] == pdd_project / "web/tests/test_page.tsx"
 

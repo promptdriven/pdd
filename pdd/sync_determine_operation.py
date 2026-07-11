@@ -1006,29 +1006,15 @@ def _relative_basename_for_context(
     return matches[0][1]
 
 
-def _generate_paths_from_templates(
+def _expand_output_templates(
     basename: str,
     language: str,
     extension: str,
     outputs_config: Dict[str, Any],
-    prompt_path: str
+    prompt_path: str,
+    path_aware_name: bool = False,
 ) -> Dict[str, Path]:
-    """
-    Generate file paths from template configuration.
-
-    This function is used by Issue #237 to support extensible output path patterns
-    for different project layouts (Next.js, Vue, Python backend, etc.).
-
-    Args:
-        basename: The relative basename (e.g., 'marketplace/AssetCard' or 'credit_helpers')
-        language: The full language name (e.g., 'python', 'typescript')
-        extension: The file extension (e.g., 'py', 'tsx')
-        outputs_config: The 'outputs' section from .pddrc context config
-        prompt_path: The prompt file path to use as fallback
-
-    Returns:
-        Dictionary mapping file types ('prompt', 'code', 'test', etc.) to Path objects
-    """
+    """Purely expand configured output templates without filesystem access."""
     import logging
     logger = logging.getLogger(__name__)
 
@@ -1036,35 +1022,6 @@ def _generate_paths_from_templates(
     parts = basename.split('/')
     name = parts[-1] if parts else basename
     category = '/'.join(parts[:-1]) if len(parts) > 1 else ''
-
-    # Issue #237 fix: If category is empty but we have an actual prompt_path,
-    # try to derive the category from the prompt path by comparing with template
-    if not category and prompt_path and Path(prompt_path).exists():
-        prompt_template = outputs_config.get('prompt', {}).get('path', '')
-        if prompt_template and '{category}' in prompt_template:
-            # Extract category from actual prompt path
-            # Template: prompts/frontend/{category}/{name}_{language}.prompt
-            # Actual:   prompts/frontend/app/page_TypescriptReact.prompt
-            # Category: app
-            prompt_path_obj = Path(prompt_path)
-            prompt_parts = prompt_path_obj.parts
-
-            # Find where the template's fixed prefix ends
-            # E.g., "prompts/frontend/" -> look for index after "frontend"
-            template_prefix = prompt_template.split('{category}')[0].rstrip('/')
-            template_prefix_parts = Path(template_prefix).parts if template_prefix else ()
-
-            # Find the matching index in the actual path
-            if template_prefix_parts:
-                for i, part in enumerate(prompt_parts):
-                    if prompt_parts[i:i+len(template_prefix_parts)] == template_prefix_parts:
-                        # Category starts after the prefix, ends before the filename
-                        category_start = i + len(template_prefix_parts)
-                        category_end = len(prompt_parts) - 1  # Exclude filename
-                        if category_start < category_end:
-                            category = '/'.join(prompt_parts[category_start:category_end])
-                            logger.info(f"Derived category '{category}' from prompt path: {prompt_path}")
-                        break
 
     # Build dir_prefix (for legacy template compatibility)
     dir_prefix = '/'.join(parts[:-1]) + '/' if len(parts) > 1 else ''
@@ -1088,11 +1045,18 @@ def _generate_paths_from_templates(
     for output_type, config in outputs_config.items():
         if isinstance(config, dict) and 'path' in config:
             template = config['path']
-            expanded = expand_template(template, template_context)
+            output_context = dict(template_context)
+            if (
+                path_aware_name
+                and len(parts) > 1
+                and '{category}' not in template
+                and '{dir_prefix}' not in template
+            ):
+                output_context['name'] = basename
+            expanded = expand_template(template, output_context)
+            if Path(template).is_absolute() and not Path(expanded).is_absolute():
+                expanded = str(Path(Path(template).anchor) / expanded)
             result[output_type] = Path(expanded)
-            if output_type == 'prompt':
-                from pdd.sync_main import _case_insensitive_prompt_lookup
-                result[output_type] = _case_insensitive_prompt_lookup(result[output_type])
             logger.debug(f"Template {output_type}: {template} -> {expanded}")
 
     # Ensure prompt is always present (fallback to provided prompt_path)
@@ -1108,6 +1072,26 @@ def _generate_paths_from_templates(
         result['example'] = Path(f"examples/{name}_example{_dot(extension)}")
     if 'test' not in result:
         result['test'] = Path(f"tests/test_{name}{_dot(extension)}")
+
+    result['test_files'] = [result['test']]
+    return result
+
+
+def _generate_paths_from_templates(
+    basename: str,
+    language: str,
+    extension: str,
+    outputs_config: Dict[str, Any],
+    prompt_path: str
+) -> Dict[str, Path]:
+    """Expand output templates and perform legacy live-path discovery."""
+    result = _expand_output_templates(
+        basename, language, extension, outputs_config, prompt_path
+    )
+    name = basename.split('/')[-1] if basename else basename
+    if 'prompt' in outputs_config:
+        from pdd.sync_main import _case_insensitive_prompt_lookup
+        result['prompt'] = _case_insensitive_prompt_lookup(result['prompt'])
 
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
