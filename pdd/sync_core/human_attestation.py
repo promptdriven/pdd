@@ -137,6 +137,7 @@ def load_human_attestation_policy(
         raise HumanAttestationError("protected human attestation threshold is invalid")
     signers: dict[str, HumanAttestationSigner] = {}
     key_ids: set[str] = set()
+    public_keys: set[bytes] = set()
     for row in rows:
         if not isinstance(row, dict):
             raise HumanAttestationError("protected human signer is malformed")
@@ -153,7 +154,12 @@ def load_human_attestation_policy(
             public_key = base64.b64decode(_required_string(row, "public_key"), validate=True)
         except ValueError as exc:
             raise HumanAttestationError("protected human signer key is malformed") from exc
-        if len(public_key) != 32 or identity in signers or key_id in key_ids:
+        if (
+            len(public_key) != 32
+            or identity in signers
+            or key_id in key_ids
+            or public_key in public_keys
+        ):
             raise HumanAttestationError("protected human signer identity or key is duplicate")
         signer = HumanAttestationSigner(
             identity, key_id, public_key, frozenset(roles),
@@ -164,6 +170,7 @@ def load_human_attestation_policy(
             raise HumanAttestationError("protected human signer validity is invalid")
         signers[identity] = signer
         key_ids.add(key_id)
+        public_keys.add(public_key)
     revoked_identities = frozenset(payload.get("revoked_identities", []))
     revoked_key_ids = frozenset(payload.get("revoked_key_ids", []))
     if not all(isinstance(value, str) for value in revoked_identities | revoked_key_ids):
