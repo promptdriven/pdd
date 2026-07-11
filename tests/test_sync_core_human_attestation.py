@@ -303,6 +303,51 @@ def test_policy_requires_threshold_active_role_qualified_signers(tmp_path: Path)
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("threshold", True),
+        ("maximum_lifetime_seconds", True),
+        ("maximum_lifetime_seconds", 86_401),
+        ("version", "v2"),
+    ],
+)
+def test_policy_rejects_unsafe_schema_values(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    root, _base, store, _keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy[field] = value
+    base = _commit_policy(root, policy, f"unsafe protected {field}")
+
+    with pytest.raises(HumanAttestationError):
+        load_human_attestation_policy(root, base, store)
+
+
+def test_approval_cannot_outlive_signer_validity_window(tmp_path: Path) -> None:
+    root, _base, store, keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy_payload["signers"][1]["not_after"] = (NOW - timedelta(minutes=1)).isoformat()
+    base = _commit_policy(root, policy_payload, "expired protected signer")
+    policy = load_human_attestation_policy(root, base, store)
+    request = _request()
+    approvals = [
+        _approval(keys[0], "alice", request, nonce="alice-current"),
+        _approval(keys[1], "bob", request, nonce="bob-backdated"),
+    ]
+    approvals[1]["issued_at"] = (NOW - timedelta(minutes=2)).isoformat()
+    approvals[1]["expires_at"] = (NOW + timedelta(minutes=30)).isoformat()
+    for index, approval in enumerate(approvals):
+        approval["policy_digest"] = policy.digest
+        _sign(keys[index], approval)
+    _write_approvals(store, approvals)
+
+    with pytest.raises(HumanAttestationError, match="threshold"):
+        HumanAttestationVerifier(policy, store / "replay.json").verify(request, now=NOW)
+
+
+@pytest.mark.parametrize(
     ("revoked_identities", "revoked_key_ids"),
     [(["bob"], []), ([], ["bob"])],
 )

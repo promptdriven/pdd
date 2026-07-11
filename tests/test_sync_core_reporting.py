@@ -146,7 +146,9 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _finalize_trusted_baseline(root: Path, commit: str) -> None:
+def _finalize_trusted_baseline(
+    root: Path, commit: str, *, artifact_closure_digest: str | None = None
+) -> None:
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     profile = load_verification_profiles(root, manifest).profiles[0]
     unit = manifest.managed_units[0]
@@ -159,6 +161,7 @@ def _finalize_trusted_baseline(root: Path, commit: str) -> None:
         TRUSTED_RUNNER_VERSION,
         commit,
         commit,
+        artifact_closure_digest or snapshot.digest(),
     )
     envelope = SIGNER.issue(
         AttestationRequest(
@@ -222,6 +225,18 @@ def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> 
     assert report["counts"]["trusted_in_sync"] == 1
     assert report["counts"]["unaccounted_tracked_paths"] == 0
     assert report["units"][0]["in_sync"] is True
+
+
+def test_canonical_report_rejects_signed_mismatched_artifact_closure(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(
+        root, commit, artifact_closure_digest="different-artifact-closure"
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is False
+    assert report["counts"]["trusted_current_evidence"] == 0
 
 
 def test_managed_waiver_is_counted_and_blocks_certificate_predicate(tmp_path) -> None:
