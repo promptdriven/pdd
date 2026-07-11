@@ -149,7 +149,7 @@ class CandidateArtifactPolicy:
         error = None
         for _attempt in range(3):
             try:
-                update_json(path, [], consume_record)
+                update_json(path, [], consume_record, trust_root=path.parent)
                 return
             except DescriptorStoreError as exc:
                 error = exc
