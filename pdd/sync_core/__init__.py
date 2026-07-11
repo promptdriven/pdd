@@ -29,6 +29,13 @@ from .identity import (
     initialize_repository_identity,
     read_repository_identity,
 )
+from .human_attestation import (
+    HumanAttestationError,
+    HumanAttestationPolicy,
+    HumanAttestationRequest,
+    HumanAttestationVerifier,
+    load_human_attestation_policy,
+)
 from .fingerprint_store import (
     CorruptFingerprintError,
     FingerprintStore,
@@ -164,6 +171,10 @@ __all__ = [
     "FingerprintProvenance",
     "FingerprintStore",
     "FingerprintStoreError",
+    "HumanAttestationError",
+    "HumanAttestationPolicy",
+    "HumanAttestationRequest",
+    "HumanAttestationVerifier",
     "FileReplayStore",
     "FinalizeResult",
     "GlobalCertificateOptions",
@@ -240,6 +251,7 @@ __all__ = [
     "load_verification_profiles",
     "load_attestation",
     "load_candidate_artifact_provenance",
+    "load_human_attestation_policy",
     "load_trust_policy",
     "load_sync_waivers",
     "initialize_repository_identity",

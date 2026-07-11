@@ -29,6 +29,12 @@ from .trust import (
 )
 from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
 from .git_io import read_git_blob, read_git_mode
+from .human_attestation import (
+    HumanAttestationError,
+    HumanAttestationRequest,
+    HumanAttestationVerifier,
+    load_human_attestation_policy,
+)
 from .types import (
     EvidenceOutcome,
     ObligationEvidence,
@@ -116,6 +122,8 @@ class RunnerConfig:
     playwright_command: tuple[str, ...] | None = None
     playwright_toolchain_manifest: Path | None = None
     playwright_toolchain_identity: str | None = None
+    human_attestation_store: Path | None = None
+    human_attestation_replay_ledger: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +143,7 @@ class RunBinding:
     snapshot_digest: str
     base_sha: str
     head_sha: str
+    artifact_closure_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -3238,6 +3247,40 @@ def run_obligation(
         )
 
 
+def _run_human_attestation(
+    root: Path,
+    profile: VerificationProfile,
+    obligation: VerificationObligation,
+    binding: RunBinding,
+    config: RunnerConfig,
+) -> RunnerExecution:
+    """Verify an external threshold decision without launching a child process."""
+    if config.human_attestation_store is None or config.human_attestation_replay_ledger is None:
+        return RunnerExecution(
+            obligation.obligation_id, EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "external human attestation store and replay ledger are required",
+        )
+    try:
+        policy = load_human_attestation_policy(
+            root, binding.base_sha, config.human_attestation_store
+        )
+        if obligation.validator_config_digest != policy.digest:
+            raise HumanAttestationError("human obligation does not bind protected policy")
+        outcome = HumanAttestationVerifier(
+            policy, config.human_attestation_replay_ledger
+        ).verify(HumanAttestationRequest(profile, obligation, binding))
+    except (HumanAttestationError, ValueError) as exc:
+        return RunnerExecution(
+            obligation.obligation_id, EvidenceOutcome.QUARANTINED,
+            obligation.validator_config_digest, str(exc),
+        )
+    return RunnerExecution(
+        obligation.obligation_id, outcome, obligation.validator_config_digest,
+        "external threshold human approval verified",
+    )
+
+
 def run_profile(
     root: Path,
     profile: VerificationProfile,
@@ -3257,11 +3300,13 @@ def run_profile(
         if identity is not None:
             config = replace(config, playwright_toolchain_identity=identity)
     executions = tuple(
-        run_obligation(
-            root,
-            obligation,
-            base_sha=binding.base_sha,
-            head_sha=binding.head_sha,
+        _run_human_attestation(root, profile, obligation, binding, config)
+        if (
+            obligation.kind == "human-attestation"
+            and obligation.validator_id == "threshold-ed25519"
+        )
+        else run_obligation(
+            root, obligation, base_sha=binding.base_sha, head_sha=binding.head_sha,
             config=config,
         )
         for obligation in profile.obligations
