@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -639,3 +640,22 @@ def test_surviving_validator_descendant_cannot_pass(tmp_path) -> None:
                 os.kill(int(pid_file.read_text()), 9)
             except ProcessLookupError:
                 pass
+
+
+def test_managed_subprocess_fails_closed_without_supported_os_sandbox(
+    tmp_path, monkeypatch
+) -> None:
+    from pdd.sync_core.runner import _managed_subprocess
+
+    monkeypatch.setattr("pdd.sync_core.runner.sys.platform", "freebsd14")
+    result, surviving = _managed_subprocess(
+        [sys.executable, "-c", "print('must not execute')"],
+        cwd=tmp_path,
+        timeout=5,
+        env={},
+        writable_roots=(tmp_path,),
+    )
+    assert result.returncode != 0
+    assert "unsupported sandbox platform" in result.stderr
+    assert "must not execute" not in result.stdout
+    assert surviving is False
