@@ -770,10 +770,10 @@ def test_get_file_path() -> None:
     path = get_file_path(filename)
     assert path == "./test.txt"
     
-    # Test with absolute path
+    # Legacy preprocessing accepts explicit local paths. Canonical sync graph
+    # construction enforces repository-relative managed paths separately.
     abs_path = "/absolute/path/test.txt"
-    with pytest.raises(ValueError, match="absolute include path"):
-        get_file_path(abs_path)
+    assert get_file_path(abs_path) == abs_path
 
 
 def test_preprocess_resolves_bundled_prompting_guide_outside_checkout(
@@ -3405,10 +3405,9 @@ def test_include_many_optional_attribute_silences_missing(tmp_path, monkeypatch,
 
 
 def test_get_file_path_absolute_returned_unchanged(tmp_path) -> None:
-    """Absolute managed include paths are rejected by protected policy."""
+    """Legacy preprocessing preserves explicit absolute local include paths."""
     p = str(tmp_path / "abs.txt")
-    with pytest.raises(ValueError, match="absolute include path"):
-        get_file_path(p)
+    assert get_file_path(p) == p
 
 
 def test_web_tag_inside_code_block_not_processed() -> None:
