@@ -13,12 +13,12 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from filelock import FileLock
 
 from .durability import fsync_directory
-from .path_policy import PathPolicy
+from .path_policy import PathPolicy, PathPolicyError
 
 
 class TransactionError(RuntimeError):
@@ -132,9 +132,14 @@ def _parse_state(payload: dict[str, object]) -> FileState:
 class TransactionManager:
     """Prepare, commit, inspect, and recover repository mutation journals."""
 
-    def __init__(self, checkout_root: Path) -> None:
+    def __init__(
+        self,
+        checkout_root: Path,
+        *,
+        approved_aliases: Mapping[PurePosixPath, PurePosixPath] | None = None,
+    ) -> None:
         self.checkout_root = Path(checkout_root).resolve()
-        self.policy = PathPolicy(self.checkout_root)
+        self.policy = PathPolicy(self.checkout_root, approved_aliases)
         self.state_root = self.checkout_root / ".pdd/transactions"
         self.lock_root = self.checkout_root / ".pdd/locks/transactions"
 
@@ -161,20 +166,37 @@ class TransactionManager:
             raise TransactionError("transaction ID contains unsafe characters")
         return self.state_root / transaction_id
 
-    def _canonical_relpath(self, relpath: PurePosixPath) -> PurePosixPath:
-        resolved = self.policy.resolve(relpath, allow_missing=True)
+    def _canonical_relpath(
+        self,
+        relpath: PurePosixPath,
+        *,
+        expected: PurePosixPath | None = None,
+    ) -> PurePosixPath:
+        try:
+            resolved = self.policy.resolve(relpath, allow_missing=True)
+        except PathPolicyError as exc:
+            raise TransactionConflict(
+                f"destination alias policy changed: {relpath}"
+            ) from exc
         try:
             relative = resolved.canonical_path.relative_to(self.checkout_root)
         except ValueError as exc:
             raise TransactionError(f"destination escapes checkout: {relpath}") from exc
-        return PurePosixPath(relative.as_posix())
+        canonical = PurePosixPath(relative.as_posix())
+        if expected is not None and canonical != expected:
+            raise TransactionConflict(f"destination canonical identity changed: {relpath}")
+        return canonical
 
     @contextmanager
     def _parent_descriptor(
-        self, relpath: PurePosixPath, *, create: bool = False
+        self,
+        relpath: PurePosixPath,
+        *,
+        create: bool = False,
+        canonical_relpath: PurePosixPath | None = None,
     ):
         """Pin and no-follow every parent directory for one destination."""
-        canonical = self._canonical_relpath(relpath)
+        canonical = self._canonical_relpath(relpath, expected=canonical_relpath)
         root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         directory_flags = (
             os.O_RDONLY
@@ -205,17 +227,25 @@ class TransactionManager:
             for descriptor in reversed(descriptors):
                 os.close(descriptor)
 
-    def _destination_state(self, relpath: PurePosixPath) -> FileState:
+    def _destination_state(
+        self, relpath: PurePosixPath, *, canonical_relpath: PurePosixPath | None = None
+    ) -> FileState:
         try:
-            with self._parent_descriptor(relpath) as (parent_fd, name):
+            with self._parent_descriptor(
+                relpath, canonical_relpath=canonical_relpath
+            ) as (parent_fd, name):
                 return _descriptor_file_state(parent_fd, name)
         except TransactionConflict as exc:
             if isinstance(exc.__cause__, FileNotFoundError):
                 return FileState(False, None, None, "missing")
             raise
 
-    def _read_destination(self, relpath: PurePosixPath) -> bytes:
-        with self._parent_descriptor(relpath) as (parent_fd, name):
+    def _read_destination(
+        self, relpath: PurePosixPath, *, canonical_relpath: PurePosixPath | None = None
+    ) -> bytes:
+        with self._parent_descriptor(
+            relpath, canonical_relpath=canonical_relpath
+        ) as (parent_fd, name):
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(name, flags, dir_fd=parent_fd)
             try:
@@ -229,9 +259,17 @@ class TransactionManager:
                 os.close(descriptor)
 
     def _replace_destination(
-        self, relpath: PurePosixPath, content: bytes, git_mode: str, suffix: str
+        self,
+        relpath: PurePosixPath,
+        content: bytes,
+        git_mode: str,
+        suffix: str,
+        *,
+        canonical_relpath: PurePosixPath | None = None,
     ) -> None:
-        with self._parent_descriptor(relpath, create=True) as (parent_fd, name):
+        with self._parent_descriptor(
+            relpath, create=True, canonical_relpath=canonical_relpath
+        ) as (parent_fd, name):
             temporary_name = f".{name}.{uuid.uuid4().hex}.{suffix}"
             flags = (
                 os.O_WRONLY
@@ -262,8 +300,12 @@ class TransactionManager:
             finally:
                 os.close(descriptor)
 
-    def _unlink_destination(self, relpath: PurePosixPath) -> None:
-        with self._parent_descriptor(relpath) as (parent_fd, name):
+    def _unlink_destination(
+        self, relpath: PurePosixPath, *, canonical_relpath: PurePosixPath | None = None
+    ) -> None:
+        with self._parent_descriptor(
+            relpath, canonical_relpath=canonical_relpath
+        ) as (parent_fd, name):
             try:
                 os.unlink(name, dir_fd=parent_fd)
             except FileNotFoundError:
@@ -336,7 +378,8 @@ class TransactionManager:
         index: int,
         write: PlannedWrite,
     ) -> dict[str, object]:
-        before = self._destination_state(write.relpath)
+        canonical = self._canonical_relpath(write.relpath)
+        before = self._destination_state(write.relpath, canonical_relpath=canonical)
         if write.expected is not None and before != write.expected:
             raise TransactionConflict(
                 f"destination changed before prepare: {write.relpath}"
@@ -349,10 +392,11 @@ class TransactionManager:
         if rollback_name:
             self._write_blob(
                 transaction_dir / rollback_name,
-                self._read_destination(write.relpath),
+                self._read_destination(write.relpath, canonical_relpath=canonical),
             )
         return {
             "relpath": write.relpath.as_posix(),
+            "canonical_relpath": canonical.as_posix(),
             "desired_digest": _digest(write.content),
             "desired_mode": write.git_mode,
             "precondition": _state_payload(write.expected or before),
@@ -396,10 +440,14 @@ class TransactionManager:
         try:
             entries = [self._entry(temporary, index, write) for index, write in enumerate(writes)]
             payload: dict[str, object] = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "transaction_id": transaction_id,
                 "phase": TransactionPhase.PREPARED.value,
                 "shared_resources": [path.as_posix() for path in sorted(shared_resources)],
+                "approved_aliases": [
+                    {"alias_path": alias.as_posix(), "canonical_path": canonical.as_posix()}
+                    for alias, canonical in self.policy.approved_aliases.items()
+                ],
                 "entries": entries,
             }
             self._write_journal(temporary, payload)
@@ -434,8 +482,8 @@ class TransactionManager:
         transaction_dir: Path,
         entry: dict[str, object],
     ) -> None:
-        relpath = PurePosixPath(str(entry["relpath"]))
-        current = self._destination_state(relpath)
+        relpath, canonical = self._entry_paths(entry)
+        current = self._destination_state(relpath, canonical_relpath=canonical)
         desired = FileState(
             True,
             str(entry["desired_digest"]),
@@ -455,7 +503,21 @@ class TransactionManager:
         content = prepared.read_bytes()
         if _digest(content) != desired.digest:
             raise TransactionError(f"prepared transaction blob is corrupt: {relpath}")
-        self._replace_destination(relpath, content, desired.git_mode, "pdd-tmp")
+        self._replace_destination(
+            relpath, content, desired.git_mode, "pdd-tmp", canonical_relpath=canonical
+        )
+
+    def _entry_paths(self, entry: dict[str, object]) -> tuple[PurePosixPath, PurePosixPath | None]:
+        """Return and revalidate the durable logical and canonical identities."""
+        relpath = PurePosixPath(str(entry["relpath"]))
+        raw_canonical = entry.get("canonical_relpath")
+        if raw_canonical is None:
+            return relpath, None
+        canonical = PurePosixPath(str(raw_canonical))
+        if canonical.is_absolute() or not canonical.parts or ".." in canonical.parts:
+            raise TransactionError("transaction canonical destination is malformed")
+        self._canonical_relpath(relpath, expected=canonical)
+        return relpath, canonical
 
     def _validate_prepared_entries(
         self, transaction_dir: Path, entries: list[object]
@@ -464,7 +526,7 @@ class TransactionManager:
         for item in entries:
             if not isinstance(item, dict):
                 raise TransactionError("transaction entry is malformed")
-            relpath = PurePosixPath(str(item["relpath"]))
+            relpath, _canonical = self._entry_paths(item)
             prepared = transaction_dir / str(item["prepared_blob"])
             if prepared.is_symlink() or not prepared.is_file():
                 raise TransactionError(f"prepared transaction blob is unsafe: {relpath}")
@@ -494,7 +556,7 @@ class TransactionManager:
         for item in reversed(entries):
             if not isinstance(item, dict) or item.get("installed") is not True:
                 continue
-            relpath = PurePosixPath(str(item["relpath"]))
+            relpath, canonical = self._entry_paths(item)
             precondition = item.get("precondition")
             if not isinstance(precondition, dict):
                 raise TransactionError("transaction rollback precondition is malformed")
@@ -506,7 +568,7 @@ class TransactionManager:
                 raise TransactionConflict(f"rollback conflict: {relpath}")
             rollback_name = item.get("rollback_blob")
             if not before.exists:
-                self._unlink_destination(relpath)
+                self._unlink_destination(relpath, canonical_relpath=canonical)
                 continue
             rollback = transaction_dir / str(rollback_name)
             if rollback.is_symlink() or not rollback.is_file():
@@ -519,6 +581,7 @@ class TransactionManager:
                 content,
                 str(before.git_mode),
                 "pdd-rollback",
+                canonical_relpath=canonical,
             )
 
     def commit(
@@ -545,8 +608,8 @@ class TransactionManager:
             for item in entries:
                 if not isinstance(item, dict):
                     raise TransactionError("transaction entry is malformed")
-                relpath = PurePosixPath(str(item["relpath"]))
-                current = self._destination_state(relpath)
+                relpath, canonical = self._entry_paths(item)
+                current = self._destination_state(relpath, canonical_relpath=canonical)
                 precondition = item.get("precondition")
                 if not isinstance(precondition, dict) or current != _parse_state(precondition):
                     raise TransactionConflict(f"destination changed: {relpath}")
@@ -608,6 +671,7 @@ class TransactionManager:
         """Complete COMMITTING work or discard a PREPARED transaction idempotently."""
         transaction_dir = self._transaction_dir(transaction_id)
         payload = self._read_journal(transaction_dir)
+        self._adopt_journal_aliases(payload)
         phase = TransactionPhase(str(payload["phase"]))
         if phase is TransactionPhase.COMMITTED:
             return TransactionResult(transaction_id, phase, (), True)
@@ -657,3 +721,27 @@ class TransactionManager:
         return TransactionResult(
             transaction_id, TransactionPhase.COMMITTED, tuple(changed), False
         )
+
+    def _adopt_journal_aliases(self, payload: dict[str, object]) -> None:
+        """Restore the prepared alias authority before COMMITTING recovery."""
+        rows = payload.get("approved_aliases")
+        if rows is None:
+            return
+        if not isinstance(rows, list):
+            raise TransactionError("transaction alias policy is malformed")
+        aliases: dict[PurePosixPath, PurePosixPath] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                raise TransactionError("transaction alias policy is malformed")
+            alias = PurePosixPath(str(row.get("alias_path", "")))
+            canonical = PurePosixPath(str(row.get("canonical_path", "")))
+            invalid_alias = alias.is_absolute() or not alias.parts or ".." in alias.parts
+            invalid_canonical = (
+                canonical.is_absolute() or not canonical.parts or ".." in canonical.parts
+            )
+            if invalid_alias or invalid_canonical or alias in aliases:
+                raise TransactionError("transaction alias policy is malformed")
+            aliases[alias] = canonical
+        if self.policy.approved_aliases and self.policy.approved_aliases != aliases:
+            raise TransactionConflict("transaction alias policy changed before recovery")
+        self.policy = PathPolicy(self.checkout_root, aliases)

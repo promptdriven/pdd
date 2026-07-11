@@ -8,6 +8,10 @@ import pytest
 
 from pdd.sync_core import build_unit_manifest
 from pdd.sync_core.alias_policy import load_protected_aliases
+from pdd.sync_core.identity import initialize_repository_identity
+
+
+REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -22,12 +26,13 @@ def test_candidate_alias_policy_cannot_authorize_itself(tmp_path) -> None:
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "aliases@example.com")
     _git(root, "config", "user.name", "Alias Test")
+    initialize_repository_identity(root, REPOSITORY_ID)
     (root / "tracked.txt").write_text("base\n", encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "base")
     base = _git(root, "rev-parse", "HEAD")
 
-    (root / ".pdd").mkdir()
+    (root / ".pdd").mkdir(exist_ok=True)
     (root / ".pdd/sync-aliases.json").write_text(
         json.dumps(
             {
@@ -52,7 +57,8 @@ def test_protected_alias_policy_requires_unchanged_candidate_copy(tmp_path) -> N
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "aliases@example.com")
     _git(root, "config", "user.name", "Alias Test")
-    (root / ".pdd").mkdir()
+    initialize_repository_identity(root, REPOSITORY_ID)
+    (root / ".pdd").mkdir(exist_ok=True)
     policy = {
         "schema_version": 1,
         "aliases": [{"alias_path": "alias", "canonical_path": "canonical"}],

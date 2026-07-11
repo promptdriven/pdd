@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from .alias_policy import load_protected_aliases
 from .evidence_store import (
     encode_attestation,
     evidence_relpath,
@@ -358,7 +359,9 @@ def finalize_unit(
         PlannedWrite(evidence_relpath(attestation_id), encode_attestation(envelope), "100644"),
         PlannedWrite(fingerprint, encode_fingerprint(record), "100644"),
     )
-    manager = TransactionManager(repository_root)
+    manager = TransactionManager(
+        repository_root, approved_aliases=load_protected_aliases(repository_root, manifest)
+    )
     manager.prepare(transaction_id, writes)
     transaction = manager.commit(transaction_id)
     return FinalizeResult(transaction, attestation_id, fingerprint)

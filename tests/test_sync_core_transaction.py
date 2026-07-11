@@ -288,9 +288,9 @@ def test_descriptor_time_parent_symlink_swap_cannot_redirect_commit(
     original = manager._canonical_relpath  # pylint: disable=protected-access
     armed = True
 
-    def swap_after_resolution(relpath):
+    def swap_after_resolution(relpath, **kwargs):
         nonlocal armed
-        canonical = original(relpath)
+        canonical = original(relpath, **kwargs)
         if armed and relpath == PurePosixPath("src/widget.py"):
             armed = False
             source.rename(tmp_path / "src-before-swap")
@@ -360,8 +360,8 @@ def test_descriptor_time_approved_alias_swap_cannot_redirect_commit(tmp_path, mo
     manager.prepare("tx-alias-swap", writes)
     original = manager._canonical_relpath  # pylint: disable=protected-access
 
-    def swap_after_resolution(relpath):
-        result = original(relpath)
+    def swap_after_resolution(relpath, **kwargs):
+        result = original(relpath, **kwargs)
         alias.unlink()
         alias.symlink_to(outside, target_is_directory=True)
         return result
