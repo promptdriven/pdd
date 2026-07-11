@@ -1,6 +1,7 @@
 """Adversarial tests for complete protected subprocess supervision."""
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -23,13 +24,14 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     )
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
-    assert argv[:4] == ["sudo", "-n", "-E", "bwrap"]
-    assert "--unshare-all" in argv
-    separator = argv.index("--")
-    assert argv.index("--bind") < separator < argv.index("--reuid")
-    assert argv[argv.index("--reuid") + 1] == str(os.getuid())
-    assert argv.index("--proc") < separator
-    assert "--ro-bind" not in argv or argv[argv.index("--ro-bind") + 1] != "/"
+    assert argv[:3] == ["sudo", "-n", "-E"]
+    bwrap = json.loads(argv[-2])
+    assert "--unshare-all" in bwrap
+    separator = bwrap.index("--")
+    assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
+    assert bwrap[bwrap.index("--reuid") + 1] == str(os.getuid())
+    assert bwrap.index("--proc") < separator
+    assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
 
 
 def test_protected_runner_declares_finite_resource_limits() -> None:

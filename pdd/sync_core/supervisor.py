@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import signal
 import subprocess
@@ -54,6 +55,22 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
     return [sys.executable, "-c", script, str(limits.max_memory_bytes),
             str(limits.max_cpu_seconds), str(limits.max_processes),
             str(limits.max_writable_bytes), "256", *command]
+
+
+def _fd_bound_bwrap(argv: list[str], sources: list[Path], elevated: bool) -> list[str]:
+    """Open bind sources before replacing the namespace root."""
+    helper = (
+        "import json,os,sys;"
+        "argv=json.loads(sys.argv[1]);paths=json.loads(sys.argv[2]);"
+        "fds=[os.open(path,os.O_PATH) for path in paths];"
+        "[os.set_inheritable(fd,True) for fd in fds];"
+        "argv=[('/proc/self/fd/'+str(fds[int(x[4:-1])])) "
+        "if x.startswith('@FD:') else x for x in argv];"
+        "os.execvp(argv[0],argv)"
+    )
+    prefix = ["sudo", "-n", "-E"] if elevated else []
+    return [*prefix, sys.executable, "-c", helper,
+            json.dumps(argv), json.dumps([str(path) for path in sources])]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -132,28 +149,30 @@ def _sandbox_command(
         elevated = bool(shutil.which("sudo")) and subprocess.run(
             ["sudo", "-n", "true"], capture_output=True, check=False,
         ).returncode == 0
-        prefix = ["sudo", "-n", "-E"] if elevated else []
         setpriv = shutil.which("setpriv") if elevated else None
         if elevated and setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
         workdir = (cwd or Path.cwd()).resolve()
-        argv = [*prefix, "bwrap", "--unshare-all", "--die-with-parent",
-                "--new-session", "--tmpfs", "/", "--dir", "/tmp"]
+        argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+                "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
+        sources: list[Path] = []
+        def bind(option: str, source: Path) -> None:
+            sources.append(source)
+            argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
         for item in _runtime_roots(command, workdir):
-            argv.extend(("--ro-bind", str(item), str(item)))
-        argv.extend(("--dev", "/dev", "--proc", "/proc"))
+            bind("--ro-bind", item)
+        argv.extend(("--dev", "/dev"))
         for item in writable_roots:
-            resolved = str(item.resolve())
-            argv.extend(("--bind", resolved, resolved))
+            bind("--bind", item.resolve())
         for item in writable_files:
-            resolved = str(item.resolve())
-            argv.extend(("--bind", resolved, resolved))
+            bind("--bind", item.resolve())
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
              "--clear-groups", "--"] if setpriv else []
         )
-        return [*argv, "--", *drop, *_limited_command(command, limits)], None
+        argv.extend(("--", *drop, *_limited_command(command, limits)))
+        return _fd_bound_bwrap(argv, sources, elevated), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
