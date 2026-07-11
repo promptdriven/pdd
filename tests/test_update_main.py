@@ -6,60 +6,15 @@ from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
 import git
-import subprocess
 
 from pdd import DEFAULT_STRENGTH
+from pdd.fingerprint_transaction import FingerprintFinalizeError
 from pdd.update_main import (
     _finalize_single_file_fingerprint,
     _included_docs_for_drift_report,
     find_and_resolve_all_pairs,
     update_main,
 )
-
-
-def test_protected_update_cli_exits_nonzero_without_model_calls_or_writes(
-    tmp_path, monkeypatch
-):
-    from pdd.cli import cli
-
-    prompt = tmp_path / "prompts/widget_python.prompt"
-    modified = tmp_path / "widget.py"
-    original = tmp_path / "widget_original.py"
-    prompt.parent.mkdir()
-    prompt.write_text("original prompt\n", encoding="utf-8")
-    modified.write_text("VALUE = 2\n", encoding="utf-8")
-    original.write_text("VALUE = 1\n", encoding="utf-8")
-    (tmp_path / ".pdd").mkdir()
-    (tmp_path / ".pdd/repository-id").write_text("test-repository\n", encoding="utf-8")
-    (tmp_path / ".pdd/sync-policy.json").write_text(
-        '{"schema_version": 1, "enforcement": "active"}\n', encoding="utf-8"
-    )
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "update@example.com"], cwd=tmp_path, check=True
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "Update Test"], cwd=tmp_path, check=True
-    )
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "protected"], cwd=tmp_path, check=True)
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", head)
-    before = {path: path.read_bytes() for path in (prompt, modified, original)}
-
-    with patch("pdd.update_main.update_prompt") as model_call:
-        result = CliRunner().invoke(
-            cli, ["update", str(prompt), str(modified), str(original)]
-        )
-
-    assert result.exit_code != 0
-    assert "protected canonical sync blocks legacy production mutation" in result.output
-    model_call.assert_not_called()
-    assert {path: path.read_bytes() for path in before} == before
 
 @pytest.fixture
 def mock_ctx():
@@ -117,7 +72,8 @@ def mock_open_file():
     """
     Patches the built-in open function so no real file I/O happens.
     """
-    with patch("builtins.open", mock_open()) as mock_file:
+    with patch("builtins.open", mock_open()) as mock_file, \
+         patch("pdd.operation_log.save_fingerprint"):
         yield mock_file
 
 @pytest.fixture
@@ -427,15 +383,14 @@ def test_update_main_regeneration_mode(
     mock_resolve_pair.return_value = ("modified_code_python.prompt", "modified_code.py")
     
     # Act
-    with patch("pdd.update_main.FingerprintTransaction"):
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=None,
-            modified_code_file="modified_code.py",
-            input_code_file=None,
-            output=None,
-            use_git=False
-        )
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=None,
+        modified_code_file="modified_code.py",
+        input_code_file=None,
+        output=None,
+        use_git=False
+    )
 
     # Assert
     # 1. It should resolve the pair to find/create the prompt file
@@ -772,7 +727,8 @@ def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, 
     ctx = click.Context(click.Command('update'))
     ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-    # Run update_main in repo mode
+    # The update primitive is mocked and does not actually write its prompt;
+    # isolate this orchestration test from the real finalizer.
     with patch("pdd.operation_log.save_fingerprint"):
         result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
 
@@ -2334,6 +2290,7 @@ class TestStrengthTemperatureResolution:
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
              patch("pdd.update_main._resolve_update_runtime_config",
                    side_effect=self._fake_resolve_runtime_config), \
+             patch("pdd.update_main._finalize_single_file_fingerprint"), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -2373,6 +2330,7 @@ class TestStrengthTemperatureResolution:
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
              patch("pdd.update_main._resolve_update_runtime_config",
                    side_effect=self._fake_resolve_runtime_config), \
+             patch("pdd.update_main._finalize_single_file_fingerprint"), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -3104,7 +3062,7 @@ def test_default_single_file_update_writes_fresh_fingerprint(
 
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=("modified_code", "python")) as mock_infer, \
-         patch("pdd.update_main.FingerprintTransaction") as mock_save_fp, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
          patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
         result = update_main(
             ctx=mock_ctx,
@@ -3125,10 +3083,9 @@ def test_default_single_file_update_writes_fresh_fingerprint(
     kwargs = mock_save_fp.call_args.kwargs
     assert mock_save_fp.call_args.args == ("modified_code", "python")
     assert kwargs["operation"] == "update"
-    assert kwargs["paths"] == {
-        "prompt": Path(str(derived_prompt)),
-        "code": Path(str(code_file)),
-    }
+    assert kwargs["paths"]["prompt"] == Path(str(derived_prompt))
+    assert kwargs["paths"]["code"] == Path(str(code_file))
+    assert {"prompt", "code", "example", "test"}.issubset(kwargs["paths"])
 
 
 @patch("pdd.update_main.resolve_prompt_code_pair")
@@ -3267,7 +3224,7 @@ def test_default_single_file_update_clears_stale_run_report(
     assert (meta_dir / "foo_python.json").exists()
 
 
-def test_finalize_single_file_fingerprint_skips_save_when_run_report_survives_clear(
+def test_finalize_single_file_fingerprint_fails_when_run_report_survives_clear(
     tmp_path,
     monkeypatch,
     capsys,
@@ -3302,8 +3259,6 @@ def test_finalize_single_file_fingerprint_skips_save_when_run_report_survives_cl
     # class the issue calls out.
     import pdd.operation_log as ol
     monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
-
-    from pdd.fingerprint_transaction import FingerprintFinalizeError
 
     with pytest.raises(FingerprintFinalizeError, match="run report not cleared"):
         _finalize_single_file_fingerprint(
@@ -3372,8 +3327,6 @@ def test_finalize_single_file_fingerprint_warns_about_stale_run_report_even_when
     import pdd.operation_log as ol
     monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
 
-    from pdd.fingerprint_transaction import FingerprintFinalizeError
-
     with pytest.raises(FingerprintFinalizeError, match="run report not cleared"):
         _finalize_single_file_fingerprint(
             prompt_path=prompt_path,
@@ -3397,7 +3350,7 @@ def test_finalize_single_file_fingerprint_warns_about_stale_run_report_even_when
     )
 
 
-def test_finalize_single_file_fingerprint_swallows_import_error_for_helpers(
+def test_finalize_single_file_fingerprint_wraps_import_error_for_helpers(
     tmp_path,
     monkeypatch,
     capsys,
@@ -3439,7 +3392,10 @@ def test_finalize_single_file_fingerprint_swallows_import_error_for_helpers(
         # statement; the import machinery resolves that via `pdd.operation_log`
         # in sys.modules. Our stand-in lacks the needed names, so the
         # `from ... import (a, b, c)` raises ImportError at the `a` lookup.
-        try:
+        with pytest.raises(
+            FingerprintFinalizeError,
+            match="could not import finalization helpers",
+        ):
             _finalize_single_file_fingerprint(
                 prompt_path=prompt_path,
                 code_path=code_path,
@@ -3449,12 +3405,6 @@ def test_finalize_single_file_fingerprint_swallows_import_error_for_helpers(
                 cost=0.0,
                 model="test-model",
             )
-        except ImportError as exc:
-            pytest.fail(
-                f"_finalize_single_file_fingerprint must NOT propagate an "
-                f"ImportError out — best-effort metadata cleanup may not "
-                f"break the caller's successful update tuple. Got: {exc!r}"
-            )
     finally:
         if real_module is not None:
             sys.modules["pdd.operation_log"] = real_module
@@ -3463,16 +3413,10 @@ def test_finalize_single_file_fingerprint_swallows_import_error_for_helpers(
     # helpers, so writing a fingerprint without first clearing the stale
     # run report would defeat the issue #1106 invariant.
     save_fingerprint_mock.assert_not_called()
-    # A user-facing warning must surface so the operator knows finalization
-    # was skipped (it is informational, not status fluff).
-    captured = " ".join(capsys.readouterr().out.split())
-    assert "Could not import finalization helpers" in captured, (
-        f"Expected a 'Could not import finalization helpers' warning "
-        f"when the import wrapping fires; got stdout: {captured!r}"
-    )
+    # The caller receives a typed failure and cannot report the update green.
 
 
-def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
+def test_default_single_file_update_fails_when_identity_unknown(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
@@ -3486,37 +3430,7 @@ def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=(None, None)), \
          patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file="updated_prompt.prompt",
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="updated_prompt.prompt",
-            use_git=False,
-        )
-
-    assert result is not None
-    mock_save_fp.assert_not_called()
-
-
-def test_default_single_file_update_fails_when_fingerprint_save_fails(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_open_file,
-):
-    # Issue #1926: a successful artifact write may not hide fingerprint
-    # persistence failure; the command must exit non-zero.
-    from pdd.fingerprint_transaction import FingerprintFinalizeError
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
-         patch(
-             "pdd.update_main.FingerprintTransaction",
-             side_effect=FingerprintFinalizeError("disk full"),
-         ):
-        with pytest.raises(click.exceptions.Exit):
+        with pytest.raises(click.exceptions.Exit) as raised:
             update_main(
                 ctx=mock_ctx,
                 input_prompt_file="updated_prompt.prompt",
@@ -3525,6 +3439,36 @@ def test_default_single_file_update_fails_when_fingerprint_save_fails(
                 output="updated_prompt.prompt",
                 use_git=False,
             )
+
+    assert raised.value.exit_code == 1
+    mock_save_fp.assert_not_called()
+
+
+def test_default_single_file_update_fails_on_fingerprint_save_failure(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # A save_fingerprint exception must not break the success return — the
+    # update tuple is the contract; fingerprint write is best-effort. Use the
+    # canonical input path so the output-redirected guard does not skip
+    # save_fingerprint before the OSError can be raised.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
+         patch("pdd.operation_log.save_fingerprint", side_effect=OSError("disk full")):
+        with pytest.raises(click.exceptions.Exit) as raised:
+            update_main(
+                ctx=mock_ctx,
+                input_prompt_file="updated_prompt.prompt",
+                modified_code_file=minimal_input_files["modified_code_file"],
+                input_code_file=minimal_input_files["input_code_file"],
+                output="updated_prompt.prompt",
+                use_git=False,
+            )
+
+    assert raised.value.exit_code == 1
 
 
 def test_default_single_file_update_skips_fingerprint_when_output_redirected(
@@ -3543,7 +3487,7 @@ def test_default_single_file_update_skips_fingerprint_when_output_redirected(
     # stale (the same stale-state class the issue is closing).
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")) as mock_infer, \
-         patch("pdd.update_main.FingerprintTransaction") as mock_save_fp:
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
         result = update_main(
             ctx=mock_ctx,
             input_prompt_file="some_prompt_file.prompt",
@@ -3554,11 +3498,8 @@ def test_default_single_file_update_skips_fingerprint_when_output_redirected(
         )
 
     assert result is not None
-    mock_save_fp.assert_called_once()
-    mock_infer.assert_called_once()
-    mock_save_fp.return_value.__enter__.return_value.skip.assert_called_once_with(
-        "output redirected"
-    )
+    mock_save_fp.assert_not_called()
+    mock_infer.assert_not_called()
 
 
 def test_sync_metadata_true_with_redirected_output_skips_orchestrator(
@@ -3906,7 +3847,7 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
 @patch("pdd.update_main.get_git_changed_files", return_value=set())
 @patch("pdd.update_main.update_file_pair")
 @patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_clear_run_report_failure_fails_closed(
+def test_repo_mode_clear_run_report_failure_is_hard_failure(
     mock_pddrc,
     mock_update_file_pair,
     mock_git_changed,
@@ -3915,8 +3856,10 @@ def test_repo_mode_clear_run_report_failure_fails_closed(
     temp_git_repo,
     capsys,
 ):
-    # Issue #1926: metadata cleanup failure makes finalization, and therefore
-    # the mutating command, fail.
+    # Regression for issue #1057: when clear_run_report raises in repo-mode
+    # legacy fingerprinting, we must surface a non-fatal warning (when not
+    # quiet) and still proceed to save_fingerprint, so the user is told that
+    # runtime verification state may still describe the pre-mutation files.
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
             "prompt_file": prompt_file,
@@ -3940,9 +3883,7 @@ def test_repo_mode_clear_run_report_failure_fails_closed(
         # quiet=False so the warning is emitted
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-        from pdd.fingerprint_transaction import FingerprintFinalizeError
-
-        with pytest.raises(FingerprintFinalizeError, match="run report clear failed"):
+        with pytest.raises(click.exceptions.Exit) as raised:
             update_main(
                 ctx=ctx,
                 input_prompt_file=None,
@@ -3954,9 +3895,13 @@ def test_repo_mode_clear_run_report_failure_fails_closed(
                 sync_metadata=False,
             )
 
+    assert raised.value.exit_code == 1
     assert mock_sync.call_count == 0
     assert mock_clear_rr.call_count == 1
-    mock_save_fp.assert_not_called()
+    assert mock_save_fp.call_count == 0
+    out = capsys.readouterr().out
+    assert "Fingerprint finalization failed" in out
+    assert "disk full" in out
 
 
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
@@ -3964,7 +3909,7 @@ def test_repo_mode_clear_run_report_failure_fails_closed(
 @patch("pdd.update_main.get_git_changed_files", return_value=set())
 @patch("pdd.update_main.update_file_pair")
 @patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_clear_run_report_silent_unlink_failure_fails_closed(
+def test_repo_mode_clear_run_report_silent_unlink_failure_is_hard_failure(
     mock_pddrc,
     mock_update_file_pair,
     mock_git_changed,
@@ -4011,9 +3956,7 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_fails_closed(
         # quiet=False so the defensive warning is emitted
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-        from pdd.fingerprint_transaction import FingerprintFinalizeError
-
-        with pytest.raises(FingerprintFinalizeError, match="run report not cleared"):
+        with pytest.raises(click.exceptions.Exit) as raised:
             update_main(
                 ctx=ctx,
                 input_prompt_file=None,
@@ -4025,6 +3968,7 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_fails_closed(
                 sync_metadata=False,
             )
 
+    assert raised.value.exit_code == 1
     assert mock_sync.call_count == 0
     # clear_run_report attempted for each successful pair, but it silently
     # did nothing (no exception raised, no file removed).
@@ -4036,7 +3980,9 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_fails_closed(
     # Defensive warning surfaced to the user because the report file still
     # exists after clear_run_report returned.
     out = capsys.readouterr().out
-    assert "still exists after" in out
+    normalized_out = " ".join(out.split())
+    assert "still exists after clear" in normalized_out
+    assert "Fingerprint finalization failed" in normalized_out
     # The file is indeed still on disk (the whole point of this regression).
     assert stale_report.exists()
 

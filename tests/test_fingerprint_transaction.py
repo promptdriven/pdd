@@ -1,5 +1,4 @@
-"""Unit and regression tests for transactional fingerprint persistence."""
-
+"""Regression coverage for transactional fingerprint finalization (#1926)."""
 from __future__ import annotations
 
 import json
@@ -12,153 +11,363 @@ from pdd.fingerprint_transaction import (
     FingerprintFinalizeError,
     FingerprintTransaction,
 )
-from pdd.operation_log import get_fingerprint_path, save_fingerprint
+from pdd.operation_log import save_fingerprint
+from pdd.sync_determine_operation import calculate_current_hashes
 
 
-def _project(tmp_path: Path, name: str = "project") -> tuple[Path, dict[str, Path]]:
-    root = tmp_path / name
+def _unit(tmp_path: Path) -> tuple[dict[str, Path], Path]:
+    root = tmp_path / "project"
     (root / "prompts").mkdir(parents=True)
-    (root / "src").mkdir()
-    (root / "examples").mkdir()
+    (root / "pdd").mkdir()
     (root / "tests").mkdir()
-    (root / ".pddrc").write_text("{}", encoding="utf-8")
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
     paths = {
-        "prompt": root / "prompts" / "widget_python.prompt",
-        "code": root / "src" / "widget.py",
-        "example": root / "examples" / "widget_example.py",
-        "test": root / "tests" / "test_widget.py",
+        "prompt": root / "prompts" / "sample_python.prompt",
+        "code": root / "pdd" / "sample.py",
+        "test": root / "tests" / "test_sample.py",
     }
-    for key, path in paths.items():
-        path.write_text(f"{key} v1\n", encoding="utf-8")
-    return root, paths
+    paths["prompt"].write_text("% Goal\nCreate sample.\n", encoding="utf-8")
+    paths["code"].write_text("def sample():\n    return 1\n", encoding="utf-8")
+    paths["test"].write_text("def test_sample():\n    assert True\n", encoding="utf-8")
+    return paths, root
 
 
-def test_transaction_writes_complete_atomic_fingerprint(tmp_path: Path) -> None:
-    """A clean exit writes the full payload through a same-directory rename."""
-    _root, paths = _project(tmp_path)
-    destination = get_fingerprint_path("widget", "Python", paths=paths)
+def test_clean_exit_writes_complete_fingerprint(tmp_path: Path) -> None:
+    paths, root = _unit(tmp_path)
 
-    real_replace = __import__("os").replace
-    replace_calls: list[tuple[Path, Path]] = []
+    with FingerprintTransaction("sample", "python", "generate", paths):
+        pass
 
-    def recording_replace(source, target):
-        replace_calls.append((Path(source), Path(target)))
-        real_replace(source, target)
-
-    with patch("pdd.fingerprint_transaction.os.replace", side_effect=recording_replace):
-        with FingerprintTransaction("widget", "Python", "generate", paths=paths):
-            pass
-
-    payload = json.loads(destination.read_text(encoding="utf-8"))
-    assert payload["command"] == "generate"
-    assert all(payload[f"{name}_hash"] for name in ("prompt", "code", "example", "test"))
-    assert replace_calls
-    temp_path, target_path = replace_calls[0]
-    assert temp_path.parent == destination.parent
-    assert target_path == destination
+    fingerprint_path = root / ".pdd" / "meta" / "sample_python.json"
+    data = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    expected = calculate_current_hashes(paths)
+    assert data["command"] == "generate"
+    assert data["prompt_hash"] == expected["prompt_hash"]
+    assert data["code_hash"] == expected["code_hash"]
+    assert data["test_hash"] == expected["test_hash"]
+    assert data["prompt_hash"] is not None
 
 
-def test_null_prompt_hash_fails_without_overwriting_existing_state(tmp_path: Path) -> None:
-    """Null prompt hashes fail without replacing known-good state (#1305)."""
-    root, paths = _project(tmp_path)
+def test_body_exception_preserves_existing_fingerprint(tmp_path: Path) -> None:
+    paths, root = _unit(tmp_path)
+    fingerprint_path = root / ".pdd" / "meta" / "sample_python.json"
+    fingerprint_path.write_text('{"sentinel": true}\n', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="body failed"):
+        with FingerprintTransaction("sample", "python", "generate", paths):
+            raise ValueError("body failed")
+
+    assert json.loads(fingerprint_path.read_text(encoding="utf-8")) == {
+        "sentinel": True
+    }
+
+
+def test_skip_is_idempotent_and_does_not_write(tmp_path: Path) -> None:
+    paths, root = _unit(tmp_path)
+    transaction = FingerprintTransaction("sample", "python", "update", paths)
+
+    with transaction:
+        transaction.skip("dry-run")
+        transaction.skip("dry-run")
+
+    assert not (root / ".pdd" / "meta" / "sample_python.json").exists()
+
+
+def test_null_prompt_hash_is_hard_failure_and_preserves_previous_file(
+    tmp_path: Path,
+) -> None:
+    paths, root = _unit(tmp_path)
     paths["prompt"].unlink()
-    destination = root / ".pdd" / "meta" / "widget_python.json"
-    destination.parent.mkdir(parents=True)
-    destination.write_text('{"known": "good"}\n', encoding="utf-8")
+    fingerprint_path = root / ".pdd" / "meta" / "sample_python.json"
+    fingerprint_path.write_text('{"old": "state"}\n', encoding="utf-8")
 
-    with pytest.raises(FingerprintFinalizeError, match="prompt_hash is null"):
-        with FingerprintTransaction("widget", "python", "example", paths=paths):
+    with pytest.raises(FingerprintFinalizeError) as raised:
+        with FingerprintTransaction("sample", "python", "fix", paths):
             pass
 
-    assert json.loads(destination.read_text(encoding="utf-8")) == {"known": "good"}
-    assert not list(destination.parent.glob("*.tmp"))
+    message = str(raised.value)
+    assert "[fix]" in message
+    assert str(fingerprint_path) in message
+    assert "prompt_hash is null" in message
+    assert json.loads(fingerprint_path.read_text(encoding="utf-8")) == {
+        "old": "state"
+    }
 
 
-def test_destination_is_resolved_once_before_cwd_changes(
+def test_existing_non_prompt_artifact_cannot_have_null_hash(
+    tmp_path: Path,
+) -> None:
+    paths, _root = _unit(tmp_path)
+    hashes = calculate_current_hashes(paths)
+    hashes["code_hash"] = None
+
+    with patch(
+        "pdd.fingerprint_transaction.calculate_current_hashes",
+        return_value=hashes,
+    ):
+        with pytest.raises(FingerprintFinalizeError, match="code_hash is null"):
+            with FingerprintTransaction("sample", "python", "generate", paths):
+                pass
+
+
+def test_atomic_write_failure_has_context_and_leaves_destination_intact(
+    tmp_path: Path,
+) -> None:
+    paths, root = _unit(tmp_path)
+    fingerprint_path = root / ".pdd" / "meta" / "sample_python.json"
+    fingerprint_path.write_text('{"old": true}\n', encoding="utf-8")
+
+    with patch(
+        "pdd.fingerprint_transaction.atomic_write_json",
+        side_effect=OSError("disk full"),
+    ):
+        with pytest.raises(FingerprintFinalizeError) as raised:
+            with FingerprintTransaction("sample", "python", "example", paths):
+                pass
+
+    assert "[example]" in str(raised.value)
+    assert str(fingerprint_path) in str(raised.value)
+    assert "disk full" in str(raised.value)
+    assert json.loads(fingerprint_path.read_text(encoding="utf-8")) == {
+        "old": True
+    }
+
+
+def test_explicit_paths_eagerly_anchor_nested_subproject(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Changing cwd after entry cannot redirect the resolved metadata root."""
-    root_a, paths_a = _project(tmp_path, "a")
-    root_b, _paths_b = _project(tmp_path, "b")
+    parent = tmp_path / "parent"
+    nested = parent / "nested"
+    (nested / "prompts").mkdir(parents=True)
+    (nested / "src").mkdir()
+    (nested / ".pddrc").write_text("contexts: {}\n", encoding="utf-8")
+    prompt = nested / "prompts" / "sample_python.prompt"
+    code = nested / "src" / "sample.py"
+    prompt.write_text("% Goal\nNested.\n", encoding="utf-8")
+    code.write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.chdir(parent)
 
-    transaction = FingerprintTransaction("widget", "python", "update", paths=paths_a)
-    monkeypatch.chdir(root_b)
+    transaction = FingerprintTransaction(
+        "sample",
+        "python",
+        "update",
+        {"prompt": prompt, "code": code},
+    )
+    assert transaction.fingerprint_path == (
+        nested / ".pdd" / "meta" / "sample_python.json"
+    )
     with transaction:
         pass
 
-    assert (root_a / ".pdd" / "meta" / "widget_python.json").is_file()
-    assert not (root_b / ".pdd" / "meta" / "widget_python.json").exists()
+    assert transaction.fingerprint_path.exists()
+    assert not (parent / ".pdd" / "meta" / "sample_python.json").exists()
 
 
-def test_body_exception_and_explicit_skip_do_not_write(tmp_path: Path) -> None:
-    """Exceptions and intentional skips never write a fingerprint."""
-    root, paths = _project(tmp_path)
-    destination = root / ".pdd" / "meta" / "widget_python.json"
+def test_include_override_controls_hash_and_persisted_graph(tmp_path: Path) -> None:
+    paths, root = _unit(tmp_path)
+    dependency = root / "schema.md"
+    dependency.write_text("contract-v1\n", encoding="utf-8")
+    override = {str(dependency): "pre-captured-hash"}
+    expected = calculate_current_hashes(paths, stored_include_deps=override)
 
-    with pytest.raises(RuntimeError, match="body failed"):
-        with FingerprintTransaction("widget", "python", "fix", paths=paths):
-            raise RuntimeError("body failed")
+    transaction = FingerprintTransaction(
+        "sample",
+        "python",
+        "auto-deps",
+        paths,
+    )
+    transaction.set_include_deps_override(override)
+    with transaction:
+        pass
+
+    data = json.loads(
+        (root / ".pdd" / "meta" / "sample_python.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert data["prompt_hash"] == expected["prompt_hash"]
+    assert data["include_deps"] == override
+
+
+def test_atomic_state_uses_same_payload_builder_without_early_write(
+    tmp_path: Path,
+) -> None:
+    paths, root = _unit(tmp_path)
+
+    class Buffer:
+        payload = None
+        path = None
+        operation = None
+
+        def set_fingerprint(self, payload, path, *, operation=None):
+            self.payload = payload
+            self.path = path
+            self.operation = operation
+
+    buffer = Buffer()
+    with FingerprintTransaction(
+        "sample",
+        "python",
+        "test",
+        paths,
+        atomic_state=buffer,
+    ):
+        pass
+
+    destination = root / ".pdd" / "meta" / "sample_python.json"
     assert not destination.exists()
+    assert buffer.path == destination
+    assert buffer.operation == "test"
+    assert buffer.payload["prompt_hash"] is not None
 
-    with FingerprintTransaction("widget", "python", "fix", paths=paths) as transaction:
-        transaction.skip("dry-run mode")
-    assert not destination.exists()
+
+def test_outer_atomic_state_rolls_back_fingerprint_if_run_report_commit_fails(
+    tmp_path: Path,
+) -> None:
+    """The buffered sync path must not expose half of its state pair."""
+    from pdd.sync_orchestration import AtomicStateUpdate
+
+    meta = tmp_path / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    fingerprint_path = meta / "sample_python.json"
+    run_report_path = meta / "sample_python_run.json"
+    old_fingerprint = b'{"old": "fingerprint"}\n'
+    old_run_report = b'{"old": "run-report"}\n'
+    fingerprint_path.write_bytes(old_fingerprint)
+    run_report_path.write_bytes(old_run_report)
+
+    state = AtomicStateUpdate("sample", "python")
+    real_atomic_write = state._atomic_write
+    write_count = 0
+
+    def fail_second_write(data, target_path):
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise OSError("run-report disk failure")
+        real_atomic_write(data, target_path)
+
+    state._atomic_write = fail_second_write
+    with pytest.raises(FingerprintFinalizeError, match="atomic state commit failed"):
+        with state:
+            state.set_fingerprint(
+                {"prompt_hash": "new"},
+                fingerprint_path,
+                operation="test",
+            )
+            state.set_run_report({"exit_code": 0}, run_report_path)
+
+    assert fingerprint_path.read_bytes() == old_fingerprint
+    assert run_report_path.read_bytes() == old_run_report
 
 
-def test_replace_failure_is_explicit_and_leaves_no_partial_file(tmp_path: Path) -> None:
-    """Rename failures include diagnostics and clean their temporary file."""
-    root, paths = _project(tmp_path)
-    destination = root / ".pdd" / "meta" / "widget_python.json"
+def test_public_save_wrapper_propagates_transaction_failure(tmp_path: Path) -> None:
+    paths, _root = _unit(tmp_path)
+    paths["prompt"].unlink()
 
-    with patch("pdd.fingerprint_transaction.os.replace", side_effect=OSError("disk full")):
-        with pytest.raises(FingerprintFinalizeError) as exc_info:
-            with FingerprintTransaction("widget", "python", "auto-deps", paths=paths):
+    with pytest.raises(FingerprintFinalizeError, match="prompt_hash is null"):
+        save_fingerprint("sample", "python", "generate", paths=paths)
+
+
+def test_path_normalization_handles_strings_and_null_test_list(
+    tmp_path: Path,
+) -> None:
+    paths, root = _unit(tmp_path)
+
+    with FingerprintTransaction(
+        "sample",
+        "python",
+        "generate",
+        paths={"prompt": str(paths["prompt"]), "test_files": None},
+    ):
+        pass
+
+    payload = json.loads(
+        (root / ".pdd" / "meta" / "sample_python.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["prompt_hash"] is not None
+    assert payload["test_files"] == {}
+
+
+def test_implicit_path_discovery_and_failure_are_typed(tmp_path: Path) -> None:
+    paths, _root = _unit(tmp_path)
+    with patch(
+        "pdd.fingerprint_transaction.get_pdd_file_paths",
+        return_value=paths,
+    ) as discover:
+        with FingerprintTransaction("sample", "python", "generate"):
+            pass
+    discover.assert_called_once_with("sample", "python")
+
+    with patch(
+        "pdd.fingerprint_transaction.get_pdd_file_paths",
+        side_effect=OSError("cannot discover project"),
+    ):
+        with pytest.raises(
+            FingerprintFinalizeError,
+            match="path resolution failed: cannot discover project",
+        ) as raised:
+            FingerprintTransaction("nested/sample", "python", "generate")
+    assert raised.value.fingerprint_path == Path(
+        ".pdd/meta/nested_sample_python.json"
+    )
+
+
+def test_existing_test_file_requires_test_files_hash(tmp_path: Path) -> None:
+    paths, _root = _unit(tmp_path)
+    paths["test_files"] = [paths["test"]]
+    hashes = calculate_current_hashes(paths)
+    hashes["test_files"] = {}
+
+    with patch(
+        "pdd.fingerprint_transaction.calculate_current_hashes",
+        return_value=hashes,
+    ):
+        with pytest.raises(
+            FingerprintFinalizeError,
+            match="test_files hash is null",
+        ):
+            with FingerprintTransaction("sample", "python", "test", paths):
                 pass
 
-    message = str(exc_info.value)
-    assert "[auto-deps]" in message
-    assert str(destination) in message
-    assert "disk full" in message
-    assert not destination.exists()
-    assert not list(destination.parent.glob("*.tmp"))
 
+def test_atomic_state_requires_fingerprint_setter(tmp_path: Path) -> None:
+    paths, _root = _unit(tmp_path)
 
-def test_save_fingerprint_is_a_thin_transaction_wrapper(tmp_path: Path) -> None:
-    """The legacy public helper delegates without retaining write logic."""
-    _root, paths = _project(tmp_path)
-
-    with patch("pdd.fingerprint_transaction.FingerprintTransaction") as transaction_cls:
-        save_fingerprint(
-            "widget",
+    with pytest.raises(
+        FingerprintFinalizeError,
+        match="atomic_state does not provide set_fingerprint",
+    ):
+        with FingerprintTransaction(
+            "sample",
             "python",
-            "generate",
-            paths=paths,
-            cost=1.25,
-            model="model",
-        )
-
-    transaction_cls.assert_called_once_with(
-        basename="widget",
-        language="python",
-        operation="generate",
-        paths=paths,
-        cost=1.25,
-        model="model",
-    )
-    transaction_cls.return_value.__enter__.assert_called_once()
-    transaction_cls.return_value.__exit__.assert_called_once()
+            "sync",
+            paths,
+            atomic_state=object(),
+        ):
+            pass
 
 
-def test_include_dependency_override_is_persisted(tmp_path: Path) -> None:
-    """Pre-rewrite dependency snapshots survive prompt transformations."""
-    root, paths = _project(tmp_path)
-    dependency = root / "context.md"
-    dependency.write_text("context", encoding="utf-8")
-    override = {str(dependency): "captured-before-rewrite"}
+def test_fingerprint_payload_has_one_authoritative_constructor() -> None:
+    """Future mutating paths must delegate instead of reimplementing writes."""
+    package_root = Path(__file__).parents[1] / "pdd"
+    constructor_owners = []
+    serialized_write_owners = []
+    for path in package_root.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "Fingerprint(" in source:
+            constructor_owners.append(path.relative_to(package_root).as_posix())
+        if "json.dump(asdict(fingerprint)" in source:
+            serialized_write_owners.append(path.relative_to(package_root).as_posix())
 
-    with FingerprintTransaction("widget", "python", "sync", paths=paths) as transaction:
-        transaction.set_include_deps_override(override)
-
-    destination = root / ".pdd" / "meta" / "widget_python.json"
-    assert json.loads(destination.read_text(encoding="utf-8"))["include_deps"] == override
+    # read_fingerprint reconstructs the persisted dataclass; only the
+    # transaction is allowed to construct a new write payload.
+    assert sorted(constructor_owners) == [
+        "fingerprint_transaction.py",
+        "sync_determine_operation.py",
+    ]
+    assert serialized_write_owners == []
