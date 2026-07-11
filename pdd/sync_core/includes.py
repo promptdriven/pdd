@@ -103,12 +103,31 @@ def _is_attribute_name_char(character: str) -> bool:
 
 
 def _has_boolean_attr(raw: str, name: str) -> bool:
-    """Find one bare boolean attribute with the legacy ASCII boundaries."""
+    """Find one bare boolean attribute outside quoted attribute values."""
     cursor = 0
+    quote: str | None = None
     while True:
+        if cursor >= len(raw):
+            return False
+        character = raw[cursor]
+        if quote is not None:
+            if character == quote:
+                quote = None
+            cursor += 1
+            continue
+        if character in "\"'":
+            quote = character
+            cursor += 1
+            continue
         start = raw.find(name, cursor)
         if start < 0:
             return False
+        intervening = raw[cursor:start]
+        quote_positions = [position for position in (
+            intervening.find("\""), intervening.find("'")) if position >= 0]
+        if quote_positions:
+            cursor += min(quote_positions)
+            continue
         end = start + len(name)
         before_is_word = start > 0 and (
             raw[start - 1].isascii() and _is_attribute_name_char(raw[start - 1])

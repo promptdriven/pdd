@@ -860,7 +860,11 @@ def main() -> None:
         "schema_version": 1,
         "results": [asdict(result) for result in results],
     }
-    arguments.output.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    encoded = json.dumps(payload, sort_keys=True)
+    if str(arguments.output) == "-":
+        print(encoded, flush=True)
+    else:
+        arguments.output.write_text(encoded, encoding="utf-8")
     if any(result.status != "PASS" for result in results):
         raise SystemExit(1)
 

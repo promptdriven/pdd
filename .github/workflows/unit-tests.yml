@@ -52,6 +52,13 @@ jobs:
           git config --global user.name "PDD CI"
           git config --global init.defaultBranch main
 
+      - name: Provision and verify protected Linux sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          bwrap --unshare-all --die-with-parent --new-session \
+            --ro-bind / / --dev /dev --proc /proc -- /bin/true
+
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 

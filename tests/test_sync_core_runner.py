@@ -508,6 +508,9 @@ def test_collection_probe_is_checker_owned_not_candidate_shadow(tmp_path) -> Non
         "    items[:] = []\n",
         encoding="utf-8",
     )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate probe shadow")
+    head = _git(root, "rev-parse", "HEAD")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert not (root / "candidate-probe-loaded").exists()
@@ -525,6 +528,9 @@ def test_collection_probe_fixed_name_is_not_candidate_shadowable(tmp_path) -> No
         "        Path(output).write_text(json.dumps([item.nodeid for item in items]))\n",
         encoding="utf-8",
     )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "candidate fixed probe shadow")
+    head = _git(root, "rev-parse", "HEAD")
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert not (root / "candidate-fixed-probe-loaded").exists()
