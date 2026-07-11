@@ -433,10 +433,18 @@ def get_file_path(file_name: str) -> str:
     resolver = get_default_resolver()
     relpath = Path(file_name)
     if relpath.is_absolute():
-        raise ValueError(f"absolute include path is not allowed: {file_name}")
+        return str(relpath)
     normalized = PurePosixPath(os.path.normpath(file_name).replace(os.sep, "/"))
     resolved = resolver.resolve_include(normalized.as_posix())
-    if resolved == resolver.cwd / normalized:
+    cwd_candidate = resolver.cwd / normalized
+    if resolved == cwd_candidate:
+        return os.path.join("./", normalized.as_posix())
+    try:
+        resolved.relative_to(resolver.cwd)
+    except ValueError:
+        pass
+    else:
+        # A nested source checkout must not shadow a missing active-project file.
         return os.path.join("./", normalized.as_posix())
     return str(resolved)
 
