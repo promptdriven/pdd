@@ -68,6 +68,15 @@ def test_malformed_include_text_is_bounded() -> None:
     assert parse_include_references(text) == ()
 
 
+@pytest.mark.timeout(1)
+def test_attribute_parser_is_bounded_for_repeated_word_characters() -> None:
+    """Unquoted attribute-like input must not cause quadratic regex retries."""
+    text = "<include " + ("0" * 15_000) + ">docs/a.md</include>"
+    assert [reference.path for reference in parse_include_references(text)] == [
+        "docs/a.md"
+    ]
+
+
 def test_preprocess_and_sync_order_use_the_same_parser(tmp_path) -> None:
     prompt = tmp_path / "widget_python.prompt"
     prompt.write_text(PROMPT, encoding="utf-8")
