@@ -19,7 +19,10 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
-from pdd.sync_core.runner import playwright_validator_config_digest
+from pdd.sync_core.runner import (
+    _playwright_result,
+    playwright_validator_config_digest,
+)
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -153,6 +156,31 @@ def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
     )
 
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_result_resolves_relative_spec_file_from_runner_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    (root / "tests").mkdir(parents=True)
+    (root / "tests/widget.spec.ts").write_text("", encoding="utf-8")
+    output = (
+        '{"suites":[{"title":"tests/widget.spec.ts","specs":[{'
+        '"title":"widget works","file":"tests/widget.spec.ts",'
+        '"tests":[{"projectName":"chromium","results":[{"status":"passed"}]}]'
+        '}]}]}'
+    )
+
+    outcome, detail, identities = _playwright_result(
+        root,
+        output,
+        0,
+        None,
+    )
+
+    assert outcome is EvidenceOutcome.PASS
+    assert detail == "1 protected Playwright tests passed"
+    assert identities == ("chromium::tests/widget.spec.ts::tests/widget.spec.ts > widget works",)
 
 
 @pytest.mark.parametrize(
