@@ -18,6 +18,7 @@ from pdd.agentic_checkup import (
     _post_checkup_comment,
     _post_error_comment,
     _prepare_hosted_agentic_artifact,
+    _publish_hosted_agentic_artifact,
     _truncate_issue_context,
     run_agentic_checkup,
 )
@@ -752,7 +753,9 @@ class TestRunAgenticCheckup:
         assert model == "codex"
         config = mock_review_loop.call_args.kwargs["config"]
         assert config.agentic_mode is True
-        assert config.agentic_artifact_path == artifact_path
+        assert config.agentic_artifact_path != artifact_path
+        assert Path(config.agentic_artifact_path).parent == Path(artifact_path).parent
+        assert config.agentic_artifact_path.endswith(".invocation.tmp")
         assert config.review_only is False
         assert config.no_fix is False
         assert config.reviewers == ("codex", "claude")
@@ -785,12 +788,11 @@ class TestRunAgenticCheckup:
             encoding="utf-8",
         )
 
-        assert (
-            _prepare_hosted_agentic_artifact(
-                str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
-            )
-            is True
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
         )
+        assert reservation is not None
+        assert reservation.private_path != path
 
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload["schema_version"] == "pdd.checkup.agentic.v1"
@@ -803,13 +805,47 @@ class TestRunAgenticCheckup:
     ):
         monkeypatch.chdir(tmp_path)
 
-        assert _prepare_hosted_agentic_artifact("./agentic.json") is True
+        assert _prepare_hosted_agentic_artifact("./agentic.json") is not None
 
         payload = json.loads((tmp_path / "agentic.json").read_text(encoding="utf-8"))
         assert payload["status"] != "passed"
         assert payload["verdict"]["decision"] == "block"
 
-    def test_prepare_hosted_artifact_fails_when_stale_pass_cannot_be_replaced(
+    def test_prepare_hosted_artifact_scrubs_identity_fields(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        secret_owner = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+        reservation = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner=secret_owner, pr_repo=secret_owner, pr_number=1
+        )
+        assert reservation is not None
+        payload_text = path.read_text(encoding="utf-8")
+        assert secret_owner not in payload_text
+        assert reservation.pr_identity[0] != secret_owner
+        assert reservation.pr_identity[1] != secret_owner
+        reservation.cleanup()
+
+    def test_hosted_early_return_cleans_private_and_owner_files(
+        self, tmp_path, monkeypatch
+    ):
+        public = tmp_path / "agentic.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv("PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(public))
+
+        with (
+            patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path),
+            patch("pdd.agentic_checkup._check_gh_cli", return_value=False),
+        ):
+            success, _message, _cost, _model = run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1", quiet=True, cwd=tmp_path
+            )
+
+        assert success is False
+        assert public.exists()
+        assert json.loads(public.read_text(encoding="utf-8"))["status"] != "passed"
+        assert not list(tmp_path.glob("*.invocation.tmp"))
+        assert not list(tmp_path.glob("*.owner.json"))
+
+    def test_prepare_hosted_artifact_failure_replaces_stale_pass_with_blocker(
         self, tmp_path
     ):
         path = tmp_path / "agentic.json"
@@ -828,9 +864,11 @@ class TestRunAgenticCheckup:
                 return_value=None,
             ),
         ):
-            assert _prepare_hosted_agentic_artifact(str(path)) is False
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
 
-        assert json.loads(path.read_text(encoding="utf-8")) == stale
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        assert persisted["status"] != "passed"
+        assert persisted["verdict"]["decision"] == "block"
 
     @pytest.mark.parametrize("payload", ["not-json", "{}"])
     def test_prepare_hosted_artifact_rejects_malformed_readback(
@@ -838,15 +876,16 @@ class TestRunAgenticCheckup:
     ):
         path = tmp_path / "agentic.json"
 
-        def malformed_writer(**_kwargs):
-            path.write_text(payload, encoding="utf-8")
-            return str(path)
+        def malformed_writer(**kwargs):
+            private = Path(kwargs["artifact_path"])
+            private.write_text(payload, encoding="utf-8")
+            return str(private)
 
         with patch(
             "pdd.agentic_checkup.write_final_gate_fallback_artifact",
             side_effect=malformed_writer,
         ):
-            assert _prepare_hosted_agentic_artifact(str(path)) is False
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
 
     def test_hosted_run_stops_before_other_early_returns_without_provenance(
         self, tmp_path, monkeypatch
@@ -859,7 +898,7 @@ class TestRunAgenticCheckup:
         with (
             patch(
                 "pdd.agentic_checkup._prepare_hosted_agentic_artifact",
-                return_value=False,
+                return_value=None,
             ),
             patch("pdd.agentic_checkup._check_gh_cli") as check_gh,
         ):
@@ -872,6 +911,35 @@ class TestRunAgenticCheckup:
         assert cost == 0.0
         assert model == ""
         check_gh.assert_not_called()
+
+    def test_hosted_overlapping_run_cannot_publish_into_newer_slot(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        older = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        newer = _prepare_hosted_agentic_artifact(
+            str(path), pr_owner="promptdriven", pr_repo="pdd", pr_number=1790
+        )
+        assert older is not None and newer is not None
+        assert older.invocation_id != newer.invocation_id
+
+        older_payload = json.loads(older.private_path.read_text(encoding="utf-8"))
+        older_payload.update(
+            status="passed",
+            authority="canonical_pass_agentic_mirror_clean",
+            layer1={"status": "pass", "blockers": []},
+            verdict={"decision": "pass", "reason": "older clean run"},
+        )
+        older.private_path.write_text(json.dumps(older_payload), encoding="utf-8")
+
+        # The older invocation finishes after the newer invocation claimed the
+        # public slot. Its PASS must be discarded by the invocation-ID CAS.
+        assert _publish_hosted_agentic_artifact(older, canonical_passed=True) is None
+        owner_payload = json.loads(newer.owner_path.read_text(encoding="utf-8"))
+        assert owner_payload["invocation_id"] == newer.invocation_id
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload["status"] != "passed"
+        assert public_payload["verdict"]["decision"] == "block"
 
     def test_finalize_hosted_artifact_canonical_fail_dominates_stale_pass(
         self, tmp_path
@@ -918,9 +986,7 @@ class TestRunAgenticCheckup:
             encoding="utf-8",
         )
         # Canonical gate FAILED, but every atomic publish (os.replace) fails.
-        with patch(
-            "pdd.agentic_checkup.os.replace", side_effect=OSError("no rename")
-        ):
+        with patch("pdd.agentic_checkup.os.replace", side_effect=OSError("no rename")):
             result = _finalize_hosted_agentic_artifact(
                 str(path), canonical_passed=False
             )

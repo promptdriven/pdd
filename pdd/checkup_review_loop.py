@@ -2182,13 +2182,10 @@ def _maybe_run_fresh_final_review_override(
         # particular, ``--fresh-final-review codex`` must not overwrite the
         # primary codex review row or round artifacts.
         fresh_findings = [
-            replace(finding, reviewer="fresh-final")
-            for finding in result.findings
+            replace(finding, reviewer="fresh-final") for finding in result.findings
         ]
         state.fresh_final_findings = fresh_findings
-        fresh_result = replace(
-            result, reviewer="fresh-final", findings=fresh_findings
-        )
+        fresh_result = replace(result, reviewer="fresh-final", findings=fresh_findings)
         _record_review(state, fresh_result, track_reviewer_status=False)
         if result.status in HARD_NOT_CLEAN_STATES:
             state.fresh_final_status = result.status
@@ -2309,9 +2306,7 @@ def _maybe_write_agentic_artifact(
                     #     Step 5 failure remain the reported layer1 status/blocker.
                     step5_still_open = any(
                         getattr(f, "reviewer", "") == "layer1:step5"
-                        and str(getattr(f, "status", "open") or "open")
-                        .strip()
-                        .lower()
+                        and str(getattr(f, "status", "open") or "open").strip().lower()
                         != "fixed"
                         for f in getattr(state, "findings", [])
                     )
@@ -2492,6 +2487,12 @@ def parse_reviewer_commands(value: str | Sequence[str] | None) -> Dict[str, str]
             continue
         role = normalized[0]
         command = command_part.strip() if sep else ""
+        # Provider-native commands are a deliberately small, argument-free
+        # slash-command surface. Reject prose, whitespace, shell fragments,
+        # and credential-shaped values instead of persisting or injecting them
+        # into prompts/artifacts as if they were executable commands.
+        if command and command not in {"/review", "/code-review"}:
+            command = ""
         # First spelling of a role wins, mirroring parse_reviewers ordering.
         commands.setdefault(role, command)
     return commands
@@ -2536,16 +2537,12 @@ def _resolve_roles(config: ReviewLoopConfig) -> Tuple[str, str, str]:
     reviewer = (
         explicit_reviewer[0]
         if explicit_reviewer
-        else legacy_roles[0]
-        if legacy_roles
-        else DEFAULT_REVIEWER
+        else legacy_roles[0] if legacy_roles else DEFAULT_REVIEWER
     )
     fixer = (
         explicit_fixer[0]
         if explicit_fixer
-        else legacy_roles[1]
-        if len(legacy_roles) > 1
-        else DEFAULT_FIXER
+        else legacy_roles[1] if len(legacy_roles) > 1 else DEFAULT_FIXER
     )
 
     if (
@@ -5743,9 +5740,9 @@ def _record_reviewer_feedback(
                 f"{disposition!r}. Reviewer reason: {feedback}"
             )
             if rationale:
-                state.reviewer_feedback_by_key[finding.key] += (
-                    f" Fixer rationale was: {rationale}"
-                )
+                state.reviewer_feedback_by_key[
+                    finding.key
+                ] += f" Fixer rationale was: {rationale}"
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
@@ -6692,9 +6689,7 @@ def _git_changed_files(worktree: Path) -> List[str]:
 def _repo_relative_path(path: str) -> Path:
     """Return a normalized repository-relative path from config/registry text."""
     parts = [
-        part
-        for part in path.replace("\\", "/").split("/")
-        if part and part != "."
+        part for part in path.replace("\\", "/").split("/") if part and part != "."
     ]
     return Path(*parts) if parts else Path("")
 

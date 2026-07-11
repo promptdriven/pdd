@@ -345,7 +345,9 @@ class TestFinalGateLibrary:
             assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
             assert context.final_gate_canonical_status == ""
             assert config.agentic_mode is True
-            assert config.agentic_artifact_path == str(artifact_path)
+            assert config.agentic_artifact_path != str(artifact_path)
+            assert Path(config.agentic_artifact_path).parent == artifact_path.parent
+            assert config.agentic_artifact_path.endswith(".invocation.tmp")
 
             # Model the successful Layer 2 resolution and use the production
             # hosted writer. This exercises the final-gate -> review-loop
@@ -380,7 +382,7 @@ class TestFinalGateLibrary:
             )
             state.findings_by_key[resolved.key] = resolved
             assert _maybe_write_agentic_artifact(context, config, state) == str(
-                artifact_path
+                config.agentic_artifact_path
             )
             _write_final_state(
                 tmp_path,

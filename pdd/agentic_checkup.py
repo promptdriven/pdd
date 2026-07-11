@@ -14,9 +14,12 @@ import logging
 import math
 import os
 import re
+import secrets
 import tempfile
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -47,6 +50,7 @@ from .checkup_review_loop import (
     SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS,
     ReviewLoopConfig,
     ReviewLoopContext,
+    _scrub_secrets,
     clear_final_state,
     load_final_state,
     parse_reviewer_commands,
@@ -119,51 +123,259 @@ def _hosted_agentic_reviewers(reviewers: str) -> str:
     return configured
 
 
+@dataclass(frozen=True)
+class _HostedAgenticArtifactReservation:
+    """Invocation-private hosted artifact and its stable publication slot."""
+
+    public_path: Path
+    private_path: Path
+    lock_path: Path
+    owner_path: Path
+    invocation_id: str
+    pr_identity: Tuple[str, str, int]
+
+    def cleanup(self) -> None:
+        """Remove invocation-private state while retaining the public blocker."""
+        try:
+            self.private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            with _hosted_artifact_lock(self.lock_path):
+                try:
+                    owner = json.loads(self.owner_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    owner = None
+                if isinstance(owner, dict) and owner.get(
+                    "invocation_id"
+                ) == self.invocation_id:
+                    self.owner_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def __del__(self) -> None:
+        # ``run_agentic_checkup`` has many validation/network early returns.
+        # CPython releases this local reservation at function exit, providing a
+        # final safety net that cannot leave private/owner files behind.
+        self.cleanup()
+
+
+@contextmanager
+def _hosted_artifact_lock(lock_path: Path) -> Iterator[None]:
+    """Serialize public-slot compare-and-swap operations across processes."""
+    import fcntl  # pylint: disable=import-outside-toplevel
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _atomic_publish_hosted_payload(path: Path, payload: Dict[str, Any]) -> None:
+    """Atomically publish one hosted payload to ``path``."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        delete=False,
+    )  # pylint: disable=consider-using-with -- closed before atomic replace
+    try:
+        tmp.write(json.dumps(payload, indent=2))
+        tmp.close()
+        os.replace(tmp.name, str(path))
+    except OSError:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+
+
 def _prepare_hosted_agentic_artifact(
     artifact_path: Optional[str],
     *,
     pr_owner: str = "",
     pr_repo: str = "",
     pr_number: int = 0,
-) -> bool:
-    """Replace any prior hosted artifact with a current blocking placeholder.
+) -> Optional[_HostedAgenticArtifactReservation]:
+    """Reserve a private path and publish a current blocking placeholder.
 
     This runs before validation/network early returns. A retry can therefore
     never expose a passing artifact from an earlier invocation as the current
-    result when the new invocation fails before the review loop starts.
+    result when the new invocation fails before the review loop starts. The
+    placeholder carries a nonce used for locked compare-and-swap publication,
+    so overlapping runs cannot finalize or overwrite one another's verdicts.
     """
     if not artifact_path:
-        return True
+        return None
     path = Path(artifact_path)
+    safe_owner = _scrub_secrets(str(pr_owner or ""))[:2000]
+    safe_repo = _scrub_secrets(str(pr_repo or ""))[:2000]
+    private_path: Optional[Path] = None
+    lock_path: Optional[Path] = None
+    owner_path: Optional[Path] = None
+    invocation_id = ""
     try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        # The writer below may still be able to replace the file even when an
-        # unlink is denied (for example, a restrictive directory policy).
-        pass
-    written_path = write_final_gate_fallback_artifact(
-        artifact_path=artifact_path,
-        pr_owner=pr_owner,
-        pr_repo=pr_repo,
-        pr_number=pr_number,
-        canonical_status="unknown",
-        blockers=["Current hosted checkup invocation has not produced a verdict."],
-        no_fix=True,
-    )
-    if written_path is None or Path(written_path).resolve() != path.resolve():
-        return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        reserved = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".invocation.tmp",
+            dir=str(path.parent),
+            delete=False,
+        )  # pylint: disable=consider-using-with -- path survives this scope
+        reserved.close()
+        private_path = Path(reserved.name)
+        invocation_id = secrets.token_hex(16)
+        lock_path = path.with_name(f".{path.name}.lock")
+        owner_path = path.with_name(f".{path.name}.owner.json")
+        written_path = write_final_gate_fallback_artifact(
+            artifact_path=str(private_path),
+            pr_owner=safe_owner,
+            pr_repo=safe_repo,
+            pr_number=pr_number,
+            canonical_status="unknown",
+            blockers=["Current hosted checkup invocation has not produced a verdict."],
+            no_fix=True,
+        )
+        if (
+            written_path is None
+            or Path(written_path).resolve() != private_path.resolve()
+        ):
+            raise ValueError("hosted placeholder writer returned the wrong path")
+        payload = json.loads(private_path.read_text(encoding="utf-8"))
+        if not (
+            isinstance(payload, dict)
+            and payload.get("schema_version") == "pdd.checkup.agentic.v1"
+            and payload.get("status") != "passed"
+            and payload.get("authority")
+            == "canonical_unknown_agentic_fallback_blocking"
+            and isinstance(payload.get("verdict"), dict)
+            and payload["verdict"].get("decision") == "block"
+        ):
+            raise ValueError("hosted placeholder is not a blocking v1 artifact")
+        payload["owner"] = safe_owner
+        payload["repo"] = safe_repo
+        payload["pr_number"] = pr_number
+        private_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        reservation = _HostedAgenticArtifactReservation(
+            public_path=path,
+            private_path=private_path,
+            lock_path=lock_path,
+            owner_path=owner_path,
+            invocation_id=invocation_id,
+            pr_identity=(safe_owner, safe_repo, pr_number),
+        )
+        with _hosted_artifact_lock(lock_path):
+            _atomic_publish_hosted_payload(
+                owner_path, {"invocation_id": invocation_id}
+            )
+            _atomic_publish_hosted_payload(path, payload)
+        return reservation
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        if lock_path is not None and owner_path is not None and invocation_id:
+            try:
+                with _hosted_artifact_lock(lock_path):
+                    try:
+                        owner = json.loads(owner_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        owner = None
+                    owner_id = (
+                        owner.get("invocation_id") if isinstance(owner, dict) else None
+                    )
+                    # When no other live invocation owns the slot, removal is
+                    # the only fail-closed outcome: a pre-existing public file
+                    # could be a stale PASS. Preserve the path only when a
+                    # different invocation demonstrably owns it.
+                    if owner_id in (None, invocation_id):
+                        try:
+                            _atomic_publish_hosted_payload(
+                                path,
+                                {
+                                    "schema_version": "pdd.checkup.agentic.v1",
+                                    "owner": safe_owner,
+                                    "repo": safe_repo,
+                                    "pr_number": pr_number,
+                                    "status": "error",
+                                    "authority": (
+                                        "canonical_unknown_agentic_fallback_blocking"
+                                    ),
+                                    "layer1": {
+                                        "status": "unknown",
+                                        "blockers": [
+                                            "Hosted artifact provenance setup failed."
+                                        ],
+                                    },
+                                    "verdict": {
+                                        "decision": "block",
+                                        "reason": (
+                                            "Hosted artifact provenance setup failed."
+                                        ),
+                                    },
+                                },
+                            )
+                        except OSError:
+                            path.unlink(missing_ok=True)
+                        if owner_id == invocation_id:
+                            owner_path.unlink(missing_ok=True)
+            except (OSError, TypeError, json.JSONDecodeError):
+                pass
+        try:
+            if private_path is not None:
+                private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+
+
+def _publish_hosted_agentic_artifact(
+    reservation: Optional[_HostedAgenticArtifactReservation],
+    *,
+    canonical_passed: Optional[bool],
+) -> Optional[str]:
+    """Finalize and publish only if this invocation still owns the slot."""
+    if reservation is None:
+        return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    return bool(
-        isinstance(payload, dict)
-        and payload.get("schema_version") == "pdd.checkup.agentic.v1"
-        and payload.get("status") != "passed"
-        and payload.get("authority") == "canonical_unknown_agentic_fallback_blocking"
-        and isinstance(payload.get("verdict"), dict)
-        and payload["verdict"].get("decision") == "block"
-    )
+        if canonical_passed is not None:
+            _finalize_hosted_agentic_artifact(
+                str(reservation.private_path), canonical_passed=canonical_passed
+            )
+        payload = json.loads(reservation.private_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "pdd.checkup.agentic.v1"
+        ):
+            raise ValueError("hosted artifact is not a v1 object")
+        artifact_identity = (
+            str(payload.get("owner", "")),
+            str(payload.get("repo", "")),
+            int(payload.get("pr_number", 0) or 0),
+        )
+        if artifact_identity != reservation.pr_identity:
+            raise ValueError("hosted artifact PR identity mismatch")
+        with _hosted_artifact_lock(reservation.lock_path):
+            owner = json.loads(reservation.owner_path.read_text(encoding="utf-8"))
+            if not isinstance(owner, dict) or owner.get(
+                "invocation_id"
+            ) != reservation.invocation_id:
+                return None
+            _atomic_publish_hosted_payload(reservation.public_path, payload)
+            reservation.owner_path.unlink(missing_ok=True)
+        return str(reservation.public_path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    finally:
+        try:
+            reservation.private_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _finalize_hosted_agentic_artifact(
@@ -1048,23 +1260,29 @@ def run_agentic_checkup(
         if agentic_review_loop
         else None
     )
-    effective_agentic_artifact_path = (
-        standalone_agentic_artifact_path or hosted_agentic_artifact_path
-    )
     preview_pr = _parse_pr_url(pr_url) if pr_url else None
-    hosted_artifact_ready = _prepare_hosted_agentic_artifact(
-        hosted_agentic_artifact_path,
-        pr_owner=preview_pr[0] if preview_pr else "",
-        pr_repo=preview_pr[1] if preview_pr else "",
-        pr_number=preview_pr[2] if preview_pr else 0,
+    hosted_artifact_reservation = (
+        _prepare_hosted_agentic_artifact(
+            hosted_agentic_artifact_path,
+            pr_owner=preview_pr[0] if preview_pr else "",
+            pr_repo=preview_pr[1] if preview_pr else "",
+            pr_number=preview_pr[2] if preview_pr else 0,
+        )
+        if hosted_agentic_artifact_path is not None
+        else None
     )
-    if not hosted_artifact_ready:
+    if hosted_agentic_artifact_path is not None and hosted_artifact_reservation is None:
         return (
             False,
             "Failed to establish current hosted agentic artifact provenance.",
             0.0,
             "",
         )
+    effective_agentic_artifact_path = standalone_agentic_artifact_path or (
+        str(hosted_artifact_reservation.private_path)
+        if hosted_artifact_reservation is not None
+        else None
+    )
 
     # 1. Check gh CLI
     if not _check_gh_cli():
@@ -1292,7 +1510,7 @@ def run_agentic_checkup(
             layer1_step5_evidence=layer1_step5_evidence,
             final_gate_canonical_status=final_gate_canonical_status,
         )
-        hosted_agentic_mode = hosted_agentic_artifact_path is not None
+        hosted_agentic_mode = hosted_artifact_reservation is not None
         loop_config = ReviewLoopConfig(
             # Hosted fallback/mirror settings are additive evidence only: they
             # must not change the canonical review-loop provider set or prompt.
@@ -1437,14 +1655,36 @@ def run_agentic_checkup(
         # the config). ``no_fix`` (report-only) is permitted.
         if not pr_context_ready:
             return False, "--agentic-review-loop requires --pr.", 0.0, ""
-        return _run_review_loop_layer()
+        result = _run_review_loop_layer()
+        if hosted_artifact_reservation is not None:
+            if effective_agentic_artifact_path != str(
+                hosted_artifact_reservation.private_path
+            ):
+                try:
+                    hosted_artifact_reservation.private_path.write_text(
+                        Path(effective_agentic_artifact_path or "").read_text(
+                            encoding="utf-8"
+                        ),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
+            _publish_hosted_agentic_artifact(
+                hosted_artifact_reservation, canonical_passed=None
+            )
+        return result
 
     if review_loop and not final_gate:
         if not pr_context_ready:
             # Review-loop is issue-coupled; review-loop-without-issue is a
             # deferred follow-up (#1292).
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
-        return _run_review_loop_layer()
+        result = _run_review_loop_layer()
+        if hosted_artifact_reservation is not None:
+            _publish_hosted_agentic_artifact(
+                hosted_artifact_reservation, canonical_passed=None
+            )
+        return result
 
     # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
     # the PR's human context without ingesting Layer 1's own posted report.
@@ -1536,8 +1776,8 @@ def run_agentic_checkup(
                     load_final_state(project_root, issue_number, pr_number),
                     has_issue=has_issue,
                 )
-                _finalize_hosted_agentic_artifact(
-                    hosted_agentic_artifact_path,
+                _publish_hosted_agentic_artifact(
+                    hosted_artifact_reservation,
                     canonical_passed=ship,
                 )
                 total_cost = orch_cost + loop_cost
@@ -1573,13 +1813,17 @@ def run_agentic_checkup(
             # Layer 2, so the review-loop artifact writer never runs. Emit the
             # bounded canonical-failure mirror artifact for hosted consumers.
             write_final_gate_fallback_artifact(
-                artifact_path=hosted_agentic_artifact_path,
+                artifact_path=effective_agentic_artifact_path,
                 pr_owner=pr_owner or "",
                 pr_repo=pr_repo or "",
                 pr_number=pr_number or 0,
                 canonical_status="fail",
                 blockers=[f"Final gate Layer 1 failed: {orch_message}"],
                 no_fix=no_fix,
+            )
+            _publish_hosted_agentic_artifact(
+                hosted_artifact_reservation,
+                canonical_passed=False,
             )
             return (
                 False,
@@ -1639,7 +1883,7 @@ def run_agentic_checkup(
                 # Emit the bounded canonical-failure mirror artifact for hosted
                 # consumers.
                 write_final_gate_fallback_artifact(
-                    artifact_path=hosted_agentic_artifact_path,
+                    artifact_path=effective_agentic_artifact_path,
                     pr_owner=pr_owner or "",
                     pr_repo=pr_repo or "",
                     pr_number=pr_number or 0,
@@ -1648,6 +1892,10 @@ def run_agentic_checkup(
                         f"Final gate GitHub checks gate failed: {github_checks_message}"
                     ],
                     no_fix=no_fix,
+                )
+                _publish_hosted_agentic_artifact(
+                    hosted_artifact_reservation,
+                    canonical_passed=False,
                 )
                 return (
                     False,
@@ -1688,8 +1936,8 @@ def run_agentic_checkup(
             load_final_state(project_root, issue_number, pr_number),
             has_issue=has_issue,
         )
-        _finalize_hosted_agentic_artifact(
-            hosted_agentic_artifact_path,
+        _publish_hosted_agentic_artifact(
+            hosted_artifact_reservation,
             canonical_passed=ship,
         )
         total_cost = orch_cost + loop_cost

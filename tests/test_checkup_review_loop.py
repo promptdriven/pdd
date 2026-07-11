@@ -2319,9 +2319,9 @@ class TestCheckupReviewLoopRuntime:
         # attempt that failed) — it must NOT be retried after the fallback
         # successfully takes over.
         codex_calls = [(role, label) for role, label in calls if role == "codex"]
-        assert len(codex_calls) == 1, (
-            f"codex must not be retried after fallback takeover; got {codex_calls!r}"
-        )
+        assert (
+            len(codex_calls) == 1
+        ), f"codex must not be retried after fallback takeover; got {codex_calls!r}"
 
         # The verify call following the fix MUST be driven by gemini (the
         # fallback), not codex. This is the load-bearing assertion: the
@@ -2329,18 +2329,18 @@ class TestCheckupReviewLoopRuntime:
         verify_calls = [(role, label) for role, label in calls if "-verify-" in label]
         assert verify_calls, f"expected at least one verify-mode call; got {calls!r}"
         for role, label in verify_calls:
-            assert role == "gemini", (
-                f"verify must be driven by the fallback gemini, not {role}: {label}"
-            )
+            assert (
+                role == "gemini"
+            ), f"verify must be driven by the fallback gemini, not {role}: {label}"
 
         # The fixer (claude per _config default) must have run, addressing
         # gemini's findings — i.e. the fallback drives the fix step too.
         fix_calls = [(role, label) for role, label in calls if "-fix-" in label]
         assert fix_calls, f"expected a fix call; got {calls!r}"
         for _role, label in fix_calls:
-            assert "for-gemini" in label, (
-                f"fix must address gemini's findings (fallback as primary): {label}"
-            )
+            assert (
+                "for-gemini" in label
+            ), f"fix must address gemini's findings (fallback as primary): {label}"
 
         # Report should reflect codex preserved as degraded, gemini as clean.
         assert "codex=degraded" in report
@@ -2469,9 +2469,9 @@ class TestCheckupReviewLoopRuntime:
         # logical fix round (primary attempt). Calling it again for the
         # fallback would double-bump the per-finding counter and would
         # mis-trip the oscillation/no-progress guards downstream.
-        assert state.fix_attempts_by_key, (
-            "no fix_attempts recorded — primary should have incremented it once"
-        )
+        assert (
+            state.fix_attempts_by_key
+        ), "no fix_attempts recorded — primary should have incremented it once"
         for key, count in state.fix_attempts_by_key.items():
             assert count == 1, (
                 f"finding {key!r} bumped {count}× in one fix round; "
@@ -2564,9 +2564,9 @@ class TestCheckupReviewLoopRuntime:
         fallback_idx = role_labels.index(
             "checkup-review-loop-fix-gemini-for-codex-round1"
         )
-        assert primary_idx < fallback_idx, (
-            f"primary fixer must precede fallback; calls={role_labels!r}"
-        )
+        assert (
+            primary_idx < fallback_idx
+        ), f"primary fixer must precede fallback; calls={role_labels!r}"
 
         # Find a reset+clean pair anywhere in the recorded subprocess
         # calls. They are inserted before the fallback fires; with the
@@ -2925,9 +2925,9 @@ class TestCheckupReviewLoopRuntime:
         )
         # No raw "Gemini" label may appear — that would mean the raw
         # alias reached ``_run_fix`` and we'd be back to the bug.
-        assert not any("fix-Gemini" in label for _, label in calls), (
-            f"raw 'Gemini' leaked into fix invocation; calls={calls!r}"
-        )
+        assert not any(
+            "fix-Gemini" in label for _, label in calls
+        ), f"raw 'Gemini' leaked into fix invocation; calls={calls!r}"
 
         assert captured_state, "_finalize was never called — cannot inspect state"
         state = captured_state[-1]
@@ -2985,9 +2985,9 @@ class TestCheckupReviewLoopRuntime:
         # never invoked.
         assert success is True
         assert "could not address" in report
-        assert not any("fix-not-a-real-role" in label for _, label in calls), (
-            f"unknown fallback role should not be executed; calls={calls!r}"
-        )
+        assert not any(
+            "fix-not-a-real-role" in label for _, label in calls
+        ), f"unknown fallback role should not be executed; calls={calls!r}"
 
     def test_fixer_fallback_same_as_reviewer_skips(
         self, monkeypatch: Any, tmp_path: Path
@@ -3030,9 +3030,9 @@ class TestCheckupReviewLoopRuntime:
             for _, label in calls
             if label.startswith("checkup-review-loop-fix-codex-")
         ]
-        assert not codex_fix_calls, (
-            f"reviewer must not be promoted to fixer fallback; got {codex_fix_calls!r}"
-        )
+        assert (
+            not codex_fix_calls
+        ), f"reviewer must not be promoted to fixer fallback; got {codex_fix_calls!r}"
 
     def test_fixer_fallback_is_one_shot_across_rounds(
         self, monkeypatch: Any, tmp_path: Path
@@ -3104,12 +3104,12 @@ class TestCheckupReviewLoopRuntime:
         # Round 1 must exercise both the primary (failing) and the
         # fallback fixer (succeeding) — that's how the takeover gets
         # established in the first place.
-        assert "checkup-review-loop-fix-claude-for-codex-round1" in labels, (
-            f"round 1 primary fixer call missing; calls={labels!r}"
-        )
-        assert "checkup-review-loop-fix-gemini-for-codex-round1" in labels, (
-            f"round 1 fallback fixer call missing; calls={labels!r}"
-        )
+        assert (
+            "checkup-review-loop-fix-claude-for-codex-round1" in labels
+        ), f"round 1 primary fixer call missing; calls={labels!r}"
+        assert (
+            "checkup-review-loop-fix-gemini-for-codex-round1" in labels
+        ), f"round 1 fallback fixer call missing; calls={labels!r}"
 
         # The one-shot contract: round 2 MUST NOT re-invoke the primary
         # claude fixer. The exhausted credential has not reset (and the
@@ -3121,9 +3121,9 @@ class TestCheckupReviewLoopRuntime:
         )
 
         # Round 2 must use the fallback as the active fixer.
-        assert "checkup-review-loop-fix-gemini-for-codex-round2" in labels, (
-            f"active fixer (gemini) did not drive round 2; calls={labels!r}"
-        )
+        assert (
+            "checkup-review-loop-fix-gemini-for-codex-round2" in labels
+        ), f"active fixer (gemini) did not drive round 2; calls={labels!r}"
 
         # The fallback helper must run exactly ONCE across the whole
         # loop — round 2's gemini call comes from the main-loop
@@ -3239,9 +3239,9 @@ class TestCheckupReviewLoopRuntime:
             for c in subprocess_calls
             if len(c) >= 4 and c[0] == "git" and c[3] == "rev-parse"
         ]
-        assert rev_parse_calls, (
-            f"expected a git rev-parse HEAD before reset; calls={subprocess_calls!r}"
-        )
+        assert (
+            rev_parse_calls
+        ), f"expected a git rev-parse HEAD before reset; calls={subprocess_calls!r}"
         first_rev_parse_idx = subprocess_calls.index(rev_parse_calls[0])
         first_reset_idx = subprocess_calls.index(reset_calls[0])
         assert first_rev_parse_idx < first_reset_idx, (
@@ -3715,9 +3715,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "stale"
-        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
-            final_state["findings"]
-        )
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
 
     def test_remote_head_refetch_failure_reverts_fixed_state(
         self, monkeypatch: Any, tmp_path: Path
@@ -3783,9 +3783,9 @@ class TestShaBackedVerificationTrustBoundary:
         )
         assert final_state["verification_status_by_round"]["1"] == "stale"
         assert "verification is treated as unverified" in final_state["stop_reason"]
-        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
-            final_state["findings"]
-        )
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
 
     def test_no_commit_pushed_skips_verifier_and_keeps_finding_open(
         self, monkeypatch: Any, tmp_path: Path
@@ -3847,9 +3847,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "skipped"
-        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
-            final_state["findings"]
-        )
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
         fixes = final_state["fixes"]
         assert fixes and fixes[0]["push_status"] == "not_attempted"
         assert fixes[0]["pushed_head_sha"] is None
@@ -3911,9 +3911,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "skipped"
-        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
-            final_state["findings"]
-        )
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
 
     def test_budget_exhausted_after_fixer_pushes_leaves_round_unverified(
         self, monkeypatch: Any, tmp_path: Path
@@ -3970,9 +3970,9 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "unverified"
-        assert all(f["status"] != "fixed" for f in final_state["findings"]), (
-            final_state["findings"]
-        )
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
         fixes = final_state["fixes"]
         assert fixes and fixes[0]["push_status"] == "pushed"
         assert fixes[0]["pushed_head_sha"] == sha
@@ -4763,9 +4763,9 @@ class TestParseHelpers:
 
         # Generic prose with no structure — should be "failed".
         result = _parse_review_output("Everything looks fine, no issues.", "codex", 1)
-        assert result.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected failure status, got {result.status!r}"
-        )
+        assert (
+            result.status in HARD_NOT_CLEAN_STATES
+        ), f"Expected failure status, got {result.status!r}"
         assert result.findings == []
 
         # Rate-limit prose — should be "degraded".
@@ -4831,9 +4831,9 @@ class TestParseHelpers:
         )
         for output in infra_failure_outputs:
             result = _parse_review_output(output, "codex", 1)
-            assert result.status in HARD_NOT_CLEAN_STATES, (
-                f"Expected non-clean status for {output!r}, got {result.status!r}"
-            )
+            assert (
+                result.status in HARD_NOT_CLEAN_STATES
+            ), f"Expected non-clean status for {output!r}, got {result.status!r}"
 
         # Negative control: a clean marker without any infra failure stays clean.
         result = _parse_review_output(
@@ -5395,17 +5395,17 @@ AST parsing passed.
         payload = json.dumps({"status": "failed", "findings": []})
         output = f"```json\n{payload}\n```"
         result = _parse_review_output(output, "codex", 1)
-        assert result.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected hard-not-clean status, got {result.status!r}"
-        )
+        assert (
+            result.status in HARD_NOT_CLEAN_STATES
+        ), f"Expected hard-not-clean status, got {result.status!r}"
 
         # Same with status="degraded" — must not become "clean".
         payload_deg = json.dumps({"status": "degraded", "findings": []})
         output_deg = f"```json\n{payload_deg}\n```"
         result_deg = _parse_review_output(output_deg, "claude", 1)
-        assert result_deg.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected hard-not-clean status, got {result_deg.status!r}"
-        )
+        assert (
+            result_deg.status in HARD_NOT_CLEAN_STATES
+        ), f"Expected hard-not-clean status, got {result_deg.status!r}"
 
 
 class TestPushWithRetryClonedRemote:
@@ -6749,9 +6749,9 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         )
         # The finding must be the SUBSET-vs-CANONICAL drift.
         names = {r["summary"] for r in results}
-        assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
-            f"expected SUBSET vs CANONICAL drift, got: {names}"
-        )
+        assert any(
+            "SUBSET" in name and "CANONICAL" in name for name in names
+        ), f"expected SUBSET vs CANONICAL drift, got: {names}"
 
 
 # ---------------------------------------------------------------------------
@@ -7791,9 +7791,9 @@ class TestPromptSourceGuardIntegration:
         assert push_calls == []
         # The fixer ran exactly once (round 1) before the guard tripped.
         fix_calls = [lbl for lbl in call_labels if "fix-" in lbl]
-        assert len(fix_calls) == 1, (
-            f"fixer must run only once before guard trips, got: {fix_calls}"
-        )
+        assert (
+            len(fix_calls) == 1
+        ), f"fixer must run only once before guard trips, got: {fix_calls}"
         # Round 2/3 review/fix/verify labels MUST NOT appear.
         assert not any("round2" in lbl or "round3" in lbl for lbl in call_labels)
         # The verifier MUST NOT have run either (it only runs after a
@@ -8020,9 +8020,7 @@ class TestPromptSourceOffenders2047:
     ) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders
 
-        self._seed_backend_prompt_root(
-            tmp_path, code_exists=True, prompt_exists=True
-        )
+        self._seed_backend_prompt_root(tmp_path, code_exists=True, prompt_exists=True)
         offenders = _prompt_source_offenders(
             tmp_path,
             [
@@ -8037,9 +8035,7 @@ class TestPromptSourceOffenders2047:
     ) -> None:
         from pdd.checkup_review_loop import _prompt_source_offenders
 
-        self._seed_backend_prompt_root(
-            tmp_path, code_exists=True, prompt_exists=False
-        )
+        self._seed_backend_prompt_root(tmp_path, code_exists=True, prompt_exists=False)
         offenders = _prompt_source_offenders(
             tmp_path, ["backend/tests/endpoint_tests/emulator.py"]
         )
@@ -11852,16 +11848,16 @@ class TestReviewLoopDeterministicGates:
             rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"
         )
         assert "gates: run_gates crashed" in warning_text
-        assert secret not in warning_text, (
-            "raw token leaked into WARNING log before _scrub_secrets"
-        )
+        assert (
+            secret not in warning_text
+        ), "raw token leaked into WARNING log before _scrub_secrets"
         # The state.gate_runs row (persisted into final-state.json) must
         # also be scrubbed at write time, not just at render time.
         assert state.gate_runs, "crash must record a gate_runs row"
         raw_row_error = state.gate_runs[-1].get("error", "")
-        assert secret not in raw_row_error, (
-            "raw token leaked into state.gate_runs[].error"
-        )
+        assert (
+            secret not in raw_row_error
+        ), "raw token leaked into state.gate_runs[].error"
 
     def test_enforce_gates_discover_crash_scrubs_secrets_from_logs(
         self, monkeypatch: Any, tmp_path: Path, caplog: Any
@@ -12020,9 +12016,9 @@ class TestReviewLoopDeterministicGates:
         det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
         # The crash row must explicitly name the phase (``run_gates``)
         # and the exception class (``RuntimeError``).
-        assert "runner crash" in det_section.lower(), (
-            f"Deterministic Gates section missing crash row:\n{det_section}"
-        )
+        assert (
+            "runner crash" in det_section.lower()
+        ), f"Deterministic Gates section missing crash row:\n{det_section}"
         assert "run_gates" in det_section, det_section
         assert "RuntimeError" in det_section, det_section
 
@@ -12103,9 +12099,9 @@ class TestReviewLoopDeterministicGates:
         rest = report[start:]
         next_section_idx = rest.find("\n### ", 1)
         det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
-        assert "[REDACTED]" in det_section, (
-            f"crash row must show [REDACTED] in place of the token:\n{det_section}"
-        )
+        assert (
+            "[REDACTED]" in det_section
+        ), f"crash row must show [REDACTED] in place of the token:\n{det_section}"
         assert secret_token not in det_section
         # Defang must not eat the diagnostic context.
         assert "runner crash" in det_section.lower()
@@ -13736,15 +13732,15 @@ class TestGuardBaselineHeadRef:
 
         # Default head_ref="HEAD" reflects POST-fix registry (the bug).
         head_mapping = _load_prompt_source_map(worktree)
-        assert head_mapping == {"pdd/foo.py": "pdd/prompts/bar_python.prompt"}, (
-            head_mapping
-        )
+        assert head_mapping == {
+            "pdd/foo.py": "pdd/prompts/bar_python.prompt"
+        }, head_mapping
 
         # head_ref=pre_fix_sha reflects PRE-fix registry (the fix).
         pre_mapping = _load_prompt_source_map(worktree, head_ref=pre_fix_sha)
-        assert pre_mapping == {"pdd/foo.py": "pdd/prompts/foo_python.prompt"}, (
-            pre_mapping
-        )
+        assert pre_mapping == {
+            "pdd/foo.py": "pdd/prompts/foo_python.prompt"
+        }, pre_mapping
 
     def test_prompt_source_guard_catches_committed_drift_with_pre_fix_baseline(
         self, tmp_path: Path
@@ -14042,6 +14038,14 @@ def test_parse_reviewer_commands_plain_role_maps_to_empty():
     assert parse_reviewer_commands("") == {}
 
 
+def test_parse_reviewer_commands_rejects_prose_and_credentials():
+    from pdd.checkup_review_loop import parse_reviewer_commands
+
+    assert parse_reviewer_commands(
+        "codex:/ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456,claude:/review --all,gemini:/code-review"
+    ) == {"codex": "", "claude": "", "gemini": "/code-review"}
+
+
 def test_parse_reviewers_strips_slash_command_suffix():
     from pdd.checkup_review_loop import parse_reviewers
 
@@ -14051,7 +14055,11 @@ def test_parse_reviewers_strips_slash_command_suffix():
 
 
 def test_review_prompt_includes_reviewer_slash_command(tmp_path):
-    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
 
     prompt = _review_prompt(
         reviewer="codex",
@@ -14069,7 +14077,11 @@ def test_review_prompt_includes_reviewer_slash_command(tmp_path):
 
 
 def test_review_prompt_omits_reviewer_slash_command_when_unconfigured(tmp_path):
-    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
 
     prompt = _review_prompt(
         reviewer="codex",
@@ -14085,7 +14097,11 @@ def test_review_prompt_omits_reviewer_slash_command_when_unconfigured(tmp_path):
 
 
 def test_review_prompt_ignores_artifact_only_reviewer_command(tmp_path):
-    from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState, _review_prompt
+    from pdd.checkup_review_loop import (
+        ReviewLoopConfig,
+        ReviewLoopState,
+        _review_prompt,
+    )
 
     prompt = _review_prompt(
         reviewer="codex",
@@ -14403,9 +14419,7 @@ def test_fresh_final_review_exception_scrubs_secrets(tmp_path, capsys):
     cfg = crl.ReviewLoopConfig(agentic_mode=True, fresh_final_review_role="codex")
     secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
 
-    with patch.object(
-        crl, "_run_review", side_effect=RuntimeError(f"Bearer {secret}")
-    ):
+    with patch.object(crl, "_run_review", side_effect=RuntimeError(f"Bearer {secret}")):
         crl._maybe_run_fresh_final_review_override(
             context=ctx,
             config=cfg,
@@ -14462,9 +14476,12 @@ def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
         "pdd.checkup_agentic_artifact.build_agentic_v1_artifact",
         side_effect=RuntimeError(f"Authorization: Bearer {secret}"),
     ):
-        assert crl.write_final_gate_fallback_artifact(
-            artifact_path=str(tmp_path / "artifact.json")
-        ) is None
+        assert (
+            crl.write_final_gate_fallback_artifact(
+                artifact_path=str(tmp_path / "artifact.json")
+            )
+            is None
+        )
 
     captured = capsys.readouterr()
     assert secret not in captured.err
@@ -14603,16 +14620,32 @@ def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
 def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path):
     import json as _json
     import pdd.checkup_review_loop as crl
+
     configured = tmp_path / "agentic.json"
     ctx = crl.ReviewLoopContext(
-        issue_url="", issue_content="", repo_owner="promptdriven", repo_name="pdd",
-        issue_number=0, issue_title="", architecture_json="", pddrc_content="",
+        issue_url="",
+        issue_content="",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        issue_number=0,
+        issue_title="",
+        architecture_json="",
+        pddrc_content="",
         pr_url="https://github.com/promptdriven/pdd/pull/1790",
-        pr_owner="promptdriven", pr_repo="pdd", pr_number=1790, project_root=tmp_path)
-    cfg = crl.ReviewLoopConfig(reviewer="codex", fixer="codex", agentic_mode=True,
-                               agentic_artifact_path=str(configured))
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        pr_number=1790,
+        project_root=tmp_path,
+    )
+    cfg = crl.ReviewLoopConfig(
+        reviewer="codex",
+        fixer="codex",
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
     success, _report, _cost, _model = crl.run_checkup_review_loop(
-        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False)
+        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False
+    )
     assert success is True
     data = _json.loads(configured.read_text())
     assert data["status"] == "needs_human"
@@ -14689,7 +14722,9 @@ def test_agentic_mode_off_writes_nothing(tmp_path, monkeypatch):
     assert not (tmp_path / "pdd-checkup-agentic-1.json").exists()
 
 
-def test_final_gate_canonical_pass_status_yields_mirror_authority(tmp_path, monkeypatch):
+def test_final_gate_canonical_pass_status_yields_mirror_authority(
+    tmp_path, monkeypatch
+):
     """Issue #1788: an explicit canonical pass on the context makes a clean loop
     write ``canonical_pass_agentic_mirror_clean``, not an unknown fallback."""
     import json as _json

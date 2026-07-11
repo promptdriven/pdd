@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -43,8 +44,12 @@ def test_resolve_authority_table(canonical_status, agentic_blocking, expected):
 
 def test_resolve_authority_fail_dominates_agentic_outcome():
     # A canonical fail is authoritative regardless of the agentic mirror.
-    assert _resolve_authority("fail", True) == "canonical_fail_agentic_not_authoritative"
-    assert _resolve_authority("fail", False) == "canonical_fail_agentic_not_authoritative"
+    assert (
+        _resolve_authority("fail", True) == "canonical_fail_agentic_not_authoritative"
+    )
+    assert (
+        _resolve_authority("fail", False) == "canonical_fail_agentic_not_authoritative"
+    )
 
 
 @pytest.mark.parametrize("bogus", ["", "weird", None, "passed", "error", "clean"])
@@ -58,7 +63,9 @@ def test_resolve_authority_unrecognized_fails_closed_to_unknown(bogus):
 
 def test_resolve_authority_normalizes_case_and_whitespace():
     assert _resolve_authority("PASS ", False) == "canonical_pass_agentic_mirror_clean"
-    assert _resolve_authority("  Fail", True) == "canonical_fail_agentic_not_authoritative"
+    assert (
+        _resolve_authority("  Fail", True) == "canonical_fail_agentic_not_authoritative"
+    )
 
 
 def test_resolve_authority_always_in_closed_vocabulary():
@@ -110,15 +117,25 @@ def test_normalize_findings_caps_free_text():
 
 
 def test_deduplicate_findings_by_key():
-    a = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
-    b = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
-    c = AgenticFinding(reviewer="codex", severity="critical", blocking=True, path="a.py", line=2)
+    a = AgenticFinding(
+        reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1
+    )
+    b = AgenticFinding(
+        reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1
+    )
+    c = AgenticFinding(
+        reviewer="codex", severity="critical", blocking=True, path="a.py", line=2
+    )
     assert len(_deduplicate_findings([a, b, c])) == 2
 
 
 def test_deduplicate_prose_only_on_summary_prefix():
-    a = AgenticFinding(reviewer="codex", severity="low", blocking=False, summary="same summary " * 10)
-    b = AgenticFinding(reviewer="codex", severity="low", blocking=False, summary="same summary " * 10)
+    a = AgenticFinding(
+        reviewer="codex", severity="low", blocking=False, summary="same summary " * 10
+    )
+    b = AgenticFinding(
+        reviewer="codex", severity="low", blocking=False, summary="same summary " * 10
+    )
     assert len(_deduplicate_findings([a, b])) == 1
 
 
@@ -150,22 +167,35 @@ def _state(**over):
 
 
 def _config(**over):
-    base = dict(review_only=False, no_fix=False, fresh_final_review_role=None,
-                max_rounds=5, max_cost=50.0, max_minutes=90.0)
+    base = dict(
+        review_only=False,
+        no_fix=False,
+        fresh_final_review_role=None,
+        max_rounds=5,
+        max_cost=50.0,
+        max_minutes=90.0,
+    )
     base.update(over)
     return SimpleNamespace(**base)
 
 
 def _context(**over):
-    base = dict(pr_owner="promptdriven", pr_repo="pdd", repo_owner="promptdriven",
-                repo_name="pdd", pr_number=1790)
+    base = dict(
+        pr_owner="promptdriven",
+        pr_repo="pdd",
+        repo_owner="promptdriven",
+        repo_name="pdd",
+        pr_number=1790,
+    )
     base.update(over)
     return SimpleNamespace(**base)
 
 
 def test_build_artifact_schema_version_constant_R1():
     art = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.schema_version == AGENTIC_V1_SCHEMA
@@ -189,8 +219,14 @@ def test_public_model_rejects_invalid_wire_contract_values(overrides):
 
 
 def test_build_artifact_nofix_never_populates_fix_attempts_R3():
-    fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
-                             changed_files=["a.py"], pushed_head_sha="deadbeef")]
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            changed_files=["a.py"],
+            pushed_head_sha="deadbeef",
+        )
+    ]
     # Production no-fix agentic runs are represented as review_only on the real
     # ReviewLoopConfig; do not rely on a fake no_fix attribute.
     art = build_agentic_v1_artifact(
@@ -204,10 +240,18 @@ def test_build_artifact_nofix_never_populates_fix_attempts_R3():
 
 
 def test_build_artifact_fix_mode_records_attempts():
-    fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
-                             changed_files=["a.py"], pushed_head_sha="deadbeef")]
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            changed_files=["a.py"],
+            pushed_head_sha="deadbeef",
+        )
+    ]
     art = build_agentic_v1_artifact(
-        loop_state=_state(fixes=fixes), config=_config(no_fix=False), context=_context(),
+        loop_state=_state(fixes=fixes),
+        config=_config(no_fix=False),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.mode == "fix"
@@ -217,7 +261,9 @@ def test_build_artifact_fix_mode_records_attempts():
 
 def test_build_artifact_authority_is_closed_and_canonical_owned_R6():
     art = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "fail"},
     )
     # canonical fail dominates regardless of agentic mirror.
@@ -229,13 +275,19 @@ def test_build_artifact_authority_is_closed_and_canonical_owned_R6():
 
 def test_build_artifact_budget_and_degraded_reviewer_fail_closed_when_clean():
     budget = build_agentic_v1_artifact(
-        loop_state=_state(max_cost_reached=True), config=_config(), context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        loop_state=_state(max_cost_reached=True),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert budget.status == "budget_exhausted"
     assert budget.verdict.decision == "block"
     degraded = build_agentic_v1_artifact(
         loop_state=_state(reviewer_status={"codex": "degraded"}),
-        config=_config(), context=_context(), final_gate_report={"layer1_status": "pass"})
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert degraded.status == "needs_human"
     assert degraded.verdict.decision == "block"
 
@@ -249,7 +301,8 @@ def test_build_artifact_budget_recomputed_from_actuals_not_stale_flags():
         loop_state=_state(total_cost=2.0, max_cost_reached=False),
         config=_config(max_cost=1.0),
         context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.budget.max_cost_reached is True
     assert art.status == "budget_exhausted"
     assert art.verdict.decision == "block"
@@ -258,12 +311,16 @@ def test_build_artifact_budget_recomputed_from_actuals_not_stale_flags():
 def test_build_artifact_budget_recomputes_nonclean_rounds_and_minutes_from_actuals():
     art = build_agentic_v1_artifact(
         loop_state=_state(
-            rounds_completed=5, elapsed_minutes=91.0,
-            max_rounds_reached=False, max_duration_reached=False,
-            fresh_final_status="findings"),
+            rounds_completed=5,
+            elapsed_minutes=91.0,
+            max_rounds_reached=False,
+            max_duration_reached=False,
+            fresh_final_status="findings",
+        ),
         config=_config(max_rounds=5, max_minutes=90.0),
         context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.budget.max_rounds_reached is True
     assert art.budget.max_minutes_reached is True
 
@@ -299,7 +356,7 @@ def test_build_artifact_malformed_runtime_shapes_fail_closed():
     )
     assert art.schema_version == AGENTIC_V1_SCHEMA
     assert art.status == "error"
-    assert art.authority == "canonical_unknown_agentic_fallback_blocking"
+    assert art.authority == "canonical_pass_agentic_mirror_blocking"
     assert art.verdict.decision == "block"
 
 
@@ -321,12 +378,17 @@ def test_secret_scrubber_exception_never_returns_original_text(monkeypatch):
 def test_build_artifact_budget_within_caps_reports_not_reached():
     art = build_agentic_v1_artifact(
         loop_state=_state(
-            total_cost=0.5, rounds_completed=1, elapsed_minutes=3.0,
-            max_cost_reached=False, max_rounds_reached=False,
-            max_duration_reached=False),
+            total_cost=0.5,
+            rounds_completed=1,
+            elapsed_minutes=3.0,
+            max_cost_reached=False,
+            max_rounds_reached=False,
+            max_duration_reached=False,
+        ),
         config=_config(max_cost=50.0, max_rounds=5, max_minutes=90.0),
         context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.budget.max_cost_reached is False
     assert art.budget.max_rounds_reached is False
     assert art.budget.max_minutes_reached is False
@@ -339,7 +401,8 @@ def test_build_artifact_budget_persisted_flag_never_lost_without_actuals():
         loop_state=_state(max_cost_reached=True),
         config=_config(max_cost=50.0),
         context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.budget.max_cost_reached is True
 
 
@@ -347,15 +410,23 @@ def test_build_artifact_stale_head_downgrades_validation_evidence():
     """Issue #1788 additional finding: when _finalize marked the reviewed head
     stale it leaves verified_head_sha set for the rendered report; the mirror
     must NOT report that stale SHA as a verified validation."""
-    fix = SimpleNamespace(fixer="claude", fixer_result="attempted",
-                          push_status="pushed", changed_files=["a.py"],
-                          pushed_head_sha="deadbeef")
+    fix = SimpleNamespace(
+        fixer="claude",
+        fixer_result="attempted",
+        push_status="pushed",
+        changed_files=["a.py"],
+        pushed_head_sha="deadbeef",
+    )
     art = build_agentic_v1_artifact(
         loop_state=_state(
-            fixes=[fix], validation_stale=True,
-            verified_head_sha="0123456789abcdef0123456789abcdef01234567"),
-        config=_config(), context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+            fixes=[fix],
+            validation_stale=True,
+            verified_head_sha="0123456789abcdef0123456789abcdef01234567",
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.validation_after_fix.status == "unverified"
     assert art.validation_after_fix.evidence == []
     assert art.status != "passed"
@@ -363,12 +434,19 @@ def test_build_artifact_stale_head_downgrades_validation_evidence():
 
 
 def test_build_artifact_push_failure_dominates_attempted_fix():
-    fix = SimpleNamespace(fixer="claude", fixer_result="attempted",
-                          push_status="push_failed", changed_files=["a.py"],
-                          local_fixer_commit_sha="local-only")
+    fix = SimpleNamespace(
+        fixer="claude",
+        fixer_result="attempted",
+        push_status="push_failed",
+        changed_files=["a.py"],
+        local_fixer_commit_sha="local-only",
+    )
     art = build_agentic_v1_artifact(
-        loop_state=_state(fixes=[fix]), config=_config(), context=_context(),
-        final_gate_report={"layer1_status": "pass"})
+        loop_state=_state(fixes=[fix]),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
     assert art.fix_attempts[0].status == "failed"
     assert art.fix_attempts[0].commit_sha is None
 
@@ -382,7 +460,8 @@ def test_build_artifact_degraded_reviewer_on_parse_failure_R4():
             findings=[],
             raw_outputs=[("review:codex:round1", "prose with no severity token")],
         ),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     codex = next(r for r in art.reviewers if r.name == "codex")
@@ -396,7 +475,8 @@ def test_build_artifact_clean_reviewer_with_output_stays_clean():
             reviewer_status={"codex": "clean"},
             raw_outputs=[("review:codex:round1", "looks good, nothing to flag")],
         ),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     codex = next(r for r in art.reviewers if r.name == "codex")
@@ -410,7 +490,8 @@ def test_build_artifact_fixer_output_not_parsed_as_reviewer_findings():
             reviewer_status={"codex": "clean"},
             raw_outputs=[("fix:claude:for:codex:round1", "blocker foo.py:1 bad")],
         ),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     # No reviewer named 'claude' (fixer), and the fixer prose is not a finding.
@@ -420,7 +501,8 @@ def test_build_artifact_fixer_output_not_parsed_as_reviewer_findings():
 def test_build_artifact_identity_and_budget():
     art = build_agentic_v1_artifact(
         loop_state=_state(max_rounds_reached=True, max_cost_reached=True),
-        config=_config(), context=_context(pr_number=1790),
+        config=_config(),
+        context=_context(pr_number=1790),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.owner == "promptdriven" and art.repo == "pdd" and art.pr_number == 1790
@@ -431,8 +513,10 @@ def test_build_artifact_identity_and_budget():
 
 def test_build_artifact_never_crashes_on_garbage_inputs():
     art = build_agentic_v1_artifact(
-        loop_state=SimpleNamespace(), config=SimpleNamespace(),
-        context=SimpleNamespace(), final_gate_report=None,
+        loop_state=SimpleNamespace(),
+        config=SimpleNamespace(),
+        context=SimpleNamespace(),
+        final_gate_report=None,
     )
     assert isinstance(art, AgenticV1Artifact)
     assert art.authority in AGENTIC_AUTHORITY_STATUSES
@@ -453,7 +537,8 @@ def test_build_artifact_passed_true_despite_nonempty_stop_reason():
             fresh_final_status="clean",
             stop_reason="Primary reviewer is clean.",
         ),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.status == "passed"
@@ -532,7 +617,8 @@ def test_build_artifact_fixed_blockers_do_not_fail_clean_final_review():
             fresh_final_status="clean",
             stop_reason="Primary reviewer is satisfied after reviewing the fixer response.",
         ),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.status == "passed"
@@ -569,26 +655,43 @@ def test_build_artifact_status_vocab_matches_spec():
     blocking = build_agentic_v1_artifact(
         loop_state=_state(
             reviewer_status={"codex": "findings"},
-            findings=[SimpleNamespace(severity="blocker", reviewer="codex",
-                                      finding="bad", required_fix="fix", location="a.py")],
+            findings=[
+                SimpleNamespace(
+                    severity="blocker",
+                    reviewer="codex",
+                    finding="bad",
+                    required_fix="fix",
+                    location="a.py",
+                )
+            ],
             fresh_final_status="findings",
             stop_reason="findings remain",
         ),
-        config=_config(), context=_context(), final_gate_report={"layer1_status": "pass"},
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
     )
     assert blocking.status == "failed"
     # budget exhausted -> budget_exhausted
     budget = build_agentic_v1_artifact(
-        loop_state=_state(fresh_final_status="missing", max_cost_reached=True,
-                          stop_reason="budget"),
-        config=_config(), context=_context(), final_gate_report={"layer1_status": "unknown"},
+        loop_state=_state(
+            fresh_final_status="missing", max_cost_reached=True, stop_reason="budget"
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "unknown"},
     )
     assert budget.status == "budget_exhausted"
     # reviewer failed, no content block -> needs_human
     nh = build_agentic_v1_artifact(
-        loop_state=_state(reviewer_status={"codex": "failed"}, fresh_final_status="missing",
-                          stop_reason="reviewer failed"),
-        config=_config(), context=_context(), final_gate_report={"layer1_status": "unknown"},
+        loop_state=_state(
+            reviewer_status={"codex": "failed"},
+            fresh_final_status="missing",
+            stop_reason="reviewer failed",
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "unknown"},
     )
     assert nh.status == "needs_human"
 
@@ -646,7 +749,9 @@ def test_build_artifact_blocking_severities_respects_config_override():
             fresh_final_status="clean",
             stop_reason="findings remain",
         ),
-        config=ReviewLoopConfig(agentic_mode=True, blocking_severities=("blocker", "critical")),
+        config=ReviewLoopConfig(
+            agentic_mode=True, blocking_severities=("blocker", "critical")
+        ),
         context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
@@ -658,15 +763,18 @@ def test_build_artifact_blocking_severities_respects_config_override():
 def test_build_artifact_reviewer_command_populated():
     art = build_agentic_v1_artifact(
         loop_state=_state(reviewer_status={"codex": "clean", "claude": "clean"}),
-        config=_config(reviewer_commands={"codex": "/review", "claude": "/code-review"}),
-        context=_context(), final_gate_report={"layer1_status": "pass"},
+        config=_config(
+            reviewer_commands={"codex": "/review", "claude": "/code-review"}
+        ),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
     )
     cmds = {r.name: r.command for r in art.reviewers}
     assert cmds["codex"] == "/review"
     assert cmds["claude"] == "/code-review"
 
 
-def test_build_artifact_prefers_artifact_only_reviewer_commands():
+def test_build_artifact_does_not_claim_unexecuted_artifact_only_commands():
     art = build_agentic_v1_artifact(
         loop_state=_state(reviewer_status={"codex": "clean", "claude": "clean"}),
         config=_config(
@@ -680,16 +788,76 @@ def test_build_artifact_prefers_artifact_only_reviewer_commands():
         final_gate_report={"layer1_status": "pass"},
     )
     cmds = {r.name: r.command for r in art.reviewers}
-    assert cmds == {"codex": "/review", "claude": "/code-review"}
+    assert cmds == {"codex": "", "claude": ""}
+
+
+def test_build_artifact_scrubs_and_bounds_all_runtime_strings():
+    secret = "Authorization: Bearer ghp_sensitive_runtime_token"
+    oversized = secret + ("x" * 5000)
+    fixes = [
+        SimpleNamespace(
+            fixer=oversized,
+            fixer_result="attempted",
+            push_status="pushed",
+            changed_files=[oversized],
+            pushed_head_sha=oversized,
+        )
+    ]
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status={oversized: "clean"},
+            fixes=fixes,
+            verified_head_sha=oversized,
+            active_reviewer=oversized,
+            fresh_final_status="clean",
+        ),
+        config=_config(
+            no_fix=False,
+            reviewer_commands={oversized: oversized},
+            fresh_final_review_role=oversized,
+        ),
+        context=SimpleNamespace(
+            pr_owner=oversized,
+            pr_repo=oversized,
+            pr_number=1,
+        ),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    payload = art.model_dump()
+    serialized = json.dumps(payload)
+    assert "ghp_sensitive_runtime_token" not in serialized
+    assert all(
+        len(value) <= FINDING_TEXT_MAX_CHARS
+        for value in (
+            payload["owner"],
+            payload["repo"],
+            payload["head_sha"],
+            payload["reviewers"][0]["name"],
+            payload["reviewers"][0]["command"],
+            payload["fix_attempts"][0]["provider"],
+            payload["fix_attempts"][0]["changed_files"][0],
+            payload["fix_attempts"][0]["commit_sha"],
+            payload["validation_after_fix"]["evidence"][0],
+            payload["fresh_final_review"]["provider"],
+        )
+    )
 
 
 def test_build_artifact_fix_status_maps_attempted_to_applied():
-    fixes = [SimpleNamespace(fixer="claude", fixer_result="attempted",
-                             push_status="pushed", changed_files=["a.py"],
-                             pushed_head_sha="deadbeef")]
+    fixes = [
+        SimpleNamespace(
+            fixer="claude",
+            fixer_result="attempted",
+            push_status="pushed",
+            changed_files=["a.py"],
+            pushed_head_sha="deadbeef",
+        )
+    ]
     art = build_agentic_v1_artifact(
-        loop_state=_state(fixes=fixes), config=_config(no_fix=False),
-        context=_context(), final_gate_report={"layer1_status": "pass"},
+        loop_state=_state(fixes=fixes),
+        config=_config(no_fix=False),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
     )
     assert art.fix_attempts[0].status == "applied"
 
@@ -719,16 +887,37 @@ def test_build_artifact_attempted_fix_without_push_is_not_applied(push_status):
 
 def test_build_artifact_layer1_blockers_passed_through():
     art = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
-        final_gate_report={"layer1_status": "fail", "blockers": ["gate X failed", "test Y failed"]},
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
+        final_gate_report={
+            "layer1_status": "fail",
+            "blockers": ["gate X failed", "test Y failed"],
+        },
     )
     assert art.layer1.blockers == ["gate X failed", "test Y failed"]
+
+
+def test_malformed_state_preserves_canonical_fail_authority():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(reviewer_status="malformed"),
+        config=_config(),
+        context=_context(),
+        final_gate_report={
+            "layer1_status": "fail",
+            "blockers": ["canonical tests failed"],
+        },
+    )
+    assert art.status == "error"
+    assert art.layer1.status == "fail"
+    assert art.layer1.blockers == ["canonical tests failed"]
+    assert art.authority == "canonical_fail_agentic_not_authoritative"
+    assert art.verdict.decision == "block"
 
 
 # ---------------------------------------------------------------------------
 # Additional coverage
 # ---------------------------------------------------------------------------
-
 
 
 import sys
@@ -738,6 +927,7 @@ from pathlib import Path
 # This allows testing local changes without installing the package
 project_root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(project_root))
+
 
 def test_normalize_findings_custom_blocking_severities():
     findings = _normalize_findings(
@@ -759,17 +949,28 @@ def test_normalize_findings_multiple_lines():
 
 
 def test_deduplicate_preserves_first_occurrence_order():
-    a = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
-    b = AgenticFinding(reviewer="codex", severity="critical", blocking=True, path="b.py", line=2)
-    dup_a = AgenticFinding(reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1)
+    a = AgenticFinding(
+        reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1
+    )
+    b = AgenticFinding(
+        reviewer="codex", severity="critical", blocking=True, path="b.py", line=2
+    )
+    dup_a = AgenticFinding(
+        reviewer="codex", severity="blocker", blocking=True, path="a.py", line=1
+    )
     result = _deduplicate_findings([a, b, dup_a])
     assert [f.path for f in result] == ["a.py", "b.py"]
 
 
 def test_build_artifact_head_sha_fallback_chain():
     art = build_agentic_v1_artifact(
-        loop_state=_state(verified_head_sha="", remote_pr_head_sha="remote-sha", reviewed_head_sha="reviewed-sha"),
-        config=_config(), context=_context(),
+        loop_state=_state(
+            verified_head_sha="",
+            remote_pr_head_sha="remote-sha",
+            reviewed_head_sha="reviewed-sha",
+        ),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.head_sha == "remote-sha"
@@ -797,7 +998,8 @@ def test_build_artifact_validation_status_verified_with_sha():
     ]
     art = build_agentic_v1_artifact(
         loop_state=_state(verified_head_sha="abc123", fixes=fixes),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     assert art.validation_after_fix.status == "verified"
@@ -807,7 +1009,8 @@ def test_build_artifact_validation_status_verified_with_sha():
 def test_build_artifact_fresh_final_reviewer_excluded_from_reviewers():
     art = build_agentic_v1_artifact(
         loop_state=_state(reviewer_status={"codex": "clean", "fresh-final": "clean"}),
-        config=_config(), context=_context(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     names = {r.name for r in art.reviewers}
@@ -816,12 +1019,18 @@ def test_build_artifact_fresh_final_reviewer_excluded_from_reviewers():
 
 def test_build_artifact_fix_status_skipped_and_failed():
     fixes = [
-        SimpleNamespace(fixer="claude", fixer_result="skipped", push_status=None, changed_files=[]),
-        SimpleNamespace(fixer="codex", fixer_result="failed", push_status=None, changed_files=[]),
+        SimpleNamespace(
+            fixer="claude", fixer_result="skipped", push_status=None, changed_files=[]
+        ),
+        SimpleNamespace(
+            fixer="codex", fixer_result="failed", push_status=None, changed_files=[]
+        ),
     ]
     art = build_agentic_v1_artifact(
-        loop_state=_state(fixes=fixes), config=_config(no_fix=False),
-        context=_context(), final_gate_report={"layer1_status": "pass"},
+        loop_state=_state(fixes=fixes),
+        config=_config(no_fix=False),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
     )
     statuses = {a.status for a in art.fix_attempts}
     assert statuses == {"skipped", "failed"}
@@ -829,12 +1038,16 @@ def test_build_artifact_fix_status_skipped_and_failed():
 
 def test_build_artifact_layer1_status_derived_from_gate_report():
     art_pass = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"status": "success"},
     )
     assert art_pass.layer1.status == "pass"
     art_fail = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"final_gate_status": "blocked"},
     )
     assert art_fail.layer1.status == "fail"
@@ -843,16 +1056,32 @@ def test_build_artifact_layer1_status_derived_from_gate_report():
 def test_build_artifact_secrets_scrubbed_in_free_text(monkeypatch):
     # Patch the scrubber at its defining module; artifact imports it lazily.
     from pdd import checkup_review_loop
-    monkeypatch.setattr(checkup_review_loop, "_scrub_secrets", lambda t: t.replace("SECRET", "[REDACTED]"))
+
+    monkeypatch.setattr(
+        checkup_review_loop,
+        "_scrub_secrets",
+        lambda t: t.replace("SECRET", "[REDACTED]"),
+    )
     art = build_agentic_v1_artifact(
         loop_state=_state(
-            findings=[SimpleNamespace(severity="blocker", reviewer="codex",
-                                      finding="leak SECRET here", required_fix="remove SECRET",
-                                      location="a.py", status="open")],
+            findings=[
+                SimpleNamespace(
+                    severity="blocker",
+                    reviewer="codex",
+                    finding="leak SECRET here",
+                    required_fix="remove SECRET",
+                    location="a.py",
+                    status="open",
+                )
+            ],
             stop_reason="stop with SECRET token",
         ),
-        config=_config(), context=_context(),
-        final_gate_report={"layer1_status": "pass", "blockers": ["blocker SECRET line"]},
+        config=_config(),
+        context=_context(),
+        final_gate_report={
+            "layer1_status": "pass",
+            "blockers": ["blocker SECRET line"],
+        },
     )
     assert "SECRET" not in art.findings[0].summary
     assert "[REDACTED]" in art.findings[0].summary
@@ -862,7 +1091,9 @@ def test_build_artifact_secrets_scrubbed_in_free_text(monkeypatch):
 
 def test_build_artifact_artifact_serializes_to_json():
     art = build_agentic_v1_artifact(
-        loop_state=_state(), config=_config(), context=_context(),
+        loop_state=_state(),
+        config=_config(),
+        context=_context(),
         final_gate_report={"layer1_status": "pass"},
     )
     dumped = art.model_dump()

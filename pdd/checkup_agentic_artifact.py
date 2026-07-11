@@ -109,7 +109,14 @@ class AgenticFreshFinalReview(BaseModel):
 
     provider: str
     status: Literal[
-        "clean", "findings", "missing", "failed", "degraded", "error", "timeout", "blocked"
+        "clean",
+        "findings",
+        "missing",
+        "failed",
+        "degraded",
+        "error",
+        "timeout",
+        "blocked",
     ]
     finding_count: int = 0
 
@@ -148,7 +155,9 @@ class AgenticV1Artifact(BaseModel):
     # One of: passed | failed | needs_human | error | timeout | budget_exhausted.
     status: AgenticArtifactStatus = "error"
     authority: AgenticAuthorityStatus = AGENTIC_AUTHORITY_STATUSES[0]
-    layer1: AgenticLayer1 = Field(default_factory=lambda: AgenticLayer1(status="unknown"))
+    layer1: AgenticLayer1 = Field(
+        default_factory=lambda: AgenticLayer1(status="unknown")
+    )
     reviewers: List[AgenticReviewer] = Field(default_factory=list)
     findings: List[AgenticFinding] = Field(default_factory=list)
     fix_attempts: List[AgenticFixAttempt] = Field(default_factory=list)
@@ -158,7 +167,9 @@ class AgenticV1Artifact(BaseModel):
     fresh_final_review: AgenticFreshFinalReview = Field(
         default_factory=lambda: AgenticFreshFinalReview(provider="", status="missing")
     )
-    verdict: AgenticVerdict = Field(default_factory=lambda: AgenticVerdict(decision="unknown"))
+    verdict: AgenticVerdict = Field(
+        default_factory=lambda: AgenticVerdict(decision="unknown")
+    )
     budget: AgenticBudget = Field(default_factory=AgenticBudget)
 
 
@@ -197,7 +208,9 @@ def _bounded(text: str) -> str:
 # default is only used when the supplied ``config`` carries no explicit
 # ``blocking_severities`` tuple.
 _DEFAULT_BLOCKING_SEVERITIES = ("blocker", "critical", "medium")
-_SEVERITY_RE = re.compile(r"\b(blocker|critical|high|medium|major|low|minor|nit|info)\b", re.IGNORECASE)
+_SEVERITY_RE = re.compile(
+    r"\b(blocker|critical|high|medium|major|low|minor|nit|info)\b", re.IGNORECASE
+)
 _PATH_LINE_RE = re.compile(r"([\w./\-]+\.\w+):(\d+)")
 
 
@@ -302,20 +315,39 @@ def _normalize_findings(
                 if not isinstance(item, dict):
                     continue
                 severity = _coerce_str(item.get("severity"), "info").strip().lower()
-                if severity not in {"blocker", "critical", "high", "medium", "low", "info"}:
+                if severity not in {
+                    "blocker",
+                    "critical",
+                    "high",
+                    "medium",
+                    "low",
+                    "info",
+                }:
                     severity = "info"
                 try:
-                    line_no = int(item["line"]) if item.get("line") is not None else None
+                    line_no = (
+                        int(item["line"]) if item.get("line") is not None else None
+                    )
                 except (TypeError, ValueError):
                     line_no = None
-                findings.append(AgenticFinding(
-                    reviewer=reviewer_name, severity=severity,
-                    blocking=severity in blocking,
-                    path=_coerce_str(item.get("path") or item.get("file")) or None,
-                    line=line_no,
-                    summary=_bounded(_coerce_str(item.get("summary") or item.get("finding"))),
-                    suggested_fix=_bounded(_coerce_str(item.get("suggested_fix") or item.get("required_fix"))),
-                ))
+                findings.append(
+                    AgenticFinding(
+                        reviewer=_bounded(reviewer_name),
+                        severity=_bounded(severity),
+                        blocking=severity in blocking,
+                        path=_bounded(_coerce_str(item.get("path") or item.get("file")))
+                        or None,
+                        line=line_no,
+                        summary=_bounded(
+                            _coerce_str(item.get("summary") or item.get("finding"))
+                        ),
+                        suggested_fix=_bounded(
+                            _coerce_str(
+                                item.get("suggested_fix") or item.get("required_fix")
+                            )
+                        ),
+                    )
+                )
             return findings
         for line in str(raw).splitlines():
             stripped = line.strip()
@@ -336,10 +368,10 @@ def _normalize_findings(
                     line_no = None
             findings.append(
                 AgenticFinding(
-                    reviewer=reviewer_name,
-                    severity=severity,
+                    reviewer=_bounded(reviewer_name),
+                    severity=_bounded(severity),
                     blocking=severity in blocking,
-                    path=path,
+                    path=_bounded(path) if path else None,
                     line=line_no,
                     summary=_bounded(stripped),
                     suggested_fix="",
@@ -359,7 +391,12 @@ def _deduplicate_findings(findings: List[AgenticFinding]) -> List[AgenticFinding
     deduped: List[AgenticFinding] = []
     for finding in findings:
         if finding.path is None and finding.line is None:
-            key: Any = ("prose", finding.reviewer, finding.severity, (finding.summary or "")[:64])
+            key: Any = (
+                "prose",
+                finding.reviewer,
+                finding.severity,
+                (finding.summary or "")[:64],
+            )
         else:
             key = (finding.reviewer, finding.path, finding.line, finding.severity)
         if key in seen:
@@ -410,9 +447,7 @@ def _runtime_sequence(obj: Any, name: str) -> List[Any]:
     value = getattr(obj, name, [])
     if value is None:
         return []
-    if not isinstance(value, Sequence) or isinstance(
-        value, (str, bytes, bytearray)
-    ):
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise TypeError(f"{name} must be a non-text sequence")
     return _sequence(value)
 
@@ -483,9 +518,11 @@ def _recompute_budget_flags(loop_state: Any, config: Any) -> "AgenticBudget":
         return bool(persisted)
 
     persisted_rounds = bool(getattr(loop_state, "max_rounds_reached", False))
-    fresh_status = _coerce_str(
-        getattr(loop_state, "fresh_final_status", "missing") or "missing"
-    ).strip().lower()
+    fresh_status = (
+        _coerce_str(getattr(loop_state, "fresh_final_status", "missing") or "missing")
+        .strip()
+        .lower()
+    )
     # Finishing cleanly on the last allowed round consumed the budget but did
     # not exhaust it: no additional round was required. The loop's persisted
     # flag remains authoritative when it explicitly stopped for max rounds;
@@ -610,21 +647,33 @@ def _build_agentic_v1_artifact(
     crashes the caller.
     """
     # --- mode (R3): nofix never carries fix attempts ----------------------
-    no_fix = bool(getattr(config, "no_fix", False)) or bool(getattr(config, "review_only", False))
+    no_fix = bool(getattr(config, "no_fix", False)) or bool(
+        getattr(config, "review_only", False)
+    )
     mode = "nofix" if no_fix else "fix"
 
     # --- identity/context -------------------------------------------------
-    owner = _coerce_str(getattr(context, "pr_owner", "") or getattr(context, "repo_owner", ""))
-    repo = _coerce_str(getattr(context, "pr_repo", "") or getattr(context, "repo_name", ""))
+    owner = _bounded(
+        _coerce_str(
+            getattr(context, "pr_owner", "") or getattr(context, "repo_owner", "")
+        )
+    )
+    repo = _bounded(
+        _coerce_str(
+            getattr(context, "pr_repo", "") or getattr(context, "repo_name", "")
+        )
+    )
     try:
         pr_number = int(getattr(context, "pr_number", 0) or 0)
     except (TypeError, ValueError):
         pr_number = 0
-    head_sha = _coerce_str(
-        getattr(loop_state, "verified_head_sha", None)
-        or getattr(loop_state, "remote_pr_head_sha", None)
-        or getattr(loop_state, "reviewed_head_sha", None)
-        or ""
+    head_sha = _bounded(
+        _coerce_str(
+            getattr(loop_state, "verified_head_sha", None)
+            or getattr(loop_state, "remote_pr_head_sha", None)
+            or getattr(loop_state, "reviewed_head_sha", None)
+            or ""
+        )
     )
 
     # --- reviewers + findings --------------------------------------------
@@ -632,9 +681,7 @@ def _build_agentic_v1_artifact(
     # via ``_required_findings``) so the artifact never under-reports blocking
     # findings relative to the canonical loop (e.g. an open ``medium``).
     blocking_severities = _blocking_severities(config)
-    reviewer_status: Dict[str, str] = _runtime_mapping(
-        loop_state, "reviewer_status"
-    )
+    reviewer_status: Dict[str, str] = _runtime_mapping(loop_state, "reviewer_status")
     raw_outputs = _runtime_sequence(loop_state, "raw_outputs")
     raw_structured_findings = _runtime_sequence(loop_state, "findings")
     findings_by_reviewer: Dict[str, List[AgenticFinding]] = {}
@@ -650,8 +697,13 @@ def _build_agentic_v1_artifact(
         if not reviewer_name:
             continue
         reviewers_with_output.add(reviewer_name)
-        parsed = [] if raw_structured_findings else _normalize_findings(
-            _coerce_str(output_text), reviewer_name, blocking_severities)
+        parsed = (
+            []
+            if raw_structured_findings
+            else _normalize_findings(
+                _coerce_str(output_text), reviewer_name, blocking_severities
+            )
+        )
         findings_by_reviewer.setdefault(reviewer_name, []).extend(parsed)
 
     # Prefer already-structured loop findings when present.
@@ -660,14 +712,12 @@ def _build_agentic_v1_artifact(
     for f in raw_structured_findings:
         try:
             severity = _coerce_str(getattr(f, "severity", "") or "info").lower()
-            finding_path, finding_line = _split_location(
-                getattr(f, "location", None)
-            )
+            finding_path, finding_line = _split_location(getattr(f, "location", None))
             finding = AgenticFinding(
-                reviewer=_coerce_str(getattr(f, "reviewer", "") or "unknown"),
-                severity=severity,
+                reviewer=_bounded(_coerce_str(getattr(f, "reviewer", "") or "unknown")),
+                severity=_bounded(severity),
                 blocking=severity in blocking_severities,
-                path=finding_path,
+                path=_bounded(finding_path) if finding_path else None,
                 line=finding_line,
                 summary=_bounded(_coerce_str(getattr(f, "finding", ""))),
                 suggested_fix=_bounded(_coerce_str(getattr(f, "required_fix", ""))),
@@ -686,18 +736,10 @@ def _build_agentic_v1_artifact(
     )
 
     reviewers: List[AgenticReviewer] = []
-    # Hosted fallback/mirror commands are metadata only. They live separately
-    # from ``config.reviewer_commands`` so the canonical prompt path cannot
-    # consume them; prefer that artifact-only mapping when present while
-    # retaining the legacy/manual agentic-loop behavior as a fallback.
-    artifact_reviewer_commands: Dict[str, str] = _runtime_mapping(
-        config, "artifact_reviewer_commands"
-    )
-    reviewer_commands: Dict[str, str] = (
-        artifact_reviewer_commands
-        if artifact_reviewer_commands
-        else _runtime_mapping(config, "reviewer_commands")
-    )
+    # Provenance must describe work that actually ran. Hosted artifact-only
+    # command requests are intentionally excluded from canonical execution, so
+    # they must not be serialized as though a reviewer invoked them.
+    reviewer_commands: Dict[str, str] = _runtime_mapping(config, "reviewer_commands")
     # The loop reports a role as ``fixer`` in reviewer_status purely for
     # traceability; that is not a reviewer verdict, so skip it here.
     for name, status in reviewer_status.items():
@@ -717,9 +759,9 @@ def _build_agentic_v1_artifact(
         resolved_status = "degraded" if parse_failed else status_str
         reviewers.append(
             AgenticReviewer(
-                name=_coerce_str(name),
-                command=_coerce_str(reviewer_commands.get(name, "")),
-                status=resolved_status,
+                name=_bounded(_coerce_str(name)),
+                command=_bounded(_coerce_str(reviewer_commands.get(name, ""))),
+                status=_bounded(resolved_status),
                 finding_count=len(own),
                 blocking_count=sum(1 for f in own if f.blocking),
             )
@@ -733,17 +775,29 @@ def _build_agentic_v1_artifact(
             try:
                 fix_attempts.append(
                     AgenticFixAttempt(
-                        provider=_coerce_str(
-                            getattr(fx, "fixer", None) or getattr(fx, "provider", "") or "unknown"
+                        provider=_bounded(
+                            _coerce_str(
+                                getattr(fx, "fixer", None)
+                                or getattr(fx, "provider", "")
+                                or "unknown"
+                            )
                         ),
                         status=_map_fix_status(
                             getattr(fx, "fixer_result", None),
                             getattr(fx, "push_status", None),
                         ),
-                        changed_files=list(getattr(fx, "changed_files", []) or []),
-                        commit_sha=(getattr(fx, "pushed_head_sha", None)
-                                    if _coerce_str(getattr(fx, "push_status", None)).strip().lower() == "pushed"
-                                    else None),
+                        changed_files=[
+                            _bounded(_coerce_str(path))
+                            for path in (getattr(fx, "changed_files", []) or [])
+                        ],
+                        commit_sha=(
+                            _bounded(_coerce_str(getattr(fx, "pushed_head_sha", None)))
+                            if _coerce_str(getattr(fx, "push_status", None))
+                            .strip()
+                            .lower()
+                            == "pushed"
+                            else None
+                        ),
                     )
                 )
             except Exception:  # pragma: no cover - defensive
@@ -758,11 +812,15 @@ def _build_agentic_v1_artifact(
     layer1 = AgenticLayer1(status=canonical_status, blockers=layer1_blockers)
 
     # --- fresh final review ----------------------------------------------
-    fresh_status = _coerce_str(getattr(loop_state, "fresh_final_status", "missing") or "missing")
-    fresh_provider = _coerce_str(
-        getattr(config, "fresh_final_review_role", None)
-        or getattr(loop_state, "active_reviewer", "")
-        or ""
+    fresh_status = _coerce_str(
+        getattr(loop_state, "fresh_final_status", "missing") or "missing"
+    )
+    fresh_provider = _bounded(
+        _coerce_str(
+            getattr(config, "fresh_final_review_role", None)
+            or getattr(loop_state, "active_reviewer", "")
+            or ""
+        )
     )
     fresh_final_review = AgenticFreshFinalReview(
         provider=fresh_provider,
@@ -788,7 +846,7 @@ def _build_agentic_v1_artifact(
         validation_status = "verified" if verified else "unverified"
     validation_after_fix = AgenticValidationResult(
         status=validation_status,
-        evidence=[verified] if validation_status == "verified" else [],
+        evidence=[_bounded(verified)] if validation_status == "verified" else [],
     )
 
     # --- budget (R5: computed fresh from config caps vs actual) -----------
@@ -810,9 +868,7 @@ def _build_agentic_v1_artifact(
     # whose loop status is now ``fixed``. The pass/fail signal must instead use
     # the current unresolved loop state when it is available.
     verdict_findings = (
-        _deduplicate_findings(open_structured)
-        if structured
-        else all_findings
+        _deduplicate_findings(open_structured) if structured else all_findings
     )
     stop_reason = _bounded(_coerce_str(getattr(loop_state, "stop_reason", "")))
     # A successful reviewer fallback intentionally leaves the failed primary
@@ -827,9 +883,7 @@ def _build_agentic_v1_artifact(
     superseded_reviewers: set = set()
     if active_reviewer and original_reviewer and active_reviewer != original_reviewer:
         superseded_reviewers.add(original_reviewer)
-    reviewer_status_details = _runtime_mapping(
-        loop_state, "reviewer_status_details"
-    )
+    reviewer_status_details = _runtime_mapping(loop_state, "reviewer_status_details")
     for name, detail in reviewer_status_details.items():
         if not isinstance(detail, dict):
             continue
@@ -866,16 +920,26 @@ def _build_agentic_v1_artifact(
     }
     hard_reviewer_state = bool(reviewer_states & hard_reviewer_states)
     validation_clean = validation_status in {"not_run", "verified"}
-    passed = (canonical_status != "fail" and not budget_exhausted
-              and not hard_reviewer_state and fresh_status == "clean"
-              and validation_clean and not remaining_open)
+    passed = (
+        canonical_status != "fail"
+        and not budget_exhausted
+        and not hard_reviewer_state
+        and fresh_status == "clean"
+        and validation_clean
+        and not remaining_open
+    )
     agentic_blocking = not passed
     decision = "pass" if passed else "block"
     verdict = AgenticVerdict(decision=decision, reason=stop_reason)
     # A reviewer that failed/degraded/errored (not a content block) means the
     # outcome could not be decided by the reviewers → needs_human.
-    needs_human = bool(reviewer_states & {"failed", "degraded", "missing", "error"}) and not remaining_open
-    status = _map_status(passed=passed, budget_exhausted=budget_exhausted, needs_human=needs_human)
+    needs_human = (
+        bool(reviewer_states & {"failed", "degraded", "missing", "error"})
+        and not remaining_open
+    )
+    status = _map_status(
+        passed=passed, budget_exhausted=budget_exhausted, needs_human=needs_human
+    )
 
     # --- authority (R6) ---------------------------------------------------
     authority = _resolve_authority(canonical_status, agentic_blocking)
@@ -900,23 +964,68 @@ def _build_agentic_v1_artifact(
             budget=budget,
         )
     except Exception:  # pragma: no cover - defensive: always fail closed
-        logger.warning("Falling back to a minimal agentic artifact after assembly error")
-        return AgenticV1Artifact(
-            schema_version=AGENTIC_V1_SCHEMA,
-            owner=owner,
-            repo=repo,
-            pr_number=pr_number,
-            mode=mode,
-            status="error",
-            authority="canonical_unknown_agentic_fallback_blocking",
-            layer1=AgenticLayer1(status="unknown"),
-            fresh_final_review=AgenticFreshFinalReview(
-                provider="", status="missing"
-            ),
-            verdict=AgenticVerdict(
-                decision="block", reason="Artifact assembly failed closed."
-            ),
+        logger.warning(
+            "Falling back to a minimal agentic artifact after assembly error"
         )
+        return _fail_closed_artifact(
+            context=context,
+            config=config,
+            final_gate_report=final_gate_report,
+            reason="Artifact assembly failed closed.",
+        )
+
+
+def _fail_closed_artifact(
+    *,
+    context: Any,
+    config: Any,
+    final_gate_report: Any,
+    reason: str,
+) -> AgenticV1Artifact:
+    """Build a minimal blocker without erasing authoritative gate failure."""
+    canonical_status = _canonical_status_from_gate(final_gate_report)
+    try:
+        owner = _bounded(
+            _coerce_str(
+                getattr(context, "pr_owner", "") or getattr(context, "repo_owner", "")
+            )
+        )
+        repo = _bounded(
+            _coerce_str(
+                getattr(context, "pr_repo", "") or getattr(context, "repo_name", "")
+            )
+        )
+        pr_number = int(getattr(context, "pr_number", 0) or 0)
+    except Exception:  # pragma: no cover - malformed compatibility object
+        owner, repo, pr_number = "", "", 0
+    try:
+        mode = (
+            "nofix"
+            if bool(getattr(config, "review_only", False))
+            or bool(getattr(config, "no_fix", False))
+            else "fix"
+        )
+    except Exception:  # pragma: no cover - malformed compatibility object
+        mode = "fix"
+    blockers: List[str] = []
+    if canonical_status == "fail" and isinstance(final_gate_report, dict):
+        raw_blockers = final_gate_report.get("blockers", [])
+        if isinstance(raw_blockers, Sequence) and not isinstance(
+            raw_blockers, (str, bytes, bytearray)
+        ):
+            blockers = [_bounded(_coerce_str(value)) for value in raw_blockers]
+    return AgenticV1Artifact(
+        schema_version=AGENTIC_V1_SCHEMA,
+        owner=owner,
+        repo=repo,
+        pr_number=pr_number,
+        mode=mode,
+        status="error",
+        authority=_resolve_authority(canonical_status, True),
+        layer1=AgenticLayer1(status=canonical_status, blockers=blockers),
+        fresh_final_review=AgenticFreshFinalReview(provider="", status="missing"),
+        verdict=AgenticVerdict(decision="block", reason=_bounded(reason)),
+    )
 
 
 def build_agentic_v1_artifact(
@@ -944,15 +1053,9 @@ def build_agentic_v1_artifact(
         logger.warning(
             "Agentic artifact extraction failed closed: %s", type(exc).__name__
         )
-        return AgenticV1Artifact(
-            schema_version=AGENTIC_V1_SCHEMA,
-            status="error",
-            authority="canonical_unknown_agentic_fallback_blocking",
-            layer1=AgenticLayer1(status="unknown"),
-            fresh_final_review=AgenticFreshFinalReview(
-                provider="", status="missing"
-            ),
-            verdict=AgenticVerdict(
-                decision="block", reason="Artifact extraction failed closed."
-            ),
+        return _fail_closed_artifact(
+            context=context,
+            config=config,
+            final_gate_report=final_gate_report,
+            reason="Artifact extraction failed closed.",
         )
