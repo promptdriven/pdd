@@ -14,9 +14,12 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+
+from tree_sitter import Node
+from tree_sitter_language_pack import get_parser
 
 from .trust import (
     AttestationBinding,
@@ -112,6 +115,7 @@ class RunnerConfig:
     vitest_command: tuple[str, ...] | None = None
     playwright_command: tuple[str, ...] | None = None
     playwright_toolchain_manifest: Path | None = None
+    playwright_toolchain_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -796,218 +800,123 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
 
 
 def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePosixPath]:
-    # pylint: disable=too-many-branches
-    """Reject dynamic controls and return literal local config imports."""
-    try:
-        text = source.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError("Playwright configuration must be UTF-8") from exc
-    tokens = _javascript_tokens(text)
-    if any(token[0] == "escaped_identifier" for token in tokens):
-        raise ValueError("Playwright configuration has an escaped identifier")
-    try:
-        references = _parse_playwright_config_tokens(path, tokens)
-    except ValueError as exc:
-        raise ValueError("Playwright configuration must be a declarative object literal") from exc
-    if not tokens:
-        raise ValueError("Playwright configuration must be a declarative object literal")
-    # Playwright config is executable code.  Only accept the deliberately small,
-    # directly inspectable object-literal subset; syntactic indirection makes a
-    # security decision based on token matching unsound.
-    if re.search(r"/\*|//|\.\.\.|\[[^\]]+\]\s*:", text):
-        raise ValueError("Playwright configuration must use direct declarative keys")
-    if re.search(
-        r"\b(?:storageState|projects|dependencies|snapshotPathTemplate|executablePath)\b",
-        text,
-    ):
-        raise ValueError("Playwright configuration references unsupported runtime resources")
-    if re.search(r"\b(process|require|import\s*\(|await|function|=>|\beval\b)\b", text):
-        raise ValueError("dynamic Playwright configuration is not supported")
-    sensitive_execution_keys = (
-        "grep",
-        "grepInvert",
-        "shard",
-        "retries",
-        "workers",
-        "repeatEach",
-    )
-    quoted_or_bare = (
-        r"(?:\b(?:{keys})\b|['\"](?:{keys})['\"])\s*:"
-    )
-    if re.search(
-        quoted_or_bare.format(keys="|".join(sensitive_execution_keys)),
-        text,
-    ):
-        raise ValueError("Playwright execution filters or retries are not allowed")
-    if re.search(r"\b(?:const|let|var)\s+(globalSetup|globalTeardown|reporter|webServer)\b", text):
-        raise ValueError("indirect Playwright executable controls are not bound by this adapter")
-    if re.search(quoted_or_bare.format(keys="webServer"), text):
-        raise ValueError("Playwright webServer is not bound by this adapter")
-    if re.search(r"['\"](?:globalSetup|globalTeardown|reporter)['\"]\s*:", text):
-        raise ValueError("quoted Playwright executable controls are not bound by this adapter")
-    if re.search(r"\b(?:globalSetup|globalTeardown|reporter)\s*:\s*(?!['\"])", text):
-        raise ValueError("indirect Playwright executable controls are not bound by this adapter")
-    # Parse direct relative imports here; the closure resolver checks each blob.
-    references = set(references)
-    for key in ("globalSetup", "globalTeardown", "reporter"):
-        for value in re.findall(rf"\b{key}\s*:\s*['\"]([^'\"]+)['\"]", text):
-            local = _jest_local_path(value)
-            if local is None:
-                raise ValueError(f"Playwright {key} is not a static local path")
-            references.add(local)
-    return references
-
-
-def _javascript_tokens(text: str) -> list[tuple[str, str]]:
-    """Lex JavaScript without retaining trivia, decoding string escapes."""
-    tokens: list[tuple[str, str]] = []
-    index = 0
-    punctuation = set("{}[]():,;.*+-/=>&|!?%")
-    while index < len(text):
-        char = text[index]
-        if char.isspace():
-            index += 1
-            continue
-        if text.startswith("//", index):
-            index = text.find("\n", index)
-            index = len(text) if index < 0 else index + 1
-            continue
-        if text.startswith("/*", index):
-            end = text.find("*/", index + 2)
-            if end < 0:
-                raise ValueError("unterminated JavaScript comment")
-            index = end + 2
-            continue
-        if char in "'\"":
-            quote, start = char, index
-            index += 1
-            value = ""
-            while index < len(text) and text[index] != quote:
-                if text[index] == "\\":
-                    index += 1
-                    if index >= len(text):
-                        raise ValueError("unterminated JavaScript string")
-                    if text[index] == "u" and index + 4 < len(text):
-                        value += chr(int(text[index + 1:index + 5], 16))
-                        index += 5
-                        continue
-                    value += {"n": "\n", "r": "\r", "t": "\t"}.get(text[index], text[index])
-                    index += 1
-                    continue
-                value += text[index]
-                index += 1
-            if index >= len(text):
-                raise ValueError(f"unterminated JavaScript string at {start}")
-            tokens.append(("string", value))
-            index += 1
-            continue
-        if char.isalpha() or char in "_$" or char == "\\":
-            escaped = False
-            value = ""
-            while index < len(text):
-                if text[index] == "\\" and text.startswith("\\u", index):
-                    value += chr(int(text[index + 2:index + 6], 16))
-                    index += 6
-                    escaped = True
-                elif text[index].isalnum() or text[index] in "_$":
-                    value += text[index]
-                    index += 1
-                else:
-                    break
-            tokens.append(("escaped_identifier" if escaped else "identifier", value))
-            continue
-        if char.isdigit():
-            start = index
-            while index < len(text) and (text[index].isalnum() or text[index] in ".x_"):
-                index += 1
-            tokens.append(("number", text[start:index]))
-            continue
-        if char == "`":
-            raise ValueError("template literals are not supported")
-        if char in punctuation:
-            pair = text[index:index + 2]
-            if pair in {"=>", "?.", "**"}:
-                tokens.append(("punct", pair))
-                index += 2
-            else:
-                tokens.append(("punct", char))
-                index += 1
-            continue
-        raise ValueError(f"unsupported JavaScript token {char!r}")
-    return tokens
-
-
-def _parse_playwright_config_tokens(
-    path: PurePosixPath, tokens: list[tuple[str, str]]
-) -> set[PurePosixPath]:
-    """Parse the enumerated data-only Playwright configuration grammar."""
-    position = 0
+    """Validate a data-only AST config and return its bound local references."""
+    tree = get_parser("typescript").parse(source)
+    if tree.root_node.has_error:
+        raise ValueError("Playwright configuration is not valid JavaScript/TypeScript")
+    statements = tree.root_node.named_children
     references: set[PurePosixPath] = set()
-
-    def accept(value: str) -> bool:
-        nonlocal position
-        if position < len(tokens) and tokens[position][1] == value:
-            position += 1
-            return True
-        return False
-
-    def take(kind: str) -> str:
-        nonlocal position
-        if position >= len(tokens) or tokens[position][0] != kind:
-            raise ValueError("unexpected config token")
-        value = tokens[position][1]
-        position += 1
-        return value
-
-    def value() -> object:
-        nonlocal position
-        if position >= len(tokens):
-            raise ValueError("missing config value")
-        kind, item = tokens[position]
-        if kind in {"string", "number"}:
-            position += 1
-            return item
-        if kind == "identifier" and item in {"true", "false", "null"}:
-            position += 1
-            return item
-        if accept("["):
-            result = []
-            while not accept("]"):
-                result.append(value())
-                if not accept(",") and tokens[position][1] != "]":
-                    raise ValueError("invalid config array")
-            return result
-        if accept("{"):
-            result = {}
-            while not accept("}"):
-                if position >= len(tokens) or tokens[position][0] not in {"identifier", "string"}:
-                    raise ValueError("config keys must be direct names")
-                key = tokens[position][1]
-                position += 1
-                if not accept(":"):
-                    raise ValueError("config methods and shorthand are unsupported")
-                result[key] = value()
-                if not accept(",") and tokens[position][1] != "}":
-                    raise ValueError("invalid config object")
-            return result
-        raise ValueError("config values must be data literals")
-
-    while accept("import"):
-        imported = take("string")
-        if not imported.startswith(("./", "../")):
-            raise ValueError("config import must be local")
-        normalized = _normalize_repo_relative_path(path.parent / PurePosixPath(imported))
-        if normalized is None:
-            raise ValueError("config import escapes repository")
-        references.add(normalized)
-        accept(";")
-    if not (accept("export") and accept("default")):
-        raise ValueError("config must use export default")
-    parsed = value()
-    accept(";")
-    if position != len(tokens) or not isinstance(parsed, dict):
-        raise ValueError("config root must be one object")
+    config_node: Node | None = None
+    for statement in statements:
+        if statement.type == "import_statement":
+            if len(statement.named_children) != 1:
+                raise ValueError("Playwright config imports must be side-effect-only")
+            imported = _javascript_string(source, statement.named_children[0])
+            references.add(_playwright_local_reference(path, imported, "config import"))
+        elif statement.type == "export_statement":
+            config_node = statement.child_by_field_name("value")
+            if config_node is None:
+                raise ValueError("Playwright config must export one object")
+        elif statement.type == "expression_statement" and path.suffix == ".cjs":
+            expression = statement.named_children[0] if statement.named_children else None
+            if expression is None or expression.type != "assignment_expression":
+                raise ValueError("Playwright CommonJS config must assign module.exports")
+            left = expression.child_by_field_name("left")
+            if left is None or _node_text(source, left) != "module.exports":
+                raise ValueError("Playwright CommonJS config must assign module.exports")
+            config_node = expression.child_by_field_name("right")
+        else:
+            raise ValueError("Playwright configuration must be one declarative object")
+    if config_node is None or config_node.type != "object":
+        raise ValueError("Playwright configuration must be a declarative object literal")
+    try:
+        references.update(_validate_playwright_config_object(path, source, config_node))
+    except ValueError as exc:
+        raise ValueError(f"Playwright configuration is unsupported: {exc}") from exc
     return references
+
+
+def _node_text(source: bytes, node: Node) -> str:
+    """Return the exact UTF-8 text covered by an AST node."""
+    return source[node.start_byte:node.end_byte].decode("utf-8")
+
+
+def _javascript_string(source: bytes, node: Node) -> str:
+    """Decode one JavaScript string literal after AST validation."""
+    if node.type != "string":
+        raise ValueError("a static JavaScript string is required")
+    try:
+        value = ast.literal_eval(_node_text(source, node))
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError("invalid JavaScript string literal") from exc
+    if not isinstance(value, str):
+        raise ValueError("a static JavaScript string is required")
+    return value
+
+
+def _playwright_local_reference(path: PurePosixPath, value: str, label: str) -> PurePosixPath:
+    local = _jest_local_path(value)
+    if local is None:
+        raise ValueError(f"Playwright {label} is not a static local path")
+    normalized = _normalize_repo_relative_path(path.parent / local)
+    if normalized is None:
+        raise ValueError(f"Playwright {label} escapes repository")
+    return normalized
+
+
+def _validate_playwright_config_object(
+    path: PurePosixPath, source: bytes, config: Node
+) -> set[PurePosixPath]:
+    """Apply the explicit root-property allowlist to a parsed config object."""
+    allowed_data = {
+        "timeout", "expect", "fullyParallel", "forbidOnly", "outputDir",
+        "testDir", "testMatch", "testIgnore", "preserveOutput", "quiet",
+        "updateSnapshots", "updateSourceMethod", "captureGitInfo", "metadata",
+    }
+    executable = {"globalSetup", "globalTeardown", "reporter"}
+    forbidden = {
+        "grep", "grepInvert", "shard", "retries", "workers", "repeatEach",
+        "webServer", "storageState", "projects", "dependencies",
+        "snapshotPathTemplate", "executablePath", "use",
+    }
+    references: set[PurePosixPath] = set()
+    for pair in config.named_children:
+        if pair.type != "pair":
+            raise ValueError("Playwright config methods and spreads are unsupported")
+        key_node = pair.child_by_field_name("key")
+        value_node = pair.child_by_field_name("value")
+        if key_node is None or value_node is None or key_node.type == "computed_property_name":
+            raise ValueError("Playwright config keys must be static")
+        key = (_javascript_string(source, key_node) if key_node.type == "string"
+               else _node_text(source, key_node))
+        if key in forbidden:
+            raise ValueError(f"Playwright config key {key} is unsupported")
+        if key in executable:
+            value = _javascript_string(source, value_node)
+            references.add(_playwright_local_reference(path, value, key))
+        elif key in allowed_data:
+            _validate_playwright_data_value(source, value_node)
+        else:
+            raise ValueError(f"Playwright config key {key} is unsupported")
+    return references
+
+
+def _validate_playwright_data_value(source: bytes, node: Node) -> None:
+    """Accept only recursively inert literals inside admitted data properties."""
+    if node.type in {"string", "number", "true", "false", "null", "undefined"}:
+        return
+    if node.type in {"array", "object"}:
+        for child in node.named_children:
+            value = child.child_by_field_name("value") if child.type == "pair" else child
+            if child.type == "pair":
+                key = child.child_by_field_name("key")
+                if key is None or key.type == "computed_property_name":
+                    raise ValueError("Playwright config data keys must be static")
+            if value is None:
+                raise ValueError("Playwright config data must be literal")
+            _validate_playwright_data_value(source, value)
+        return
+    raise ValueError("Playwright config data must be literal")
 
 
 def _playwright_support_closure(
@@ -1055,9 +964,6 @@ def _playwright_support_closure(
                     snapshot = read_git_blob(root, ref, snapshot_path)
                     if snapshot is not None:
                         paths.add(snapshot_path)
-            text = source.decode("utf-8")
-            if re.search(r"\b(?:test|describe)\.(?:only|skip|fixme|slow)\s*\(", text):
-                raise ValueError("Playwright focused, skipped, fixme, or slow tests are ambiguous")
     return tuple(
         (path, read_git_blob(root, ref, path)) for path in sorted(paths)
         if read_git_blob(root, ref, path) is not None
@@ -1065,55 +971,83 @@ def _playwright_support_closure(
 
 
 def _playwright_source_syntax(source: bytes) -> tuple[set[str], set[str], bool]:
-    """Analyze loader and runtime capability syntax after lexical decoding."""
-    try:
-        tokens = _javascript_tokens(source.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise ValueError("Playwright source is not valid supported JavaScript syntax") from exc
+    """Derive module/snapshot edges under an AST runtime-capability allowlist."""
+    tree = get_parser("typescript").parse(source)
+    if tree.root_node.has_error:
+        raise ValueError("Playwright source is not valid JavaScript/TypeScript syntax")
     local: set[str] = set()
     bare: set[str] = set()
     snapshot = False
-    dangerous_runtime = {
-        "child_process", "fs", "worker_threads", "vm", "exec", "execSync",
-        "execFile", "execFileSync", "spawn", "spawnSync", "fork",
-        "readFile", "readFileSync", "writeFile", "writeFileSync",
-        "getBuiltinModule",
-    }
-    values = [value for _kind, value in tokens]
-    for index, (kind, value) in enumerate(tokens):
-        if value in {"Function", "eval", "createRequire"}:
-            raise ValueError("dynamic or aliased Playwright module loading is not supported")
-        if value in dangerous_runtime or (kind == "string" and value.startswith("node:")):
-            raise ValueError("Playwright runtime resource access is not bound by this adapter")
-        if value == "toHaveScreenshot":
-            snapshot = True
-        if value == "[" and index > 0:
-            if index + 1 < len(tokens) and tokens[index + 1] == ("string", "require"):
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.named_children)
+        if node.type in {"import_statement", "export_statement"}:
+            source_node = node.child_by_field_name("source")
+            if source_node is None and node.type == "import_statement":
+                source_node = next(
+                    (child for child in node.named_children if child.type == "string"), None
+                )
+            if source_node is not None:
+                imported = _javascript_string(source, source_node)
+                (local if imported.startswith(("./", "../")) else bare).add(imported)
+        if node.type == "subscript_expression":
+            label = "module loading" if "require" in _node_text(source, node) else "runtime resource"
+            raise ValueError(f"Playwright {label} uses dynamic property access")
+        if node.type == "identifier" and _node_text(source, node) in {
+            "Reflect", "eval", "Function", "process",
+        }:
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "identifier" and _node_text(source, node) in {
+            "exec", "execSync", "execFile", "execFileSync", "spawn", "spawnSync",
+            "fork", "readFile", "readFileSync", "writeFile", "writeFileSync",
+        }:
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "identifier" and _node_text(source, node) == "require":
+            parent = node.parent
+            if parent is None or parent.type != "call_expression" or parent.child_by_field_name("function") != node:
                 raise ValueError("dynamic or aliased Playwright module loading is not supported")
-            raise ValueError("reflective Playwright runtime resource access is not supported")
-        if value == "require":
-            direct = (
-                index + 3 < len(tokens)
-                and values[index + 1] == "("
-                and tokens[index + 2][0] == "string"
-                and values[index + 3] == ")"
-                and not (index > 0 and values[index - 1] in {".", "["})
-            )
-            if not direct:
-                raise ValueError("dynamic or aliased Playwright module loading is not supported")
-            imported = values[index + 2]
-            (local if imported.startswith(("./", "../")) else bare).add(imported)
-        if value == "import":
-            if index + 1 < len(tokens) and values[index + 1] == "(":
-                if not (index + 3 < len(tokens) and tokens[index + 2][0] == "string" and values[index + 3] == ")"):
+        if node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            arguments = node.child_by_field_name("arguments")
+            if function is None:
+                continue
+            function_text = _node_text(source, function)
+            if function.type == "import" or function_text == "require":
+                values = arguments.named_children if arguments is not None else []
+                if len(values) != 1 or values[0].type != "string":
                     raise ValueError("dynamic or aliased Playwright module loading is not supported")
-                imported = values[index + 2]
-            else:
-                following = next((item for item in tokens[index + 1:] if item[0] == "string"), None)
-                if following is None:
-                    continue
-                imported = following[1]
-            (local if imported.startswith(("./", "../")) else bare).add(imported)
+                imported = _javascript_string(source, values[0])
+                (local if imported.startswith(("./", "../")) else bare).add(imported)
+            elif function.type == "identifier" and function_text in {
+                "require", "eval", "Function", "createRequire",
+            }:
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+        if node.type == "member_expression":
+            prop = node.child_by_field_name("property")
+            if prop is None:
+                continue
+            name = _node_text(source, prop)
+            if name in {"toHaveScreenshot", "toMatchSnapshot"}:
+                snapshot = True
+            if name in {"only", "skip", "fixme", "slow"}:
+                obj = node.child_by_field_name("object")
+                if obj is not None and _node_text(source, obj) in {"test", "describe"}:
+                    raise ValueError("Playwright focused, skipped, fixme, or slow tests are ambiguous")
+            if name in {
+                "createRequire",
+            }:
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            if name in {
+                "require", "getBuiltinModule", "exec", "execSync",
+                "execFile", "execFileSync", "spawn", "spawnSync", "fork",
+                "readFile", "readFileSync", "writeFile", "writeFileSync",
+            }:
+                if name == "require":
+                    raise ValueError("dynamic or aliased Playwright module loading is not supported")
+                raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
+        if node.type == "string" and _javascript_string(source, node).startswith("node:"):
+            raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
     return local, bare, snapshot
 
 
@@ -1382,21 +1316,64 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Playwright toolchain manifest is invalid") from exc
-    if not isinstance(payload, dict) or set(payload) != {"version", "files"}:
-        raise ValueError("Playwright toolchain manifest has unknown fields")
-    files = payload.get("files")
-    if payload.get("version") != 1 or not isinstance(files, list) or not files:
-        raise ValueError("Playwright toolchain manifest schema is invalid")
-    if not all(isinstance(item, str) and item for item in files):
-        raise ValueError("Playwright toolchain manifest files are invalid")
+    required_roles = {
+        "launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile",
+    }
+    if not isinstance(payload, dict) or set(payload) != {"version", "roles"}:
+        raise ValueError("Playwright toolchain manifest must declare typed roles")
+    roles = payload.get("roles")
+    if payload.get("version") != 2 or not isinstance(roles, dict):
+        raise ValueError("Playwright toolchain manifest roles schema is invalid")
+    if set(roles) != required_roles or not all(
+        isinstance(item, str) and Path(item).is_absolute() for item in roles.values()
+    ):
+        raise ValueError("Playwright toolchain manifest roles are incomplete")
     digest = hashlib.sha256(manifest_path.read_bytes() + b"\0")
-    for item in files:
+    for role, item in sorted(roles.items()):
         declared = Path(item)
-        if declared.is_absolute() or ".." in declared.parts:
-            raise ValueError("Playwright toolchain manifest path escapes its root")
-        digest.update(_manifest_path_identity(manifest_path.parent / declared, set()))
+        if not declared.exists():
+            raise ValueError(f"Playwright toolchain role {role} does not exist")
+        canonical = declared.resolve(strict=True)
+        if role in {"launcher", "entrypoint", "lockfile"} and not canonical.is_file():
+            raise ValueError(f"Playwright toolchain role {role} must be a file")
+        if role in {"dependencies", "browser_runtime"} and not canonical.is_dir():
+            raise ValueError(f"Playwright toolchain role {role} must be a directory")
+        digest.update(role.encode() + b"\0")
+        digest.update(_manifest_path_identity(declared, set()))
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _toolchain_manifest_roles(manifest_path: Path) -> dict[str, Path]:
+    """Return canonical roles after the manifest has passed identity validation."""
+    _toolchain_manifest_identity(manifest_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return {role: Path(value).resolve(strict=True) for role, value in payload["roles"].items()}
+
+
+def _playwright_toolchain_identity(
+    root: Path, command: tuple[str, ...], manifest: Path
+) -> str:
+    """Validate external command coverage and return the complete identity."""
+    candidate = root.resolve()
+    if _path_is_relative_to(manifest.resolve(), candidate):
+        raise ValueError("Playwright toolchain manifest must be external to candidate checkout")
+    roles = _toolchain_manifest_roles(manifest)
+    command_paths = []
+    for part in command[:2]:
+        path = Path(part).expanduser()
+        if path.is_absolute() or "/" in part:
+            command_paths.append(path.resolve(strict=True))
+        else:
+            resolved = shutil.which(part)
+            if resolved is None:
+                raise ValueError("Playwright command launcher is not resolvable")
+            command_paths.append(Path(resolved).resolve(strict=True))
+    if not command_paths or command_paths[0] != roles["launcher"]:
+        raise ValueError("Playwright toolchain launcher role does not cover command")
+    if len(command_paths) < 2 or command_paths[1] != roles["entrypoint"]:
+        raise ValueError("Playwright toolchain entrypoint role does not cover command")
+    return _toolchain_manifest_identity(manifest)
 
 
 def _command_part_identity(root: Path, part: str) -> str:
@@ -1463,9 +1440,15 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
         if config.playwright_toolchain_manifest is None:
             payload["playwright_toolchain_manifest"] = "missing"
         else:
+            try:
+                identity = config.playwright_toolchain_identity or _toolchain_manifest_identity(
+                    config.playwright_toolchain_manifest
+                )
+            except ValueError:
+                identity = "invalid"
             payload["playwright_toolchain_manifest"] = {
                 "path": str(config.playwright_toolchain_manifest.resolve()),
-                "sha256": _toolchain_manifest_identity(config.playwright_toolchain_manifest),
+                "sha256": identity,
             }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -2046,9 +2029,12 @@ def _run_playwright(
             "playwright-untrusted", "Playwright toolchain manifest is required",
         ), ()
     try:
-        toolchain_identity = _toolchain_manifest_identity(
-            config.playwright_toolchain_manifest
+        current_identity = _playwright_toolchain_identity(
+            tool_root, prefix, config.playwright_toolchain_manifest
         )
+        toolchain_identity = config.playwright_toolchain_identity or current_identity
+        if current_identity != toolchain_identity:
+            raise ValueError("Playwright toolchain changed across protocol execution")
     except ValueError as exc:
         return RunnerExecution(
             "playwright", EvidenceOutcome.COLLECTION_ERROR,
@@ -2091,7 +2077,9 @@ def _run_playwright(
                 f"Playwright launch failed: {exc}",
             ), ()
     try:
-        if _toolchain_manifest_identity(config.playwright_toolchain_manifest) != toolchain_identity:
+        if _playwright_toolchain_identity(
+            tool_root, prefix, config.playwright_toolchain_manifest
+        ) != toolchain_identity:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Playwright toolchain changed during execution",
@@ -2836,6 +2824,29 @@ def run_obligation(
                     obligation.validator_config_digest,
                     command_error,
                 )
+        prefix = _playwright_command(config)
+        if prefix is not None and config.playwright_toolchain_manifest is not None:
+            try:
+                identity = _playwright_toolchain_identity(
+                    root, prefix, config.playwright_toolchain_manifest
+                )
+            except (OSError, ValueError) as exc:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    obligation.validator_config_digest,
+                    str(exc),
+                )
+            if config.playwright_toolchain_identity is not None:
+                if identity != config.playwright_toolchain_identity:
+                    return RunnerExecution(
+                        obligation.obligation_id,
+                        EvidenceOutcome.COLLECTION_ERROR,
+                        obligation.validator_config_digest,
+                        "Playwright toolchain changed across protocol execution",
+                    )
+            else:
+                config = replace(config, playwright_toolchain_identity=identity)
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
@@ -2873,6 +2884,16 @@ def run_profile(
     config: RunnerConfig = RunnerConfig(),
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
+    prefix = _playwright_command(config)
+    if prefix is not None and config.playwright_toolchain_manifest is not None:
+        try:
+            identity = _playwright_toolchain_identity(
+                root, prefix, config.playwright_toolchain_manifest
+            )
+        except (OSError, ValueError):
+            identity = None
+        if identity is not None:
+            config = replace(config, playwright_toolchain_identity=identity)
     executions = tuple(
         run_obligation(
             root,
@@ -2883,6 +2904,27 @@ def run_profile(
         )
         for obligation in profile.obligations
     )
+    if (
+        prefix is not None
+        and config.playwright_toolchain_manifest is not None
+        and config.playwright_toolchain_identity is not None
+    ):
+        try:
+            final_identity = _playwright_toolchain_identity(
+                root, prefix, config.playwright_toolchain_manifest
+            )
+        except (OSError, ValueError):
+            final_identity = None
+        if final_identity != config.playwright_toolchain_identity:
+            executions = tuple(
+                RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.COLLECTION_ERROR,
+                    execution.command_digest,
+                    "Playwright toolchain changed across protocol execution",
+                ) if obligation.validator_id == "playwright" else execution
+                for obligation, execution in zip(profile.obligations, executions)
+            )
     runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
     binding = AttestationBinding(
         profile.unit_id,

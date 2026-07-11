@@ -77,6 +77,7 @@ dependencies = [
     "websockets>=13.0",
     "watchdog>=4.0.0",
     "tiktoken>=0.7.0",
+    "tree-sitter-language-pack==1.12.5",
     "filelock>=3.12"]
 requires-python = ">=3.12"
 
