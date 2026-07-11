@@ -1555,3 +1555,88 @@ def test_playwright_rejects_identifier_executable_config_value(
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_playwright_each_protocol_phase_uses_fresh_immutable_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    phase_roots: list[Path] = []
+
+    def supervised(command, *, cwd, writable_roots, **_kwargs):
+        phase_roots.append(cwd)
+        assert cwd not in writable_roots
+        assert cwd / ".git" not in writable_roots
+        payload = {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert len(phase_roots) == 3
+    assert len({path.resolve() for path in phase_roots}) == 3
+
+
+@pytest.mark.parametrize("mutation", ["commit", "ignored"])
+def test_playwright_detects_clean_status_and_ignored_phase_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    root, commit = _repository(tmp_path)
+    if mutation == "ignored":
+        (root / ".gitignore").write_text("candidate-cache/\n", encoding="utf-8")
+        _git(root, "add", ".gitignore")
+        _git(root, "commit", "-q", "-m", "ignore candidate cache")
+        commit = _git(root, "rev-parse", "HEAD")
+    calls = 0
+
+    def supervised(command, *, cwd, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            if mutation == "commit":
+                (cwd / "tests/widget.spec.ts").write_text(
+                    "import { test } from '@playwright/test';\n"
+                    "test('widget works', async () => {});\n",
+                    encoding="utf-8",
+                )
+                _git(cwd, "config", "user.email", "candidate@example.com")
+                _git(cwd, "config", "user.name", "Candidate")
+                _git(cwd, "add", "tests/widget.spec.ts")
+                _git(cwd, "commit", "-q", "-m", "replace protected test")
+            else:
+                (cwd / "candidate-cache").mkdir()
+                (cwd / "candidate-cache/state").write_text("candidate", encoding="utf-8")
+        payload = {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "modified" in executions[0].detail.lower()
+
+
+def test_playwright_receiver_capabilities_accept_documented_representative_chains(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test.describe.configure({ mode: 'serial' });\n"
+        "test.beforeEach(async ({ page }) => {\n"
+        "  await page.getByTestId('card').filter({ hasText: 'ready' }).first().hover();\n"
+        "  await page.mainFrame().getByRole('button').click();\n"
+        "});\n"
+        "test('widget works', async ({ page }) => {\n"
+        "  const card = page.locator('.card');\n"
+        "  await expect(card).toHaveCount(1);\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "documented receiver chains")
+
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
