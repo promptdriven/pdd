@@ -166,6 +166,25 @@ def test_jest_imported_test_helper_mutation_cannot_pass(tmp_path: Path) -> None:
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
+def test_jest_side_effect_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.js").write_text("global.expected = true;\n")
+    (root / "tests/widget.test.js").write_text(
+        "import './helper';\n"
+        "test('widget works', () => expect(global.expected).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.js").write_text("global.expected = false;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate side effect helper")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
 @pytest.mark.parametrize("config_key", ["globalSetup", "globalTeardown", "testEnvironment"])
 def test_jest_executable_config_hook_mutation_cannot_pass(
     tmp_path: Path, config_key: str
@@ -179,6 +198,33 @@ def test_jest_executable_config_hook_mutation_cannot_pass(
     (root / "hook.js").write_text("module.exports = { changed: true };\n")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "mutate Jest hook")
+
+    _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+@pytest.mark.parametrize(
+    ("config", "path"),
+    [
+        ('{"snapshotSerializers":["<rootDir>/serializer.js"]}', "serializer.js"),
+        ('{"testSequencer":"<rootDir>/sequencer.js"}', "sequencer.js"),
+        ('{"moduleNameMapper":{"^@/(.*)$":"<rootDir>/src/$1"}}', "src/helper.js"),
+    ],
+)
+def test_jest_additional_executable_config_mutation_cannot_pass(
+    tmp_path: Path, config: str, path: str
+) -> None:
+    root, _commit = _repository(tmp_path, config=config)
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("module.exports = {};\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected Jest executable config")
+    base = _git(root, "rev-parse", "HEAD")
+    target.write_text("module.exports = { changed: true };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate protected Jest executable config")
 
     _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
 
@@ -202,6 +248,21 @@ def test_default_candidate_node_modules_jest_is_not_trusted(tmp_path: Path) -> N
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "candidate node_modules" in executions[0].detail
+
+
+def test_explicit_candidate_local_jest_command_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = root / "tools" / "jest.py"
+    runner.parent.mkdir()
+    runner.write_text(_fake_jest(tmp_path).read_text())
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add candidate-local Jest command")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, runner)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate checkout" in executions[0].detail
 
 
 def test_jest_subprocess_cannot_read_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
