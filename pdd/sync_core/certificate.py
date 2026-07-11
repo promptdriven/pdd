@@ -560,7 +560,8 @@ def _aggregate_counts(reports: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _scan_predicate(
-    counts: dict[str, int], lifecycle: LifecycleResult, extra: dict[str, int]
+    counts: dict[str, int], lifecycle: LifecycleResult, extra: dict[str, int],
+    *, require_measurement: bool = True,
 ) -> bool:
     managed = counts["managed_units"]
     baseline_failures = ("DRIFTED", "UNBASELINED", "CORRUPT")
@@ -594,14 +595,35 @@ def _scan_predicate(
             for character in lifecycle.dependency_environment_digest
         )
         and lifecycle.candidate_artifact is not None
+        and (not require_measurement or _lifecycle_measurement_complete(lifecycle))
         and extra["nightly_observation_complete"] == 1
     )
 
 
+def _lifecycle_measurement_complete(lifecycle: LifecycleResult) -> bool:
+    """Require checker-owned measured closure fields; never synthesize them."""
+    hexadecimal = set("0123456789abcdef")
+    interpreter_keys = {"implementation", "version", "abi", "platform"}
+    return (
+        len(lifecycle.runtime_lock_sha256) == 64
+        and set(lifecycle.runtime_lock_sha256) <= hexadecimal
+        and isinstance(lifecycle.interpreter, dict)
+        and set(lifecycle.interpreter) == interpreter_keys
+        and all(isinstance(value, str) and value for value in lifecycle.interpreter.values())
+        and bool(lifecycle.installed_files)
+        and all(len(item) == 4 and all(isinstance(value, str) and value for value in item)
+                and len(item[3]) == 64 and set(item[3]) <= hexadecimal
+                for item in lifecycle.installed_files)
+        and lifecycle.measurement_authority == "pdd-released-checker-v1"
+    )
+
+
 def _predicate(
-    counts: dict[str, int], lifecycle: LifecycleResult, extra: dict[str, int]
+    counts: dict[str, int], lifecycle: LifecycleResult, extra: dict[str, int],
+    *, require_measurement: bool = True,
 ) -> bool:
-    return _scan_predicate(counts, lifecycle, extra) and (
+    return _scan_predicate(counts, lifecycle, extra,
+                           require_measurement=require_measurement) and (
         extra["nightly_streak"] >= extra["required_nightly_streak"]
     )
 
@@ -823,8 +845,12 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         != expected_evidence_coverage
     ):
         return False, False
-    scan_ok = all(report_results) and _scan_predicate(aggregate, lifecycle, extra)
-    ok = all(report_results) and _predicate(aggregate, lifecycle, extra)
+    scan_ok = all(report_results) and _scan_predicate(
+        aggregate, lifecycle, extra, require_measurement=schema_version == 4
+    )
+    ok = all(report_results) and _predicate(
+        aggregate, lifecycle, extra, require_measurement=schema_version == 4
+    )
     return scan_ok, ok
 
 
@@ -894,28 +920,6 @@ def _build_global_certificate_from_targets(
         if candidate_artifact_valid
         else replace(options.lifecycle_result, candidate_artifact=None)
     )
-    if candidate_artifact_valid and lifecycle.candidate_artifact is not None:
-        policy = options.candidate_artifact_policy
-        lifecycle = replace(
-            lifecycle,
-            runtime_lock_sha256=(
-                lifecycle.runtime_lock_sha256 or policy.dependency_lock_sha256
-            ),
-            interpreter=lifecycle.interpreter or {
-                "implementation": policy.python_implementation,
-                "version": policy.python_version,
-                "abi": policy.python_abi,
-                "platform": policy.python_platform,
-            },
-            installed_files=lifecycle.installed_files or ((
-                "candidate-wheel", "1", "candidate.whl",
-                lifecycle.candidate_wheel_sha256,
-            ),),
-            measurement_authority=(
-                lifecycle.measurement_authority
-                or options.checker_identity.workflow_identity
-            ),
-        )
     body: dict[str, Any] = {
         "schema_version": 4,
         "checked_at": datetime.now(timezone.utc).isoformat(),

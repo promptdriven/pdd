@@ -34,22 +34,37 @@ def _unlock(descriptor: int) -> None:
 
 
 def _safe_parent(path: Path) -> tuple[int, os.stat_result]:
-    """Open the ledger parent once and return its stable directory identity."""
+    """Traverse to the ledger parent from an anchored root without following links."""
     if path.name in {"", ".", ".."} or path.is_absolute() is False:
         path = path.absolute()
-    parent = path.parent
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(parent, flags)
-    except OSError as exc:
+        descriptor = os.open(path.anchor, flags)
+        for component in path.parent.parts[1:]:
+            if component in {"", ".", ".."}:
+                raise DescriptorStoreError("replay ledger parent is unsafe")
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            metadata = os.fstat(child)
+            if not stat.S_ISDIR(metadata.st_mode) or (
+                hasattr(os, "getuid") and metadata.st_uid not in {0, os.getuid()}
+            ):
+                os.close(child)
+                raise DescriptorStoreError("replay ledger parent is unsafe")
+            os.close(descriptor)
+            descriptor = child
+    except (OSError, NotImplementedError) as exc:
+        try:
+            os.close(descriptor)
+        except (UnboundLocalError, OSError):
+            pass
         raise DescriptorStoreError("replay ledger parent is unsafe") from exc
     opened = os.fstat(descriptor)
-    lexical = os.lstat(parent)
     if (
         not stat.S_ISDIR(opened.st_mode)
-        or stat.S_ISLNK(lexical.st_mode)
-        or (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino)
         or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
         or stat.S_IMODE(opened.st_mode) & 0o077
     ):
@@ -78,7 +93,7 @@ def _read_json(parent_fd: int, name: str, empty: Any) -> Any:
             os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return empty
-        raise
+        descriptor = _open_relative(parent_fd, name, os.O_RDONLY)
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
@@ -130,7 +145,7 @@ def update_json(
         replacement = update(payload)
         if replacement is not None:
             _write_json(parent_fd, path.name, replacement)
-        current = os.stat(path.parent, follow_symlinks=False)
+        current = os.fstat(parent_fd)
         if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
             raise DescriptorStoreError("replay ledger parent changed")
         return payload if replacement is None else replacement

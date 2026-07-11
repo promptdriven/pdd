@@ -20,6 +20,7 @@ from .artifact_provenance import (
 from .certificate import LifecycleResult
 from .isolation import untrusted_child_environment
 from .scenario_contract import REQUIRED_SCENARIOS
+from .supervisor import run_supervised
 
 
 def _isolated_lifecycle_environment(home: Path) -> dict[str, str]:
@@ -126,66 +127,36 @@ def _normalized_results(payload: Any) -> dict[str, dict[str, Any]]:
     return results
 
 
-def _dependency_environment_digest(candidate_python: Path, isolated: dict[str, str]) -> str:
-    """Hash the installed distribution set visible to the candidate wheel."""
-    probe = subprocess.run(
-        [
-            str(candidate_python),
-            "-c",
-            (
-                "import importlib.metadata as m, json;"
-                "rows=[];"
-                "\nfor d in m.distributions():"
-                "\n rows.append({"
-                "'name': d.metadata.get('Name', ''),"
-                "'version': d.version,"
-                "'files': sorted("
-                "(str(f), getattr(getattr(f, 'hash', None), 'value', ''), f.size or 0)"
-                " for f in (d.files or ()))"
-                "})"
-                "\nprint(json.dumps(sorted(rows, key=lambda r: (r['name'].lower(), r['version'])),"
-                " sort_keys=True, separators=(',', ':')))"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=isolated,
-    )
-    if probe.returncode != 0:
-        return ""
-    return hashlib.sha256(probe.stdout.encode()).hexdigest()
+def _dependency_environment_digest(candidate_python: Path, _isolated: dict[str, str]) -> str:
+    """Hash the checker-owned installed-file closure without candidate startup."""
+    closure = _installed_file_closure(candidate_python)
+    return hashlib.sha256(json.dumps(closure, separators=(",", ":")).encode()).hexdigest()
 
 
 def _candidate_interpreter_identity(
     candidate_python: Path, isolated: dict[str, str]
 ) -> dict[str, str] | None:
-    """Measure the interpreter and first compatible wheel tag actually executed."""
-    probe = subprocess.run(
-        [
-            str(candidate_python),
-            "-I",
-            "-c",
-            (
-                "import json, platform; from packaging.tags import sys_tags;"
-                "tag=next(sys_tags()); print(json.dumps({"
-                "'implementation':platform.python_implementation(),"
-                "'version':platform.python_version(),'abi':tag.abi,"
-                "'platform':tag.platform},sort_keys=True))"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=isolated,
+    """Measure the checker interpreter used to create the venv, before site startup."""
+    del candidate_python, isolated
+    import platform  # pylint: disable=import-outside-toplevel
+    from packaging.tags import sys_tags  # pylint: disable=import-outside-toplevel
+    tag = next(sys_tags())
+    return {"implementation": platform.python_implementation(),
+            "version": platform.python_version(), "abi": tag.abi,
+            "platform": tag.platform}
+
+
+def _lifecycle_command(command: list[str], temporary: Path, home: Path,
+                       timeout: int = 1200) -> subprocess.CompletedProcess[str]:
+    """Route every lifecycle command through the shared fail-closed supervisor."""
+    result, surviving = run_supervised(
+        command, cwd=temporary, timeout=timeout,
+        env=_isolated_lifecycle_environment(home), writable_roots=(temporary,)
     )
-    if probe.returncode != 0:
-        return None
-    try:
-        measured = json.loads(probe.stdout)
-    except json.JSONDecodeError:
-        return None
-    return measured if isinstance(measured, dict) else None
+    if surviving:
+        return subprocess.CompletedProcess(command, 125, result.stdout,
+                                           result.stderr + "\nsurviving descendant")
+    return result
 
 
 def _combined_candidate_lock(temporary: Path, runtime_lock: Path, wheel: Path) -> Path | None:
@@ -223,19 +194,15 @@ def _install_candidate_wheel(
         return None
     environment = temporary / "candidate-venv"
     isolated = _isolated_lifecycle_environment(home)
-    created = subprocess.run(
-        [sys.executable, "-m", "venv", str(environment)],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=isolated,
+    created = _lifecycle_command(
+        [sys.executable, "-m", "venv", str(environment)], temporary, home
     )
     candidate_python = environment / (
         "Scripts/python.exe" if os.name == "nt" else "bin/python"
     )
     if created.returncode != 0:
         return None
-    installed = subprocess.run(
+    installed = _lifecycle_command(
         [
             str(candidate_python),
             "-m",
@@ -251,19 +218,12 @@ def _install_candidate_wheel(
             "-r",
             str(combined_lock),
         ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=isolated,
+        temporary, home,
     )
     if installed.returncode != 0:
         return None
-    proved = subprocess.run(
-        [str(candidate_python), "-I", "-m", "pdd.cli", "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=isolated,
+    proved = _lifecycle_command(
+        [str(candidate_python), "-I", "-m", "pdd.cli", "--help"], temporary, home
     )
     if proved.returncode != 0:
         return None
@@ -373,16 +333,10 @@ def run_lifecycle_matrix(
             "--candidate-python",
             str(candidate_python),
         ]
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-                env=_isolated_lifecycle_environment(temporary / "home"),
-            )
-        except subprocess.TimeoutExpired:
+        completed = _lifecycle_command(
+            command, temporary, temporary / "home", timeout_seconds
+        )
+        if completed.returncode == 124:
             return _failed_result(timeout=True)
         try:
             results = _normalized_results(json.loads(output.read_text(encoding="utf-8")))

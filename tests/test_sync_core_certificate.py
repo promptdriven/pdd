@@ -48,6 +48,13 @@ CANDIDATE_POLICY = CandidateArtifactPolicy(
     "cp312",
     "manylinux_2_17_x86_64",
 )
+MEASURED_CLOSURE = {
+    "runtime_lock_sha256": DEPENDENCY_ENVIRONMENT_DIGEST,
+    "interpreter": {"implementation": "CPython", "version": "3.12.3",
+                    "abi": "cp312", "platform": "manylinux_2_17_x86_64"},
+    "installed_files": (("pdd", "1.0", "pdd/__init__.py", "f" * 64),),
+    "measurement_authority": "pdd-released-checker-v1",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -303,6 +310,7 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
         dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
         candidate_artifact=_candidate_artifact(),
+        **MEASURED_CLOSURE,
     )
     certificate = build_global_certificate(
         (
@@ -483,6 +491,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
                 candidate_artifact=_candidate_artifact(),
+                **MEASURED_CLOSURE,
             ),
             nightly,
             checker_identity=CHECKER,
@@ -644,6 +653,7 @@ def test_unsigned_nightly_rows_cannot_fabricate_temporal_proof(
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
                 candidate_artifact=_candidate_artifact(),
+                **MEASURED_CLOSURE,
             ),
             nightly,
             checker_identity=CHECKER,
@@ -692,6 +702,7 @@ def test_signed_nightly_rows_without_observations_do_not_extend_streak(
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
                 candidate_artifact=_candidate_artifact(),
+                **MEASURED_CLOSURE,
             ),
             nightly,
             checker_identity=CHECKER,
@@ -743,6 +754,7 @@ def test_signed_nightly_rows_with_untrusted_candidate_artifacts_do_not_extend_st
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 candidate_artifact=_candidate_artifact(),
+                **MEASURED_CLOSURE,
             ),
             nightly,
             checker_identity=CHECKER,
