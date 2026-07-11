@@ -66,6 +66,18 @@ def _process_descendants(root_pid: int) -> set[int]:
     return found
 
 
+def _live_processes(pids: set[int]) -> set[int]:
+    """Filter historical observations to processes that still exist."""
+    live = set()
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            continue
+        live.add(pid)
+    return live
+
+
 def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...]
 ) -> tuple[list[str], Path | None]:
@@ -165,7 +177,9 @@ def run_supervised(
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    descendants = (_supervised_descendants(token) | tracked) - {process.pid}
+    descendants = _live_processes(
+        (_supervised_descendants(token) | tracked) - {process.pid}
+    )
     if descendants:
         surviving = True
         for pid in descendants:
