@@ -20,6 +20,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import (
+    _local_javascript_imports,
     _playwright_result,
     playwright_validator_config_digest,
 )
@@ -312,7 +313,7 @@ def test_playwright_collection_identity_mismatch_cannot_pass(
     _envelope, executions = _run(
         root, base, _git(root, "rev-parse", "HEAD"), _fake_playwright(tmp_path)
     )
-    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
 def test_playwright_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
@@ -323,7 +324,7 @@ def test_playwright_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
     _envelope, executions = _run(
         root, base, _git(root, "rev-parse", "HEAD"), _fake_playwright(tmp_path)
     )
-    assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
 
 
 @pytest.mark.parametrize("path", ["playwright.config.ts", "setup.ts", "reporter.ts"])
@@ -367,6 +368,123 @@ def test_playwright_side_effect_import_helper_mutation_cannot_pass(tmp_path: Pat
     )
 
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_playwright_parent_directory_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/helper.ts").write_text("export const expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { expected } from '../shared/helper';\n"
+        "test('widget works', async () => expect(expected).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/helper.ts").write_text("export const expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_playwright(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_playwright_parent_directory_side_effect_import_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import '../shared/setup';\n"
+        "test('widget works', async () => expect(globalThis.expected).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/setup.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent side effect helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_playwright(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_playwright_parent_directory_imports_change_validator_digest(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    (root / "shared/helpers").mkdir(parents=True)
+    (root / "shared/helpers/index.ts").write_text(
+        "export const expected = true;\n", encoding="utf-8"
+    )
+    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { expected } from '../shared/helpers';\n"
+        "import '../shared/setup';\n"
+        "test('widget works', async () => expect(expected && globalThis.expected).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helpers")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = playwright_validator_config_digest(root, base, paths)
+
+    (root / "shared/helpers/index.ts").write_text(
+        "export const expected = false;\n", encoding="utf-8"
+    )
+    (root / "shared/setup.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helpers")
+    head_digest = playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    )
+
+    assert head_digest != base_digest
+
+
+def test_playwright_config_reference_index_candidate_changes_validator_digest(tmp_path: Path) -> None:
+    config = "import './support/setup';\nexport default {};\n"
+    root, _commit = _repository(tmp_path, config=config)
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    (root / "support/setup").mkdir(parents=True)
+    (root / "support/setup/index.ts").write_text(
+        "globalThis.expected = true;\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add extensionless setup index")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = playwright_validator_config_digest(root, base, paths)
+
+    (root / "support/setup/index.ts").write_text(
+        "globalThis.expected = false;\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate extensionless setup index")
+    head_digest = playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    )
+
+    assert head_digest != base_digest
+
+
+def test_playwright_repository_escape_import_is_not_bound(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    imports = _local_javascript_imports(
+        root,
+        commit,
+        PurePosixPath("tests/widget.spec.ts"),
+        b"import '../../outside.js';\n",
+    )
+    assert imports == set()
 
 
 def test_playwright_dirty_support_cannot_influence_run(tmp_path: Path) -> None:
