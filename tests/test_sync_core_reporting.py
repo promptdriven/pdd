@@ -21,6 +21,7 @@ from pdd.sync_core import (
     FingerprintRecord,
     FingerprintStore,
     PlannedWrite,
+    RunnerConfig,
     SemanticStatus,
     TransactionManager,
     TRUSTED_RUNNER_VERSION,
@@ -338,6 +339,7 @@ def test_nested_config_cannot_bypass_repository_canonical_finalizer(
         base_ref=head,
         head_ref="HEAD",
         signer=signer,
+        config=RunnerConfig(),
     )
 
 

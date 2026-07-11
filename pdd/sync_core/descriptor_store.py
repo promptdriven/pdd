@@ -89,11 +89,12 @@ def _open_trust_root(trust_root: Path, flags: int) -> int:
         trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(trust_root, flags)
     metadata = os.fstat(descriptor)
-    if not _owned_directory(metadata) or (existed and not _safe_directory(metadata)):
+    if not _owned_directory(metadata) or (
+        existed and stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
         os.close(descriptor)
         raise DescriptorStoreError("replay ledger root is unsafe")
-    if not existed:
-        os.fchmod(descriptor, 0o700)
+    os.fchmod(descriptor, 0o700)
     if not _safe_directory(os.fstat(descriptor)):
         os.close(descriptor)
         raise DescriptorStoreError("replay ledger root is unsafe")
