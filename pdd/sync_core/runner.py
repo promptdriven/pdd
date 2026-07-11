@@ -893,16 +893,26 @@ def _file_identity(path: Path) -> str:
     return hashlib.sha256(str(path).encode() + b"\0" + data).hexdigest()
 
 
+def _command_part_identity(root: Path, part: str) -> str:
+    """Return literal argv text or a digest for an explicit path operand."""
+    path = Path(part).expanduser()
+    if not path.is_absolute() and "/" not in part:
+        return part
+    resolved = (path if path.is_absolute() else root / path).resolve()
+    return _file_identity(resolved) if resolved.exists() else part
+
+
+def _is_script_like_operand(value: str) -> bool:
+    """Return true for argv operands that are likely executable script paths."""
+    return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
+
+
 def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
     """Bind explicitly supplied validator commands to signed runner evidence."""
     payload: dict[str, object] = {}
     if config.jest_command is not None:
         payload["jest"] = [
-            _file_identity(Path(part).resolve())
-            if (Path(part).is_absolute() or "/" in part)
-            and Path(part).expanduser().exists()
-            else part
-            for part in config.jest_command
+            _command_part_identity(root, part) for part in config.jest_command
         ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -1229,6 +1239,46 @@ def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bo
     return False
 
 
+def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Return a fail-closed reason for unprotected explicit validator argv."""
+    if not command:
+        return "explicit validator command is empty"
+    candidate_root = root.resolve()
+    path_operands: list[Path] = []
+    executable = Path(command[0]).expanduser()
+    if not executable.is_absolute():
+        return "explicit validator command executable must be an absolute path"
+    path_operands.append(executable)
+    expect_module_operand = False
+    for part in command[1:]:
+        if expect_module_operand:
+            if "/" not in part:
+                return (
+                    "pathless validator module operand is not trusted; use an "
+                    "absolute external path or protected module launcher"
+                )
+            expect_module_operand = False
+        if part == "-m":
+            expect_module_operand = True
+            continue
+        if part.startswith("-"):
+            continue
+        path = Path(part).expanduser()
+        if not path.is_absolute() and "/" not in part:
+            if _is_script_like_operand(part):
+                return (
+                    "pathless validator script operand is not trusted; use an "
+                    "absolute external path"
+                )
+            continue
+        path_operands.append(path if path.is_absolute() else root / path)
+    for operand in path_operands:
+        resolved = operand.resolve()
+        if _path_is_relative_to(resolved, candidate_root):
+            return "explicit validator command inside the candidate checkout is not trusted"
+    return None
+
+
 _JEST_REPORTER = """class PddTrustedReporter {
   constructor() { this.tests = []; }
   onTestResult(test, result) {
@@ -1286,8 +1336,11 @@ def _run_jest(
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
             return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
         return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
-    if _command_uses_candidate_checkout(root, command_prefix):
-        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "explicit Jest command inside the candidate checkout is not trusted"), ()
+    command_error = _protected_command_error(root, command_prefix)
+    if command_error is not None:
+        return RunnerExecution(
+            "jest", EvidenceOutcome.ERROR, "jest-untrusted", command_error
+        ), ()
     try:
         config_path, _config_data = _jest_config(root, "HEAD")
     except ValueError as exc:
