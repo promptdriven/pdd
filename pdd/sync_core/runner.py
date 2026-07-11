@@ -171,6 +171,12 @@ class VitestPhaseToolchain:
     descriptor: VitestToolchainDescriptor
 
 
+PLAYWRIGHT_CONFIG_NAMES = (
+    "playwright.config.js", "playwright.config.cjs", "playwright.config.mjs",
+    "playwright.config.ts", "playwright.config.cts", "playwright.config.mts",
+)
+
+
 @dataclass(frozen=True)
 class RunnerConfig:
     """Protected execution limits for trusted validation adapters."""
@@ -181,6 +187,7 @@ class RunnerConfig:
     vitest_toolchain_manifest: Path | None = None
     vitest_toolchain_identity: str | None = None
     adapter_identities: tuple[tuple[str, str], ...] = ()
+    playwright_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1438,6 +1445,87 @@ def vitest_validator_config_digest(
     return digest.hexdigest()
 
 
+def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
+    """Return the single protected Playwright configuration source."""
+    found = [
+        PurePosixPath(name) for name in PLAYWRIGHT_CONFIG_NAMES
+        if read_git_blob(root, ref, PurePosixPath(name)) is not None
+    ]
+    if len(found) != 1:
+        raise ValueError("exactly one static Playwright configuration is required")
+    content = read_git_blob(root, ref, found[0])
+    assert content is not None
+    return found[0], content
+
+
+def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePosixPath]:
+    """Reject dynamic controls and return literal local config imports."""
+    try:
+        text = source.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Playwright configuration must be UTF-8") from exc
+    if re.search(r"\b(process|require|import\s*\(|await|function|=>|\beval\b)\b", text):
+        raise ValueError("dynamic Playwright configuration is not supported")
+    if re.search(r"\b(grep|grepInvert|shard|retries|workers|repeatEach)\s*:", text):
+        raise ValueError("Playwright execution filters or retries are not allowed")
+    if re.search(r"\bwebServer\s*:", text):
+        raise ValueError("Playwright webServer is not bound by this adapter")
+    # Parse direct relative imports here; the closure resolver checks each blob.
+    references = {
+        path.parent / PurePosixPath(item)
+        for item in re.findall(r"(?:from\s+|import\s+)['\"](\.{1,2}/[^'\"]+)['\"]", text)
+    }
+    for key in ("globalSetup", "globalTeardown", "reporter"):
+        for value in re.findall(rf"\b{key}\s*:\s*['\"]([^'\"]+)['\"]", text):
+            local = _jest_local_path(value)
+            if local is None:
+                raise ValueError(f"Playwright {key} is not a static local path")
+            references.add(local)
+    return references
+
+
+def _playwright_support_closure(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Bind config, local support, and test imports without executing them."""
+    config_path, config_source = _playwright_config(root, ref)
+    paths = {config_path}
+    pending = list(_playwright_static_config(config_path, config_source)) + list(test_paths)
+    visited: set[PurePosixPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = read_git_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
+        paths.add(path)
+        if path.suffix in _JAVASCRIPT_SUFFIXES:
+            pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
+            try:
+                text = source.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise ValueError(f"Playwright source is not UTF-8: {path.as_posix()}") from exc
+            if re.search(r"\b(?:test|describe)\.(?:only|skip|fixme|slow)\s*\(", text):
+                raise ValueError("Playwright focused, skipped, fixme, or slow tests are ambiguous")
+    return tuple(
+        (path, read_git_blob(root, ref, path)) for path in sorted(paths)
+        if read_git_blob(root, ref, path) is not None
+    )
+
+
+def playwright_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> str:
+    """Hash Playwright config and every bound local executable dependency."""
+    del test_paths
+    digest = hashlib.sha256()
+    for path, content in _playwright_support_closure(root, ref, ()):
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
 def _support_digest(
     root: Path, ref: str, profile: VerificationProfile
 ) -> tuple[str, tuple[PurePosixPath, ...]]:
@@ -1518,6 +1606,25 @@ def _vitest_support_digest(
         closure = _vitest_support_closure(root, ref, tests, products)
     except ValueError:
         return "invalid-vitest-closure", ()
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest(), tuple(path for path, _content in closure)
+
+
+def _playwright_support_digest(
+    root: Path, ref: str, profile: VerificationProfile
+) -> tuple[str, tuple[PurePosixPath, ...]]:
+    """Hash the protected Playwright configuration and source closure."""
+    tests = tuple(
+        path for obligation in profile.obligations
+        if obligation.validator_id == "playwright"
+        for path in obligation.artifact_paths
+    )
+    try:
+        closure = _playwright_support_closure(root, ref, tests)
+    except ValueError:
+        return "invalid-playwright-closure", ()
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -1618,6 +1725,8 @@ def runner_identity_digest(
             "--outputFile=<trusted-temp-path>",
         ],
         "vitest_environment": {"NODE_ENV": "test"},
+        "playwright_command": ["<node>", "<local-playwright-cli>", "test", "<protected-test-path>", "--config=<protected-config-path>", "--reporter=json"],
+        "playwright_environment": {"NODE_ENV": "test"},
         "obligations": [
             {
                 "id": item.obligation_id,
@@ -1640,6 +1749,7 @@ def runner_identity_digest(
                 support_closure_digest
                 + jest_support_digest
                 + _vitest_support_digest(root, ref, profile)[0]
+                + _playwright_support_digest(root, ref, profile)[0]
             ).encode()
         ).hexdigest()
         adapter_identities = config.adapter_identities or _capture_adapter_identities(
@@ -3071,6 +3181,119 @@ def _run_vitest(
         return RunnerExecution("vitest", outcome, digest, detail), identities
 
 
+def _playwright_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+    """Return the checked-in local Playwright CLI, never an npm script."""
+    if config.playwright_command is not None:
+        return config.playwright_command
+    node = shutil.which("node")
+    binary = root / "node_modules" / "@playwright" / "test" / "cli.js"
+    if node is None or not binary.is_file():
+        return None
+    return (node, str(binary))
+
+
+def _playwright_environment(home: Path) -> dict[str, str]:
+    """Return an isolated credential-free environment for Playwright."""
+    return {
+        key: value for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
+        and not key.startswith(("PLAYWRIGHT_", "NODE_", "npm_config_", "NPM_CONFIG_"))
+        and key not in {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}
+    } | {
+        "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_CACHE_HOME": str(home / "cache"), "NODE_ENV": "test",
+    }
+
+
+def _playwright_result(
+    root: Path, output: str, returncode: int, expected: tuple[str, ...] | None,
+    collection: bool = False,
+) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    """Normalize JSON reporter output to project, file, title-path identities."""
+    try:
+        payload = json.loads(output)
+        tests = payload.get("tests")
+        if tests is None:
+            tests = []
+            def visit(suite: object, parents: tuple[str, ...] = ()) -> None:
+                if not isinstance(suite, dict):
+                    raise ValueError("malformed Playwright suite")
+                title = suite.get("title", "")
+                next_parents = parents + ((title,) if isinstance(title, str) and title else ())
+                for spec in suite.get("specs", []):
+                    if not isinstance(spec, dict):
+                        raise ValueError("malformed Playwright spec")
+                    filename = Path(spec["file"]).resolve().relative_to(root.resolve()).as_posix()
+                    title_path = " > ".join(next_parents + (spec["title"],))
+                    for item in spec.get("tests", []):
+                        result = (item.get("results") or [{}])[-1]
+                        tests.append({
+                            "identity": f"{item['projectName']}::{filename}::{title_path}",
+                            "status": result.get("status", "passed" if collection else "skipped"),
+                        })
+                for child in suite.get("suites", []):
+                    visit(child, next_parents)
+            for suite in payload.get("suites", []):
+                visit(suite)
+        if not isinstance(tests, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("identity"), str)
+            and isinstance(item.get("status"), str) for item in tests
+        ):
+            raise ValueError("malformed Playwright reporter payload")
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright JSON reporter produced malformed JSON", ()
+    identities = tuple(sorted(item["identity"] for item in tests))
+    if not identities:
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Playwright test identities collected", ()
+    if len(set(identities)) != len(identities):
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted duplicate test identities", ()
+    if expected is not None and identities != expected:
+        return EvidenceOutcome.QUARANTINED, "checked-head Playwright identities differ from protected base", identities
+    if collection:
+        if returncode:
+            return EvidenceOutcome.COLLECTION_ERROR, "Playwright collection failed", identities
+        return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests collected", identities
+    statuses = {item["status"] for item in tests}
+    if statuses - {"passed", "failed", "skipped", "timedOut", "interrupted"}:
+        return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted an unsupported status", identities
+    if "timedOut" in statuses:
+        return EvidenceOutcome.TIMEOUT, "Playwright reported a timed out protected test", identities
+    if returncode or "failed" in statuses or "interrupted" in statuses:
+        return EvidenceOutcome.FAIL, "Playwright reported failed protected tests", identities
+    if statuses - {"passed"}:
+        return EvidenceOutcome.SKIP, "Playwright reported skipped protected tests", identities
+    return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests passed", identities
+
+
+def _run_playwright(
+    root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
+    config: RunnerConfig, expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None, collection: bool = False,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Execute exact paths through Playwright's JSON reporter without filters."""
+    prefix = _playwright_command(command_root or root, config)
+    if prefix is None:
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
+    try:
+        config_path, _source = _playwright_config(root, "HEAD")
+    except ValueError as exc:
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)), ()
+    command = [*prefix, "test", *(path.as_posix() for path in paths), f"--config={root / config_path}", "--reporter=json"]
+    if collection:
+        command.append("--list")
+    digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="pdd-trusted-playwright-") as directory:
+        try:
+            result = subprocess.run(command, cwd=root, capture_output=True, text=True,
+                check=False, timeout=timeout_seconds, env=_playwright_environment(Path(directory)))
+        except subprocess.TimeoutExpired:
+            return RunnerExecution("playwright", EvidenceOutcome.TIMEOUT, digest, "Playwright execution timed out"), ()
+    outcome, detail, identities = _playwright_result(
+        root, result.stdout, result.returncode, expected, collection
+    )
+    return RunnerExecution("playwright", outcome, digest, detail), identities
+
+
 def _run_test_node(
     root: Path,
     node_id: str,
@@ -3347,6 +3570,20 @@ def _dirty_vitest_support(root: Path) -> set[str]:
     return dirty
 
 
+def _dirty_playwright_support(root: Path) -> set[str]:
+    """Reject ambient local JS, config, and support that Playwright could load."""
+    result = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=root, capture_output=True, check=False)
+    if result.returncode != 0:
+        return {"<unreadable-git-status>"}
+    dirty: set[str] = set()
+    for field in result.stdout.decode(errors="surrogateescape").split("\0"):
+        path = field[3:] if len(field) >= 4 else ""
+        relpath = PurePosixPath(path)
+        if relpath.name.startswith("playwright.config.") or relpath.suffix in _JAVASCRIPT_SUFFIXES:
+            dirty.add(path)
+    return dirty
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -3378,7 +3615,7 @@ def _obligation_preflight(
 ) -> RunnerExecution | None:
     # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
-    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest"}:
+    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest", "playwright"}:
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -3396,6 +3633,7 @@ def _obligation_preflight(
         "pytest": pytest_validator_config_digest,
         "jest": jest_validator_config_digest,
         "vitest": vitest_validator_config_digest,
+        "playwright": playwright_validator_config_digest,
     }[obligation.validator_id]
     try:
         if obligation.validator_id == "pytest":
@@ -3626,6 +3864,22 @@ def _run_vitest_at_commit(
         ), ()
 
 
+def _collect_playwright_at_base(
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Execute the protected base to derive Playwright project/file/title IDs."""
+    with tempfile.TemporaryDirectory(prefix="pdd-playwright-protected-base-") as directory:
+        clone = Path(directory) / "repository"
+        cloned = subprocess.run(["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)], capture_output=True, text=True, check=False)
+        checked_out = cloned.returncode == 0 and subprocess.run(["git", "checkout", "-q", "--detach", base_sha], cwd=clone, capture_output=True, check=False).returncode == 0
+        if not checked_out:
+            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Playwright clone"), ()
+        return _run_playwright(
+            clone, paths, config.timeout_seconds, config, command_root=root,
+            collection=True,
+        )
+
+
 def _protected_node_ids(
     root: Path,
     obligation: VerificationObligation,
@@ -3746,6 +4000,32 @@ def _run_obligation_in_tree(
             head_execution.command_digest,
             head_execution.detail,
         )
+    if obligation.validator_id == "playwright":
+        profile = VerificationProfile(
+            UnitId("runner-closure", PurePosixPath("closure.prompt"), "typescript"),
+            (obligation,), obligation.requirement_ids, "closure",
+        )
+        _digest, support_paths = _playwright_support_digest(root, head_sha, profile)
+        protected_paths = tuple(sorted(set(obligation.artifact_paths) | set(support_paths)))
+        changed = _changed_paths(root, base_sha, head_sha, protected_paths)
+        changed.update(_dirty_playwright_support(root))
+        if changed:
+            return RunnerExecution(obligation.obligation_id, EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified Playwright support cannot solely certify itself: " + ", ".join(sorted(changed)))
+        base_execution, base_ids = _collect_playwright_at_base(root, base_sha, obligation.artifact_paths, config)
+        if base_execution.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
+        head_collection, _head_ids = _run_playwright(
+            root, obligation.artifact_paths, config.timeout_seconds, config,
+            base_ids, collection=True,
+        )
+        if head_collection.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, head_collection.outcome, head_collection.command_digest, head_collection.detail)
+        head_execution, _head_ids = _run_playwright(
+            root, obligation.artifact_paths, config.timeout_seconds, config, base_ids
+        )
+        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
     profile = VerificationProfile(
         UnitId("runner-closure", PurePosixPath("closure.prompt"), "python"),
         (obligation,),
