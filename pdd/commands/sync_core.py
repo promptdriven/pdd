@@ -206,7 +206,7 @@ def certify(
             )
             if replay_ledger.exists() and not replay_ledger.is_dir():
                 raise ValueError("global --replay-ledger must be a directory")
-            replay_ledger.mkdir(parents=True, exist_ok=True)
+            replay_ledger.mkdir(mode=0o700, parents=True, exist_ok=True)
             candidate_policy = candidate_artifact_policy_from_environment()
             candidate_policy.replay_ledger_path = (
                 replay_ledger / "candidate-artifacts.json"

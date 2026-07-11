@@ -33,16 +33,22 @@ def _unlock(descriptor: int) -> None:
     fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
-def _safe_parent(path: Path) -> tuple[int, os.stat_result]:
-    """Traverse to the ledger parent from an anchored root without following links."""
-    if path.name in {"", ".", ".."} or path.is_absolute() is False:
-        path = path.absolute()
+def _safe_directory(metadata: os.stat_result) -> bool:
+    """Return whether metadata describes a private checker-owned directory."""
+    return (
+        stat.S_ISDIR(metadata.st_mode)
+        and (not hasattr(os, "getuid") or metadata.st_uid == os.getuid())
+        and not stat.S_IMODE(metadata.st_mode) & 0o077
+    )
+
+
+def _legacy_safe_parent(path: Path) -> tuple[int, os.stat_result]:
+    """Preserve strict filesystem-root validation for unanchored callers."""
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
     try:
         descriptor = os.open(path.anchor, flags)
         for component in path.parent.parts[1:]:
-            if component in {"", ".", ".."}:
-                raise DescriptorStoreError("replay ledger parent is unsafe")
             try:
                 child = os.open(component, flags, dir_fd=descriptor)
             except FileNotFoundError:
@@ -56,18 +62,63 @@ def _safe_parent(path: Path) -> tuple[int, os.stat_result]:
                 raise DescriptorStoreError("replay ledger parent is unsafe")
             os.close(descriptor)
             descriptor = child
-    except (OSError, NotImplementedError) as exc:
-        try:
+    except (OSError, NotImplementedError, DescriptorStoreError) as exc:
+        if descriptor >= 0:
             os.close(descriptor)
-        except (UnboundLocalError, OSError):
-            pass
+        if isinstance(exc, DescriptorStoreError):
+            raise
         raise DescriptorStoreError("replay ledger parent is unsafe") from exc
     opened = os.fstat(descriptor)
-    if (
-        not stat.S_ISDIR(opened.st_mode)
-        or (hasattr(os, "getuid") and opened.st_uid != os.getuid())
-        or stat.S_IMODE(opened.st_mode) & 0o077
-    ):
+    if not _safe_directory(opened):
+        os.close(descriptor)
+        raise DescriptorStoreError("replay ledger parent is unsafe")
+    return descriptor, opened
+
+
+def _safe_parent(
+    path: Path, trust_root: Path | None
+) -> tuple[int, os.stat_result]:
+    """Traverse below a checker-owned trust root without following links."""
+    path = path.absolute()
+    if path.name in {"", ".", ".."}:
+        raise DescriptorStoreError("replay ledger parent is unsafe")
+    if trust_root is None:
+        return _legacy_safe_parent(path)
+    trust_root = trust_root.absolute()
+    try:
+        relative_parent = path.parent.relative_to(trust_root)
+    except ValueError as exc:
+        raise DescriptorStoreError("replay ledger escapes protected root") from exc
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor = os.open(trust_root, flags)
+        root_metadata = os.fstat(descriptor)
+        if not _safe_directory(root_metadata):
+            raise DescriptorStoreError("replay ledger root is unsafe")
+        for component in relative_parent.parts:
+            if component in {"", ".", ".."}:
+                raise DescriptorStoreError("replay ledger parent is unsafe")
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            metadata = os.fstat(child)
+            if not _safe_directory(metadata):
+                os.close(child)
+                raise DescriptorStoreError("replay ledger parent is unsafe")
+            os.close(descriptor)
+            descriptor = child
+    except (OSError, NotImplementedError, DescriptorStoreError) as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if isinstance(exc, DescriptorStoreError):
+            raise
+        raise DescriptorStoreError("replay ledger parent is unsafe") from exc
+    opened = os.fstat(descriptor)
+    if not _safe_directory(opened):
         os.close(descriptor)
         raise DescriptorStoreError("replay ledger parent is unsafe")
     return descriptor, opened
@@ -128,11 +179,17 @@ def _write_json(parent_fd: int, name: str, payload: Any) -> None:
 
 
 def update_json(
-    path: Path, empty: Any, update: Callable[[Any], Any]
+    path: Path,
+    empty: Any,
+    update: Callable[[Any], Any],
+    *,
+    trust_root: Path | None = None,
 ) -> Any:
-    """Lock and update one JSON ledger using only its held parent descriptor."""
-    path = Path(path)
-    parent_fd, identity = _safe_parent(path)
+    """Update JSON below an explicit checker-owned descriptor trust anchor."""
+    path = Path(path).absolute()
+    parent_fd, identity = _safe_parent(
+        path, Path(trust_root) if trust_root is not None else None
+    )
     lock_name = f"{path.name}.lock"
     lock_fd = -1
     try:
