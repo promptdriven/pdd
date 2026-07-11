@@ -8,9 +8,27 @@ from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner
+import pytest
 
 from pdd import cli
 from pdd.continuous_sync import SyncUnit, classify_unit
+from pdd.sync_determine_operation import calculate_current_hashes
+
+
+def _write_fingerprint(project: Path, basename: str, hashes: dict) -> None:
+    meta = project / ".pdd" / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / f"{basename}_python.json").write_text(
+        json.dumps(
+            {
+                "pdd_version": "0.0-test",
+                "timestamp": "2026-07-11T00:00:00+00:00",
+                "command": f"pdd sync {basename}",
+                **hashes,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_global_dry_run_json_discovers_absolute_configured_prompt_root_once(
@@ -332,3 +350,174 @@ def test_missing_prompt_repair_uses_bounded_pruned_traversal(
     assert report["failure"] == "repair_traversal_budget"
     assert "repair search exceeded traversal budget" in report["reason"]
     assert "node_modules" not in json.dumps(report["paths"])
+
+
+def test_configured_outputs_without_architecture_remain_in_sync(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    code = project / "src" / "widget.py"
+    example = project / "samples" / "widget_example.py"
+    test_file = project / "checks" / "test_widget.py"
+    for path, content in (
+        (prompt, "widget\n"),
+        (code, "value = 1\n"),
+        (example, "print('widget')\n"),
+        (test_file, "def test_widget(): pass\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      prompts_dir: prompts\n      generate_output_path: src/\n"
+        "      example_output_path: samples/\n      test_output_path: checks/\n",
+        encoding="utf-8",
+    )
+    paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": test_file,
+        "test_files": [test_file],
+    }
+    _write_fingerprint(project, "widget", calculate_current_hashes(paths))
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "IN_SYNC"
+    assert report["paths"]["code"] == "src/widget.py"
+    assert report["paths"]["example"] == "samples/widget_example.py"
+    assert report["paths"]["test"] == "checks/test_widget.py"
+
+
+def test_live_include_hash_is_independent_of_nested_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    nested = project / "nested"
+    prompts.mkdir(parents=True)
+    nested.mkdir()
+    prompt = prompts / "widget_python.prompt"
+    dependency = project / "shared.txt"
+    prompt.write_text('<include path="shared.txt">\nwidget\n', encoding="utf-8")
+    dependency.write_text("trusted\n", encoding="utf-8")
+    (nested / "shared.txt").write_text("cwd-dependent\n", encoding="utf-8")
+    paths = {"prompt": prompt, "code": project / "widget.py", "example": project / "examples/widget_example.py", "test": project / "tests/test_widget.py", "test_files": [project / "tests/test_widget.py"]}
+    for key in ("code", "example", "test"):
+        paths[key].parent.mkdir(parents=True, exist_ok=True)
+        paths[key].write_text(f"{key}\n", encoding="utf-8")
+    monkeypatch.chdir(project)
+    hashes = calculate_current_hashes(paths, dependency_root=project)
+    _write_fingerprint(project, "widget", hashes)
+    monkeypatch.chdir(nested)
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "IN_SYNC"
+
+
+@pytest.mark.parametrize("include_kind", ["absolute", "symlink"])
+def test_live_include_rejects_unsafe_target(
+    tmp_path: Path,
+    include_kind: str,
+) -> None:
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    if include_kind == "absolute":
+        reference = str(outside)
+    else:
+        link = project / "linked.txt"
+        try:
+            link.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        reference = "linked.txt"
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text(f'<include path="{reference}">\nwidget\n', encoding="utf-8")
+    _write_fingerprint(project, "widget", {"prompt_hash": "stored", "code_hash": None, "example_hash": None, "test_hash": None, "test_files": None, "include_deps": {}})
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "hash_calculation"
+
+
+def test_symlinked_architecture_is_rejected_before_read(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    outside = tmp_path / "architecture.json"
+    outside.write_text("[]", encoding="utf-8")
+    try:
+        (project / "architecture.json").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "unsafe_architecture"
+
+
+@pytest.mark.parametrize("value", ["[]", "7", "true", "'   '"])
+def test_invalid_prompts_dir_value_emits_invalid_pddrc_json(
+    tmp_path: Path,
+    monkeypatch,
+    value: str,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: " + value + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
+
+    report = json.loads(result.output)
+    assert report["failures"][0]["failure"] == "invalid_pddrc"
+
+
+def test_unexpandable_prompts_dir_emits_invalid_pddrc_json(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: ~pdd_user_that_does_not_exist/prompts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
+
+    report = json.loads(result.output)
+    assert report["failures"][0]["failure"] == "invalid_pddrc"
+
+
+def test_malformed_string_include_path_is_unit_scoped_failure(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    _write_fingerprint(project, "widget", {"prompt_hash": "stored", "code_hash": None, "example_hash": None, "test_hash": None, "test_files": None, "include_deps": {"bad\u0000path": "digest"}})
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["failure"] == "unsafe_include_deps"
+    assert report["unsafe_include_deps"] == [{"path": "bad\u0000path", "reason": "invalid_path"}]
