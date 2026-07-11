@@ -1049,28 +1049,37 @@ def _playwright_source_syntax(
     bare: set[str] = set()
     resources: set[str] = set()
     snapshot = False
-    allowed_calls = {
-        "test", "describe", "expect", "check",
+    assertion_calls = {
         "toBe", "toEqual", "toStrictEqual", "toBeTruthy", "toBeFalsy",
         "toContain", "toMatch", "toHaveTitle", "toHaveURL", "toBeVisible",
         "toBeHidden", "toHaveText", "toContainText", "toHaveValue",
-        "toHaveScreenshot", "toMatchSnapshot", "includes", "append",
-        "click", "fill", "goto", "locator", "getByRole", "getByText",
-        "waitFor", "press", "selectOption", "uncheck",
-        "addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR",
+        "toHaveScreenshot", "toMatchSnapshot", "toBeEnabled", "toBeDisabled",
+        "toBeChecked", "toHaveAttribute", "toHaveClass", "toHaveCount",
+        "toHaveCSS", "toHaveJSProperty", "toHaveId", "toHaveAccessibleName",
+    }
+    test_calls = {
         "use", "beforeEach", "afterEach", "beforeAll", "afterAll", "step",
-        "waitForSelector", "toBeEnabled", "toBeDisabled", "toBeChecked",
-        "toHaveAttribute", "toHaveClass", "toHaveCount", "toHaveCSS",
-        "toHaveJSProperty", "toHaveId", "toHaveAccessibleName",
+        "configure",
     }
+    page_calls = {
+        "goto", "locator", "getByRole", "getByText", "getByTestId",
+        "waitForSelector", "addInitScript", "addScriptTag", "addStyleTag",
+        "routeFromHAR", "mainFrame",
+    }
+    locator_calls = {
+        "click", "fill", "filter", "first", "last", "nth", "hover",
+        "waitFor", "press", "selectOption", "uncheck", "locator",
+        "getByRole", "getByText", "getByTestId",
+    }
+    frame_calls = {
+        "goto", "locator", "getByRole", "getByText", "getByTestId",
+        "waitForSelector",
+    }
+    allowed_calls = {
+        "test", "describe", "expect", "check",
+        "includes", "append",
+    } | assertion_calls | test_calls | page_calls | locator_calls | frame_calls
     resource_calls = {"addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR"}
-    test_calls = {"use", "beforeEach", "afterEach", "beforeAll", "afterAll", "step"}
-    matcher_calls = {name for name in allowed_calls if name.startswith("to")}
-    browser_calls = {
-        "click", "fill", "goto", "locator", "getByRole", "getByText",
-        "waitFor", "waitForSelector", "press", "selectOption", "uncheck",
-        "addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR",
-    }
     reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
     local_callables: set[str] = set()
     discovery = [tree.root_node]
@@ -1158,16 +1167,28 @@ def _playwright_source_syntax(
                     raise ValueError(
                         "Playwright test capability is not valid for this receiver"
                     )
-                if name in matcher_calls and "expect(" not in receiver:
+                if name in assertion_calls and "expect(" not in receiver:
                     raise ValueError(
                         "Playwright assertion capability is not valid for this receiver"
                     )
-                if name in browser_calls and not any(
-                    token in receiver
-                    for token in (
-                        "page", "locator", "context", "frame", "request",
-                        "browser", "dialog", "download", "response",
-                    )
+                receiver_methods = {
+                    "locator": locator_calls,
+                    "frame": frame_calls,
+                    "page": page_calls,
+                }
+                receiver_kind = next(
+                    (kind for kind, methods in receiver_methods.items()
+                     if kind in receiver.lower()
+                     or (kind == "locator" and any(
+                         token in receiver for token in
+                         ("getBy", ".filter(", ".first(", ".last(", ".nth(")
+                     ))),
+                    None,
+                )
+                browser_capabilities = page_calls | locator_calls | frame_calls
+                if name in browser_capabilities and (
+                    receiver_kind is None
+                    or name not in receiver_methods[receiver_kind]
                 ):
                     raise ValueError(
                         "Playwright browser capability is not valid for this receiver"
@@ -2229,10 +2250,49 @@ def _playwright_result(
     return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests passed", identities
 
 
-def _run_playwright(
+def _playwright_execution_tree_identity(root: Path) -> str:
+    """Bind every non-Git execution-tree entry, including ignored files."""
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if relative.parts and relative.parts[0] == ".git":
+            continue
+        stat = path.lstat()
+        digest.update(relative.as_posix().encode() + b"\0")
+        digest.update(str(stat.st_mode).encode() + b"\0")
+        if path.is_symlink():
+            digest.update(os.readlink(path).encode())
+        elif path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _playwright_protected_worktree_identity(
+    root: Path, ref: str, paths: tuple[PurePosixPath, ...]
+) -> str:
+    """Bind blob bytes and Git modes for the complete protected closure."""
+    closure = _playwright_support_closure(root, ref, paths, ())
+    config_path, config_source = _playwright_config(root, ref)
+    members = tuple(closure) + ((config_path, config_source),)
+    digest = hashlib.sha256()
+    for path, expected in sorted(members):
+        actual = root / path
+        if actual.is_symlink() or not actual.is_file():
+            return "invalid"
+        digest.update(path.as_posix().encode() + b"\0")
+        digest.update(read_git_mode(root, ref, path).encode() + b"\0")
+        digest.update(expected + b"\0" + actual.read_bytes() + b"\0")
+        executable = bool(actual.stat().st_mode & 0o111)
+        if executable != (read_git_mode(root, ref, path) == "100755"):
+            return "invalid"
+    return digest.hexdigest()
+
+
+def _run_playwright_in_tree(
     root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
     command_root: Path | None = None, collection: bool = False,
+    expected_commit: str | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute exact paths through Playwright's JSON reporter without filters."""
     tool_root = command_root or root
@@ -2271,6 +2331,12 @@ def _run_playwright(
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-playwright-") as directory:
         temporary = Path(directory)
+        commit = expected_commit or subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, check=True,
+        ).stdout.strip()
+        tree_identity = _playwright_execution_tree_identity(root)
+        closure_identity = _playwright_protected_worktree_identity(root, commit, paths)
         command = [
             *prefix, "test", *(path.as_posix() for path in paths),
             f"--config={root / config_path}", "--reporter=json",
@@ -2290,9 +2356,7 @@ def _run_playwright(
                 roles["dependencies"],
                 roles["browser_runtime"],
             ),
-            # Browsers and reporters routinely create checkout-local artifacts;
-            # the immutable Git status check below rejects every such write.
-            writable_roots=(temporary, root),
+            writable_roots=(temporary,),
         )
         if result.returncode == 124:
             return RunnerExecution(
@@ -2304,18 +2368,25 @@ def _run_playwright(
                 "playwright", EvidenceOutcome.ERROR, digest,
                 "Playwright left surviving descendants after execution",
             ), ()
-        mutated = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=root, capture_output=True, text=True, check=False,
+        denied_write = result.returncode != 0 and any(
+            marker in result.stderr
+            for marker in ("Operation not permitted", "Permission denied")
         )
-        if mutated.returncode != 0 or mutated.stdout.strip():
-            changed = ", ".join(
-                line[3:] for line in mutated.stdout.splitlines() if len(line) > 3
-            )
+        current_commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, check=False,
+        )
+        modified = (
+            current_commit.returncode != 0
+            or current_commit.stdout.strip() != commit
+            or _playwright_protected_worktree_identity(root, commit, paths)
+            != closure_identity
+            or _playwright_execution_tree_identity(root) != tree_identity
+        )
+        if modified or denied_write:
             return RunnerExecution(
                 "playwright", EvidenceOutcome.ERROR, digest,
-                "protected Playwright execution tree was modified"
-                + (f": {changed}" if changed else ""),
+                "protected Playwright execution tree was modified",
             ), ()
     try:
         if _playwright_toolchain_identity(
@@ -2333,6 +2404,49 @@ def _run_playwright(
         root, result.stdout, result.returncode, expected, collection
     )
     return RunnerExecution("playwright", outcome, digest, detail), identities
+
+
+def _run_playwright(
+    root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
+    config: RunnerConfig, expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None, collection: bool = False,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run one protocol phase from a fresh exact-commit materialization."""
+    source_root = root
+    tool_root = command_root or root
+    resolved = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, capture_output=True,
+        text=True, check=False,
+    )
+    if resolved.returncode != 0:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            hashlib.sha256(b"invalid-playwright-ref").hexdigest(),
+            "cannot resolve exact Playwright phase commit",
+        ), ()
+    commit = resolved.stdout.strip()
+    with tempfile.TemporaryDirectory(prefix="pdd-playwright-phase-") as directory:
+        phase_root = Path(directory) / "repository"
+        cloned = subprocess.run(
+            ["git", "clone", "-q", "--no-local", "--no-checkout",
+             str(source_root), str(phase_root)],
+            capture_output=True, text=True, check=False,
+        )
+        checked = cloned.returncode == 0 and subprocess.run(
+            ["git", "checkout", "-q", "--detach", commit], cwd=phase_root,
+            capture_output=True, text=True, check=False,
+        ).returncode == 0
+        if not checked:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.COLLECTION_ERROR,
+                hashlib.sha256(commit.encode()).hexdigest(),
+                "cannot create fresh exact-commit Playwright phase tree",
+            ), ()
+        return _run_playwright_in_tree(
+            phase_root, paths, timeout_seconds, config, expected,
+            command_root=tool_root, collection=collection,
+            expected_commit=commit,
+        )
 
 
 def _run_test_node(
