@@ -22,7 +22,11 @@ from pdd.sync_core import (
     verify_global_certificate,
 )
 from pdd.sync_core.lifecycle import _isolated_lifecycle_environment
-from pdd.sync_core.certificate import _nightly_lineage
+from pdd.sync_core.certificate import (
+    _NightlyVerificationPolicy,
+    _nightly_lineage,
+    _nightly_streak,
+)
 
 
 CHECKER = CheckerIdentity(
@@ -85,10 +89,23 @@ def _report(name):
     }
 
 
-def _nightly(path, signer, count=7, *, include_observation=True):
-    start = datetime.now(timezone.utc) - timedelta(days=count - 1)
+def _nightly(
+    path,
+    signer,
+    count=7,
+    *,
+    include_observation=True,
+    candidate_artifact=None,
+    start=None,
+):
+    start = start or datetime.now(timezone.utc) - timedelta(days=count - 1)
     rows = []
     for index in range(count):
+        checked_at = start + timedelta(days=index)
+        row_candidate_artifact = candidate_artifact or _candidate_artifact(
+            issued_at=checked_at - timedelta(minutes=5),
+            expires_at=checked_at + timedelta(minutes=10),
+        )
         reports = [
             {**_report("pdd"), "repository": "pdd"},
             {**_report("pdd_cloud"), "repository": "pdd_cloud"},
@@ -125,11 +142,11 @@ def _nightly(path, signer, count=7, *, include_observation=True):
             "missing_scenarios": [],
             "candidate_wheel_sha256": CANDIDATE_WHEEL_SHA256,
             "dependency_environment_digest": DEPENDENCY_ENVIRONMENT_DIGEST,
-            "candidate_artifact": _candidate_artifact().payload(),
+            "candidate_artifact": row_candidate_artifact.payload(),
         }
         body = {
             "schema_version": 3,
-            "checked_at": (start + timedelta(days=index)).isoformat(),
+            "checked_at": checked_at.isoformat(),
             "checker": CHECKER.payload(),
             "candidate_artifact_policy": CANDIDATE_POLICY.identity(),
             "repositories": reports,
@@ -164,14 +181,31 @@ def _expected_ids(certificate):
     }
 
 
-def _candidate_artifact(source_sha="b" * 40):
+def _candidate_artifact(source_sha="b" * 40, *, issued_at=None, expires_at=None):
+    return _candidate_artifact_with_authority(
+        CANDIDATE_BUILDER,
+        source_sha,
+        issued_at=issued_at,
+        expires_at=expires_at,
+    )
+
+
+def _candidate_artifact_with_authority(
+    authority,
+    source_sha="b" * 40,
+    *,
+    issued_at=None,
+    expires_at=None,
+):
     now = datetime.now(timezone.utc)
+    issued_at = issued_at or now
+    expires_at = expires_at or now + timedelta(minutes=10)
     artifact = CandidateArtifactProvenance(
-        CANDIDATE_BUILDER.issuer,
+        authority.issuer,
         f"candidate-build-{now.timestamp()}",
         f"candidate-build-nonce-{now.timestamp()}",
-        now.isoformat(),
-        (now + timedelta(minutes=10)).isoformat(),
+        issued_at.isoformat(),
+        expires_at.isoformat(),
         CANDIDATE_WHEEL_SHA256,
         source_sha,
         DEPENDENCY_ENVIRONMENT_DIGEST,
@@ -184,21 +218,15 @@ def _candidate_artifact(source_sha="b" * 40):
         CANDIDATE_POLICY.builder_workflow_identity,
         "",
     )
-    unsigned = {key: value for key, value in artifact.payload().items() if key != "signature"}
     return CandidateArtifactProvenance(
-        artifact.issuer,
-        artifact.attestation_id,
-        artifact.nonce,
-        artifact.issued_at,
-        artifact.expires_at,
-        artifact.wheel_sha256,
-        artifact.source_sha,
-        artifact.dependency_lock_sha256,
-        artifact.python,
-        artifact.builder_workflow_identity,
-        CANDIDATE_BUILDER.sign_bytes(
-            json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
-        ),
+        **{
+            **artifact.__dict__,
+            "signature": authority.sign_bytes(
+                json.dumps(
+                    artifact.unsigned_payload(), sort_keys=True, separators=(",", ":")
+                ).encode()
+            ),
+        }
     )
 
 
@@ -674,6 +702,79 @@ def test_signed_nightly_rows_without_observations_do_not_extend_streak(
     )
     assert certificate["counts"]["nightly_streak"] == 0
     assert certificate["ok"] is False
+
+
+def test_signed_nightly_rows_with_untrusted_candidate_artifacts_do_not_extend_streak(
+    tmp_path, monkeypatch
+) -> None:
+    for name in ("pdd", "pdd_cloud"):
+        (tmp_path / name).mkdir()
+    signer = AttestationSigner("certificate-ci", b"g" * 32)
+    attacker = AttestationSigner("attacker-builder", b"z" * 32)
+    nightly = tmp_path / "nightly.jsonl"
+    _nightly(
+        nightly,
+        signer,
+        candidate_artifact=_candidate_artifact_with_authority(attacker),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate.build_canonical_report",
+        lambda root, _options: _report(str(root)),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate._validate_target", lambda target: target
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.certificate.count_vendored_sync_semantics", lambda *_a, **_k: 0
+    )
+    certificate = build_global_certificate(
+        (
+            RepositoryTarget("pdd", tmp_path / "pdd"),
+            RepositoryTarget("pdd_cloud", tmp_path / "pdd_cloud"),
+        ),
+        GlobalCertificateOptions(
+            tmp_path / "replay",
+            LifecycleResult(
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
+                candidate_artifact=_candidate_artifact(),
+            ),
+            nightly,
+            checker_identity=CHECKER,
+            nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
+        ),
+        signer=signer,
+    )
+    assert certificate["counts"]["nightly_streak"] == 0
+    assert certificate["ok"] is False
+
+
+def test_historical_nightly_candidate_artifact_uses_row_checked_at(tmp_path) -> None:
+    signer = AttestationSigner("certificate-ci", b"g" * 32)
+    checked_at = datetime.now(timezone.utc) - timedelta(days=1)
+    artifact = _candidate_artifact(
+        issued_at=checked_at - timedelta(minutes=5),
+        expires_at=checked_at + timedelta(minutes=10),
+    )
+    nightly = tmp_path / "nightly.jsonl"
+    _nightly(nightly, signer, count=1, candidate_artifact=artifact, start=checked_at)
+
+    assert _nightly_streak(
+        nightly,
+        _NightlyVerificationPolicy(
+            signer.public_key_bytes(),
+            signer.issuer,
+            (),
+            CHECKER,
+            CANDIDATE_POLICY,
+        ),
+    ) == 1
 
 
 def test_nightly_lineage_requires_identity_and_ancestry(tmp_path) -> None:
