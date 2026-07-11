@@ -258,6 +258,23 @@ def test_collection_probe_is_checker_owned_not_candidate_shadow(tmp_path) -> Non
     assert not (root / "candidate-probe-loaded").exists()
 
 
+def test_collection_probe_fixed_name_is_not_candidate_shadowable(tmp_path) -> None:
+    root, head = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "pdd_checker_pytest_probe.py").write_text(
+        "import json, os\n"
+        "from pathlib import Path\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    Path('candidate-fixed-probe-loaded').write_text('shadowed')\n"
+        "    output = os.environ.get('PDD_TRUSTED_COLLECTION_OUTPUT')\n"
+        "    if output:\n"
+        "        Path(output).write_text(json.dumps([item.nodeid for item in items]))\n",
+        encoding="utf-8",
+    )
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert not (root / "candidate-fixed-probe-loaded").exists()
+
+
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
     content = "def test_keep(): assert True\ndef test_drop(): assert True\n"
     root, head = _repository(tmp_path, content)
