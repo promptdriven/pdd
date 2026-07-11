@@ -422,34 +422,50 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
     if not isinstance(config, dict):
         return set()
     references: set[PurePosixPath] = set()
-    for key in ("setupFiles", "setupFilesAfterEnv", "reporters", "projects"):
+    for key in ("setupFiles", "setupFilesAfterEnv", "reporters"):
         value = config.get(key, [])
         if not isinstance(value, list):
             raise ValueError(f"Jest {key} must be an array")
         for item in value:
             target = item[0] if isinstance(item, list) and item else item
-            if isinstance(target, str):
-                path = _jest_local_path(target)
-                if path is not None:
-                    references.add(path)
+            if not isinstance(target, str):
+                raise ValueError(f"Jest {key} entry must be a static local path")
+            path = _jest_local_path(target)
+            if path is None:
+                raise ValueError(f"Jest {key} plugin is not bound by this adapter")
+            references.add(path)
     resolver = config.get("resolver")
     if resolver is not None:
         if not isinstance(resolver, str):
             raise ValueError("Jest resolver must be a string")
         path = _jest_local_path(resolver)
-        if path is not None:
-            references.add(path)
+        if path is None:
+            raise ValueError("Jest resolver is not bound by this adapter")
+        references.add(path)
     transforms = config.get("transform", {})
     if not isinstance(transforms, dict):
         raise ValueError("Jest transform must be an object")
     for value in transforms.values():
         target = value[0] if isinstance(value, list) and value else value
-        if isinstance(target, str):
-            path = _jest_local_path(target)
-            if path is not None:
-                references.add(path)
-        elif not isinstance(target, dict):
+        if not isinstance(target, str):
             raise ValueError("Jest transform entry must be a static path")
+        path = _jest_local_path(target)
+        if path is None:
+            raise ValueError("Jest transform is not bound by this adapter")
+        references.add(path)
+    projects = config.get("projects", [])
+    if not isinstance(projects, list):
+        raise ValueError("Jest projects must be an array")
+    for project in projects:
+        if isinstance(project, dict):
+            references.update(_jest_config_references(project))
+        elif isinstance(project, str):
+            path = _jest_local_path(project)
+            if path is None:
+                raise ValueError("Jest project is not bound by this adapter")
+            references.add(path)
+        else:
+            raise ValueError("Jest project must be a static local config")
     return references
 
 
@@ -493,6 +509,14 @@ def _jest_support_closure(
         if source is None:
             raise ValueError(f"Jest support path is missing: {path.as_posix()}")
         paths.add(path)
+        if path.suffix == ".json":
+            try:
+                nested_config = json.loads(source.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Jest project config is invalid: {path.as_posix()}") from exc
+            if path.name == "package.json" and isinstance(nested_config, dict):
+                nested_config = nested_config.get("jest", {})
+            pending.extend(_jest_config_references(nested_config) - visited)
         pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
     return tuple((path, read_git_blob(root, ref, path)) for path in sorted(paths) if read_git_blob(root, ref, path) is not None)
 
