@@ -1491,6 +1491,13 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
         text = source.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Playwright configuration must be UTF-8") from exc
+    declarative_config = re.fullmatch(
+        r"(?:import\s+['\"]\.{1,2}/[^'\"]+['\"]\s*;?\s*)*"
+        r"export\s+default\s*\{[\s\S]*\}\s*;?",
+        text.strip(),
+    )
+    if declarative_config is None:
+        raise ValueError("Playwright configuration must be a declarative object literal")
     # Playwright config is executable code.  Only accept the deliberately small,
     # directly inspectable object-literal subset; syntactic indirection makes a
     # security decision based on token matching unsound.
@@ -1575,8 +1582,16 @@ def _playwright_support_closure(
                 raise ValueError(f"Playwright source is not UTF-8: {path.as_posix()}") from exc
             if re.search(r"\bimport\s*\(\s*(?!['\"])", text) or re.search(
                 r"\b(?:const|let|var)\s+\w+\s*=\s*require\b", text
+            ) or re.search(
+                r"\b(?:module\.)?require\s*\(\s*(?!['\"])", text
+            ) or re.search(
+                r"(?:globalThis|global|window)\s*\[\s*['\"]require['\"]\s*\]", text
             ):
                 raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            if re.search(r"process\s*\.\s*getBuiltinModule\s*\(", text) or re.search(
+                r"expect\s*\([^)]*\)\s*\[", text
+            ):
+                raise ValueError("reflective Playwright runtime resource access is not supported")
             if re.search(
                 r"(?:from\s+|import\s*\(|require\s*\()\s*['\"](?:node:)?fs(?:/[^'\"]*)?['\"]",
                 text,
@@ -2363,6 +2378,56 @@ def _directory_identity(path: Path) -> str:
         except OSError:
             data = b"<unreadable>"
         digest.update(relative + b"\0" + data + b"\0")
+    return digest.hexdigest()
+
+
+def _manifest_path_identity(path: Path, seen: set[Path]) -> bytes:
+    """Return identity bytes for a declared path and symlink target closure."""
+    absolute = path.absolute()
+    if absolute in seen:
+        return b"cycle\0" + str(absolute).encode()
+    seen.add(absolute)
+    try:
+        if path.is_symlink():
+            target_text = os.readlink(path)
+            target = (path.parent / target_text).absolute()
+            return (
+                b"link\0" + str(path).encode() + b"\0" + target_text.encode()
+                + b"\0" + _manifest_path_identity(target, seen)
+            )
+        if path.is_file():
+            return b"file\0" + str(path).encode() + b"\0" + path.read_bytes()
+        if path.is_dir():
+            content = bytearray(b"dir\0" + str(path).encode() + b"\0")
+            for child in sorted(path.iterdir(), key=lambda item: item.name):
+                content.extend(_manifest_path_identity(child, seen.copy()))
+                content.extend(b"\0")
+            return bytes(content)
+    except OSError as exc:
+        return b"error\0" + str(path).encode() + b"\0" + str(exc).encode()
+    return b"missing\0" + str(path).encode()
+
+
+def _toolchain_manifest_identity(manifest_path: Path) -> str:
+    """Hash a strict protected Playwright toolchain manifest and its closure."""
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Playwright toolchain manifest is invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {"version", "files"}:
+        raise ValueError("Playwright toolchain manifest has unknown fields")
+    files = payload.get("files")
+    if payload.get("version") != 1 or not isinstance(files, list) or not files:
+        raise ValueError("Playwright toolchain manifest schema is invalid")
+    if not all(isinstance(item, str) and item for item in files):
+        raise ValueError("Playwright toolchain manifest files are invalid")
+    digest = hashlib.sha256(manifest_path.read_bytes() + b"\0")
+    for item in files:
+        declared = Path(item)
+        if declared.is_absolute() or ".." in declared.parts:
+            raise ValueError("Playwright toolchain manifest path escapes its root")
+        digest.update(_manifest_path_identity(manifest_path.parent / declared, set()))
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -3350,6 +3415,12 @@ def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | Non
         return "Playwright command options are not trusted in the protected prefix"
     if not Path(command[1]).expanduser().is_absolute():
         return "Playwright CLI entrypoint must be an absolute external path"
+    executable = Path(command[0]).expanduser()
+    entrypoint = Path(command[1]).expanduser()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        return "Playwright launch executable is missing or not executable"
+    if not entrypoint.is_file():
+        return "Playwright launch entrypoint is missing or is not a file"
     return None
 
 
@@ -3470,7 +3541,8 @@ def _run_playwright(
     command_error = _playwright_command_error(root, prefix)
     if command_error is not None:
         return RunnerExecution(
-            "playwright", EvidenceOutcome.ERROR, "playwright-untrusted", command_error
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", command_error,
         ), ()
     node_modules = _external_node_modules_root(root, prefix)
     try:
@@ -3497,6 +3569,11 @@ def _run_playwright(
             )
         except subprocess.TimeoutExpired:
             return RunnerExecution("playwright", EvidenceOutcome.TIMEOUT, digest, "Playwright execution timed out"), ()
+        except OSError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
+                f"Playwright launch failed: {exc}",
+            ), ()
     outcome, detail, identities = _playwright_result(
         root, result.stdout, result.returncode, expected, collection
     )
@@ -4350,7 +4427,9 @@ def run_obligation(
             if command_error is not None:
                 return RunnerExecution(
                     obligation.obligation_id,
-                    EvidenceOutcome.ERROR,
+                    EvidenceOutcome.COLLECTION_ERROR
+                    if command_error.startswith("Playwright launch")
+                    else EvidenceOutcome.ERROR,
                     obligation.validator_config_digest,
                     command_error,
                 )

@@ -83,6 +83,8 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["adapter_identities"] = [
             list(item) for item in binding.adapter_identities
         ]
+    if binding.playwright_command is not None:
+        payload["binding"]["playwright_command"] = list(binding.playwright_command)
     return payload
 
 
@@ -127,6 +129,13 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             or len(set(adapter_identities)) != len(adapter_identities)
         ):
             raise TypeError("adapter_identities must be sorted and unique")
+        command_data = binding_data.get("playwright_command")
+        if command_data is not None and (
+            not isinstance(command_data, list)
+            or len(command_data) != 2
+            or not all(isinstance(item, str) and item for item in command_data)
+        ):
+            raise TypeError("playwright_command must be two non-empty strings")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -137,10 +146,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "checked_sha"),
             adapter_identities=adapter_identities,
             playwright_command=(
-                tuple(binding_data["playwright_command"])
-             if isinstance(binding_data.get("playwright_command"), list)
-             and all(isinstance(item, str) for item in binding_data["playwright_command"])
-             else None,
+                tuple(command_data) if command_data is not None else None
             ),
         )
         results = tuple(
