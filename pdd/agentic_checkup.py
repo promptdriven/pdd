@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -180,12 +181,38 @@ def _finalize_hosted_agentic_artifact(
     if not artifact_path:
         return None
     path = Path(artifact_path)
+
+    def _atomic_publish(obj: Dict[str, Any]) -> None:
+        """Atomically replace ``path`` with ``obj`` (temp + os.replace).
+
+        A partial or interrupted write can never leave a truncated — or
+        stale — artifact behind (issue #1788).
+        """
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+            delete=False,
+        )
+        try:
+            tmp.write(json.dumps(obj, indent=2))
+            tmp.close()
+            os.replace(tmp.name, str(path))
+        except OSError:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+            raise
+
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            return None
+            raise ValueError("hosted agentic artifact must be a JSON object")
         if payload.get("schema_version") != "pdd.checkup.agentic.v1":
-            return None
+            raise ValueError("unexpected hosted agentic artifact schema")
 
         layer1 = payload.get("layer1")
         if not isinstance(layer1, dict):
@@ -220,12 +247,46 @@ def _finalize_hosted_agentic_artifact(
                 "reason", "Canonical final gate did not produce a shippable verdict."
             )
 
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        _atomic_publish(payload)
         return str(path)
     except (OSError, ValueError, TypeError) as exc:
         logger.warning(
             "Failed to finalize hosted agentic artifact (%s)", type(exc).__name__
         )
+        # Fail closed: when the canonical final gate did NOT pass, the hosted
+        # artifact must never remain consumable as a pass. If finalization
+        # could not downgrade it, atomically replace it with a minimal blocking
+        # tombstone, or remove it, so a stale ``status="passed"`` can never
+        # survive a read/parse/write failure (issue #1788).
+        if not canonical_passed:
+            try:
+                _atomic_publish(
+                    {
+                        "schema_version": "pdd.checkup.agentic.v1",
+                        "status": "failed",
+                        "authority": "canonical_fail_agentic_not_authoritative",
+                        "layer1": {
+                            "status": "fail",
+                            "blockers": [
+                                "Canonical final gate did not produce a "
+                                "shippable verdict."
+                            ],
+                        },
+                        "verdict": {
+                            "decision": "block",
+                            "reason": (
+                                "Canonical final gate did not produce a "
+                                "shippable verdict; hosted artifact "
+                                "finalization failed."
+                            ),
+                        },
+                    }
+                )
+            except OSError:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return None
 
 

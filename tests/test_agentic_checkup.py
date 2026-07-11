@@ -900,6 +900,63 @@ class TestRunAgenticCheckup:
         assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
         assert payload["verdict"]["decision"] == "block"
 
+    def test_finalize_hosted_artifact_failclosed_when_publish_fails(self, tmp_path):
+        """Issue #1788: a canonical FAILURE must never leave a consumable pass,
+        even when the atomic publish itself fails."""
+        path = tmp_path / "agentic.json"
+        # A Layer 2 mirror left a PASSING artifact on disk.
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "layer1": {"status": "pass", "blockers": []},
+                    "verdict": {"decision": "pass", "reason": "clean"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        # Canonical gate FAILED, but every atomic publish (os.replace) fails.
+        with patch(
+            "pdd.agentic_checkup.os.replace", side_effect=OSError("no rename")
+        ):
+            result = _finalize_hosted_agentic_artifact(
+                str(path), canonical_passed=False
+            )
+        assert result is None
+        # The prior PASS must not survive: removed, or left non-pass.
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            assert payload.get("status") != "passed"
+            assert payload.get("verdict", {}).get("decision") != "pass"
+
+    def test_finalize_hosted_artifact_failclosed_on_unreadable(self, tmp_path):
+        """Issue #1788: when the prior artifact cannot be parsed and the
+        canonical gate FAILED, replace it with a blocking tombstone rather than
+        leaving an ambiguous/consumable file."""
+        path = tmp_path / "agentic.json"
+        path.write_text("{ not valid json", encoding="utf-8")
+        result = _finalize_hosted_agentic_artifact(str(path), canonical_passed=False)
+        assert result is None
+        assert path.exists()
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["status"] == "failed"
+        assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
+        assert payload["verdict"]["decision"] == "block"
+
+    def test_finalize_hosted_artifact_canonical_pass_untouched_on_bad_schema(
+        self, tmp_path
+    ):
+        """A canonical PASS must not fabricate/alter an unrelated file: an
+        invalid-schema artifact is left as-is (returns None, no tombstone)."""
+        path = tmp_path / "agentic.json"
+        original = json.dumps({"schema_version": "something.else", "x": 1})
+        path.write_text(original, encoding="utf-8")
+        result = _finalize_hosted_agentic_artifact(str(path), canonical_passed=True)
+        assert result is None
+        assert path.read_text(encoding="utf-8") == original
+
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch(
