@@ -1,5 +1,7 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
+import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -18,12 +20,210 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
-from pdd.sync_core.runner import vitest_validator_config_digest
-from pdd.sync_core.runner import _local_javascript_imports
+from pdd.sync_core.runner import (
+    _local_javascript_imports,
+    _protected_command_error,
+    _run_vitest,
+    _vitest_environment,
+    _vitest_result,
+    vitest_validator_config_digest,
+)
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        "--testNamePattern=smoke",
+        "--project=unit",
+        "--shard=1/2",
+        "--related=src/widget.ts",
+        "--retry=3",
+        "--repeat=2",
+        "--update",
+    ],
+)
+def test_vitest_command_schema_rejects_non_launcher_controls(
+    tmp_path: Path, control: str
+) -> None:
+    launcher = tmp_path / "node"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    entrypoint = tmp_path / "vitest.mjs"
+    entrypoint.write_text("", encoding="utf-8")
+
+    assert _protected_command_error(
+        tmp_path, (str(launcher), str(entrypoint), control)
+    ) is not None
+
+
+def test_vitest_prior_retry_failure_cannot_normalize_to_pass(tmp_path: Path) -> None:
+    output = tmp_path / "results.json"
+    output.write_text(
+        json.dumps(
+            {
+                "testResults": [
+                    {
+                        "name": str(tmp_path / "tests/widget.test.ts"),
+                        "assertionResults": [
+                            {
+                                "title": "widget works",
+                                "fullName": "widget works",
+                                "status": "passed",
+                                "failureMessages": ["first attempt failed"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    outcome, _detail, _identities = _vitest_result(tmp_path, output, 0, None)
+    assert outcome is not EvidenceOutcome.PASS
+
+
+def test_vitest_declared_product_is_excluded_from_support_digest(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "src").mkdir()
+    (root / "src/product.ts").write_text("export const value = 1;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import '../src/product';\nimport { test } from 'vitest';\ntest('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "import declared product")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    products = (PurePosixPath("src/product.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths, products)
+    (root / "src/product.ts").write_text("export const value = 2;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change product")
+    assert vitest_validator_config_digest(root, "HEAD", paths, products) == before
+
+
+def test_vitest_ast_binds_static_template_loader_and_rejects_runtime_config(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/resource.ts").write_text("export default 'base';\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import(`./resource`);\nimport { test } from 'vitest';\ntest('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add static template loader")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths)
+    (root / "tests/resource.ts").write_text("export default 'changed';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change loaded resource")
+    assert vitest_validator_config_digest(root, "HEAD", paths) != before
+    (root / "snapshot-environment.ts").write_text("export {};\n", encoding="utf-8")
+    (root / "vitest.config.json").write_text(
+        '{"test":{"snapshotEnvironment":"./snapshot-environment.ts"}}', encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "unsupported runtime config")
+    with pytest.raises(ValueError, match="snapshotEnvironment"):
+        vitest_validator_config_digest(root, "HEAD", paths)
+
+
+def test_vitest_rejects_nonregular_git_closure_members(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    target = tmp_path / "outside.ts"
+    target.write_text("export {};\n", encoding="utf-8")
+    (root / "setup.ts").symlink_to(target)
+    (root / "vitest.config.json").write_text(
+        '{"test":{"setupFiles":["./setup.ts"]}}', encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "symlink support")
+    with pytest.raises(ValueError, match="regular|symlink"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_environment_drops_protected_host_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "steal-me")
+    monkeypatch.setenv("AWS_PROFILE", "production")
+    environment = _vitest_environment(tmp_path)
+    assert "PDD_ATTESTATION_SIGNER_COMMAND" not in environment
+    assert "AWS_PROFILE" not in environment
+
+
+def test_vitest_execution_uses_shared_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    invoked = False
+
+    def supervised(*_args, **_kwargs):
+        nonlocal invoked
+        invoked = True
+        return subprocess.CompletedProcess([], 1, "", ""), set()
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", supervised)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.subprocess.run",
+        lambda *_args, **_kwargs: pytest.fail("Vitest bypassed shared supervision"),
+    )
+    _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        1,
+        RunnerConfig(vitest_command=(sys.executable, str(_fake_vitest(tmp_path)))),
+    )
+    assert invoked
+
+
+def test_vitest_toolchain_descriptor_is_required_and_typed(tmp_path: Path) -> None:
+    fields = RunnerConfig.__dataclass_fields__
+    assert "vitest_toolchain_manifest" in fields
+    assert "vitest_toolchain_identity" in fields
+
+
+def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = tmp_path / "mutating_vitest.py"
+    runner.write_text(
+        "import json, os, pathlib\n"
+        "root = pathlib.Path.cwd()\n"
+        "(root / 'tests/widget.test.ts').write_text('// replaced')\n"
+        "pathlib.Path(os.environ['PDD_TRUSTED_VITEST_OUTPUT']).write_text("
+        "json.dumps({'tests':[{'identity':'tests/widget.test.ts::widget works','status':'passed'}]}))\n",
+        encoding="utf-8",
+    )
+    _envelope, executions = _run(root, commit, commit, runner)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+@pytest.mark.parametrize("payload", [[], {"tests": [None]}, {"testResults": None}])
+def test_vitest_malformed_json_shapes_fail_closed(tmp_path: Path, payload: object) -> None:
+    output = tmp_path / "results.json"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+    outcome, _detail, identities = _vitest_result(tmp_path, output, 0, None)
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+def test_vitest_missing_launcher_is_normalized(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        1,
+        RunnerConfig(vitest_command=(str(tmp_path / "missing-node"),)),
+    )
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert identities == ()
 
 
 def _git(root: Path, *args: str) -> str:
