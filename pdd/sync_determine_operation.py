@@ -1583,21 +1583,39 @@ def _get_filepath_from_architecture(
             if cached is not None:
                 return cached
 
-            if (
-                not isinstance(filepath, str)
-                or _contained_architecture_code_path(
-                    architecture_path.parent.resolve(strict=False), filepath
-                ) is None
-            ):
+            root_resolved = architecture_path.parent.resolve(strict=False)
+            contained = (
+                _contained_architecture_code_path(root_resolved, filepath)
+                if isinstance(filepath, str)
+                else None
+            )
+            if contained is None:
                 borrow_ownership_cache[cache_key] = False
                 return False
 
-            if _filepath_owned_by_other_context(
-                filepath,
-                resolved_context_name,
-                pddrc_anchor,
-                config_snapshot=territory_config,
-                project_root=territory_project_root,
+            # Sibling-territory ownership is checked against BOTH the lexical
+            # filepath and its RESOLVED project-relative identity. An in-project
+            # symlink (e.g. ``backend/link`` -> ``frontend/src``) passes project
+            # containment yet physically lands in a sibling context; a lexical-only
+            # check would let that alias smuggle a code target into the sibling.
+            identities = [filepath]
+            try:
+                resolved_rel = contained.relative_to(root_resolved).as_posix()
+            except ValueError:
+                resolved_rel = None
+            if resolved_rel and resolved_rel != PurePosixPath(
+                filepath.replace("\\", "/")
+            ).as_posix():
+                identities.append(resolved_rel)
+            if any(
+                _filepath_owned_by_other_context(
+                    identity,
+                    resolved_context_name,
+                    pddrc_anchor,
+                    config_snapshot=territory_config,
+                    project_root=territory_project_root,
+                )
+                for identity in identities
             ):
                 borrow_ownership_cache[cache_key] = False
                 return False

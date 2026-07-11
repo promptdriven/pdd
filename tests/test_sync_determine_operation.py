@@ -2691,6 +2691,42 @@ def test_get_pdd_file_paths_proven_owner_still_rejects_sibling_context_target(tm
     assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
 
 
+def test_get_pdd_file_paths_rejects_symlinked_code_path_into_sibling_context(tmp_path, monkeypatch):
+    """A code filepath that resolves THROUGH an in-project symlink into a sibling
+    context's territory must be rejected, even though it is lexically inside the
+    resolving context and stays within the project root.
+
+    ``backend/link`` -> ``frontend``, and architecture.json targets
+    ``backend/link/credits.py``. Lexically that is backend territory and passes
+    project containment, but it physically lands in the frontend sibling context.
+    Sibling ownership is checked against the resolved identity, so the borrow is
+    rejected and a backend sync cannot overwrite frontend code through the alias.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "frontend").mkdir()
+    (tmp_path / "backend").mkdir()
+    os.symlink(tmp_path / "frontend", tmp_path / "backend" / "link")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "backend/link/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    resolved = paths["code"].resolve(strict=False).as_posix()
+    assert not resolved.endswith("frontend/credits.py"), (
+        f"symlinked code path leaked into the frontend sibling context: {resolved!r}"
+    )
+
+
 def test_get_pdd_file_paths_existing_prompt_template_anchored_from_parent_cwd(tmp_path, monkeypatch):
     """An EXISTING prompt's template outputs must anchor at the subproject too.
 
