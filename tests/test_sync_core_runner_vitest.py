@@ -19,6 +19,7 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
+from pdd.sync_core.runner import vitest_validator_config_digest
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -71,8 +72,12 @@ def _repository(
 
 def _run(root: Path, base: str, head: str, fake_vitest: Path, timeout: int = 2):
     paths = (PurePosixPath("tests/widget.test.ts"),)
+    try:
+        config_digest = vitest_validator_config_digest(root, base, paths)
+    except ValueError:
+        config_digest = "invalid-vitest-config"
     obligation = VerificationObligation(
-        "vitest", "test", "vitest", "vitest-config", ("REQ-1",), paths
+        "vitest", "test", "vitest", config_digest, ("REQ-1",), paths
     )
     profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
     return run_profile(
@@ -145,7 +150,7 @@ def test_vitest_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
 def test_vitest_config_and_support_mutation_cannot_pass(
     tmp_path: Path, path: str
 ) -> None:
-    config = '{"test":{"setupFiles":["setup.ts"],"deps":{"moduleDirectories":["transform.ts"]}}}'
+    config = '{"test":{"setupFiles":["setup.ts"]},"transform":{"^.+\\\\.ts$":"transform.ts"}}'
     root, base = _repository(tmp_path, config=config)
     (root / "setup.ts").write_text("export {};\n", encoding="utf-8")
     (root / "transform.ts").write_text("export {};\n", encoding="utf-8")
@@ -190,5 +195,22 @@ def test_vitest_rejects_dynamic_config(tmp_path: Path) -> None:
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "dynamic config")
     commit = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        '{"test":{"watch":true}}',
+        '{"test":{"shard":"1/2"}}',
+        '{"projects":["unit"]}',
+        '{"plugins":["local-plugin"]}',
+    ],
+)
+def test_vitest_rejects_unbound_execution_controls(
+    tmp_path: Path, config: str
+) -> None:
+    root, commit = _repository(tmp_path, config=config)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.ERROR

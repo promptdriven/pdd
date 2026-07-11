@@ -100,6 +100,18 @@ _JAVASCRIPT_SUFFIXES = (
     ".jsx",
     ".json",
 )
+VITEST_CONFIG_PATHS = (
+    PurePosixPath("vitest.config.json"),
+    PurePosixPath("package.json"),
+)
+VITEST_DYNAMIC_CONFIG_NAMES = (
+    "vitest.config.js",
+    "vitest.config.cjs",
+    "vitest.config.mjs",
+    "vitest.config.ts",
+    "vitest.config.cts",
+    "vitest.config.mts",
+)
 
 
 @dataclass(frozen=True)
@@ -108,6 +120,7 @@ class RunnerConfig:
 
     timeout_seconds: int = 300
     jest_command: tuple[str, ...] | None = None
+    vitest_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -778,6 +791,107 @@ def jest_validator_config_digest(
     return digest.hexdigest()
 
 
+def _vitest_config(root: Path, ref: str) -> tuple[PurePosixPath, dict[str, object]]:
+    """Load the only supported, static Vitest configuration forms."""
+    for name in VITEST_DYNAMIC_CONFIG_NAMES:
+        if read_git_blob(root, ref, PurePosixPath(name)) is not None:
+            raise ValueError("dynamic Vitest configuration is not supported")
+    config_path = VITEST_CONFIG_PATHS[0]
+    content = read_git_blob(root, ref, config_path)
+    if content is None:
+        config_path = VITEST_CONFIG_PATHS[1]
+        content = read_git_blob(root, ref, config_path)
+    if content is None:
+        raise ValueError("no static Vitest configuration is present")
+    try:
+        parsed = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Vitest configuration must be valid JSON") from exc
+    if config_path.name == "package.json":
+        parsed = parsed.get("vitest") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        raise ValueError("Vitest configuration must be a JSON object")
+    return config_path, parsed
+
+
+def _vitest_config_references(config: object) -> set[PurePosixPath]:
+    """Find static local Vitest setup and transform support modules."""
+    if not isinstance(config, dict):
+        raise ValueError("Vitest configuration must be a JSON object")
+    for key in ("workspace", "projects", "plugins", "globalSetup"):
+        if config.get(key):
+            raise ValueError(f"Vitest {key} is not bound by this adapter")
+    test_config = config.get("test", {})
+    if not isinstance(test_config, dict):
+        raise ValueError("Vitest test configuration must be an object")
+    for key in ("workspace", "projects", "plugins", "globalSetup"):
+        if test_config.get(key):
+            raise ValueError(f"Vitest {key} is not bound by this adapter")
+    for key in ("testNamePattern", "shard", "watch", "related", "changed"):
+        if test_config.get(key):
+            raise ValueError(f"Vitest {key} is not allowed by this adapter")
+    references: set[PurePosixPath] = set()
+    setup = test_config.get("setupFiles", [])
+    if isinstance(setup, str):
+        setup = [setup]
+    if not isinstance(setup, list):
+        raise ValueError("Vitest setupFiles must be an array")
+    for value in setup:
+        if not isinstance(value, str):
+            raise ValueError("Vitest setupFiles entry must be a static local path")
+        path = _jest_local_path(value)
+        if path is None:
+            raise ValueError("Vitest setup plugin is not bound by this adapter")
+        references.add(path)
+    transforms = config.get("transform", {})
+    if not isinstance(transforms, dict):
+        raise ValueError("Vitest transform must be an object")
+    for value in transforms.values():
+        if not isinstance(value, str):
+            raise ValueError("Vitest transform entry must be a static local path")
+        path = _jest_local_path(value)
+        if path is None:
+            raise ValueError("Vitest transform is not bound by this adapter")
+        references.add(path)
+    return references
+
+
+def _vitest_support_closure(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Return static config and transitive local Vitest support modules."""
+    del test_paths
+    config_path, config = _vitest_config(root, ref)
+    paths = {config_path}
+    pending = list(_vitest_config_references(config))
+    visited: set[PurePosixPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        source = read_git_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Vitest support path is missing: {path.as_posix()}")
+        paths.add(path)
+        pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
+    return tuple(
+        (path, read_git_blob(root, ref, path))
+        for path in sorted(paths)
+        if read_git_blob(root, ref, path) is not None
+    )
+
+
+def vitest_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> str:
+    """Hash static Vitest config and executable local support closure."""
+    digest = hashlib.sha256()
+    for path, content in _vitest_support_closure(root, ref, test_paths):
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
 def _support_digest(
     root: Path, ref: str, profile: VerificationProfile
 ) -> tuple[str, tuple[PurePosixPath, ...]]:
@@ -833,6 +947,26 @@ def _jest_support_digest(
         closure = _jest_support_closure(root, ref, tests, product)
     except ValueError:
         return "invalid-jest-closure", ()
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest(), tuple(path for path, _content in closure)
+
+
+def _vitest_support_digest(
+    root: Path, ref: str, profile: VerificationProfile
+) -> tuple[str, tuple[PurePosixPath, ...]]:
+    """Hash the protected static Vitest support closure for a profile."""
+    tests = tuple(
+        path
+        for obligation in profile.obligations
+        if obligation.validator_id == "vitest"
+        for path in obligation.artifact_paths
+    )
+    try:
+        closure = _vitest_support_closure(root, ref, tests)
+    except ValueError:
+        return "invalid-vitest-closure", ()
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -923,6 +1057,16 @@ def runner_identity_digest(
             "<test-path>",
         ],
         "pytest_environment": {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        "vitest_command": [
+            "<node>",
+            "<local-vitest-binary>",
+            "run",
+            "<protected-test-path>",
+            "--config=<protected-config-path>",
+            "--reporter=json",
+            "--outputFile=<trusted-temp-path>",
+        ],
+        "vitest_environment": {"NODE_ENV": "test"},
         "obligations": [
             {
                 "id": item.obligation_id,
@@ -941,7 +1085,11 @@ def runner_identity_digest(
         support_closure_digest = _support_digest(root, ref, profile)[0]
         jest_support_digest = _jest_support_digest(root, ref, profile)[0]
         payload["support_closure_digest"] = hashlib.sha256(
-            (support_closure_digest + jest_support_digest).encode()
+            (
+                support_closure_digest
+                + jest_support_digest
+                + _vitest_support_digest(root, ref, profile)[0]
+            ).encode()
         ).hexdigest()
         payload["validator_command_digest"] = _validator_command_identity_digest(
             root, config
@@ -1552,6 +1700,124 @@ def _run_jest(
         return RunnerExecution("jest", outcome, digest, detail), identities
 
 
+def _vitest_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+    """Return an explicit local Vitest argv prefix; never invoke an npm script."""
+    if config.vitest_command is not None:
+        return config.vitest_command
+    node = shutil.which("node")
+    binary = root / "node_modules" / "vitest" / "vitest.mjs"
+    if node is None or not binary.is_file():
+        return None
+    return (node, str(binary))
+
+
+def _vitest_environment(home: Path) -> dict[str, str]:
+    """Return a credential-free, non-ambient environment for Vitest."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
+        and not key.startswith(("VITEST_", "NODE_", "npm_config_", "NPM_CONFIG_"))
+        and key not in {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}
+    } | {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_CACHE_HOME": str(home / "cache"),
+        "NODE_ENV": "test",
+    }
+
+
+def _vitest_result(
+    root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
+) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    """Validate Vitest JSON output and normalize every non-pass state."""
+    try:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        tests = payload.get("tests")
+        if tests is None:
+            tests = [
+                {
+                    "identity": (
+                        Path(item["name"]).resolve().relative_to(root.resolve()).as_posix()
+                        + "::"
+                        + assertion.get("fullName", assertion["title"])
+                    ),
+                    "status": assertion["status"],
+                }
+                for item in payload["testResults"]
+                for assertion in item["assertionResults"]
+            ]
+        if not isinstance(tests, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("identity"), str)
+            and isinstance(item.get("status"), str)
+            for item in tests
+        ):
+            raise ValueError("malformed Vitest reporter payload")
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
+    identities = tuple(sorted(item["identity"] for item in tests))
+    if not identities:
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
+    if len(set(identities)) != len(identities):
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted duplicate test identities", ()
+    if expected is not None and identities != expected:
+        return EvidenceOutcome.QUARANTINED, "checked-head Vitest identities differ from protected base", identities
+    statuses = {item["status"] for item in tests}
+    if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
+    if returncode or "failed" in statuses:
+        return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
+    if statuses - {"passed"}:
+        return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
+    return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
+
+
+def _run_vitest(
+    root: Path,
+    paths: tuple[PurePosixPath, ...],
+    timeout_seconds: int,
+    config: RunnerConfig,
+    expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run exact protected Vitest paths with the built-in JSON reporter."""
+    command_prefix = _vitest_command(command_root or root, config)
+    if command_prefix is None:
+        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
+    try:
+        config_path, _config_data = _vitest_config(root, "HEAD")
+    except ValueError as exc:
+        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
+    with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
+        temporary = Path(directory)
+        output = temporary / "results.json"
+        command = [
+            *command_prefix,
+            "run",
+            *(path.as_posix() for path in paths),
+            f"--config={root / config_path}",
+            "--reporter=json",
+            f"--outputFile={output}",
+        ]
+        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+        try:
+            result = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+                env=_vitest_environment(temporary)
+                | {"PDD_TRUSTED_VITEST_OUTPUT": str(output)},
+            )
+        except subprocess.TimeoutExpired:
+            return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
+        outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
+        return RunnerExecution("vitest", outcome, digest, detail), identities
+
+
 def _run_test_node(
     root: Path,
     node_id: str,
@@ -1805,6 +2071,29 @@ def _dirty_jest_support(root: Path) -> set[str]:
     return dirty
 
 
+def _dirty_vitest_support(root: Path) -> set[str]:
+    """Return dirty executable modules that can change a Vitest run."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {"<unreadable-git-status>"}
+    dirty: set[str] = set()
+    for field in result.stdout.decode(errors="surrogateescape").split("\0"):
+        path = field[3:] if len(field) >= 4 else ""
+        relpath = PurePosixPath(path)
+        if (
+            relpath.name.startswith(("vitest.config.", "vite.config."))
+            or relpath.name == "package.json"
+            or relpath.suffix in {".js", ".cjs", ".mjs", ".ts", ".cts", ".mts", ".tsx", ".jsx"}
+        ):
+            dirty.add(path)
+    return dirty
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -1836,7 +2125,7 @@ def _obligation_preflight(
 ) -> RunnerExecution | None:
     # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
-    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest"}:
+    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest"}:
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -1850,6 +2139,11 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
         )
+    digest_function = {
+        "pytest": pytest_validator_config_digest,
+        "jest": jest_validator_config_digest,
+        "vitest": vitest_validator_config_digest,
+    }[obligation.validator_id]
     try:
         if obligation.validator_id == "pytest":
             expected_config_digests = {
@@ -1858,7 +2152,7 @@ def _obligation_preflight(
             }
         else:
             expected_config_digests = {
-                jest_validator_config_digest(
+                digest_function(
                     root,
                     ref,
                     obligation.artifact_paths,
@@ -1984,6 +2278,35 @@ def _collect_jest_at_base(
         return _run_jest(clone, paths, config.timeout_seconds, config)
 
 
+def _collect_vitest_at_base(
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run protected-base Vitest to establish independently derived identities."""
+    with tempfile.TemporaryDirectory(prefix="pdd-vitest-protected-base-") as directory:
+        clone = Path(directory) / "repository"
+        cloned = subprocess.run(
+            ["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        checked_out = cloned.returncode == 0 and subprocess.run(
+            ["git", "checkout", "-q", "--detach", base_sha],
+            cwd=clone,
+            capture_output=True,
+            check=False,
+        ).returncode == 0
+        if not checked_out:
+            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Vitest clone"), ()
+        return _run_vitest(
+            clone,
+            paths,
+            config.timeout_seconds,
+            config,
+            command_root=root,
+        )
+
+
 def _protected_node_ids(
     root: Path,
     obligation: VerificationObligation,
@@ -2057,13 +2380,41 @@ def _run_obligation_in_tree(
             root, base_sha, obligation.artifact_paths, config
         )
         if base_execution.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
+        head_execution, _head_ids = _run_jest(root, obligation.artifact_paths, config.timeout_seconds, config, base_ids)
+        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
+    if obligation.validator_id == "vitest":
+        profile = VerificationProfile(
+            UnitId("runner-closure", PurePosixPath("closure.prompt"), "typescript"),
+            (obligation,),
+            obligation.requirement_ids,
+            "closure",
+        )
+        _digest, support_paths = _vitest_support_digest(root, head_sha, profile)
+        protected_paths = tuple(
+            sorted(set(obligation.artifact_paths) | set(support_paths))
+        )
+        changed = _changed_paths(root, base_sha, head_sha, protected_paths)
+        changed.update(_dirty_vitest_support(root))
+        if changed:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified Vitest support cannot solely certify itself: "
+                + ", ".join(sorted(changed)),
+            )
+        base_execution, base_ids = _collect_vitest_at_base(
+            root, base_sha, obligation.artifact_paths, config
+        )
+        if base_execution.outcome is not EvidenceOutcome.PASS:
             return RunnerExecution(
                 obligation.obligation_id,
                 base_execution.outcome,
                 base_execution.command_digest,
                 base_execution.detail,
             )
-        head_execution, _head_ids = _run_jest(
+        head_execution, _head_ids = _run_vitest(
             root,
             obligation.artifact_paths,
             config.timeout_seconds,
