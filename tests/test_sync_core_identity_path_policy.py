@@ -3,6 +3,7 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+import subprocess
 from pathlib import PurePosixPath
 
 import pytest
@@ -110,6 +111,80 @@ def test_path_policy_accepts_unchanged_tracked_alias(repository) -> None:
     assert resolved.logical_relpath == PurePosixPath("alias/widget.py")
     assert resolved.canonical_path == repository / "canonical/widget.py"
     assert resolved.alias_relpath == PurePosixPath("alias")
+
+
+def _git(root, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _git_repository(root) -> None:
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "path-policy@example.com")
+    _git(root, "config", "user.name", "Path Policy")
+
+
+def test_path_policy_accepts_unchanged_alias_from_immutable_trees(tmp_path) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "tracked alias")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(tmp_path, base_ref=commit, head_ref=commit)
+    resolved = policy.resolve(PurePosixPath("alias/widget.py"))
+
+    assert resolved.canonical_path == tmp_path / "canonical/widget.py"
+    assert resolved.alias_relpath == PurePosixPath("alias")
+
+
+def test_path_policy_rejects_alias_retarget_between_immutable_trees(tmp_path) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other/widget.py").write_text("value = 2\n", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base alias")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    alias.unlink()
+    alias.symlink_to("other", target_is_directory=True)
+    _git(tmp_path, "add", "alias")
+    _git(tmp_path, "commit", "-q", "-m", "retarget alias")
+    head = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(tmp_path, base_ref=base, head_ref=head)
+    with pytest.raises(PathPolicyError, match="changed in protected trees"):
+        policy.resolve(PurePosixPath("alias/widget.py"))
+
+
+def test_path_policy_rejects_stale_alias_policy_over_real_directory(tmp_path) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "alias").mkdir()
+    (tmp_path / "alias/widget.py").write_text("candidate = True\n", encoding="utf-8")
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "real directory")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("canonical")},
+        base_ref=commit,
+        head_ref=commit,
+    )
+    with pytest.raises(PathPolicyError, match="not an unchanged symlink"):
+        policy.resolve(PurePosixPath("alias/widget.py"))
 
 
 def test_path_policy_rejects_alias_retarget(repository) -> None:
