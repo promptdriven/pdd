@@ -783,12 +783,21 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
         return False
 
 
+# Sentinel distinguishing "read architecture.json from disk" from an explicit
+# (possibly empty) pre-parsed module snapshot. get_pdd_file_paths parses the
+# architecture ONCE and threads that immutable snapshot through prompt discovery
+# and code-path selection so a mid-resolution rewrite of architecture.json cannot
+# produce a torn prompt/code pair (prompt from the old registry, code from the new).
+_ARCH_MODULES_UNSET: Any = object()
+
+
 def _find_prompt_file(
     basename: str,
     language: str,
     prompts_root: Path,
     architecture_path: Optional[Path] = None,
     context_override: Optional[str] = None,
+    arch_modules: Any = _ARCH_MODULES_UNSET,
 ) -> Optional[Path]:
     """Authoritative prompt file resolution — case-insensitive, subdirectory-aware.
 
@@ -828,7 +837,12 @@ def _find_prompt_file(
     # yields context_prefix='backend/utils' so we prefer matches under that path.
     context_prefix = None
     if context_name:
-        pddrc_path = _find_pddrc_file()
+        # Anchor at the prompt root, NOT the process CWD: resolution is often driven
+        # from a parent/sibling directory with an absolute prompts root, and a
+        # CWD-based lookup would miss the project's .pddrc, drop context_prefix, and
+        # let a same-leaf prompt in the WRONG context win the shallowest/lexicographic
+        # tie-break below.
+        pddrc_path = _find_pddrc_file(resolved_prompts_root)
         if pddrc_path:
             try:
                 config = _load_pddrc_config(pddrc_path)
@@ -841,18 +855,29 @@ def _find_prompt_file(
                 pass
 
     # --- Step 1: Direct path (fast path for simple/flat projects) ---
+    # Containment applies to the fast path too: the exact expected prompt may itself
+    # be a file symlink whose target escapes prompts_root. An in-root alias resolves
+    # inside the root and is preserved; an escaping symlink is skipped so a later
+    # update cannot open it with "w" and truncate the external target.
     for candidate_basename in basename_candidates:
         resolved = _case_insensitive_path_lookup(prompts_root / f"{candidate_basename}_{language}.prompt")
-        if resolved:
+        if resolved and _prompt_candidate_within_root(resolved, resolved_prompts_root):
             return resolved
 
     # --- Step 3: Architecture.json hint → recursive search ---
-    if architecture_path and architecture_path.exists():
+    # Use the caller's immutable module snapshot when provided so prompt discovery
+    # and code-path selection agree on ONE architecture view; only re-check the file
+    # on disk when no snapshot was threaded in.
+    have_architecture = architecture_path is not None and (
+        arch_modules is not _ARCH_MODULES_UNSET or architecture_path.exists()
+    )
+    if have_architecture:
         _, arch_filename = _get_filepath_from_architecture(
             architecture_path,
             f"{basename_candidates[0]}_{language}.prompt",
             basename=basename,
             language=language,
+            modules=arch_modules,
         )
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
@@ -861,7 +886,9 @@ def _find_prompt_file(
                 arch_filename = None
         if arch_filename and joined is not None:
             resolved_joined = _case_insensitive_path_lookup(joined)
-            if resolved_joined:
+            if resolved_joined and _prompt_candidate_within_root(
+                resolved_joined, resolved_prompts_root
+            ):
                 return resolved_joined
             # 3b: Case-insensitive in the joined parent directory
             if joined.parent.is_dir():
@@ -964,6 +991,7 @@ def _get_filepath_from_architecture(
     prompts_root: Optional[Path] = None,
     prompt_roots: Optional[Tuple[Path, ...]] = None,
     resolved_context_name: Optional[str] = None,
+    modules: Any = _ARCH_MODULES_UNSET,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Extract filepath for a prompt from architecture.json.
 
@@ -984,6 +1012,9 @@ def _get_filepath_from_architecture(
             heuristic leaf/filepath-stem borrows to that context's territory so a
             stale sibling-context entry cannot redirect the sync (see
             :func:`_context_owned_filepath`).
+        modules: Pre-parsed architecture module snapshot. When left unset the file
+            is read from disk; when supplied (even as ``None``/empty) it is used
+            as-is so caller-shared resolution reads ONE immutable architecture view.
 
     Returns:
         Tuple of (filepath, matched_filename) if found, else (None, None).
@@ -993,10 +1024,10 @@ def _get_filepath_from_architecture(
         - [...] - flat array
     """
     try:
-        with open(architecture_path, 'r', encoding='utf-8') as f:
-            arch = json.load(f)
-
-        modules = extract_modules(arch)
+        if modules is _ARCH_MODULES_UNSET:
+            with open(architecture_path, 'r', encoding='utf-8') as f:
+                arch = json.load(f)
+            modules = extract_modules(arch)
 
         if not modules:
             return None, None
@@ -1260,6 +1291,7 @@ def _architecture_module_choices(
     architecture_path: Path,
     basename: str,
     language: str,
+    modules: Any = _ARCH_MODULES_UNSET,
 ) -> List[str]:
     """Return the distinct canonical output files a BARE basename maps to.
 
@@ -1292,11 +1324,12 @@ def _architecture_module_choices(
     if "/" in basename:
         return []
 
-    try:
-        with open(architecture_path, "r", encoding="utf-8") as handle:
-            modules = extract_modules(json.load(handle))
-    except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
-        return []
+    if modules is _ARCH_MODULES_UNSET:
+        try:
+            with open(architecture_path, "r", encoding="utf-8") as handle:
+                modules = extract_modules(json.load(handle))
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
+            return []
 
     if not modules:
         return []
@@ -1710,6 +1743,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json(prompts_root_anchor)
+        # Parse the architecture ONCE and thread this immutable snapshot through
+        # ambiguity detection, prompt discovery, and code-path selection. Reading it
+        # separately per phase lets an atomic rewrite of architecture.json between
+        # phases pair a prompt from the old registry with a code target from the new
+        # one (torn prompt/code pair); one snapshot also avoids the redundant parse.
+        arch_modules: Any = _ARCH_MODULES_UNSET
+        if arch_path:
+            try:
+                with open(arch_path, "r", encoding="utf-8") as _arch_handle:
+                    arch_modules = extract_modules(json.load(_arch_handle))
+            except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
+                arch_modules = None
         prompt_ownership_roots: Tuple[Path, ...] = (prompts_root_anchor,)
         if arch_path:
             prompt_ownership_roots = _architecture_prompt_roots(
@@ -1723,14 +1768,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # more than one architecture module must not be resolved by silent
         # first-match-wins or written to a generic `<generate_output_path>/page.tsx`.
         if arch_path:
-            ambiguous_choices = _architecture_module_choices(arch_path, basename, language)
+            ambiguous_choices = _architecture_module_choices(
+                arch_path, basename, language, modules=arch_modules
+            )
             if len(ambiguous_choices) > 1:
                 raise AmbiguousModuleError(basename, language, ambiguous_choices)
 
         # Issue #1169: Use _find_prompt_file for authoritative prompt resolution.
         # This handles case-insensitive matching, nested subdirectories, and
         # architecture.json hints in a single code path.
-        resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override)
+        resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override, arch_modules=arch_modules)
         if resolved_prompt:
             prompt_path = str(resolved_prompt)
         else:
@@ -1798,6 +1845,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 prompts_root=prompts_root,
                 prompt_roots=prompt_ownership_roots,
                 resolved_context_name=resolved_context_name,
+                modules=arch_modules,
             )
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")
@@ -1873,7 +1921,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # example/test stem from the canonical code path so the artifacts are
                 # distinct per module. Unique leaves keep the flat stem (backward compat).
                 example_stem = code_stem
-                if arch_path and len(_architecture_module_choices(arch_path, name, language)) > 1:
+                if arch_path and len(_architecture_module_choices(arch_path, name, language, modules=arch_modules)) > 1:
                     example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
 
                 example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"

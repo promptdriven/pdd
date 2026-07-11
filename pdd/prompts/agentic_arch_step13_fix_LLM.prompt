@@ -247,7 +247,8 @@ find prompts -mindepth 2 -name "*.prompt" 2>/dev/null
 #    A slash in `filename` is CORRECT when the `filepath` is nested. The problem is a
 #    FLATTENED filename (underscores, no slash) whose filepath has directories.
 echo "=== architecture.json filename vs filepath (must mirror per Issue #617) ==="
-cat architecture.json | jq -r '.[] | "\(.filename)\tfilepath=\(.filepath)"' 2>/dev/null || echo "None found"
+# Handle BOTH formats: {"modules": [...]} and a bare [...] array via (.modules // .)[].
+cat architecture.json | jq -r '(.modules // .)[] | "\(.filename)\tfilepath=\(.filepath)"' 2>/dev/null || echo "None found"
 
 # 3. Check for orphan code files at wrong paths
 echo "=== Potential orphan code files ==="
@@ -526,7 +527,7 @@ Before fixing the validation error, clean up ALL incorrectly placed artifacts:
 # A. Find and list problems
 echo "=== Checking for flattened filenames in architecture.json (WRONG per Issue #617) ==="
 # Filenames should mirror filepath (contain /). Flat names like prisma_schema_Prisma.prompt are wrong.
-cat architecture.json | jq -r '.[] | "\(.filename) | \(.filepath)"' | while IFS='|' read -r fn fp; do
+cat architecture.json | jq -r '(.modules // .)[] | "\(.filename) | \(.filepath)"' | while IFS='|' read -r fn fp; do
   fn="${fn%% *}"; fp="${fp%% *}";
   # If filepath has / but filename does not, it's flattened (wrong)
   if [[ "$fp" == */* && "$fn" != */* ]]; then echo "FLATTENED (fix): $fn -> should mirror $fp"; fi;

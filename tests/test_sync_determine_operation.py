@@ -40,6 +40,7 @@ from sync_determine_operation import (
     get_pdd_file_paths,
     _safe_architecture_prompt_filename,
     _contained_architecture_code_path,
+    _find_prompt_file,
 )
 
 # --- Test Plan ---
@@ -2095,6 +2096,149 @@ def test_get_pdd_file_paths_context_isolation_holds_from_parent_cwd(
     code = paths["code"].resolve(strict=False).as_posix()
     assert not code.endswith("frontend/credits.py")
     assert code.endswith("backend/functions/credits.py")
+
+
+def test_find_prompt_file_direct_fast_path_rejects_escaping_symlink(tmp_path):
+    """The direct/case-insensitive fast path must not return an escaping symlink.
+
+    The exact expected prompt (``prompts/backend/credits_Python.prompt``) can itself
+    be a file symlink to a target outside the root. `_find_prompt_file` must not
+    return it — otherwise a later update opens it with ``"w"`` and truncates the
+    external file. Containment must gate Step 1 too, not only recursive candidates.
+    """
+    prompts_root = tmp_path / "prompts" / "backend"
+    prompts_root.mkdir(parents=True)
+    external_dir = tmp_path / "outside"
+    external_dir.mkdir()
+    external = external_dir / "credits_Python.prompt"
+    external.write_text("% external (must not be written through)\n", encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    result = _find_prompt_file("credits", "python", prompts_root, tmp_path / "architecture.json")
+
+    if result is not None:
+        assert Path(result).resolve() != external.resolve()
+        assert Path(result).resolve().is_relative_to(prompts_root.resolve())
+
+
+def test_find_prompt_file_preserves_in_root_symlink_alias(tmp_path):
+    """An in-root symlink alias (target inside the root) must still resolve."""
+    prompts_root = tmp_path / "prompts"
+    prompts_root.mkdir()
+    real = prompts_root / "real_credits_Python.prompt"
+    real.write_text("% real in-root prompt\n", encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(real)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+
+    result = _find_prompt_file("credits", "python", prompts_root, tmp_path / "architecture.json")
+
+    assert result is not None
+    assert Path(result).resolve().is_relative_to(prompts_root.resolve())
+
+
+def test_get_pdd_file_paths_broad_root_context_selection_from_parent_cwd(
+    tmp_path,
+    monkeypatch,
+):
+    """Same-leaf prompts in sibling contexts must resolve by requested context, not CWD.
+
+    With a broad, project-level prompts root, two contexts owning a same-leaf prompt,
+    and resolution driven from the project's parent directory, `_find_prompt_file`
+    must load the context prefix (anchored at the prompts root, not the CWD) so the
+    Step-4 tie-break picks the requested context — not the shallowest/lexicographic
+    first match (backend).
+    """
+    project = tmp_path / "project"
+    for ctx in ("backend", "frontend"):
+        d = project / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx} credits\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/src/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT of the project.
+    abs_prompts = str((project / "prompts").resolve())  # BROAD root spanning both contexts.
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir=abs_prompts,
+        context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/frontend/" in resolved
+    assert "/prompts/backend/" not in resolved
+
+
+def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
+    """Prompt discovery and code-path selection must share ONE architecture snapshot.
+
+    Parsing architecture.json separately per phase opens a window where an atomic
+    rewrite between phases pairs a prompt from the old registry with a code target
+    from the new one (torn pair). The nested prompt below forces the architecture
+    hint (Step 3) AND the code-path lookup, both of which previously reparsed the
+    file; a single snapshot means exactly one parse.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    pdir = tmp_path / "prompts" / "backend" / "deep"
+    pdir.mkdir(parents=True)
+    (pdir / "credits_Python.prompt").write_text("% nested credits\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+
+    parses = {"n": 0}
+    original = sync_determine_module.extract_modules
+
+    def counting(arch):
+        parses["n"] += 1
+        return original(arch)
+
+    monkeypatch.setattr(sync_determine_module, "extract_modules", counting)
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert parses["n"] == 1
+    assert paths["prompt"].resolve(strict=False).as_posix().endswith(
+        "prompts/backend/deep/credits_Python.prompt"
+    )
+    assert paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/functions/credits.py"
+    )
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
