@@ -57,19 +57,28 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_writable_bytes), "256", *command]
 
 
-def _fd_bound_bwrap(argv: list[str], sources: list[Path], elevated: bool) -> list[str]:
-    """Open bind sources before replacing the namespace root."""
-    helper = (
-        "import json,os,sys;"
-        "argv=json.loads(sys.argv[1]);paths=json.loads(sys.argv[2]);"
-        "fds=[os.open(path,os.O_PATH) for path in paths];"
-        "[os.set_inheritable(fd,True) for fd in fds];"
-        "argv=[('/proc/self/fd/'+str(fds[int(x[4:-1])])) "
-        "if x.startswith('@FD:') else x for x in argv];"
-        "os.execvp(argv[0],argv)"
-    )
-    prefix = ["sudo", "-n", "-E"] if elevated else []
-    return [*prefix, sys.executable, "-c", helper,
+def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
+    """Stage exact bind mounts before replacing the namespace root."""
+    helper = "\n".join((
+        "import json,os,pathlib,shutil,subprocess,sys,tempfile",
+        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
+        "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
+        "os.chmod(base,0o755); staged=[]",
+        "try:",
+        " for index,source in enumerate(paths):",
+        "  source=pathlib.Path(source); target=base/str(index)",
+        "  target.mkdir() if source.is_dir() else target.touch()",
+        "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
+        "  staged.append(target)",
+        " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
+        " result=subprocess.run(argv,check=False)",
+        "finally:",
+        " for target in reversed(staged):",
+        "  subprocess.run(['umount',str(target)],check=False)",
+        " shutil.rmtree(base,ignore_errors=True)",
+        "raise SystemExit(result.returncode)",
+    ))
+    return ["sudo", "-n", "-E", sys.executable, "-c", helper,
             json.dumps(argv), json.dumps([str(path) for path in sources])]
 
 def _supervised_descendants(token: str) -> set[int]:
@@ -149,6 +158,8 @@ def _sandbox_command(
         elevated = bool(shutil.which("sudo")) and subprocess.run(
             ["sudo", "-n", "true"], capture_output=True, check=False,
         ).returncode == 0
+        if not elevated:
+            raise RuntimeError("protected sandbox requires privileged bind staging")
         setpriv = shutil.which("setpriv") if elevated else None
         if elevated and setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
@@ -172,7 +183,7 @@ def _sandbox_command(
              "--clear-groups", "--"] if setpriv else []
         )
         argv.extend(("--", *drop, *_limited_command(command, limits)))
-        return _fd_bound_bwrap(argv, sources, elevated), None
+        return _staged_bwrap(argv, sources), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
