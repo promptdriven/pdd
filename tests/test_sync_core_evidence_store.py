@@ -3,6 +3,7 @@
 import base64
 import json
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -46,6 +47,20 @@ def _envelope():
 
 def test_attestation_json_round_trip_preserves_signed_payload() -> None:
     envelope = _envelope()
+    decoded = decode_attestation(json.loads(encode_attestation(envelope)))
+    assert decoded == envelope
+    assert decoded.payload() == envelope.payload()
+
+
+def test_attestation_json_round_trip_preserves_playwright_command() -> None:
+    envelope = _envelope()
+    envelope = replace(
+        envelope,
+        binding=replace(
+            envelope.binding,
+            playwright_command=("/opt/node", "/opt/playwright/cli.js"),
+        ),
+    )
     decoded = decode_attestation(json.loads(encode_attestation(envelope)))
     assert decoded == envelope
     assert decoded.payload() == envelope.payload()
