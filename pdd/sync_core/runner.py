@@ -6,7 +6,10 @@ from __future__ import annotations
 import hashlib
 import ast
 import json
-import re
+import os
+import shlex
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -39,7 +42,9 @@ PYTEST_CONFIG_PATHS = (
     PurePosixPath("tox.ini"),
     PurePosixPath("setup.cfg"),
 )
-PYTEST_PROTECTED_FLAGS = ("--strict-config", "--strict-markers", "-ra")
+PYTEST_PROTECTED_FLAGS = (
+    "--strict-config", "--strict-markers", "-ra", "-p", "no:cacheprovider"
+)
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
 
 
@@ -119,7 +124,7 @@ def _local_module_paths(
     *,
     code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
 ) -> tuple[set[PurePosixPath], bool]:
-    # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals,too-many-branches
     """Resolve repository-local Python imports without executing candidate code."""
     try:
         tree = ast.parse(source)
@@ -161,6 +166,20 @@ def _local_module_paths(
             and node.func.attr == "import_module"
         ):
             dynamic_pytest_plugins = True
+        elif isinstance(node, ast.Call) and (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"getattr", "exec", "eval", "compile", "run_path", "run_module"}
+            or isinstance(node.func, ast.Attribute)
+            and node.func.attr in {
+                "spec_from_file_location", "load_module", "exec_module",
+                "run_path", "run_module",
+            }
+        ):
+            dynamic_pytest_plugins = True
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            if isinstance(value, ast.Name) and value.id == "__import__":
+                dynamic_pytest_plugins = True
     resolved: set[PurePosixPath] = set()
     for module in modules:
         level = len(module) - len(module.lstrip("."))
@@ -373,7 +392,6 @@ def _support_digest(
 
 def _config_loads_plugin(root: Path, ref: str) -> bool:
     """Reject repository-configured plugins until profiles bind plugin identities."""
-    pattern = re.compile(r"(?:^|[\s\"'])-p(?:[=\s]+)[A-Za-z0-9_.-]+")
     for path in PYTEST_CONFIG_PATHS:
         content = read_git_blob(root, ref, path)
         if content is None:
@@ -382,9 +400,65 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             return True
-        if pattern.search(text):
+        try:
+            tokens = shlex.split(text.replace("=", " = "), comments=True)
+        except ValueError:
             return True
+        for index, token in enumerate(tokens):
+            if token == "-p" and index + 1 < len(tokens):
+                return True
+            if token.startswith("-p=") or (token.startswith("-p") and len(token) > 2):
+                return True
     return False
+
+
+def _managed_subprocess(
+    command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
+    writable_roots: tuple[Path, ...],
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    # pylint: disable=consider-using-with
+    """Run an untrusted command in a networkless sandbox and reap its group."""
+    argv = command
+    profile_path = None
+    if sys.platform == "darwin" and shutil.which("sandbox-exec"):
+        rules = ["(version 1)", "(allow default)", "(deny network*)",
+                 "(deny file-write*)",
+                 '(allow file-write* (literal "/dev/null"))']
+        for item in writable_roots:
+            rules.append(f'(allow file-write* (subpath "{item.resolve()}"))')
+        descriptor, profile_name = tempfile.mkstemp(prefix="pdd-sandbox-", suffix=".sb")
+        os.close(descriptor)
+        profile_path = Path(profile_name)
+        profile_path.write_text("\n".join(rules), encoding="utf-8")
+        argv = ["sandbox-exec", "-f", str(profile_path), *command]
+    process = subprocess.Popen(
+        argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env | {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": str(writable_roots[0].resolve()),
+            "TEMP": str(writable_roots[0].resolve()),
+            "TMP": str(writable_roots[0].resolve()),
+        }, start_new_session=True,
+    )
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate()
+    surviving = False
+    if not timed_out and os.name != "nt":
+        try:
+            os.killpg(process.pid, 0)
+            surviving = True
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if profile_path is not None:
+        profile_path.unlink(missing_ok=True)
+    return subprocess.CompletedProcess(command, 124 if timed_out else process.returncode,
+                                       stdout, stderr), surviving
 
 
 def runner_identity_digest(
@@ -602,22 +676,22 @@ def _run_test_node(
         home = temporary / "home"
         home.mkdir(mode=0o700)
         junit = temporary / "junit.xml"
-        try:
-            result = subprocess.run(
-                [*command, f"--junitxml={junit}"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-                env=_pytest_environment(home),
-            )
-        except subprocess.TimeoutExpired:
+        result, surviving = _managed_subprocess(
+            [*command, f"--junitxml={junit}"], cwd=root,
+            timeout=timeout_seconds, env=_pytest_environment(home),
+            writable_roots=(temporary,),
+        )
+        if result.returncode == 124:
             return RunnerExecution(
                 node_id,
                 EvidenceOutcome.TIMEOUT,
                 command_digest,
                 "test execution timed out",
+            )
+        if surviving:
+            return RunnerExecution(
+                node_id, EvidenceOutcome.ERROR, command_digest,
+                "validator left a surviving process-group descendant",
             )
         outcome, detail = _junit_outcome(
             junit,
@@ -645,6 +719,8 @@ def _collect_node_ids(
             "-q",
             "--strict-config",
             "--strict-markers",
+            "-p",
+            "no:cacheprovider",
             path.as_posix(),
         ]
         runner = _trusted_collection_runner(temporary, root, pytest_args)
@@ -661,20 +737,13 @@ def _collect_node_ids(
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        try:
-            result = subprocess.run(
-                command,
-                cwd=temporary,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-                env=_pytest_environment(home)
-                | {
-                    "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
-                },
-            )
-        except subprocess.TimeoutExpired:
+        result, surviving = _managed_subprocess(
+            command, cwd=temporary, timeout=timeout_seconds,
+            env=_pytest_environment(home) | {
+                "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
+            }, writable_roots=(temporary,),
+        )
+        if result.returncode == 124:
             return (
                 RunnerExecution(
                     path.as_posix(),
@@ -683,6 +752,13 @@ def _collect_node_ids(
                     "test collection timed out",
                 ),
                 (),
+            )
+        if surviving:
+            return (
+                RunnerExecution(
+                    path.as_posix(), EvidenceOutcome.COLLECTION_ERROR, digest,
+                    "collection left a surviving process-group descendant",
+                ), (),
             )
         try:
             payload = json.loads(collection_output.read_text(encoding="utf-8"))
@@ -697,7 +773,8 @@ def _collect_node_ids(
                     path.as_posix(),
                     EvidenceOutcome.COLLECTION_ERROR,
                     digest,
-                    "trusted collection probe produced no valid node IDs",
+                    "trusted collection probe produced no valid node IDs: "
+                    + (result.stderr or result.stdout)[-500:],
                 ),
                 (),
             )
@@ -706,7 +783,7 @@ def _collect_node_ids(
             detail = "zero protected node IDs collected"
         elif result.returncode != 0:
             outcome = EvidenceOutcome.COLLECTION_ERROR
-            detail = "pytest collection failed"
+            detail = "protected sandbox rejected pytest collection"
         else:
             outcome = EvidenceOutcome.PASS
             detail = f"{len(node_ids)} protected node IDs collected"

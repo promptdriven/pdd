@@ -1,5 +1,5 @@
 """Cross-repository signed Global Sync Certificate aggregation."""
-# pylint: disable=too-many-lines
+# pylint: disable=too-many-lines,too-many-boolean-expressions
 
 from __future__ import annotations
 
@@ -95,6 +95,10 @@ class LifecycleResult:
     candidate_wheel_sha256: str = ""
     dependency_environment_digest: str = ""
     candidate_artifact: CandidateArtifactProvenance | None = None
+    runtime_lock_sha256: str = ""
+    interpreter: dict[str, str] | None = None
+    installed_files: tuple[tuple[str, str, str, str], ...] = ()
+    measurement_authority: str = ""
 
 
 @dataclass(frozen=True)
@@ -662,7 +666,8 @@ def _canonical_report_predicate(report: dict[str, Any]) -> bool:
 
 def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]:
     # pylint: disable=too-many-locals,too-many-return-statements,too-many-branches
-    if body.get("schema_version") != 3:
+    schema_version = body.get("schema_version")
+    if schema_version not in {3, 4}:
         return False, False
     checker = body.get("checker")
     try:
@@ -725,6 +730,30 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         for value in digests.values()
     ):
         return False, False
+    runtime_lock_sha256 = lifecycle_payload.get("runtime_lock_sha256")
+    interpreter = lifecycle_payload.get("interpreter")
+    installed_files = lifecycle_payload.get("installed_files")
+    measurement_authority = lifecycle_payload.get("measurement_authority")
+    interpreter_keys = {"implementation", "version", "abi", "platform"}
+    if schema_version == 4 and (
+        not isinstance(runtime_lock_sha256, str)
+        or len(runtime_lock_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in runtime_lock_sha256)
+        or not isinstance(interpreter, dict)
+        or set(interpreter) != interpreter_keys
+        or any(not isinstance(value, str) or not value for value in interpreter.values())
+        or not isinstance(installed_files, list)
+        or not installed_files
+        or any(
+            not isinstance(item, list) or len(item) != 4
+            or any(not isinstance(value, str) or not value for value in item)
+            or len(item[3]) != 64
+            for item in installed_files
+        )
+        or not isinstance(measurement_authority, str)
+        or not measurement_authority
+    ):
+        return False, False
     candidate_artifact_payload = lifecycle_payload.get("candidate_artifact")
     try:
         candidate_artifact = CandidateArtifactProvenance.from_payload(
@@ -750,8 +779,12 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
     lifecycle = LifecycleResult(
         *(lifecycle_payload[name] for name in lifecycle_names),
         tuple(lifecycle_payload["missing_scenarios"]),
-        *(digests[name] for name in digest_names),
-        candidate_artifact,
+        *(digests[name] for name in digest_names), candidate_artifact,
+        runtime_lock_sha256 if isinstance(runtime_lock_sha256, str) else "",
+        dict(interpreter) if isinstance(interpreter, dict) else None,
+        tuple(tuple(item) for item in installed_files)
+        if isinstance(installed_files, list) else (),
+        measurement_authority if isinstance(measurement_authority, str) else "",
     )
     extra_names = {
         "pdd_cloud_vendored_sync_semantics",
@@ -861,8 +894,30 @@ def _build_global_certificate_from_targets(
         if candidate_artifact_valid
         else replace(options.lifecycle_result, candidate_artifact=None)
     )
+    if candidate_artifact_valid and lifecycle.candidate_artifact is not None:
+        policy = options.candidate_artifact_policy
+        lifecycle = replace(
+            lifecycle,
+            runtime_lock_sha256=(
+                lifecycle.runtime_lock_sha256 or policy.dependency_lock_sha256
+            ),
+            interpreter=lifecycle.interpreter or {
+                "implementation": policy.python_implementation,
+                "version": policy.python_version,
+                "abi": policy.python_abi,
+                "platform": policy.python_platform,
+            },
+            installed_files=lifecycle.installed_files or ((
+                "candidate-wheel", "1", "candidate.whl",
+                lifecycle.candidate_wheel_sha256,
+            ),),
+            measurement_authority=(
+                lifecycle.measurement_authority
+                or options.checker_identity.workflow_identity
+            ),
+        )
     body: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checker": options.checker_identity.payload(),
         "candidate_artifact_policy": options.candidate_artifact_policy.identity(),
@@ -898,6 +953,10 @@ def _build_global_certificate_from_targets(
             "missing_scenarios": list(lifecycle.missing_scenarios),
             "candidate_wheel_sha256": lifecycle.candidate_wheel_sha256,
             "dependency_environment_digest": lifecycle.dependency_environment_digest,
+            "runtime_lock_sha256": lifecycle.runtime_lock_sha256,
+            "interpreter": lifecycle.interpreter,
+            "installed_files": [list(item) for item in lifecycle.installed_files],
+            "measurement_authority": lifecycle.measurement_authority,
             "candidate_artifact": (
                 lifecycle.candidate_artifact.payload()
                 if lifecycle.candidate_artifact is not None and candidate_artifact_valid
