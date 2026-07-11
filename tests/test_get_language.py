@@ -146,3 +146,19 @@ class TestLanguageFormatCSV:
 
         assert js_cmd == 'node {file}', f"JavaScript run_test_command should be 'node {{file}}', got: {js_cmd}"
         assert ts_cmd == 'npx tsx {file}', f"TypeScript run_test_command should be 'npx tsx {{file}}', got: {ts_cmd}"
+
+
+@pytest.mark.parametrize(
+    ("extension", "language"),
+    [
+        (".sh", "Shell"),
+        (".m", "MATLAB"),
+        ("sh", "Shell"),
+    ],
+)
+def test_get_language_preserves_legacy_ambiguous_first_match(extension, language):
+    assert get_language(extension) == language
+
+
+def test_get_language_unknown_extension_returns_empty_string():
+    assert get_language(".not-a-real-extension") == ""
