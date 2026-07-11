@@ -11,7 +11,7 @@ from click.testing import CliRunner
 import pytest
 
 from pdd import cli
-from pdd.continuous_sync import SyncUnit, classify_unit
+from pdd.continuous_sync import SyncUnit, _find_matching_artifact, classify_unit
 from pdd.sync_determine_operation import calculate_current_hashes, get_pdd_file_paths
 
 
@@ -263,6 +263,54 @@ def test_global_dry_run_json_reports_directory_entry_traversal_budget(
     assert report["failures"][0]["failure"] == "prompt_traversal_budget"
 
 
+def test_prompt_traversal_stops_scandir_at_entry_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A single wide directory is consumed only through allowance plus one."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    for index in range(8):
+        (prompts / f"file{index}.txt").write_text("noise\n", encoding="utf-8")
+    real_scandir = __import__("os").scandir
+    yielded = 0
+
+    def observing_scandir(path):
+        iterator = real_scandir(path)
+
+        class Observed:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                iterator.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal yielded
+                entry = next(iterator)
+                yielded += 1
+                return entry
+
+        return Observed()
+
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.os.scandir", observing_scandir)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_PROMPT_DISCOVERY_ENTRIES", 3)
+
+    result = CliRunner().invoke(
+        cli.cli,
+        ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert json.loads(result.output)["failures"][0]["failure"] == "prompt_traversal_budget"
+    assert yielded == 4
+
+
 def test_missing_fingerprint_does_not_mask_path_resolution_failure(
     tmp_path: Path,
 ) -> None:
@@ -283,6 +331,34 @@ def test_missing_fingerprint_does_not_mask_path_resolution_failure(
     assert report["classification"] == "FAILURE"
     assert report["failure"] == "path_resolution"
     assert "ambiguous module configuration" in report["reason"]
+
+
+@pytest.mark.parametrize(
+    "output_key",
+    ["generate_output_path", "example_output_path", "test_output_path"],
+)
+def test_missing_fingerprint_does_not_mask_unsafe_legacy_artifact(
+    tmp_path: Path,
+    output_key: str,
+) -> None:
+    """Every resolved legacy artifact is validated before fingerprint branching."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      prompts_dir: prompts\n"
+        f"      {output_key}: ../outside\n",
+        encoding="utf-8",
+    )
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "unsafe_artifacts"
+    assert "resolves outside project" in report["reason"]
 
 
 def test_classify_unit_does_not_remove_concurrent_empty_directories(
@@ -350,6 +426,49 @@ def test_missing_prompt_repair_uses_bounded_pruned_traversal(
     assert report["failure"] == "repair_traversal_budget"
     assert "repair search exceeded traversal budget" in report["reason"]
     assert "node_modules" not in json.dumps(report["paths"])
+
+
+def test_repair_traversal_stops_scandir_at_entry_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Repair does not materialize a wide directory before enforcing its cap."""
+    project = tmp_path / "project"
+    project.mkdir()
+    for index in range(8):
+        (project / f"entry-{index}.txt").write_text("noise\n", encoding="utf-8")
+    real_scandir = __import__("os").scandir
+    yielded = 0
+
+    def observing_scandir(path):
+        iterator = real_scandir(path)
+
+        class Observed:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                iterator.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal yielded
+                entry = next(iterator)
+                yielded += 1
+                return entry
+
+        return Observed()
+
+    monkeypatch.setattr("pdd.continuous_sync.os.scandir", observing_scandir)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_REPAIR_DISCOVERY_ENTRIES", 3)
+
+    _match, failure = _find_matching_artifact(project, "widget.py", "stored")
+
+    assert failure is not None
+    assert failure.failure == "repair_traversal_budget"
+    assert yielded == 4
 
 
 def test_configured_outputs_without_architecture_remain_in_sync(
@@ -647,7 +766,7 @@ def test_live_include_hash_is_independent_of_nested_cwd(
     prompts.mkdir(parents=True)
     nested.mkdir()
     prompt = prompts / "widget_python.prompt"
-    dependency = project / "shared.txt"
+    dependency = prompts / "shared.txt"
     prompt.write_text("<include>shared.txt</include>\nwidget\n", encoding="utf-8")
     dependency.write_text("trusted\n", encoding="utf-8")
     (nested / "shared.txt").write_text("cwd-dependent\n", encoding="utf-8")
@@ -663,6 +782,34 @@ def test_live_include_hash_is_independent_of_nested_cwd(
     report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
 
     assert report["classification"] == "IN_SYNC"
+
+
+def test_live_include_is_validated_once_before_dependency_read(
+    tmp_path: Path,
+) -> None:
+    """Hash and dependency-map generation share one validated include resolution."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    outside = tmp_path / "secret.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text(f"<include>{outside}</include>\nwidget\n", encoding="utf-8")
+    _write_fingerprint(project, "widget", {"prompt_hash": "stored", "code_hash": None, "example_hash": None, "test_hash": None, "test_files": None, "include_deps": {}})
+    original_read_bytes = Path.read_bytes
+    outside_reads = 0
+
+    def observing_read_bytes(path: Path) -> bytes:
+        nonlocal outside_reads
+        if path == outside:
+            outside_reads += 1
+        return original_read_bytes(path)
+
+    with patch.object(Path, "read_bytes", observing_read_bytes):
+        report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["failure"] == "hash_calculation"
+    assert outside_reads == 0
 
 
 @pytest.mark.parametrize("include_kind", ["absolute", "symlink"])
