@@ -1,4 +1,5 @@
 """Strict tests for protected candidate-wheel build provenance."""
+# pylint: disable=missing-function-docstring,line-too-long
 
 import hashlib
 import json
@@ -88,7 +89,9 @@ def test_correct_wheel_with_wrong_certified_source_sha_is_rejected(tmp_path) -> 
     wheel = tmp_path / "candidate.whl"
     wheel.write_bytes(b"exact wheel")
     with pytest.raises(CandidateArtifactProvenanceError, match="source SHA"):
-        _load(tmp_path, wheel, authority, source_sha="c" * 40)
+        _load(tmp_path, wheel, authority, source_sha="c" * 40).verify(
+            _policy(authority), expected_source_sha=SOURCE_SHA
+        )
 
 
 def test_forged_build_attestation_is_rejected(tmp_path) -> None:
@@ -115,9 +118,11 @@ def test_stale_or_replayed_build_attestation_is_rejected(tmp_path) -> None:
             issued_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
             expires_at=(datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
         )
+    policy = _policy(authority)
     provenance = _load(tmp_path, wheel, authority)
+    provenance.verify(policy, expected_source_sha=SOURCE_SHA)
     with pytest.raises(CandidateArtifactProvenanceError, match="replayed"):
-        provenance.verify(_policy(authority), expected_source_sha=SOURCE_SHA)
+        provenance.verify(policy, expected_source_sha=SOURCE_SHA)
 
 
 @pytest.mark.parametrize(
@@ -133,15 +138,21 @@ def test_wrong_protected_build_environment_is_rejected(tmp_path, field, value, e
     wheel = tmp_path / "candidate.whl"
     wheel.write_bytes(b"exact wheel")
     with pytest.raises(CandidateArtifactProvenanceError, match=error):
-        _load(tmp_path, wheel, authority, **{field: value})
+        _load(tmp_path, wheel, authority, **{field: value}).verify(
+            _policy(authority), expected_source_sha=SOURCE_SHA
+        )
 
 
 def test_source_checkout_is_not_a_candidate_artifact(tmp_path) -> None:
     authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
     checkout = tmp_path / "pdd"
     checkout.mkdir()
+    path = tmp_path / "candidate-build-attestation.json"
+    path.write_text(json.dumps(_attestation(wheel, authority)))
     with pytest.raises(CandidateArtifactProvenanceError, match="wheel path"):
-        _load(tmp_path, checkout, authority)
+        load_candidate_artifact_provenance(path, checkout, _policy(authority))
 
 
 def test_valid_exact_sha_artifact_is_accepted(tmp_path) -> None:
@@ -149,5 +160,6 @@ def test_valid_exact_sha_artifact_is_accepted(tmp_path) -> None:
     wheel = tmp_path / "candidate.whl"
     wheel.write_bytes(b"exact wheel")
     provenance = _load(tmp_path, wheel, authority)
+    provenance.verify(_policy(authority), expected_source_sha=SOURCE_SHA)
     assert provenance.source_sha == SOURCE_SHA
     assert provenance.wheel_sha256 == hashlib.sha256(wheel.read_bytes()).hexdigest()

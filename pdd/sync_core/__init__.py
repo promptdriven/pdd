@@ -15,6 +15,13 @@ from .certificate import (
     signer_from_environment,
     verify_global_certificate,
 )
+from .artifact_provenance import (
+    CandidateArtifactPolicy,
+    CandidateArtifactProvenance,
+    CandidateArtifactProvenanceError,
+    candidate_artifact_policy_from_environment,
+    load_candidate_artifact_provenance,
+)
 from .identity import (
     RepositoryIdentity,
     RepositoryIdentityError,
@@ -140,6 +147,9 @@ __all__ = [
     "AttestationTrustPolicy",
     "BaselineStatus",
     "CandidateId",
+    "CandidateArtifactPolicy",
+    "CandidateArtifactProvenance",
+    "CandidateArtifactProvenanceError",
     "CandidateRecord",
     "CanonicalCounts",
     "CanonicalFinalizationError",
@@ -209,6 +219,7 @@ __all__ = [
     "WaiverSet",
     "classify",
     "canonical_repository_id",
+    "candidate_artifact_policy_from_environment",
     "canonical_root_for_paths",
     "decode_attestation",
     "encode_attestation",
@@ -228,6 +239,7 @@ __all__ = [
     "include_paths",
     "load_verification_profiles",
     "load_attestation",
+    "load_candidate_artifact_provenance",
     "load_trust_policy",
     "load_sync_waivers",
     "initialize_repository_identity",

@@ -28,6 +28,7 @@ from ..sync_core import (
     build_global_certificate,
     build_unit_manifest,
     build_unit_snapshot,
+    candidate_artifact_policy_from_environment,
     checker_identity_from_environment,
     encode_fingerprint,
     finalize_unit,
@@ -206,6 +207,7 @@ def certify(
             if replay_ledger.exists() and not replay_ledger.is_dir():
                 raise ValueError("global --replay-ledger must be a directory")
             replay_ledger.mkdir(parents=True, exist_ok=True)
+            candidate_policy = candidate_artifact_policy_from_environment()
             report = build_global_certificate(
                 targets,
                 GlobalCertificateOptions(
@@ -227,6 +229,12 @@ def certify(
                             if "PDD_CANDIDATE_RUNTIME_LOCK" in os.environ
                             else None
                         ),
+                        candidate_attestation=(
+                            Path(os.environ["PDD_CANDIDATE_BUILD_ATTESTATION"])
+                            if "PDD_CANDIDATE_BUILD_ATTESTATION" in os.environ
+                            else None
+                        ),
+                        candidate_artifact_policy=candidate_policy,
                         cloud_root=targets[1].path,
                         cloud_base_ref=targets[1].base_ref,
                         cloud_head_ref=targets[1].head_ref,
@@ -238,6 +246,7 @@ def certify(
                     ),
                     required_nightly_streak=int(options["require_nightly_streak"]),
                     checker_identity=checker_identity_from_environment(),
+                    candidate_artifact_policy=candidate_policy,
                     nightly_observation=_load_nightly_observation(
                         options.get("nightly_observation")
                     ),
