@@ -169,6 +169,8 @@ def _evidence(
             config=RunnerConfig(
                 adapter_identities=binding.adapter_identities,
                 playwright_command=binding.playwright_command,
+                playwright_toolchain_manifest=Path(binding.playwright_toolchain_manifest)
+                if binding.playwright_toolchain_manifest else None,
             ),
         )
         or binding.tool_version != TRUSTED_RUNNER_VERSION

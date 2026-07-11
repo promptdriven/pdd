@@ -85,6 +85,10 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         ]
     if binding.playwright_command is not None:
         payload["binding"]["playwright_command"] = list(binding.playwright_command)
+    if binding.playwright_toolchain_manifest is not None:
+        payload["binding"]["playwright_toolchain_manifest"] = (
+            binding.playwright_toolchain_manifest
+        )
     return payload
 
 
@@ -136,6 +140,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             or not all(isinstance(item, str) and item for item in command_data)
         ):
             raise TypeError("playwright_command must be two non-empty strings")
+        manifest_data = binding_data.get("playwright_toolchain_manifest")
+        if manifest_data is not None and (
+            not isinstance(manifest_data, str) or not manifest_data
+        ):
+            raise TypeError("playwright_toolchain_manifest must be a non-empty string")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -148,6 +157,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             playwright_command=(
                 tuple(command_data) if command_data is not None else None
             ),
+            playwright_toolchain_manifest=manifest_data,
         )
         results = tuple(
             ObligationEvidence(

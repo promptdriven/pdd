@@ -226,6 +226,9 @@ def _reusable_result(
             config=RunnerConfig(
                 adapter_identities=envelope.binding.adapter_identities,
                 playwright_command=envelope.binding.playwright_command,
+                playwright_toolchain_manifest=Path(
+                    envelope.binding.playwright_toolchain_manifest
+                ) if envelope.binding.playwright_toolchain_manifest else None,
             ),
         ),
         TRUSTED_RUNNER_VERSION,
@@ -233,6 +236,7 @@ def _reusable_result(
         envelope.binding.checked_sha,
         adapter_identities=envelope.binding.adapter_identities,
         playwright_command=envelope.binding.playwright_command,
+        playwright_toolchain_manifest=envelope.binding.playwright_toolchain_manifest,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(
