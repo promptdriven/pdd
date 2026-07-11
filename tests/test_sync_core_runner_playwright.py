@@ -149,13 +149,38 @@ def _run(
     )
 
 
+def _run_default_playwright(root: Path, base: str, head: str, timeout: int = 2):
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    obligation = VerificationObligation(
+        "playwright",
+        "test",
+        "playwright",
+        playwright_validator_config_digest(root, base, paths),
+        ("REQ-1",),
+        paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+    return run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", base, head),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"p" * 32),
+            "id",
+            "nonce",
+            datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        config=RunnerConfig(timeout_seconds=timeout),
+    )
+
+
 def test_playwright_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
-def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
+def test_playwright_candidate_node_modules_dependency_is_not_trusted(
     tmp_path: Path,
 ) -> None:
     root, commit = _repository(tmp_path)
@@ -177,10 +202,11 @@ def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
         (node, str(_fake_node_playwright(tmp_path))),
     )
 
-    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in executions[0].detail
 
 
-def test_playwright_uses_pinned_package_local_browser_cache(tmp_path: Path) -> None:
+def test_playwright_candidate_browser_cache_is_not_trusted(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
     module = root / "node_modules" / "@playwright" / "test"
@@ -208,7 +234,28 @@ def test_playwright_uses_pinned_package_local_browser_cache(tmp_path: Path) -> N
         (node, str(_fake_node_playwright_requiring_browser_path(tmp_path))),
     )
 
-    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in executions[0].detail
+
+
+def test_default_candidate_node_modules_playwright_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-q", "-m", "ignore local node modules")
+    commit = _git(root, "rev-parse", "HEAD")
+    binary = root / "node_modules" / "@playwright" / "test" / "cli.js"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "console.log(JSON.stringify({tests:[{identity:"
+        "'chromium::tests/widget.spec.ts::widget works',status:'passed'}]}));\n",
+        encoding="utf-8",
+    )
+
+    _envelope, executions = _run_default_playwright(root, commit, commit)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in executions[0].detail
 
 
 def test_playwright_result_resolves_relative_spec_file_from_runner_root(
@@ -328,6 +375,8 @@ def test_playwright_subprocess_cannot_read_secret(
         "export default { grep: /widget/ };\n",
         "export default { retries: 1 };\n",
         "export default { webServer: { command: 'npm run dev' } };\n",
+        "const globalSetup = './setup';\nexport default { globalSetup };\n",
+        "const webServer = { command: 'npm run dev' };\nexport default { webServer };\n",
     ],
 )
 def test_playwright_rejects_unbound_execution_controls(
