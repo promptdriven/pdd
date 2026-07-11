@@ -9,6 +9,7 @@ fixes them — one step per LLM call for reliability.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -132,7 +133,8 @@ class _HostedAgenticArtifactReservation:
     lock_path: Path
     owner_path: Path
     invocation_id: str
-    pr_identity: Tuple[str, str, int]
+    identity_digest: str
+    pr_number: int
 
     def cleanup(self) -> None:
         """Remove invocation-private state while retaining the public blocker."""
@@ -216,6 +218,9 @@ def _prepare_hosted_agentic_artifact(
     path = Path(artifact_path)
     safe_owner = _scrub_secrets(str(pr_owner or ""))[:2000]
     safe_repo = _scrub_secrets(str(pr_repo or ""))[:2000]
+    identity_digest = hashlib.sha256(
+        f"{safe_owner}\0{safe_repo}\0{pr_number}".encode("utf-8")
+    ).hexdigest()
     private_path: Optional[Path] = None
     lock_path: Optional[Path] = None
     owner_path: Optional[Path] = None
@@ -237,8 +242,8 @@ def _prepare_hosted_agentic_artifact(
         owner_path = path.with_name(f".{path.name}.owner.json")
         written_path = write_final_gate_fallback_artifact(
             artifact_path=str(private_path),
-            pr_owner=safe_owner,
-            pr_repo=safe_repo,
+            pr_owner="",
+            pr_repo="",
             pr_number=pr_number,
             canonical_status="unknown",
             blockers=["Current hosted checkup invocation has not produced a verdict."],
@@ -260,23 +265,42 @@ def _prepare_hosted_agentic_artifact(
             and payload["verdict"].get("decision") == "block"
         ):
             raise ValueError("hosted placeholder is not a blocking v1 artifact")
-        payload["owner"] = safe_owner
-        payload["repo"] = safe_repo
-        payload["pr_number"] = pr_number
-        private_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         reservation = _HostedAgenticArtifactReservation(
             public_path=path,
             private_path=private_path,
             lock_path=lock_path,
             owner_path=owner_path,
             invocation_id=invocation_id,
-            pr_identity=(safe_owner, safe_repo, pr_number),
+            identity_digest=identity_digest,
+            pr_number=pr_number,
         )
         with _hosted_artifact_lock(lock_path):
             _atomic_publish_hosted_payload(
                 owner_path, {"invocation_id": invocation_id}
             )
-            _atomic_publish_hosted_payload(path, payload)
+            _atomic_publish_hosted_payload(
+                path,
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "owner": "",
+                    "repo": "",
+                    "pr_number": pr_number,
+                    "status": "error",
+                    "authority": "canonical_unknown_agentic_fallback_blocking",
+                    "layer1": {
+                        "status": "unknown",
+                        "blockers": [
+                            "Current hosted checkup invocation has not produced a verdict."
+                        ],
+                    },
+                    "verdict": {
+                        "decision": "block",
+                        "reason": (
+                            "Current hosted checkup invocation has not produced a verdict."
+                        ),
+                    },
+                },
+            )
         return reservation
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         if lock_path is not None and owner_path is not None and invocation_id:
@@ -299,8 +323,8 @@ def _prepare_hosted_agentic_artifact(
                                 path,
                                 {
                                     "schema_version": "pdd.checkup.agentic.v1",
-                                    "owner": safe_owner,
-                                    "repo": safe_repo,
+                                    "owner": "",
+                                    "repo": "",
                                     "pr_number": pr_number,
                                     "status": "error",
                                     "authority": (
@@ -353,12 +377,16 @@ def _publish_hosted_agentic_artifact(
             or payload.get("schema_version") != "pdd.checkup.agentic.v1"
         ):
             raise ValueError("hosted artifact is not a v1 object")
-        artifact_identity = (
-            str(payload.get("owner", "")),
-            str(payload.get("repo", "")),
-            int(payload.get("pr_number", 0) or 0),
-        )
-        if artifact_identity != reservation.pr_identity:
+        artifact_owner = str(payload.get("owner", ""))
+        artifact_repo = str(payload.get("repo", ""))
+        artifact_pr_number = int(payload.get("pr_number", 0) or 0)
+        artifact_digest = hashlib.sha256(
+            f"{artifact_owner}\0{artifact_repo}\0{artifact_pr_number}".encode("utf-8")
+        ).hexdigest()
+        if artifact_pr_number != reservation.pr_number or (
+            (artifact_owner or artifact_repo)
+            and artifact_digest != reservation.identity_digest
+        ):
             raise ValueError("hosted artifact PR identity mismatch")
         with _hosted_artifact_lock(reservation.lock_path):
             owner = json.loads(reservation.owner_path.read_text(encoding="utf-8"))
@@ -366,7 +394,7 @@ def _publish_hosted_agentic_artifact(
                 "invocation_id"
             ) != reservation.invocation_id:
                 return None
-            _atomic_publish_hosted_payload(reservation.public_path, payload)
+            os.replace(str(reservation.private_path), str(reservation.public_path))
             reservation.owner_path.unlink(missing_ok=True)
         return str(reservation.public_path)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):

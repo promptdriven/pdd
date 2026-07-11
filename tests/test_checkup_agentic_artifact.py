@@ -308,6 +308,32 @@ def test_build_artifact_budget_recomputed_from_actuals_not_stale_flags():
     assert art.verdict.decision == "block"
 
 
+@pytest.mark.parametrize(
+    "state_field,config_field,value",
+    [
+        ("rounds_completed", None, float("nan")),
+        ("elapsed_minutes", None, float("inf")),
+        ("total_cost", None, float("-inf")),
+        (None, "max_rounds", float("nan")),
+        (None, "max_minutes", float("inf")),
+        (None, "max_cost", float("-inf")),
+    ],
+)
+def test_build_artifact_nonfinite_budget_values_fail_closed(
+    state_field, config_field, value
+):
+    state_kwargs = {state_field: value} if state_field else {}
+    config_kwargs = {config_field: value} if config_field else {}
+    art = build_agentic_v1_artifact(
+        loop_state=_state(**state_kwargs),
+        config=_config(**config_kwargs),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.status == "error"
+    assert art.verdict.decision == "block"
+
+
 def test_build_artifact_budget_recomputes_nonclean_rounds_and_minutes_from_actuals():
     art = build_agentic_v1_artifact(
         loop_state=_state(

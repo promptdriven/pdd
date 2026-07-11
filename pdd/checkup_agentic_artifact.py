@@ -16,6 +16,7 @@ This module is the SINGLE SOURCE OF TRUTH for the agentic authority vocabulary
 """
 
 import logging
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -481,7 +482,10 @@ def _num(obj: Any, *names: str) -> Optional[float]:
         if isinstance(value, bool):
             continue
         if isinstance(value, (int, float)):
-            return float(value)
+            number = float(value)
+            if not math.isfinite(number):
+                raise ValueError(f"{name} must be finite")
+            return number
     return None
 
 

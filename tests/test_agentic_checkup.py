@@ -820,8 +820,7 @@ class TestRunAgenticCheckup:
         assert reservation is not None
         payload_text = path.read_text(encoding="utf-8")
         assert secret_owner not in payload_text
-        assert reservation.pr_identity[0] != secret_owner
-        assert reservation.pr_identity[1] != secret_owner
+        assert secret_owner not in reservation.identity_digest
         reservation.cleanup()
 
     def test_hosted_early_return_cleans_private_and_owner_files(
