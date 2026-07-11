@@ -385,14 +385,19 @@ def _effective_profile(
 
 def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet:
     """Load the protected base/candidate union for every expected-managed unit."""
-    approved_aliases = load_protected_aliases(root, manifest)
+    alias_invalid: list[str] = []
+    try:
+        approved_aliases = load_protected_aliases(root, manifest)
+    except ValueError as exc:
+        approved_aliases = {}
+        alias_invalid.append(str(exc))
     base, base_invalid = _load_inputs(
         root, manifest.base_ref, manifest.repository_id, approved_aliases
     )
     head, head_invalid = _load_inputs(
         root, manifest.head_ref, manifest.repository_id, approved_aliases
     )
-    invalid = base_invalid + head_invalid
+    invalid = alias_invalid + base_invalid + head_invalid
     authorized_updates, rotation_invalid = _authorized_rotation_updates(
         root,
         manifest,

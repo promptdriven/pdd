@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from .alias_policy import load_protected_aliases
+from .alias_policy import load_committed_aliases, load_protected_aliases
 from .evidence_store import (
     encode_attestation,
     evidence_relpath,
@@ -121,15 +121,15 @@ def lexical_managed_module(
         module = PurePosixPath(lexical_prompt.relative_to(repository_root).as_posix())
     except ValueError as exc:
         raise ValueError("canonical prompt path escapes project root") from exc
-    manifest = build_unit_manifest(
-        repository_root, base_ref=base_ref, head_ref=head_ref
-    )
-    require_valid_manifest(manifest)
+    base_aliases = load_committed_aliases(repository_root, base_ref)
+    head_aliases = load_committed_aliases(repository_root, head_ref)
+    if base_aliases != head_aliases:
+        raise ValueError("candidate changed protected alias policy")
     policy = PathPolicy(
         repository_root,
-        approved_aliases=load_protected_aliases(repository_root, manifest),
-        base_ref=manifest.base_ref,
-        head_ref=manifest.head_ref,
+        approved_aliases=base_aliases,
+        base_ref=base_ref,
+        head_ref=head_ref,
     )
     return policy.resolve(module).logical_relpath
 
