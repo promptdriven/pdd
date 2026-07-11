@@ -1,4 +1,5 @@
 """CLI contract tests for canonical synchronization certification."""
+# pylint: disable=missing-function-docstring
 
 import base64
 import json
@@ -57,7 +58,9 @@ def test_global_certify_rejects_replayed_candidate_attestation_from_cli_policy(
             "abi": "cp312",
             "platform": "manylinux_2_17_x86_64",
         },
-        "builder_workflow_identity": "promptdriven/pdd/.github/workflows/candidate-wheel.yml@refs/heads/main",
+        "builder_workflow_identity": (
+            "promptdriven/pdd/.github/workflows/candidate-wheel.yml@refs/heads/main"
+        ),
     }
     artifact = CandidateArtifactProvenance.from_payload(
         {
