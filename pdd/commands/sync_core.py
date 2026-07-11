@@ -174,6 +174,7 @@ def _runner_config_from_options(
     """Build trusted validator configuration from protected CLI/env options."""
     jest_command = options.get("jest_command")
     vitest_command = options.get("vitest_command")
+    playwright_command = options.get("playwright_command")
     return RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
@@ -183,6 +184,11 @@ def _runner_config_from_options(
         vitest_command=_protected_command(
             vitest_command if isinstance(vitest_command, str) else None,
             "--vitest-command",
+            cwd,
+        ),
+        playwright_command=_protected_command(
+            playwright_command if isinstance(playwright_command, str) else None,
+            "--playwright-command",
             cwd,
         ),
     )
@@ -429,6 +435,11 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     envvar="PDD_SYNC_VITEST_COMMAND",
     help="Protected absolute external Vitest command argv.",
 )
+@click.option(
+    "--playwright-command",
+    envvar="PDD_SYNC_PLAYWRIGHT_COMMAND",
+    help="Protected absolute external Playwright command argv.",
+)
 @click.pass_context
 def validate(
     ctx: click.Context,
@@ -437,6 +448,7 @@ def validate(
     head_ref: str,
     jest_command: str | None,
     vitest_command: str | None,
+    playwright_command: str | None,
 ) -> None:
     """Run protected obligations and transactionally finalize trusted evidence."""
     ctx.ensure_object(dict)
@@ -448,7 +460,11 @@ def validate(
         head_ref=head_ref,
         signer=attestation_signer_from_environment(),
         config=_runner_config_from_options(
-            {"jest_command": jest_command, "vitest_command": vitest_command},
+            {
+                "jest_command": jest_command,
+                "vitest_command": vitest_command,
+                "playwright_command": playwright_command,
+            },
             root,
         ),
     )
