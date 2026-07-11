@@ -387,6 +387,49 @@ def _trusted_probe_plugin(directory: Path) -> tuple[str, Path]:
     return plugin_name, directory
 
 
+def _checker_probe_digest() -> str:
+    """Return the digest of the checker-owned collection probe bytes."""
+    return hashlib.sha256(_CHECKER_PYTEST_PROBE.read_bytes()).hexdigest()
+
+
+def _trusted_collection_runner(
+    directory: Path,
+    root: Path,
+    pytest_args: list[str],
+) -> Path:
+    """Create a checker-owned pytest entrypoint that imports the probe by path."""
+    runner = directory / "run_collection.py"
+    runner.write_text(
+        "\n".join(
+            (
+                "import importlib.util",
+                "import os",
+                "import sys",
+                "",
+                f"_ROOT = {json.dumps(str(root))}",
+                f"_PROBE = {json.dumps(str(_CHECKER_PYTEST_PROBE))}",
+                f"_ARGS = {json.dumps(pytest_args)}",
+                "",
+                "os.chdir(_ROOT)",
+                "_SPEC = importlib.util.spec_from_file_location(",
+                "    '_pdd_checker_pytest_probe_abs', _PROBE",
+                ")",
+                "if _SPEC is None or _SPEC.loader is None:",
+                "    raise ImportError('checker pytest probe is unavailable')",
+                "_MODULE = importlib.util.module_from_spec(_SPEC)",
+                "sys.modules['_pdd_checker_pytest_probe_abs'] = _MODULE",
+                "_SPEC.loader.exec_module(_MODULE)",
+                "",
+                "import pytest",
+                "raise SystemExit(pytest.main(_ARGS, plugins=[_MODULE]))",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return runner
+
+
 def _run_test_node(
     root: Path,
     node_id: str,
@@ -440,26 +483,31 @@ def _collect_node_ids(
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-collection-") as directory:
         temporary = Path(directory)
         collection_output = temporary / "node-ids.json"
-        plugin_name, plugin_directory = _trusted_probe_plugin(temporary)
-        command = [
-            sys.executable,
-            "-m",
-            "pytest",
+        pytest_args = [
             "--collect-only",
             "-q",
             "--strict-config",
             "--strict-markers",
-            "-p",
-            plugin_name,
             path.as_posix(),
         ]
+        runner = _trusted_collection_runner(temporary, root, pytest_args)
+        command = [sys.executable, str(runner)]
         digest = hashlib.sha256(
-            json.dumps(command, separators=(",", ":")).encode()
+            json.dumps(
+                {
+                    "argv": [sys.executable, "pdd-trusted-collection-runner"],
+                    "pytest_args": pytest_args,
+                    "probe_path": str(_CHECKER_PYTEST_PROBE),
+                    "probe_sha256": _checker_probe_digest(),
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode()
         ).hexdigest()
         try:
             result = subprocess.run(
                 command,
-                cwd=root,
+                cwd=temporary,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -467,7 +515,6 @@ def _collect_node_ids(
                 env=_pytest_environment()
                 | {
                     "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
-                    "PYTHONPATH": str(plugin_directory),
                 },
             )
         except subprocess.TimeoutExpired:
