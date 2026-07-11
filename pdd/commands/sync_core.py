@@ -194,6 +194,7 @@ def _runner_config_from_options(
         error = _vitest_command_error(cwd, protected_vitest)
         if error is not None:
             raise click.ClickException(f"--vitest-command: {error}")
+    playwright_command = options.get("playwright_command")
     config = RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
@@ -202,6 +203,11 @@ def _runner_config_from_options(
         ),
         vitest_command=protected_vitest,
         vitest_toolchain_manifest=manifest_path,
+        playwright_command=_protected_command(
+            playwright_command if isinstance(playwright_command, str) else None,
+            "--playwright-command",
+            cwd,
+        ),
     )
     if protected_vitest is not None:
         try:
@@ -213,6 +219,8 @@ def _runner_config_from_options(
             vitest_command=config.vitest_command,
             vitest_toolchain_manifest=config.vitest_toolchain_manifest,
             vitest_toolchain_identity=descriptor.identity,
+            playwright_command=config.playwright_command,
+            adapter_identities=config.adapter_identities,
         )
     return config
 
@@ -477,6 +485,9 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     envvar="PDD_SYNC_VITEST_TOOLCHAIN_MANIFEST",
     type=click.Path(path_type=Path),
     help="Protected external Node/Vitest toolchain closure manifest.",
+    "--playwright-command",
+    envvar="PDD_SYNC_PLAYWRIGHT_COMMAND",
+    help="Protected absolute external Playwright command argv.",
 )
 @click.pass_context
 def validate(
@@ -487,6 +498,7 @@ def validate(
     jest_command: str | None,
     vitest_command: str | None,
     vitest_toolchain_manifest: Path | None,
+    playwright_command: str | None,
 ) -> None:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Run protected obligations and transactionally finalize trusted evidence."""
@@ -504,6 +516,7 @@ def validate(
                 "vitest_command": vitest_command,
                 "vitest_toolchain_manifest": str(vitest_toolchain_manifest)
                 if vitest_toolchain_manifest else None,
+                "playwright_command": playwright_command,
             },
             root,
         ),

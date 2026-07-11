@@ -1488,6 +1488,8 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
         raise ValueError("Playwright webServer is not bound by this adapter")
     if re.search(r"['\"](?:globalSetup|globalTeardown|reporter)['\"]\s*:", text):
         raise ValueError("quoted Playwright executable controls are not bound by this adapter")
+    if re.search(r"\b(?:globalSetup|globalTeardown|reporter)\s*:\s*(?!['\"])", text):
+        raise ValueError("indirect Playwright executable controls are not bound by this adapter")
     # Parse direct relative imports here; the closure resolver checks each blob.
     references = {
         path.parent / PurePosixPath(item)
