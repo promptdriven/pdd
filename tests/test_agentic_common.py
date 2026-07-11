@@ -14088,6 +14088,37 @@ def test_run_agentic_task_all_providers_disabled_reports_aggregated_reasons(mock
     assert "google: quota" in result.output_text
 
 
+def test_run_agentic_task_all_disabled_routed_call_emits_audit_record(mock_cwd):
+    """Fail-fast routed calls still emit their selected config and outcome."""
+    from pdd.routing_policy import default_policy
+
+    reset_disabled_providers()
+    with provider_failure_scope():
+        mark_provider_permanently_failed("anthropic", "auth")
+        mark_provider_permanently_failed("google", "quota")
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic", "google"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic", "google"],
+        ):
+            result = run_agentic_task(
+                "do work",
+                mock_cwd,
+                quiet=True,
+                task_class="bug-fix",
+                routing_policy=default_policy(),
+            )
+
+    assert result.success is False
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text(encoding="utf-8").splitlines()[0])
+    assert payload["verifier_result"] == "fail"
+    assert payload["fallback_reason"] == "all_feasible_providers_disabled"
+
+
 def test_run_agentic_task_honors_disabled_providers_env_from_subprocess(mock_cwd):
     """A re-entrant `pdd` subprocess inherits PDD_AGENTIC_DISABLED_PROVIDERS from
     its parent; that env var alone (no in-process marking) must drop the dead

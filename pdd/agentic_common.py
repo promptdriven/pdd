@@ -5119,6 +5119,18 @@ def run_agentic_task(
     elif task_class is not None:
         candidates = select_harness_for_task(task_class, candidates)
 
+    # Select the routing record before filtering providers so every routed
+    # request has an auditable outcome, including the fail-fast case where all
+    # feasible providers were disabled by earlier permanent failures. Applying
+    # the selected config remains deferred until after feasibility filtering.
+    if routing_policy is not None:
+        routing_config, routing_record = select_config(
+            routing_policy,
+            task_class,
+            budget_remaining=None,
+            deadline=deadline,
+        )
+
     # Drop providers that failed permanently before routing selects/pins a
     # harness. If the policy's preferred harness is disabled, the normal
     # selected-harness-unavailable path keeps the remaining healthy candidates
@@ -5129,6 +5141,8 @@ def run_agentic_task(
         if healthy != candidates:
             dropped = [p for p in candidates if p in disabled_providers]
             if not healthy:
+                if routing_record is not None:
+                    routing_record.fallback_reason = "all_feasible_providers_disabled"
                 detail = "; ".join(
                     f"{p}: {disabled_providers[p]}" for p in dropped
                 )
@@ -5155,12 +5169,6 @@ def run_agentic_task(
             candidates = healthy
 
     if routing_policy is not None:
-        routing_config, routing_record = select_config(
-            routing_policy,
-            task_class,
-            budget_remaining=None,
-            deadline=deadline,
-        )
         if routing_config is not None:
             if routing_config.harness in candidates:
                 candidates = [routing_config.harness]

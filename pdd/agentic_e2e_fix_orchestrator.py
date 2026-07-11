@@ -1820,7 +1820,7 @@ def _commit_and_push(
     # Commit with message referencing issue
     commit_msg = f"fix: {issue_title}\n\nFixes #{issue_number}"
     commit_result = subprocess.run(
-        ["git", "commit", "-m", commit_msg],
+        ["git", "commit", "--only", "-m", commit_msg, "--", *files_to_commit],
         cwd=cwd,
         capture_output=True,
         text=True
