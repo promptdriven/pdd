@@ -86,7 +86,7 @@ LOCKS_DIR = get_locks_dir()
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
-           '_check_example_success_history', 'AmbiguousModuleError']
+           '_check_example_success_history', 'AmbiguousModuleError', 'UnsafePromptPathError']
 
 
 class AmbiguousModuleError(ValueError):
@@ -115,6 +115,24 @@ class AmbiguousModuleError(ValueError):
             f"{len(self.choices)} different files in architecture.json:\n{choice_lines}\n"
             f"Re-run with a path-qualified module name (e.g. the prompt's directory "
             f"path, like 'app/login/{basename}') so PDD writes to the intended file."
+        )
+
+
+class UnsafePromptPathError(AmbiguousModuleError):
+    """Raised when a prompt candidate resolves outside its configured root.
+
+    This subclasses the existing hard path-resolution error so every sync entry
+    point that already propagates :class:`AmbiguousModuleError` also fails closed
+    before generation can write through an escaping symlink.
+    """
+
+    def __init__(self, prompt_path: Path, prompts_root: Path):
+        self.prompt_path = prompt_path
+        self.prompts_root = prompts_root
+        ValueError.__init__(
+            self,
+            f"Unsafe prompt path '{prompt_path}' resolves outside prompts root "
+            f"'{prompts_root}'",
         )
 
 
@@ -534,6 +552,31 @@ def _prompt_path_has_context_prefix(
     return tuple(part.lower() for part in relative_parts[:len(prefix_parts)]) == tuple(
         part.lower() for part in prefix_parts
     )
+
+
+def _context_prefix_for_prompts_root(
+    configured_prompts_dir: Any,
+    pddrc_path: Path,
+    prompts_root: Path,
+) -> Optional[str]:
+    """Return a configured context root relative to the active prompt root.
+
+    Custom roots need filesystem-relative normalization: for an active ``specs``
+    root, ``specs/frontend`` scopes candidates by ``frontend``, not by the raw
+    ``specs/frontend`` configuration string.
+    """
+    if not isinstance(configured_prompts_dir, str) or not configured_prompts_dir.strip():
+        return None
+    configured_path = Path(configured_prompts_dir.strip())
+    if not configured_path.is_absolute():
+        configured_path = pddrc_path.parent / configured_path
+    try:
+        relative = configured_path.resolve(strict=False).relative_to(
+            prompts_root.resolve(strict=False)
+        )
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return relative.as_posix() if relative.parts else None
 
 
 def _architecture_prompt_roots(
@@ -1033,8 +1076,11 @@ def _find_prompt_file(
                 context_config = config.get('contexts', {}).get(context_name, {})
                 prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                 if prompts_dir_config:
-                    from pdd.construct_paths import _extract_prefix_from_prompts_dir
-                    context_prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
+                    context_prefix = _context_prefix_for_prompts_root(
+                        prompts_dir_config,
+                        pddrc_path,
+                        resolved_prompts_root,
+                    )
             except (ValueError, KeyError):
                 pass
 
@@ -1341,11 +1387,13 @@ def _get_filepath_from_architecture(
             if ownership == _OWNERSHIP_INELIGIBLE:
                 return False
             filepath = module.get("filepath")
+            if _filepath_owned_by_other_context(
+                filepath, resolved_context_name, pddrc_anchor
+            ):
+                return False
             if _context_owned_filepath(filepath, resolved_context_name, pddrc_anchor):
                 return True
-            return ownership == _OWNERSHIP_PROVEN and not _filepath_owned_by_other_context(
-                filepath, resolved_context_name, pddrc_anchor
-            )
+            return ownership == _OWNERSHIP_PROVEN
 
         # Try exact filename match first
         for module in modules:
@@ -2093,13 +2141,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     context_config = config.get('contexts', {}).get(context_name or '', {})
                     prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                     if prompts_dir_config:
-                        from pdd.construct_paths import _extract_prefix_from_prompts_dir
-                        prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
+                        prefix = _context_prefix_for_prompts_root(
+                            prompts_dir_config,
+                            pddrc_path,
+                            prompts_root_anchor,
+                        )
                         prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
                         if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
                             prompt_path = str(prompts_root / prefix / prompt_filename)
                 except ValueError:
                     pass
+
+        prompt_path_obj = Path(prompt_path)
+        resolved_prompts_root = prompts_root.resolve(strict=False)
+        if not _prompt_candidate_within_root(prompt_path_obj, resolved_prompts_root):
+            raise UnsafePromptPathError(prompt_path_obj, resolved_prompts_root)
 
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 

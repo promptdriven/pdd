@@ -41,6 +41,7 @@ from sync_determine_operation import (
     _safe_architecture_prompt_filename,
     _contained_architecture_code_path,
     _find_prompt_file,
+    UnsafePromptPathError,
 )
 
 # --- Test Plan ---
@@ -2891,6 +2892,107 @@ def test_get_pdd_file_paths_absolute_sibling_prompt_root_establishes_owner(
     assert not paths["code"].resolve(strict=False).as_posix().endswith(
         "backend/foreign/credits.py"
     )
+
+
+def test_get_pdd_file_paths_repo_root_output_still_rejects_sibling_target(
+    tmp_path,
+    monkeypatch,
+):
+    """A repo-root current output cannot override explicit sibling ownership."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"./\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "frontend/credits.py"
+    )
+
+
+def test_get_pdd_file_paths_custom_context_prefix_is_relative_to_active_root(
+    tmp_path,
+    monkeypatch,
+):
+    """A custom broad root scopes context matches by its root-relative suffix."""
+    for context in ("backend", "frontend"):
+        prompt_dir = tmp_path / "specs" / context
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "credits_Python.prompt").write_text(
+            f"% {context}\n", encoding="utf-8"
+        )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/backend\"\n"
+        "      generate_output_path: \"backend/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="specs", context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/specs/frontend/" in resolved
+    assert "/specs/backend/" not in resolved
+
+
+def test_get_pdd_file_paths_does_not_reconstruct_escaping_direct_symlink(
+    tmp_path,
+    monkeypatch,
+):
+    """Fallback must not return a direct symlink rejected by prompt discovery."""
+    prompts_root = tmp_path / "prompts"
+    prompts_root.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (prompts_root / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+
+    assert external.read_text(encoding="utf-8") == original
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
