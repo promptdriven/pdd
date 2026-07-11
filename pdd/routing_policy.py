@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from pdd.reasoning import EffortLevel
+from pdd.model_defaults import CODEX_MODEL_DEFAULT
 
 
 log = logging.getLogger(__name__)
@@ -339,6 +340,9 @@ def resolve_model_for_tier(tier: int) -> Optional[str]:
         requested_tier = int(tier)
     except (TypeError, ValueError):
         return None
+
+    if requested_tier == 1:
+        return CODEX_MODEL_DEFAULT
 
     ranked: list[dict[str, Any]] = []
     for item in _MANIFEST_CACHE:

@@ -6366,8 +6366,8 @@ def test_codex_gpt_5_6_model_env_var_passed_to_cli(mock_cwd, mock_env, mock_load
     )
 
 
-def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
-    """When CODEX_MODEL env var is NOT set, no --model flag in codex CLI command."""
+def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """When CODEX_MODEL is unset, PDD pins the shared GPT-5.6 default."""
     def which_side_effect(cmd):
         return "/bin/codex" if cmd == "codex" else None
     mock_shutil_which.side_effect = which_side_effect
@@ -6393,7 +6393,9 @@ def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_m
 
     args, kwargs = mock_subprocess.call_args
     cmd = args[0]
-    assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
+    model_idx = cmd.index("--model")
+    assert cmd[model_idx + 1] == "gpt-5.6"
+    assert model_idx < cmd.index("exec")
 
 
 # ---------------------------------------------------------------------------

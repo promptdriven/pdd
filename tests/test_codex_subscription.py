@@ -251,6 +251,7 @@ def test_codex_family_present_in_packaged_csv():
     fam = df[df["provider"] == "OpenAI ChatGPT"]
     by_model = {r["model"]: r for _, r in fam.iterrows()}
     expected = {
+        "chatgpt/gpt-5.6": (0, 17001),
         "chatgpt/gpt-5.5": (1450, 17000),
         "chatgpt/gpt-5.4": (1437, 15600),
         "chatgpt/gpt-5.3-codex": 1407,
@@ -283,7 +284,7 @@ def test_chatgpt_and_openai_api_models_do_not_collide():
 
 
 def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
-    """Within the Codex family, high strength selects the top-ranked model (gpt-5.5).
+    """Within the Codex family, high strength selects the GPT-5.6 platform default.
 
     Issue #1164: chatgpt/* rows are now ``interactive_only`` (device-flow / codex
     login), so the automatic candidate cascade skips the whole family by default
@@ -294,7 +295,7 @@ def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
     cands = li._select_model_candidates(1.0, "chatgpt/gpt-5.3-codex", fam)
-    assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
+    assert cands[0]["model"] == "chatgpt/gpt-5.6", [c["model"] for c in cands]
 
 
 def test_anthropic_outranks_codex_so_default_unchanged():
@@ -428,9 +429,9 @@ def test_catalog_generator_preserves_chatgpt_family():
     cg = sorted(r["model"] for r in merged if str(r["model"]).startswith("chatgpt/"))
     assert cg == ["chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex",
                   "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4",
-                  "chatgpt/gpt-5.5"], cg
+                  "chatgpt/gpt-5.5", "chatgpt/gpt-5.6"], cg
     again = gmc._merge_chatgpt_subscription_rows(merged)
-    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 5
+    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 6
     elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
     assert elos["chatgpt/gpt-5.4"] == "1437"
     assert elos["chatgpt/gpt-5.5"] == "1450"

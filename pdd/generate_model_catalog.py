@@ -1300,7 +1300,7 @@ def _survives_catalog_cutoff(elo: int, rank_source: str) -> bool:
     below ``ELO_CUTOFF`` (or no Arena match at all). Arena/static fallback rows
     keep the historical contract: raw ELO must clear the cutoff.
     """
-    return rank_source == "deepswe-solve-rate" or elo >= ELO_CUTOFF
+    return rank_source in {"deepswe-solve-rate", "platform-default"} or elo >= ELO_CUTOFF
 
 
 def _add_score_fields(
@@ -1682,6 +1682,11 @@ def _mandatory_rows_missing_from(
 # API twins; empty api_key marks device-flow (codex login) auth, like the
 # github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
 _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.6", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "0", "model_rank_score": "17001",
+     "model_rank_source": "platform-default", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5", "input": "0.0",
      "output": "0.0", "coding_arena_elo": "1450", "model_rank_score": "17000",
      "model_rank_source": "deepswe-solve-rate", "base_url": "", "api_key": "",

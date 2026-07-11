@@ -27,6 +27,8 @@ from enum import Enum
 
 from rich.console import Console
 
+from pdd.model_defaults import CODEX_MODEL_DEFAULT
+
 from pdd.routing_policy import (
     RoutingConfig,
     RoutingPolicy,
@@ -7338,9 +7340,8 @@ def _run_with_provider(
             cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
         # Codex --model is a top-level flag; keep it before the subcommand so
         # the final "-" remains the explicit stdin prompt operand.
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
+        codex_model = env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT
+        cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,

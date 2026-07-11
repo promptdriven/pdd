@@ -329,7 +329,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
         "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
-        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
+        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.6",
     }
     assert all(
         r["provider"] == "OpenAI ChatGPT"
@@ -1184,7 +1184,7 @@ def test_build_rows_keeps_reviewed_rows_and_static_fallbacks_under_deepswe_ranki
 def test_committed_csv_has_no_non_deepswe_rows_below_cutoff():
     offenders = []
     for row in _read_catalog_rows():
-        if row["model_rank_source"] == "deepswe-solve-rate":
+        if row["model_rank_source"] in {"deepswe-solve-rate", "platform-default"}:
             continue
         if int(row["coding_arena_elo"]) < gmc.ELO_CUTOFF:
             offenders.append(
