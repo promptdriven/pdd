@@ -3206,6 +3206,9 @@ def _playwright_environment(home: Path, module_root: Path) -> dict[str, str]:
     node_modules = module_root / "node_modules"
     if node_modules.is_dir():
         environment["NODE_PATH"] = str(node_modules)
+    local_browsers = node_modules / "playwright-core" / ".local-browsers"
+    if local_browsers.is_dir():
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = "0"
     return environment
 
 
