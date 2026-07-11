@@ -3175,6 +3175,9 @@ def test_get_pdd_file_paths_nested_missing_custom_module_keeps_context_root(
     code = paths["code"].resolve(strict=False).as_posix()
     assert code.endswith("/frontend/utils/foo.py")
     assert "/frontend/frontend/" not in code
+    test_path = paths["test"].resolve(strict=False).as_posix()
+    assert test_path.endswith("/utils/test_foo.py")
+    assert "/utils/utils/" not in test_path
 
 
 def test_get_pdd_file_paths_ignores_unsafe_symlink_in_sibling_context(
@@ -3296,6 +3299,63 @@ def test_get_pdd_file_paths_flat_arch_hint_aligns_path_qualified_basename(
         tmp_path / "prompts" / "foo" / "page_python.prompt"
     ).resolve(strict=False)
     assert "/prompts/afoo/" not in paths["prompt"].resolve(strict=False).as_posix()
+
+
+def test_get_pdd_file_paths_direct_fast_path_respects_explicit_context(
+    tmp_path,
+    monkeypatch,
+):
+    """A root-level prompt is not a direct-path fallback for explicit backend."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% root-level sibling\n", encoding="utf-8"
+    )
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_misaligned_direct_arch_join_is_not_returned(
+    tmp_path,
+    monkeypatch,
+):
+    """A rejected flat direct join cannot be returned again as the helper fallback."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "page_Python.prompt").write_text(
+        "% wrong root page\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "page_Python.prompt",
+            "filepath": "foo/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "foo" / "page_python.prompt"
+    ).resolve(strict=False)
+    assert paths["prompt"].resolve(strict=False) != (
+        tmp_path / "prompts" / "page_Python.prompt"
+    ).resolve(strict=False)
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):

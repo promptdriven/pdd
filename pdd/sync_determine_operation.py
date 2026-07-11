@@ -385,6 +385,8 @@ def _resolve_prompt_path_from_architecture(
             if relevant_unsafe:
                 raise UnsafePromptPathError(relevant_unsafe[0], resolved_root)
 
+    if basename is not None and not _prompt_candidate_aligns_basename(joined, basename):
+        return None
     return joined
 
 
@@ -1164,6 +1166,10 @@ def _find_prompt_file(
     for candidate_basename in basename_candidates:
         resolved = _case_insensitive_path_lookup(prompts_root / f"{candidate_basename}_{language}.prompt")
         if resolved:
+            if context_prefix and not _prompt_path_has_context_prefix(
+                resolved, prompts_root, context_prefix
+            ):
+                continue
             if _prompt_candidate_within_root(resolved, resolved_prompts_root):
                 return resolved
             raise UnsafePromptPathError(resolved, resolved_prompts_root)
@@ -2574,24 +2580,24 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     # Explicit complete directory - use directly with just filename
                     code_path = f"{generate_output_path}{name_part}{_dot(extension)}"
                 else:
-                    # Old behavior - use code_dir + dir_prefix
-                    code_path = f"{code_dir}{dir_prefix}{name_part}{_dot(extension)}"
+                    # The shared re-anchor below adds dir_prefix exactly once.
+                    code_path = f"{code_dir}{name_part}{_dot(extension)}"
 
                 # Example path
                 if example_output_path and example_output_path.endswith('/'):
                     # Explicit complete directory - use directly with just filename
                     example_path = f"{example_output_path}{name_part}_example{_dot(extension)}"
                 else:
-                    # Old behavior - use example_dir + dir_prefix
-                    example_path = f"{example_dir}{dir_prefix}{name_part}_example{_dot(extension)}"
+                    # The shared re-anchor below adds dir_prefix exactly once.
+                    example_path = f"{example_dir}{name_part}_example{_dot(extension)}"
 
                 # Test path
                 if test_output_path and test_output_path.endswith('/'):
                     # Explicit complete directory - use directly with just filename
                     test_path = f"{test_output_path}test_{name_part}{_dot(extension)}"
                 else:
-                    # Old behavior - use test_dir + dir_prefix
-                    test_path = f"{test_dir}{dir_prefix}test_{name_part}{_dot(extension)}"
+                    # The shared re-anchor below adds dir_prefix exactly once.
+                    test_path = f"{test_dir}test_{name_part}{_dot(extension)}"
 
                 logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
 
