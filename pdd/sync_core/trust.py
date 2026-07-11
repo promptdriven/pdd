@@ -23,6 +23,10 @@ from .durability import fsync_directory
 from .types import EvidenceOutcome, ObligationEvidence, UnitId
 
 
+# Pre-closure v1 envelopes had an eight-day maximum lifetime when v2 shipped.
+LEGACY_CLOSURE_MIGRATION_CUTOFF = datetime(2026, 7, 20, tzinfo=timezone.utc)
+
+
 class AttestationError(ValueError):
     """Raised when semantic evidence fails protected trust policy."""
 
@@ -212,8 +216,16 @@ class AttestationEnvelope:
 
     def payload(self) -> bytes:
         """Return canonical signed bytes, excluding the signature itself."""
-        if self.payload_version not in {1, 2}:
+        if (
+            not isinstance(self.payload_version, int)
+            or isinstance(self.payload_version, bool)
+            or self.payload_version not in {1, 2}
+        ):
             raise AttestationError("attestation payload version is unsupported")
+        if self.payload_version == 1 and self.binding.artifact_closure_digest:
+            raise AttestationError("v1 attestation cannot claim an artifact closure")
+        if self.payload_version == 2 and not self.binding.artifact_closure_digest:
+            raise AttestationError("v2 attestation requires an artifact closure")
         data = {
             "attestation_id": self.attestation_id,
             "issuer": self.issuer,
@@ -476,7 +488,17 @@ class AttestationTrustPolicy:
             raise AttestationError("attestation is revoked")
         self._verify_signature(envelope)
         self._verify_freshness(envelope, now or datetime.now(timezone.utc))
-        if envelope.binding != expected:
+        expected_binding = expected
+        if envelope.payload_version == 1:
+            expires = _parse_timestamp(envelope.validity.expires_at)
+            if expires > LEGACY_CLOSURE_MIGRATION_CUTOFF:
+                raise AttestationError("legacy attestation migration window is closed")
+            if expected.artifact_closure_digest != envelope.binding.snapshot_digest:
+                raise AttestationError(
+                    "legacy attestation cannot establish the current artifact closure"
+                )
+            expected_binding = replace(expected, artifact_closure_digest="")
+        if envelope.binding != expected_binding:
             raise AttestationError("attestation does not match the checked closure")
         identifiers = [result.obligation_id for result in envelope.results]
         if len(identifiers) != len(set(identifiers)):

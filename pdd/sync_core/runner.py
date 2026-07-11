@@ -1635,11 +1635,6 @@ def _command_part_identity(root: Path, part: str) -> str:
     return _file_identity(resolved) if resolved.exists() else part
 
 
-def _is_script_like_operand(value: str) -> bool:
-    """Return true for argv operands that are likely executable script paths."""
-    return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
-
-
 def _external_node_modules_root(
     root: Path, command: tuple[str, ...] | None
 ) -> Path | None:
@@ -1890,43 +1885,40 @@ def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bo
 
 
 def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None:
-    """Return a fail-closed reason for unprotected explicit validator argv."""
+    """Enforce an executable plus identity-bound external entrypoint grammar."""
     if not command:
         return "explicit validator command is empty"
+    if len(command) != 2:
+        return "explicit validator command must be exactly a launcher and entrypoint"
     candidate_root = root.resolve()
-    path_operands: list[Path] = []
-    executable = Path(command[0]).expanduser()
-    if not executable.is_absolute():
-        return "explicit validator command executable must be an absolute path"
-    path_operands.append(executable)
-    expect_module_operand = False
-    for part in command[1:]:
-        if expect_module_operand:
-            if "/" not in part:
-                return (
-                    "pathless validator module operand is not trusted; use an "
-                    "absolute external path or protected module launcher"
-                )
-            expect_module_operand = False
-        if part == "-m":
-            expect_module_operand = True
-            continue
-        if part.startswith("-"):
-            continue
-        path = Path(part).expanduser()
-        if not path.is_absolute() and "/" not in part:
-            if _is_script_like_operand(part):
-                return (
-                    "pathless validator script operand is not trusted; use an "
-                    "absolute external path"
-                )
-            continue
-        path_operands.append(path if path.is_absolute() else root / path)
-    for operand in path_operands:
-        resolved = operand.resolve()
+    operands = tuple(Path(part).expanduser() for part in command)
+    if not all(operand.is_absolute() for operand in operands):
+        return (
+            "pathless or relative validator operands are not trusted; launcher "
+            "and entrypoint must be absolute external paths"
+        )
+    for operand in operands:
+        try:
+            resolved = operand.resolve(strict=True)
+        except OSError:
+            return "validator launcher or entrypoint is missing"
         if _path_is_relative_to(resolved, candidate_root):
             return "explicit validator command inside the candidate checkout is not trusted"
+        if not resolved.is_file():
+            return "validator launcher and entrypoint must be files"
+    if not os.access(operands[0], os.X_OK):
+        return "validator launch executable is not executable"
     return None
+
+
+def _jest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the protected Jest command-prefix grammar."""
+    return _protected_command_error(root, command)
+
+
+def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the protected Vitest command-prefix grammar."""
+    return _protected_command_error(root, command)
 
 
 _JEST_REPORTER = """class PddTrustedReporter {
@@ -1986,7 +1978,7 @@ def _run_jest(
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
             return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
         return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
-    command_error = _protected_command_error(root, command_prefix)
+    command_error = _jest_command_error(root, command_prefix)
     if command_error is not None:
         return RunnerExecution(
             "jest", EvidenceOutcome.ERROR, "jest-untrusted", command_error
@@ -2094,7 +2086,7 @@ def _run_vitest(
         if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
-    command_error = _protected_command_error(root, command_prefix)
+    command_error = _vitest_command_error(root, command_prefix)
     if command_error is not None:
         return RunnerExecution(
             "vitest", EvidenceOutcome.ERROR, "vitest-untrusted", command_error
@@ -2143,6 +2135,12 @@ def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | Non
     """Enforce the exact protected Playwright launcher grammar."""
     error = _protected_command_error(root, command)
     if error is not None:
+        if error in {
+            "validator launcher or entrypoint is missing",
+            "validator launcher and entrypoint must be files",
+            "validator launch executable is not executable",
+        }:
+            return f"Playwright launch is invalid: {error}"
         return error
     if len(command) != 2:
         return "Playwright command must be exactly an executable and CLI entrypoint"
@@ -3149,7 +3147,7 @@ def run_obligation(
             + ", ".join(sorted(dirty)),
         )
     if obligation.validator_id == "jest" and config.jest_command is not None:
-        command_error = _protected_command_error(root, config.jest_command)
+        command_error = _jest_command_error(root, config.jest_command)
         if command_error is not None:
             return RunnerExecution(
                 obligation.obligation_id,
@@ -3168,7 +3166,7 @@ def run_obligation(
                 "candidate node_modules Vitest runner is not trusted",
             )
         if config.vitest_command is not None:
-            command_error = _protected_command_error(root, config.vitest_command)
+            command_error = _vitest_command_error(root, config.vitest_command)
             if command_error is not None:
                 return RunnerExecution(
                     obligation.obligation_id,
@@ -3344,7 +3342,7 @@ def run_profile(
         config.playwright_command,
         str(config.playwright_toolchain_manifest.resolve())
         if config.playwright_toolchain_manifest is not None else None,
-        binding.artifact_closure_digest,
+        binding.artifact_closure_digest or binding.snapshot_digest,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions

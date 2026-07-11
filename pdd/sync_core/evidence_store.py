@@ -121,6 +121,16 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             payload_version = version_data
         else:
             raise ValueError("attestation payload version is unsupported")
+        if payload_version == 1:
+            if "artifact_closure_digest" in binding_data:
+                raise ValueError(
+                    "v1 binding must not contain artifact_closure_digest"
+                )
+            artifact_closure_digest = ""
+        else:
+            artifact_closure_digest = _string(
+                binding_data, "artifact_closure_digest"
+            )
         subject_data = binding_data["subject"]
         validity_data = payload["validity"]
         results_data = payload["results"]
@@ -148,7 +158,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "checked_sha"),
             tuple(command_data) if command_data is not None else None,
             binding_data.get("playwright_toolchain_manifest"),
-            str(binding_data.get("artifact_closure_digest") or ""),
+            artifact_closure_digest,
         )
         results = tuple(
             ObligationEvidence(

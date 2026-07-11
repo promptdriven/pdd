@@ -36,7 +36,14 @@ def _git(root: Path, *args: str) -> str:
 
 def _envelope():
     binding = AttestationBinding(
-        UNIT, "snapshot", "profile", "runner", "pdd-test", "base", "head"
+        UNIT,
+        "snapshot",
+        "profile",
+        "runner",
+        "pdd-test",
+        "base",
+        "head",
+        artifact_closure_digest="snapshot",
     )
     return SIGNER.issue(
         AttestationRequest(
@@ -87,7 +94,7 @@ def test_pre_closure_signed_envelope_uses_explicit_legacy_payload_shape() -> Non
     assert decoded.payload() == legacy_bytes
     AttestationTrustPolicy({SIGNER.issuer: SIGNER.public_key_bytes()}).verify(
         decoded,
-        decoded.binding,
+        replace(decoded.binding, artifact_closure_digest="snapshot"),
         now=datetime(2026, 7, 10, 12, 1, tzinfo=timezone.utc),
     )
 

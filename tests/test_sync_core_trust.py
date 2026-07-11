@@ -54,6 +54,7 @@ def _binding(**overrides):
         "tool_version": "pdd-test",
         "base_sha": "base-1",
         "checked_sha": "head-1",
+        "artifact_closure_digest": "snapshot-1",
     }
     values.update(overrides)
     return AttestationBinding(**values)
