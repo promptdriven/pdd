@@ -398,6 +398,62 @@ def test_legacy_finalizers_preserve_approved_prompt_alias_identity(
     )
 
 
+@pytest.mark.parametrize("explicit_protected_base", [False, True])
+@pytest.mark.parametrize("bridge", ["operation_log", "orchestration"])
+def test_legacy_finalizers_fail_closed_when_prompt_alias_is_live_retargeted(
+    tmp_path, monkeypatch, explicit_protected_base, bridge
+) -> None:
+    """Lexical repository activation must precede a dirty alias resolution."""
+    root, _commit = _repository(tmp_path)
+    canonical = root / "canonical-prompts"
+    canonical.mkdir()
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.rename(canonical / prompt.name)
+    prompt.symlink_to("../canonical-prompts/widget_python.prompt")
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected prompt alias")
+    protected_base = _git(root, "rev-parse", "HEAD")
+    outside = tmp_path / "outside.prompt"
+    outside.write_text("untrusted\n")
+    prompt.unlink()
+    prompt.symlink_to(outside)
+    monkeypatch.chdir(root)
+    if explicit_protected_base:
+        monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", protected_base)
+    else:
+        monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
+
+    legacy_path = root / ".pdd/meta/widget_python.json"
+    if bridge == "operation_log":
+        from pdd.sync_core.finalize import CanonicalFinalizationError
+
+        with pytest.raises(CanonicalFinalizationError):
+            save_fingerprint("widget", "python", "generate", {"prompt": prompt})
+    else:
+        from pdd.sync_orchestration import _save_fingerprint_atomic
+
+        with pytest.raises(RuntimeError):
+            _save_fingerprint_atomic(
+                "widget", "python", "generate", {"prompt": prompt}, 0.0, "test"
+            )
+
+    assert not legacy_path.exists()
+    assert not list((root / ".pdd/meta/v2").glob("*.json"))
+
+
 def test_prompt_alias_uses_canonical_prompt_requirements_and_finalizes(tmp_path) -> None:
     root, _commit = _repository(tmp_path)
     canonical = root / "canonical-prompts"

@@ -5663,3 +5663,82 @@ def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
 
     assert persisted == {}
     assert second == first
+
+
+def test_sync_classifier_preserves_nested_prompt_alias_identity(
+    tmp_path, monkeypatch
+):
+    """Architecture, include closure, and hashing use the approved logical path."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync@example.com"], cwd=root, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Sync Test"], cwd=root, check=True
+    )
+    (root / "prompts/nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / ".pdd").mkdir()
+    (root / "src/nested").mkdir(parents=True)
+    canonical_prompt = root / "canonical-prompts/widget_python.prompt"
+    canonical_prompt.write_text("Build widget\n<include>contract.md</include>\n")
+    logical_prompt = root / "prompts/nested/widget_python.prompt"
+    logical_prompt.symlink_to("../../canonical-prompts/widget_python.prompt")
+    contract = root / "prompts/nested/contract.md"
+    contract.write_text("logical contract\n")
+    code = root / "src/nested/widget.py"
+    code.write_text("value = 1\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "nested/widget_python.prompt",
+                    "filepath": "src/nested/widget.py",
+                }
+            ]
+        )
+    )
+    (root / ".pdd/repository-id").write_text(
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0\n"
+    )
+    (root / ".pdd/sync-policy.json").write_text(
+        json.dumps({"schema_version": 1, "enforcement": "active"})
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/nested/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "nested prompt alias"], cwd=root, check=True
+    )
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
+
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    deps = extract_include_deps(paths["prompt"])
+    digest_before = calculate_prompt_hash(paths["prompt"])
+    contract.write_text("changed logical contract\n")
+    digest_after = calculate_prompt_hash(paths["prompt"])
+
+    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
+    assert paths["code"].resolve() == code.resolve()
+    assert deps == {
+        "prompts/nested/contract.md": hashlib.sha256(
+            b"logical contract\n"
+        ).hexdigest()
+    }
+    assert digest_before is not None
+    assert digest_after is not None
+    assert digest_after != digest_before
