@@ -1536,7 +1536,10 @@ def _playwright_result(
                 for spec in suite.get("specs", []):
                     if not isinstance(spec, dict):
                         raise ValueError("malformed Playwright spec")
-                    filename = Path(spec["file"]).resolve().relative_to(root.resolve()).as_posix()
+                    spec_file = Path(spec["file"])
+                    if not spec_file.is_absolute():
+                        spec_file = root / spec_file
+                    filename = spec_file.resolve().relative_to(root.resolve()).as_posix()
                     title_path = " > ".join(next_parents + (spec["title"],))
                     for item in spec.get("tests", []):
                         result = (item.get("results") or [{}])[-1]
