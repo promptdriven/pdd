@@ -167,7 +167,16 @@ def _sandbox_command(
         argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
+        destination_dirs = {Path("/tmp")}
         def bind(option: str, source: Path) -> None:
+            missing = []
+            parent = source.parent
+            while parent != Path("/") and parent not in destination_dirs:
+                missing.append(parent)
+                parent = parent.parent
+            for directory in reversed(missing):
+                argv.extend(("--dir", str(directory)))
+                destination_dirs.add(directory)
             sources.append(source)
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
         for item in _runtime_roots(command, workdir):
