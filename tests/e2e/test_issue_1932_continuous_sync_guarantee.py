@@ -10,6 +10,7 @@ from typing import Callable, Dict, List
 
 import pytest
 
+from pdd import continuous_sync
 from pdd.operation_log import save_fingerprint
 from pdd.sync_determine_operation import get_pdd_file_paths
 
@@ -182,6 +183,13 @@ def _fingerprint(repo: Path) -> dict:
     return json.loads((repo / ".pdd/meta/widget_python.json").read_text(encoding="utf-8"))
 
 
+def _write_fingerprint(repo: Path, fingerprint: dict) -> None:
+    (repo / ".pdd/meta/widget_python.json").write_text(
+        json.dumps(fingerprint, indent=2),
+        encoding="utf-8",
+    )
+
+
 def test_issue_1932_complete_inventory_blocks_unbaselined_units(pdd_project: Path) -> None:
     reconcile = _pdd_json(
         pdd_project, "reconcile", "--json", "--strict", check=False
@@ -327,12 +335,150 @@ def test_issue_1932_incomplete_metadata_reports_failure_not_success(pdd_project:
     fingerprint_path = pdd_project / ".pdd/meta/widget_python.json"
     fingerprint = _fingerprint(pdd_project)
     fingerprint["code_hash"] = None
-    fingerprint_path.write_text(json.dumps(fingerprint, indent=2), encoding="utf-8")
+    _write_fingerprint(pdd_project, fingerprint)
 
     report = _pdd_json(pdd_project, "reconcile", "--json", "--strict", check=False)
     assert report["ok"] is False
     assert report["failures"][0]["classification"] == "FAILURE"
     assert report["failures"][0]["failure"] == "incomplete_metadata"
+
+
+@pytest.mark.parametrize(
+    ("dep_factory", "expected_reason"),
+    [
+        (
+            lambda repo: repo.parent / "outside.md",
+            "outside_project",
+        ),
+        (
+            lambda _repo: "../outside.md",
+            "outside_project",
+        ),
+        (
+            lambda repo: repo / "docs" / "missing.md",
+            "missing",
+        ),
+    ],
+)
+def test_issue_1996_legacy_include_deps_reject_unsafe_paths_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dep_factory: Callable[[Path], object],
+    expected_reason: str,
+) -> None:
+    dep_path = dep_factory(pdd_project)
+    if isinstance(dep_path, Path) and dep_path.name == "outside.md":
+        dep_path.write_text("outside bytes must not be read\n", encoding="utf-8")
+    if dep_path == "../outside.md":
+        (pdd_project.parent / "outside.md").write_text(
+            "outside bytes must not be read\n",
+            encoding="utf-8",
+        )
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(dep_path): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    def fail_if_hashing_reached(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("unsafe include deps reached current hash calculation")
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        fail_if_hashing_reached,
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(dep_path), "reason": expected_reason}
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_legacy_include_deps_reject_symlink_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pdd_project / "docs" / "target.md"
+    target.write_text("target bytes must not be read through symlink\n", encoding="utf-8")
+    link = pdd_project / "docs" / "link.md"
+    os.symlink(target, link)
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(link): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("symlink include dep reached current hash calculation")
+        ),
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(link), "reason": "symlink"}
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO unavailable")
+def test_issue_1996_legacy_include_deps_reject_fifo_before_hashing(
+    pdd_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = pdd_project / "docs" / "dep.fifo"
+    os.mkfifo(fifo)
+
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = {str(fifo): "stored-hash"}
+    _write_fingerprint(pdd_project, fingerprint)
+
+    monkeypatch.setattr(
+        continuous_sync,
+        "calculate_current_hashes",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("FIFO include dep reached current hash calculation")
+        ),
+    )
+
+    result = continuous_sync.classify_unit(
+        continuous_sync.SyncUnit(
+            basename="widget",
+            language="python",
+            prompt_path=pdd_project / "prompts/widget_python.prompt",
+            prompts_dir=pdd_project / "prompts",
+        ),
+        pdd_project,
+    )
+
+    assert result["classification"] == "FAILURE"
+    assert result["failure"] == "unsafe_include_deps"
+    assert result["unsafe_include_deps"] == [
+        {"path": str(fifo), "reason": "nonregular"}
+    ]
 
 
 def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
