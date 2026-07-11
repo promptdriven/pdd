@@ -11,6 +11,7 @@ helpers in the same command raise `click.exceptions.Exit(1)` on failure.
 """
 
 import csv
+import sys
 
 import pytest
 from click.testing import CliRunner
@@ -118,14 +119,19 @@ def test_cli_sync_failure_still_writes_evidence_manifest(tmp_path, monkeypatch):
 
 
 def _enable_cost_csv(tmp_path, monkeypatch):
-    """Route the track_cost CSV row to a temp file and neutralise the guards that
-    key off PYTEST_CURRENT_TEST (track_cost skips row-writing under pytest; the
-    duplicate-run guard and auto-update activate without it)."""
+    """Route the track_cost CSV row to a temp file and neutralise the runtime
+    behaviors that key off PYTEST_CURRENT_TEST (track_cost skips row-writing
+    under pytest; the duplicate-run guard, auto-update, and onboarding shell
+    detection — which shells out to `ps` and breaks in sandboxes — activate
+    without it). Codex round-2 review: PDD_SUPPRESS_SETUP_REMINDER must be set
+    here, not inherited from the outer environment, so these tests stay
+    hermetic."""
     csv_path = tmp_path / "cost.csv"
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("PDD_OUTPUT_COST_PATH", str(csv_path))
     monkeypatch.setenv("PDD_DISABLE_DUPLICATE_GUARD", "1")
     monkeypatch.setenv("PDD_AUTO_UPDATE", "false")
+    monkeypatch.setenv("PDD_SUPPRESS_SETUP_REMINDER", "1")
     return csv_path
 
 
@@ -172,3 +178,38 @@ def test_cli_sync_success_writes_exactly_one_cost_csv_row(tmp_path, monkeypatch)
     assert len(rows) == 1, rows
     assert rows[0]["command"] == "sync"
     assert float(rows[0]["cost"]) == pytest.approx(0.0123)
+
+
+def test_failed_sync_restores_captured_streams_in_process(tmp_path, monkeypatch):
+    """Codex round-2 review of PR #1982: the non-zero `click.exceptions.Exit`
+    branch in PDDCLI.invoke must restore the core-dump `OutputCapture` streams
+    before re-raising. The server executor invokes commands in-process
+    (pdd/server/executor.py, ctx.invoke), so a failed sync with --core-dump
+    would otherwise leak OutputCapture onto sys.stdout/sys.stderr for the rest
+    of the process. Driven via cli.main(standalone_mode=False), the embedded
+    top-level invocation shape (click returns the exit code for Exit there)."""
+    from pdd.core.cli import OutputCapture  # noqa: PLC0415 - test-local import
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "pdd.commands.maintenance.sync_main", _fake_sync_main(overall_success=False)
+    )
+    monkeypatch.setenv("PDD_AUTO_UPDATE", "false")
+    monkeypatch.setenv("PDD_SUPPRESS_SETUP_REMINDER", "1")
+
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    try:
+        exit_code = real_cli.main(
+            ["--core-dump", "sync", "my_module"], standalone_mode=False
+        )
+        leaked_stdout, leaked_stderr = sys.stdout, sys.stderr
+    finally:
+        # Never let a red run poison sys.stdout/sys.stderr for later tests.
+        sys.stdout, sys.stderr = original_stdout, original_stderr
+
+    assert exit_code == 1
+    assert not isinstance(leaked_stdout, OutputCapture), (
+        "failed sync leaked the core-dump OutputCapture onto sys.stdout"
+    )
+    assert leaked_stdout is original_stdout
+    assert leaked_stderr is original_stderr
