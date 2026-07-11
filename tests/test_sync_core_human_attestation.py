@@ -132,6 +132,14 @@ def _write_approvals(store: Path, approvals: list[dict[str, object]]) -> None:
     (store / "approvals.json").write_text(json.dumps({"approvals": approvals}), encoding="utf-8")
 
 
+def _commit_policy(root: Path, policy: dict[str, object], message: str) -> str:
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    _git(root, "add", ".pdd/human-attestation-policy.json")
+    _git(root, "commit", "-q", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
 def _sign(key: Ed25519PrivateKey, approval: dict[str, object]) -> None:
     approval["signature"] = base64.b64encode(
         key.sign(
@@ -261,6 +269,88 @@ def test_human_attestation_rejects_each_invalid_signer_or_binding(
         HumanAttestationVerifier(policy, store / "replay.json").verify(request, now=NOW)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("revoked_identities", "bob"),
+        ("revoked_identities", {"bob": True}),
+        ("revoked_key_ids", "bob"),
+        ("revoked_key_ids", {"bob": True}),
+    ],
+)
+def test_policy_rejects_malformed_revocation_lists(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    root, _base, store, _keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy[field] = value
+    base = _commit_policy(root, policy, "malformed revocation policy")
+
+    with pytest.raises(HumanAttestationError, match="revocation"):
+        load_human_attestation_policy(root, base, store)
+
+
+def test_policy_requires_threshold_active_role_qualified_signers(tmp_path: Path) -> None:
+    root, _base, store, _keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["revoked_identities"] = ["bob", "carol"]
+    base = _commit_policy(root, policy, "unsatisfiable active policy")
+
+    with pytest.raises(HumanAttestationError, match="unsatisfiable"):
+        load_human_attestation_policy(root, base, store)
+
+
+@pytest.mark.parametrize(
+    ("revoked_identities", "revoked_key_ids"),
+    [(["bob"], []), ([], ["bob"])],
+)
+def test_revoked_identity_and_key_cannot_contribute_to_threshold(
+    tmp_path: Path, revoked_identities: list[str], revoked_key_ids: list[str]
+) -> None:
+    root, _base, store, keys = _repository(tmp_path)
+    policy_path = root / ".pdd/human-attestation-policy.json"
+    policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy_payload["revoked_identities"] = revoked_identities
+    policy_payload["revoked_key_ids"] = revoked_key_ids
+    base = _commit_policy(root, policy_payload, "revoked protected signers")
+    policy = load_human_attestation_policy(root, base, store)
+    request = _request()
+    approvals = [
+        _approval(keys[0], "alice", request, nonce="alice-revocation"),
+        _approval(keys[1], "bob", request, nonce="bob-revocation"),
+    ]
+    for index, approval in enumerate(approvals):
+        approval["policy_digest"] = policy.digest
+        _sign(keys[index], approval)
+    _write_approvals(store, approvals)
+
+    with pytest.raises(HumanAttestationError):
+        HumanAttestationVerifier(policy, store / "replay.json").verify(request, now=NOW)
+
+
+def test_stale_targeted_history_does_not_block_fresh_quorum(tmp_path: Path) -> None:
+    root, base, store, keys = _repository(tmp_path)
+    request = _request()
+    policy = load_human_attestation_policy(root, base, store)
+    stale = _approval(keys[2], "carol", request, nonce="carol-stale")
+    stale["expires_at"] = (NOW - timedelta(minutes=1)).isoformat()
+    approvals = [
+        stale,
+        _approval(keys[0], "alice", request, nonce="alice-fresh"),
+        _approval(keys[1], "bob", request, nonce="bob-fresh"),
+    ]
+    for index, approval in zip((2, 0, 1), approvals):
+        approval["policy_digest"] = policy.digest
+        _sign(keys[index], approval)
+    _write_approvals(store, approvals)
+
+    assert HumanAttestationVerifier(policy, store / "replay.json").verify(
+        request, now=NOW
+    ) is EvidenceOutcome.PASS
+
+
 def test_runner_normalizes_external_threshold_quorum_to_pass(tmp_path: Path) -> None:
     root, base, store, keys = _repository(tmp_path)
     binding = RunBinding("snapshot-digest", base, base, "artifact-digest")
@@ -293,12 +383,10 @@ def test_runner_normalizes_external_threshold_quorum_to_pass(tmp_path: Path) -> 
 
 def test_policy_rejects_duplicate_public_key_under_distinct_identities(tmp_path: Path) -> None:
     """One Ed25519 key must never satisfy multiple human threshold slots."""
-    root, base, store, _keys = _repository(tmp_path)
+    root, _base, store, _keys = _repository(tmp_path)
     policy_path = root / ".pdd/human-attestation-policy.json"
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     policy["signers"][1]["public_key"] = policy["signers"][0]["public_key"]
-    policy_path.write_text(json.dumps(policy), encoding="utf-8")
-    _git(root, "add", ".pdd/human-attestation-policy.json")
-    duplicate_key_base = _git(root, "commit", "-qm", "duplicate protected key")
+    duplicate_key_base = _commit_policy(root, policy, "duplicate protected key")
     with pytest.raises(HumanAttestationError, match="duplicate"):
         load_human_attestation_policy(root, duplicate_key_base, store)
