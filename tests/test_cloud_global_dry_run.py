@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
 from pdd import cli
+from pdd.continuous_sync import SyncUnit, classify_unit
 
 
 def test_global_dry_run_json_discovers_absolute_configured_prompt_root_once(
@@ -43,3 +45,95 @@ def test_global_dry_run_json_discovers_absolute_configured_prompt_root_once(
     assert report["summary"]["total"] == 2
     assert {unit["basename"] for unit in report["units"]} == {"alpha", "beta"}
     assert sorted(path.relative_to(project) for path in project.rglob("*")) == before
+
+
+def test_global_dry_run_json_rejects_unsafe_absolute_prompt_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Candidate configs cannot make dry-run traverse arbitrary absolute trees."""
+    project = tmp_path / "workspace" / "project"
+    outside = tmp_path / "outside"
+    project.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "secret_python.prompt").write_text("secret\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: [\"**\"]\n"
+        "    defaults:\n"
+        f"      prompts_dir: {outside}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(
+        cli.cli,
+        ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["summary"]["failures"] == 1
+    assert report["summary"]["total"] == 1
+    assert report["failures"][0]["failure"] == "unsafe_prompt_root"
+    assert "outside configured workspace" in report["failures"][0]["reason"]
+
+
+def test_global_dry_run_json_reports_prompt_traversal_budget(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Large configured prompt trees fail closed instead of hanging discovery."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    for index in range(3):
+        (prompts / f"unit{index}_python.prompt").write_text(
+            f"unit {index}\n",
+            encoding="utf-8",
+        )
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    paths: [\"**\"]\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_PROMPT_DISCOVERY_FILES", 2)
+
+    result = CliRunner().invoke(
+        cli.cli,
+        ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    report = json.loads(result.output)
+    assert report["summary"]["failures"] == 1
+    assert report["failures"][0]["failure"] == "prompt_traversal_budget"
+
+
+def test_missing_fingerprint_does_not_mask_path_resolution_failure(
+    tmp_path: Path,
+) -> None:
+    """Path failures remain distinct even when no legacy fingerprint exists."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "broken_python.prompt"
+    prompt.write_text("broken\n", encoding="utf-8")
+    unit = SyncUnit("broken", "python", prompt, prompts)
+
+    with patch(
+        "pdd.continuous_sync.get_pdd_file_paths",
+        side_effect=ValueError("ambiguous module configuration"),
+    ):
+        report = classify_unit(unit, project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "path_resolution"
+    assert "ambiguous module configuration" in report["reason"]
