@@ -1,4 +1,5 @@
 """Deterministic continuous-sync classification and reconciliation reports."""
+# pylint: disable=too-many-lines
 from __future__ import annotations
 
 import json
@@ -684,6 +685,60 @@ def _relative_or_raw(path: Path, root: Path) -> str:
         return str(path)
 
 
+def _include_dep_violation(dep_path_value: Any, root: Path) -> Optional[Dict[str, str]]:
+    # pylint: disable=too-many-return-statements
+    if not isinstance(dep_path_value, str) or not dep_path_value:
+        return {"path": str(dep_path_value), "reason": "invalid_path"}
+
+    raw_path = Path(dep_path_value)
+    dep_path = raw_path if raw_path.is_absolute() else root / raw_path
+    dep_path = Path(os.path.abspath(os.path.normpath(os.fspath(dep_path))))
+    root_path = root.resolve()
+    try:
+        common_path = os.path.commonpath([str(root_path), str(dep_path)])
+    except ValueError:
+        return {"path": dep_path_value, "reason": "outside_project"}
+    if common_path != str(root_path):
+        return {"path": dep_path_value, "reason": "outside_project"}
+
+    try:
+        relative_parts = Path(os.path.relpath(dep_path, root_path)).parts
+    except ValueError:
+        return {"path": dep_path_value, "reason": "outside_project"}
+
+    cursor = root_path
+    for index, part in enumerate(relative_parts):
+        cursor = cursor / part
+        is_leaf = index == len(relative_parts) - 1
+        try:
+            dep_stat = cursor.lstat()
+        except OSError:
+            return {"path": dep_path_value, "reason": "missing"}
+        if stat.S_ISLNK(dep_stat.st_mode):
+            return {"path": dep_path_value, "reason": "symlink"}
+        if is_leaf:
+            if not stat.S_ISREG(dep_stat.st_mode):
+                return {"path": dep_path_value, "reason": "nonregular"}
+        elif not stat.S_ISDIR(dep_stat.st_mode):
+            return {"path": dep_path_value, "reason": "nonregular"}
+
+    return None
+
+
+def _unsafe_include_deps(
+    include_deps: Optional[Dict[str, str]],
+    root: Path,
+) -> List[Dict[str, str]]:
+    if not isinstance(include_deps, dict) or not include_deps:
+        return []
+    violations = []
+    for dep_path_value in sorted(include_deps, key=str):
+        violation = _include_dep_violation(dep_path_value, root)
+        if violation is not None:
+            violations.append(violation)
+    return violations
+
+
 def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
     resolved_root = root.resolve()
@@ -1133,6 +1188,22 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "fingerprint_path": str(fp_path),
             "paths": _paths_as_json(paths, base),
             "failure": "missing_artifacts",
+        }
+
+    unsafe_include_deps = _unsafe_include_deps(fingerprint.include_deps, base)
+    if unsafe_include_deps:
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": "unsafe legacy include dependency metadata",
+            "changed_files": [],
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": _paths_as_json(paths, base),
+            "failure": "unsafe_include_deps",
+            "unsafe_include_deps": unsafe_include_deps,
         }
 
     current_hashes = calculate_current_hashes(
