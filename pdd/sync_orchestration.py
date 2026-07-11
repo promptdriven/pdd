@@ -689,6 +689,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         from .sync_core import (
             attestation_signer_from_environment,
             finalize_unit,
+            protected_runner_config_from_environment,
         )
 
         root = repository_root(start)
@@ -708,6 +709,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             base_ref=protected_base,
             head_ref="HEAD",
             signer=attestation_signer_from_environment(),
+            config=protected_runner_config_from_environment(root),
         )
         return
     if atomic_state:

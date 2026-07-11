@@ -33,13 +33,17 @@ def _unlock(descriptor: int) -> None:
     fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
-def _safe_directory(metadata: os.stat_result) -> bool:
-    """Return whether metadata describes a private checker-owned directory."""
+def _owned_directory(metadata: os.stat_result) -> bool:
+    """Return whether metadata describes a checker-owned directory."""
     return (
         stat.S_ISDIR(metadata.st_mode)
         and (not hasattr(os, "getuid") or metadata.st_uid == os.getuid())
-        and not stat.S_IMODE(metadata.st_mode) & 0o077
     )
+
+
+def _safe_directory(metadata: os.stat_result) -> bool:
+    """Return whether metadata describes a private checker-owned directory."""
+    return _owned_directory(metadata) and not stat.S_IMODE(metadata.st_mode) & 0o077
 
 
 def _legacy_safe_parent(path: Path) -> tuple[int, os.stat_result]:
@@ -75,6 +79,28 @@ def _legacy_safe_parent(path: Path) -> tuple[int, os.stat_result]:
     return descriptor, opened
 
 
+def _open_trust_root(trust_root: Path, flags: int) -> int:
+    """Open a new private root or reject compromised pre-existing state."""
+    try:
+        os.lstat(trust_root)
+        existed = True
+    except FileNotFoundError:
+        existed = False
+        trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(trust_root, flags)
+    metadata = os.fstat(descriptor)
+    if not _owned_directory(metadata) or (
+        existed and stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
+        os.close(descriptor)
+        raise DescriptorStoreError("replay ledger root is unsafe")
+    os.fchmod(descriptor, 0o700)
+    if not _safe_directory(os.fstat(descriptor)):
+        os.close(descriptor)
+        raise DescriptorStoreError("replay ledger root is unsafe")
+    return descriptor
+
+
 def _safe_parent(
     path: Path, trust_root: Path | None
 ) -> tuple[int, os.stat_result]:
@@ -92,11 +118,7 @@ def _safe_parent(
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = -1
     try:
-        trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(trust_root, flags)
-        root_metadata = os.fstat(descriptor)
-        if not _safe_directory(root_metadata):
-            raise DescriptorStoreError("replay ledger root is unsafe")
+        descriptor = _open_trust_root(trust_root, flags)
         for component in relative_parent.parts:
             if component in {"", ".", ".."}:
                 raise DescriptorStoreError("replay ledger parent is unsafe")
@@ -147,7 +169,11 @@ def _read_json(parent_fd: int, name: str, empty: Any) -> Any:
         descriptor = _open_relative(parent_fd, name, os.O_RDONLY)
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or (hasattr(os, "getuid") and metadata.st_uid != os.getuid())
+        ):
             raise DescriptorStoreError("replay ledger is unsafe")
         with os.fdopen(descriptor, "r", encoding="utf-8", closefd=False) as handle:
             return json.load(handle)
@@ -194,7 +220,10 @@ def update_json(
     lock_fd = -1
     try:
         lock_fd = _open_relative(parent_fd, lock_name, os.O_RDWR | os.O_CREAT, 0o600)
-        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode) or (
+            hasattr(os, "getuid") and lock_metadata.st_uid != os.getuid()
+        ):
             raise DescriptorStoreError("replay ledger lock is unsafe")
         os.fchmod(lock_fd, 0o600)
         _lock(lock_fd)

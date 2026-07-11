@@ -1045,7 +1045,17 @@ def test_playwright_launch_failures_are_normalized(
     assert "launch" in executions[0].detail.lower()
 
 
-@pytest.mark.parametrize("option", ["--require=helper", "--import=helper", "--loader=helper"])
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--require=helper",
+        "--import=helper",
+        "--loader=helper",
+        "--require=./candidate-helper",
+        "--import=./candidate-helper",
+        "--loader=./candidate-helper",
+    ],
+)
 def test_playwright_command_rejects_candidate_resolving_prefix_options(
     tmp_path: Path, option: str
 ) -> None:
@@ -1058,6 +1068,18 @@ def test_playwright_command_rejects_candidate_resolving_prefix_options(
     )
     assert error is not None
     assert "exactly" in error or "options" in error
+
+
+def test_playwright_command_rejects_extensionless_pathless_entrypoint(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path.parent / "node"
+    executable.write_bytes(b"node")
+
+    error = _playwright_command_error(tmp_path, (str(executable), "fake_playwright"))
+
+    assert error is not None
+    assert "absolute" in error or "pathless" in error
 
 
 def test_playwright_candidate_node_modules_dependency_is_not_trusted(

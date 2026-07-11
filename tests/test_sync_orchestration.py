@@ -13,7 +13,7 @@ import click
 # may carry their own @pytest.mark.timeout override.
 pytestmark = pytest.mark.timeout(450)
 
-from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error, _compose_sync_summary
+from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error, _compose_sync_summary, _save_fingerprint_atomic
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 
 # Test Plan:
@@ -9521,3 +9521,30 @@ def test_sync_orchestration_skip_handler_for_fix(orchestration_fixture):
     orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
         "calculator", "python", "skip:fix", ANY, 0.0, "skipped"
     )
+
+
+def test_atomic_fingerprint_finalizer_wires_human_attestation_environment(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "repo"
+    prompt = root / "prompts/widget_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Build widget\n")
+    store = tmp_path / "external-human-store"
+    ledger = tmp_path / "external-human-replay.json"
+    store.mkdir()
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", "protected-base")
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_STORE", str(store))
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER", str(ledger))
+    with patch("pdd.continuous_sync.canonical_sync_enabled", return_value=True), patch(
+        "pdd.continuous_sync.repository_root", return_value=root
+    ), patch(
+        "pdd.sync_core.attestation_signer_from_environment", return_value=object()
+    ), patch("pdd.sync_core.finalize_unit") as mocked_finalize:
+        _save_fingerprint_atomic(
+            "widget", "python", "generate", {"prompt": prompt}, 0.0, "test"
+        )
+
+    config = mocked_finalize.call_args.kwargs["config"]
+    assert config.human_attestation_store == store.resolve()
+    assert config.human_attestation_replay_ledger == ledger.resolve()

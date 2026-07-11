@@ -187,6 +187,19 @@ def _protected_playwright_command(
     return command
 
 
+def _protected_external_path(value: Path | None, option: str, cwd: Path) -> Path | None:
+    """Resolve an external protected path and reject candidate-local storage."""
+    if value is None:
+        return None
+    root = cwd.resolve()
+    resolved = value.expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return resolved
+    raise click.ClickException(f"{option} must be outside the candidate checkout")
+
+
 def _runner_config_from_options(
     options: dict[str, object], cwd: Path
 ) -> RunnerConfig:
@@ -195,6 +208,8 @@ def _runner_config_from_options(
     vitest_command = options.get("vitest_command")
     playwright_command = options.get("playwright_command")
     playwright_manifest = options.get("playwright_toolchain_manifest")
+    human_store = options.get("human_attestation_store")
+    human_replay = options.get("human_attestation_replay_ledger")
     return RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
@@ -212,6 +227,16 @@ def _runner_config_from_options(
         ),
         playwright_toolchain_manifest=Path(playwright_manifest).expanduser().resolve()
         if isinstance(playwright_manifest, str) and playwright_manifest else None,
+        human_attestation_store=_protected_external_path(
+            human_store if isinstance(human_store, Path) else None,
+            "--human-attestation-store",
+            cwd,
+        ),
+        human_attestation_replay_ledger=_protected_external_path(
+            human_replay if isinstance(human_replay, Path) else None,
+            "--human-attestation-replay-ledger",
+            cwd,
+        ),
     )
 
 
@@ -467,6 +492,18 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     type=click.Path(path_type=Path),
     help="Protected external Playwright toolchain manifest.",
 )
+@click.option(
+    "--human-attestation-store",
+    type=click.Path(path_type=Path),
+    envvar="PDD_SYNC_HUMAN_ATTESTATION_STORE",
+    help="Protected external human approval store path.",
+)
+@click.option(
+    "--human-attestation-replay-ledger",
+    type=click.Path(path_type=Path),
+    envvar="PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER",
+    help="Protected external human approval replay ledger path.",
+)
 @click.pass_context
 def validate(
     ctx: click.Context,
@@ -477,26 +514,31 @@ def validate(
     vitest_command: str | None,
     playwright_command: str | None,
     playwright_toolchain_manifest: Path | None,
+    human_attestation_store: Path | None,
+    human_attestation_replay_ledger: Path | None,
 ) -> None:
     """Run protected obligations and transactionally finalize trusted evidence."""
     ctx.ensure_object(dict)
     root = Path.cwd().resolve()
+    config = _runner_config_from_options(
+        {
+            "jest_command": jest_command,
+            "vitest_command": vitest_command,
+            "playwright_command": playwright_command,
+            "playwright_toolchain_manifest": str(playwright_toolchain_manifest)
+            if playwright_toolchain_manifest else None,
+            "human_attestation_store": human_attestation_store,
+            "human_attestation_replay_ledger": human_attestation_replay_ledger,
+        },
+        root,
+    )
     result = finalize_unit(
         root,
         PurePosixPath(module),
         base_ref=base_ref,
         head_ref=head_ref,
         signer=attestation_signer_from_environment(),
-        config=_runner_config_from_options(
-            {
-                "jest_command": jest_command,
-                "vitest_command": vitest_command,
-                "playwright_command": playwright_command,
-                "playwright_toolchain_manifest": str(playwright_toolchain_manifest)
-                if playwright_toolchain_manifest else None,
-            },
-            root,
-        ),
+        config=config,
     )
     click.echo(
         json.dumps(

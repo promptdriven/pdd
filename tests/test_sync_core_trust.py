@@ -54,6 +54,7 @@ def _binding(**overrides):
         "tool_version": "pdd-test",
         "base_sha": "base-1",
         "checked_sha": "head-1",
+        "artifact_closure_digest": "snapshot-1",
     }
     values.update(overrides)
     return AttestationBinding(**values)
@@ -68,6 +69,13 @@ def test_valid_attestation_produces_sealed_evidence() -> None:
     evidence = _verify(AttestationTrustPolicy({"trusted-ci": PUBLIC_KEY}), _envelope())
     assert isinstance(evidence, ValidationEvidence)
     assert evidence.attestation_id == "attestation-1"
+
+
+def test_boolean_payload_version_is_rejected_by_domain_payload() -> None:
+    envelope = replace(_envelope(), payload_version=True)
+
+    with pytest.raises(AttestationError, match="payload version"):
+        envelope.payload()
 
 
 def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None:
@@ -260,4 +268,15 @@ def test_file_replay_store_rejects_symlinked_ancestor(tmp_path) -> None:
     (protected / "linked").symlink_to(outside, target_is_directory=True)
     store = FileReplayStore(protected / "linked" / "nested" / "replay.json")
     with pytest.raises(AttestationError, match="unsafe"):
+        store.consume("trusted-ci", "nonce", "attestation")
+
+
+def test_file_replay_store_normalizes_filesystem_failures(tmp_path, monkeypatch) -> None:
+    store = FileReplayStore(tmp_path / "replay.json")
+
+    def fail_io(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pdd.sync_core.trust.update_json", fail_io)
+    with pytest.raises(AttestationError, match="replay ledger I/O failed"):
         store.consume("trusted-ci", "nonce", "attestation")

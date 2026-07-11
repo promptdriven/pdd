@@ -18,7 +18,7 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
-from pdd.sync_core.runner import jest_validator_config_digest
+from pdd.sync_core.runner import _jest_command_error, jest_validator_config_digest
 from pdd.sync_core.runner import _local_javascript_imports
 
 
@@ -447,6 +447,22 @@ def test_pathless_jest_script_operand_is_not_resolved_from_candidate(
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "pathless" in executions[0].detail
+
+
+@pytest.mark.parametrize(
+    "command_tail",
+    [("fake_jest",), ("--require=./candidate-helper", "/external/jest.js")],
+)
+def test_jest_prefix_rejects_pathless_entrypoints_and_code_loaders(
+    tmp_path: Path, command_tail: tuple[str, ...]
+) -> None:
+    executable = tmp_path / "python"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+
+    error = _jest_command_error(tmp_path / "candidate", (str(executable), *command_tail))
+
+    assert error is not None
 
 
 def test_jest_subprocess_cannot_read_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -29,6 +29,12 @@ from .trust import (
 )
 from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
 from .git_io import read_git_blob, read_git_mode
+from .human_attestation import (
+    HumanAttestationError,
+    HumanAttestationRequest,
+    HumanAttestationVerifier,
+    load_human_attestation_policy,
+)
 from .types import (
     EvidenceOutcome,
     ObligationEvidence,
@@ -39,7 +45,8 @@ from .types import (
 from .supervisor import run_supervised
 
 
-TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+PREDECESSOR_TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v3"
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -116,6 +123,8 @@ class RunnerConfig:
     playwright_command: tuple[str, ...] | None = None
     playwright_toolchain_manifest: Path | None = None
     playwright_toolchain_identity: str | None = None
+    human_attestation_store: Path | None = None
+    human_attestation_replay_ledger: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +144,7 @@ class RunBinding:
     snapshot_digest: str
     base_sha: str
     head_sha: str
+    artifact_closure_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -1499,10 +1509,11 @@ def _managed_subprocess(
 def runner_identity_digest(
     profile: VerificationProfile, *, root: Path | None = None, ref: str = "HEAD",
     config: RunnerConfig = RunnerConfig(),
+    tool_version: str = TRUSTED_RUNNER_VERSION,
 ) -> str:
     """Bind evidence to protected adapters, configs, and exact artifact scopes."""
     payload = {
-        "tool_version": TRUSTED_RUNNER_VERSION,
+        "tool_version": tool_version,
         "pytest_command": [
             sys.executable,
             "-m",
@@ -1730,11 +1741,6 @@ def _command_part_identity(root: Path, part: str) -> str:
         return part
     resolved = (path if path.is_absolute() else root / path).resolve()
     return _file_identity(resolved) if resolved.exists() else part
-
-
-def _is_script_like_operand(value: str) -> bool:
-    """Return true for argv operands that are likely executable script paths."""
-    return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
 
 
 def _external_node_modules_root(
@@ -1987,43 +1993,40 @@ def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bo
 
 
 def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None:
-    """Return a fail-closed reason for unprotected explicit validator argv."""
+    """Enforce an executable plus identity-bound external entrypoint grammar."""
     if not command:
         return "explicit validator command is empty"
+    if len(command) != 2:
+        return "explicit validator command must be exactly a launcher and entrypoint"
     candidate_root = root.resolve()
-    path_operands: list[Path] = []
-    executable = Path(command[0]).expanduser()
-    if not executable.is_absolute():
-        return "explicit validator command executable must be an absolute path"
-    path_operands.append(executable)
-    expect_module_operand = False
-    for part in command[1:]:
-        if expect_module_operand:
-            if "/" not in part:
-                return (
-                    "pathless validator module operand is not trusted; use an "
-                    "absolute external path or protected module launcher"
-                )
-            expect_module_operand = False
-        if part == "-m":
-            expect_module_operand = True
-            continue
-        if part.startswith("-"):
-            continue
-        path = Path(part).expanduser()
-        if not path.is_absolute() and "/" not in part:
-            if _is_script_like_operand(part):
-                return (
-                    "pathless validator script operand is not trusted; use an "
-                    "absolute external path"
-                )
-            continue
-        path_operands.append(path if path.is_absolute() else root / path)
-    for operand in path_operands:
-        resolved = operand.resolve()
+    operands = tuple(Path(part).expanduser() for part in command)
+    if not all(operand.is_absolute() for operand in operands):
+        return (
+            "pathless or relative validator operands are not trusted; launcher "
+            "and entrypoint must be absolute external paths"
+        )
+    for operand in operands:
+        try:
+            resolved = operand.resolve(strict=True)
+        except OSError:
+            return "validator launcher or entrypoint is missing"
         if _path_is_relative_to(resolved, candidate_root):
             return "explicit validator command inside the candidate checkout is not trusted"
+        if not resolved.is_file():
+            return "validator launcher and entrypoint must be files"
+    if not os.access(operands[0], os.X_OK):
+        return "validator launch executable is not executable"
     return None
+
+
+def _jest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the protected Jest command-prefix grammar."""
+    return _protected_command_error(root, command)
+
+
+def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the protected Vitest command-prefix grammar."""
+    return _protected_command_error(root, command)
 
 
 _JEST_REPORTER = """class PddTrustedReporter {
@@ -2083,7 +2086,7 @@ def _run_jest(
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
             return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
         return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
-    command_error = _protected_command_error(root, command_prefix)
+    command_error = _jest_command_error(root, command_prefix)
     if command_error is not None:
         return RunnerExecution(
             "jest", EvidenceOutcome.ERROR, "jest-untrusted", command_error
@@ -2191,7 +2194,7 @@ def _run_vitest(
         if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
-    command_error = _protected_command_error(root, command_prefix)
+    command_error = _vitest_command_error(root, command_prefix)
     if command_error is not None:
         return RunnerExecution(
             "vitest", EvidenceOutcome.ERROR, "vitest-untrusted", command_error
@@ -2240,6 +2243,12 @@ def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | Non
     """Enforce the exact protected Playwright launcher grammar."""
     error = _protected_command_error(root, command)
     if error is not None:
+        if error in {
+            "validator launcher or entrypoint is missing",
+            "validator launcher and entrypoint must be files",
+            "validator launch executable is not executable",
+        }:
+            return f"Playwright launch is invalid: {error}"
         return error
     if len(command) != 2:
         return "Playwright command must be exactly an executable and CLI entrypoint"
@@ -2253,6 +2262,49 @@ def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | Non
         return "Playwright launch executable is missing or not executable"
     if not entrypoint.is_file():
         return "Playwright launch entrypoint is missing or is not a file"
+    return None
+
+
+def attested_runner_identity_error(
+    root: Path,
+    ref: str,
+    profile: VerificationProfile,
+    binding: AttestationBinding,
+) -> str | None:
+    """Validate current or safely migratable predecessor runner identity."""
+    playwright_obligation = any(
+        obligation.validator_id == "playwright"
+        for obligation in profile.obligations
+    )
+    if binding.playwright_command is not None:
+        if not playwright_obligation:
+            return "attestation contains an unexpected Playwright command"
+        command_error = _playwright_command_error(root, binding.playwright_command)
+        if command_error is not None:
+            return f"attested Playwright command is not trusted: {command_error}"
+    elif binding.playwright_toolchain_manifest is not None:
+        return "attestation contains a Playwright manifest without a command"
+
+    allowed_versions = {
+        TRUSTED_RUNNER_VERSION,
+        PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    }
+    if binding.tool_version not in allowed_versions:
+        return "attestation runner version is not protected"
+    expected_digest = runner_identity_digest(
+        profile,
+        root=root,
+        ref=ref,
+        config=RunnerConfig(
+            playwright_command=binding.playwright_command,
+            playwright_toolchain_manifest=Path(
+                binding.playwright_toolchain_manifest
+            ) if binding.playwright_toolchain_manifest else None,
+        ),
+        tool_version=binding.tool_version,
+    )
+    if binding.runner_digest != expected_digest:
+        return "attestation runner digest is not protected"
     return None
 
 
@@ -3285,7 +3337,7 @@ def run_obligation(
             + ", ".join(sorted(dirty)),
         )
     if obligation.validator_id == "jest" and config.jest_command is not None:
-        command_error = _protected_command_error(root, config.jest_command)
+        command_error = _jest_command_error(root, config.jest_command)
         if command_error is not None:
             return RunnerExecution(
                 obligation.obligation_id,
@@ -3304,7 +3356,7 @@ def run_obligation(
                 "candidate node_modules Vitest runner is not trusted",
             )
         if config.vitest_command is not None:
-            command_error = _protected_command_error(root, config.vitest_command)
+            command_error = _vitest_command_error(root, config.vitest_command)
             if command_error is not None:
                 return RunnerExecution(
                     obligation.obligation_id,
@@ -3383,6 +3435,40 @@ def run_obligation(
         )
 
 
+def _run_human_attestation(
+    root: Path,
+    profile: VerificationProfile,
+    obligation: VerificationObligation,
+    binding: RunBinding,
+    config: RunnerConfig,
+) -> RunnerExecution:
+    """Verify an external threshold decision without launching a child process."""
+    if config.human_attestation_store is None or config.human_attestation_replay_ledger is None:
+        return RunnerExecution(
+            obligation.obligation_id, EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "external human attestation store and replay ledger are required",
+        )
+    try:
+        policy = load_human_attestation_policy(
+            root, binding.base_sha, config.human_attestation_store
+        )
+        if obligation.validator_config_digest != policy.digest:
+            raise HumanAttestationError("human obligation does not bind protected policy")
+        outcome = HumanAttestationVerifier(
+            policy, config.human_attestation_replay_ledger
+        ).verify(HumanAttestationRequest(profile, obligation, binding))
+    except (HumanAttestationError, ValueError) as exc:
+        return RunnerExecution(
+            obligation.obligation_id, EvidenceOutcome.QUARANTINED,
+            obligation.validator_config_digest, str(exc),
+        )
+    return RunnerExecution(
+        obligation.obligation_id, outcome, obligation.validator_config_digest,
+        "external threshold human approval verified",
+    )
+
+
 def run_profile(
     root: Path,
     profile: VerificationProfile,
@@ -3402,11 +3488,13 @@ def run_profile(
         if identity is not None:
             config = replace(config, playwright_toolchain_identity=identity)
     executions = tuple(
-        run_obligation(
-            root,
-            obligation,
-            base_sha=binding.base_sha,
-            head_sha=binding.head_sha,
+        _run_human_attestation(root, profile, obligation, binding, config)
+        if (
+            obligation.kind == "human-attestation"
+            and obligation.validator_id == "threshold-ed25519"
+        )
+        else run_obligation(
+            root, obligation, base_sha=binding.base_sha, head_sha=binding.head_sha,
             config=config,
         )
         for obligation in profile.obligations
@@ -3444,6 +3532,7 @@ def run_profile(
         config.playwright_command,
         str(config.playwright_toolchain_manifest.resolve())
         if config.playwright_toolchain_manifest is not None else None,
+        binding.artifact_closure_digest or binding.snapshot_digest,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions

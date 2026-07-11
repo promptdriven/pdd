@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,7 +19,7 @@ from .fingerprint_store import CorruptFingerprintError, FingerprintStore
 from .git_io import resolve_git_commit
 from .manifest import ManifestUnit, UnitManifest, build_unit_manifest
 from .snapshot import SnapshotError, build_unit_snapshot
-from .runner import RunnerConfig, TRUSTED_RUNNER_VERSION, runner_identity_digest
+from .runner import attested_runner_identity_error
 from .transaction import TransactionError, TransactionManager
 from .trust import AttestationError, ValidationEvidence
 from .types import (
@@ -101,6 +101,7 @@ class EvidenceExpectation:
 
     unit: ManifestUnit
     snapshot_digest: str
+    artifact_closure_digest: str
     profile_digest: str
     attestation_ref: str | None
 
@@ -133,8 +134,14 @@ def _evidence(
     if not expectation.attestation_ref or context.trust_policy is None:
         return None
     envelope = load_attestation(context.root, expectation.attestation_ref)
+    expected_binding = envelope.binding
+    if envelope.payload_version == 1:
+        expected_binding = replace(
+            envelope.binding,
+            artifact_closure_digest=expectation.artifact_closure_digest,
+        )
     evidence = context.trust_policy.verify(
-        envelope, envelope.binding, now=context.now
+        envelope, expected_binding, now=context.now
     )
     ancestry = subprocess.run(
         [
@@ -153,30 +160,27 @@ def _evidence(
             "attestation checked commit is not an ancestor of certified head"
         )
     binding = envelope.binding
+    artifact_closure_digest = (
+        binding.snapshot_digest
+        if envelope.payload_version == 1
+        else binding.artifact_closure_digest
+    )
     if (
         binding.subject != expectation.unit.unit_id
         or binding.snapshot_digest != expectation.snapshot_digest
+        or artifact_closure_digest != expectation.artifact_closure_digest
         or binding.profile_digest != expectation.profile_digest
         or binding.base_sha != context.manifest.base_ref
     ):
         return None
     profile = context.profiles.for_unit(expectation.unit.unit_id)
-    if (
-        profile is None
-        or binding.runner_digest
-        != runner_identity_digest(
-            profile,
-            root=context.root,
-            ref=context.manifest.head_ref,
-            config=RunnerConfig(
-                playwright_command=binding.playwright_command,
-                playwright_toolchain_manifest=Path(binding.playwright_toolchain_manifest)
-                if binding.playwright_toolchain_manifest else None,
-            ),
-        )
-        or binding.tool_version != TRUSTED_RUNNER_VERSION
-    ):
+    if profile is None:
         raise AttestationError("attestation runner identity is not protected")
+    runner_error = attested_runner_identity_error(
+        context.root, context.manifest.head_ref, profile, binding
+    )
+    if runner_error is not None:
+        raise AttestationError(runner_error)
     return evidence
 
 
@@ -192,6 +196,7 @@ def _unit_verdict(context: ReportContext, unit: ManifestUnit) -> SyncVerdict:
             context,
             EvidenceExpectation(
                 unit,
+                snapshot.digest(),
                 snapshot.digest(),
                 profile.profile_digest,
                 attestation_ref,

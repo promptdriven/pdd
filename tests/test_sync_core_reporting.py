@@ -4,6 +4,8 @@ import base64
 import json
 import os
 import subprocess
+import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
@@ -21,6 +23,7 @@ from pdd.sync_core import (
     FingerprintRecord,
     FingerprintStore,
     PlannedWrite,
+    RunnerConfig,
     SemanticStatus,
     TransactionManager,
     TRUSTED_RUNNER_VERSION,
@@ -30,10 +33,12 @@ from pdd.sync_core import (
     encode_attestation,
     encode_fingerprint,
     evidence_relpath,
+    finalize_legacy_paths,
     finalize_unit,
     load_verification_profiles,
     runner_identity_digest,
 )
+from pdd.sync_core.runner import PREDECESSOR_TRUSTED_RUNNER_VERSION
 from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.types import ObligationEvidence
 from pdd.ci_drift_heal import main as ci_drift_heal_main
@@ -146,7 +151,15 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _finalize_trusted_baseline(root: Path, commit: str) -> None:
+def _finalize_trusted_baseline(
+    root: Path,
+    commit: str,
+    *,
+    artifact_closure_digest: str | None = None,
+    legacy_pre_closure: bool = False,
+    playwright_command: tuple[str, ...] | None = None,
+    tool_version: str = TRUSTED_RUNNER_VERSION,
+) -> None:
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     profile = load_verification_profiles(root, manifest).profiles[0]
     unit = manifest.managed_units[0]
@@ -155,20 +168,41 @@ def _finalize_trusted_baseline(root: Path, commit: str) -> None:
         unit.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(profile, root=root, ref=commit),
-        TRUSTED_RUNNER_VERSION,
+        runner_identity_digest(
+            profile,
+            root=root,
+            ref=commit,
+            config=RunnerConfig(playwright_command=playwright_command),
+            tool_version=tool_version,
+        ),
+        tool_version,
         commit,
         commit,
+        playwright_command,
+        artifact_closure_digest=artifact_closure_digest or snapshot.digest(),
     )
     envelope = SIGNER.issue(
         AttestationRequest(
             "attestation-widget-1",
             binding,
-            (ObligationEvidence("pytest", EvidenceOutcome.PASS),),
+            (
+                ObligationEvidence(
+                    profile.obligations[0].obligation_id, EvidenceOutcome.PASS
+                ),
+            ),
             "nonce-widget-1",
             NOW,
         )
     )
+    if legacy_pre_closure:
+        envelope = SIGNER.sign(
+            replace(
+                envelope,
+                binding=replace(envelope.binding, artifact_closure_digest=""),
+                signature="",
+                payload_version=1,
+            )
+        )
     provenance = FingerprintProvenance(
         "generated",
         "pdd sync widget",
@@ -222,6 +256,179 @@ def test_trusted_transactional_baseline_passes_canonical_predicate(tmp_path) -> 
     assert report["counts"]["trusted_in_sync"] == 1
     assert report["counts"]["unaccounted_tracked_paths"] == 0
     assert report["units"][0]["in_sync"] is True
+
+
+def test_canonical_report_rejects_signed_mismatched_artifact_closure(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(
+        root, commit, artifact_closure_digest="different-artifact-closure"
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is False
+    assert report["counts"]["trusted_current_evidence"] == 0
+
+
+def test_canonical_report_migrates_fresh_signed_pre_closure_envelope(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(root, commit, legacy_pre_closure=True)
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is True
+    assert report["counts"]["trusted_in_sync"] == 1
+
+
+def test_canonical_report_rejects_signed_legacy_pathless_playwright_command(
+    tmp_path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, "fake_playwright"),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is False
+    assert report["counts"]["trusted_current_evidence"] == 0
+    assert "Playwright" in report["units"][0]["reason"]
+
+
+def test_canonical_report_migrates_safe_predecessor_playwright_command(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    external_entrypoint = tmp_path / "trusted-tools" / "playwright-cli"
+    external_entrypoint.parent.mkdir()
+    external_entrypoint.write_text("// trusted entrypoint\n", encoding="utf-8")
+
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, str(external_entrypoint)),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is True
+    assert report["counts"]["trusted_current_evidence"] == 1
+
+
+def test_finalizer_reuses_fresh_signed_pre_closure_envelope(tmp_path) -> None:
+    root, commit = _repository(tmp_path)
+    _finalize_trusted_baseline(root, commit, legacy_pre_closure=True)
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        result = finalize_unit(
+            root,
+            PurePosixPath("prompts/widget_python.prompt"),
+            base_ref=commit,
+            head_ref=commit,
+            signer=SIGNER,
+            replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+        )
+
+    assert result.transaction.no_op is True
+    assert result.attestation_id == "attestation-widget-1"
+    run_profile_mock.assert_not_called()
+
+
+def test_finalizer_does_not_reuse_legacy_pathless_playwright_command(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, "fake_playwright"),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        with pytest.raises(ValueError, match="attested Playwright command"):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=commit,
+                head_ref=commit,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+            )
+
+    run_profile_mock.assert_not_called()
+
+
+def test_finalizer_reuses_safe_predecessor_playwright_command(tmp_path) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    external_entrypoint = tmp_path / "trusted-tools" / "playwright-cli"
+    external_entrypoint.parent.mkdir()
+    external_entrypoint.write_text("// trusted entrypoint\n", encoding="utf-8")
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, str(external_entrypoint)),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        result = finalize_unit(
+            root,
+            PurePosixPath("prompts/widget_python.prompt"),
+            base_ref=commit,
+            head_ref=commit,
+            signer=SIGNER,
+            replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+        )
+
+    assert result.transaction.no_op is True
+    assert result.attestation_id == "attestation-widget-1"
+    run_profile_mock.assert_not_called()
 
 
 def test_managed_waiver_is_counted_and_blocks_certificate_predicate(tmp_path) -> None:
@@ -322,6 +529,7 @@ def test_nested_config_cannot_bypass_repository_canonical_finalizer(
         base_ref=head,
         head_ref="HEAD",
         signer=signer,
+        config=RunnerConfig(),
     )
 
 
@@ -563,10 +771,105 @@ def test_validate_command_wires_protected_playwright_runner_config(
     )
 
 
+def test_validate_command_wires_protected_human_attestation_config(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    store = tmp_path / "external-human-store"
+    ledger = tmp_path / "external-human-replay.json"
+    store.mkdir()
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--human-attestation-store",
+                str(store),
+                "--human-attestation-replay-ledger",
+                str(ledger),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    call = mocked_finalize.call_args
+    assert call.kwargs["signer"] is signer
+    assert call.kwargs["config"].human_attestation_store == store.resolve()
+    assert call.kwargs["config"].human_attestation_replay_ledger == ledger.resolve()
+
+
+def test_legacy_finalizer_wires_protected_human_attestation_environment(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    store = tmp_path / "external-human-store"
+    ledger = tmp_path / "external-human-replay.json"
+    store.mkdir()
+    prompt = root / "prompts/widget_python.prompt"
+    monkeypatch.setenv("PDD_SYNC_PROTECTED_BASE_SHA", commit)
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_STORE", str(store))
+    monkeypatch.setenv("PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER", str(ledger))
+    with patch(
+        "pdd.sync_core.finalize.canonical_root_for_paths", return_value=root
+    ), patch(
+        "pdd.sync_core.finalize.attestation_signer_from_environment",
+        return_value=object(),
+    ), patch("pdd.sync_core.finalize.finalize_unit") as mocked_finalize:
+        assert finalize_legacy_paths({"prompt": prompt}) is True
+
+    config = mocked_finalize.call_args.kwargs["config"]
+    assert config.human_attestation_store == store.resolve()
+    assert config.human_attestation_replay_ledger == ledger.resolve()
+
+
+def test_validate_command_rejects_candidate_local_human_attestation_paths(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    candidate_store = root / ".pdd" / "candidate-approvals"
+    candidate_ledger = root / ".pdd" / "candidate-replay.json"
+    candidate_store.mkdir()
+    monkeypatch.chdir(root)
+    with patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--human-attestation-store",
+                str(candidate_store),
+                "--human-attestation-replay-ledger",
+                str(candidate_ledger),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "candidate checkout" in result.output
+    mocked_finalize.assert_not_called()
+
+
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
     root, commit = _repository(tmp_path)
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+    snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
+    expected_artifact_closure = snapshot.digest()
     result = finalize_unit(
         root,
         PurePosixPath("prompts/widget_python.prompt"),
@@ -576,6 +879,13 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
         replay_ledger_path=tmp_path / "external-trust/finalizer.json",
     )
     assert result.transaction.phase.value == "COMMITTED"
+    attestation = json.loads(
+        (root / evidence_relpath(result.attestation_id)).read_text(encoding="utf-8")
+    )
+    assert (
+        attestation["binding"]["artifact_closure_digest"]
+        == expected_artifact_closure
+    )
     _git(root, "add", ".pdd/meta/v2", ".pdd/evidence/v2")
     _git(root, "commit", "-q", "-m", "commit trusted sync evidence")
     finalized_commit = _git(root, "rev-parse", "HEAD")
@@ -629,11 +939,11 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     metrics_path = os.environ.get("PDD_LIFECYCLE_METRICS_PATH")
     if metrics_path:
         path = Path(metrics_path)
-        payload = json.loads(path.read_text()) if path.exists() else {}
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         payload["post_repair_second_run_writes"] = (
             len(second.transaction.changed_paths) + int(before != after)
         )
-        path.write_text(json.dumps(payload, sort_keys=True))
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
 
 def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:

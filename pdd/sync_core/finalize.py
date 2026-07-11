@@ -26,8 +26,8 @@ from .runner import (
     AttestationIssue,
     RunBinding,
     RunnerConfig,
+    attested_runner_identity_error,
     run_profile,
-    runner_identity_digest,
 )
 from .snapshot import build_unit_snapshot
 from .transaction import (
@@ -60,6 +60,34 @@ class CanonicalFinalizationError(RuntimeError):
     """Raised when an opted-in mutation cannot commit trusted final state."""
 
 
+def protected_runner_config_from_environment(root: Path) -> RunnerConfig:
+    """Load external protected-runner state shared by canonical finalizers."""
+    store_raw = os.environ.get("PDD_SYNC_HUMAN_ATTESTATION_STORE")
+    replay_raw = os.environ.get("PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER")
+    if bool(store_raw) != bool(replay_raw):
+        raise ValueError(
+            "human attestation store and replay ledger must be configured together"
+        )
+    if not store_raw:
+        return RunnerConfig()
+    candidate_root = Path(root).resolve()
+
+    def external(value: str, label: str) -> Path:
+        resolved = Path(value).expanduser().resolve()
+        try:
+            resolved.relative_to(candidate_root)
+        except ValueError:
+            return resolved
+        raise ValueError(f"{label} must be outside the candidate checkout")
+
+    return RunnerConfig(
+        human_attestation_store=external(store_raw, "human attestation store"),
+        human_attestation_replay_ledger=external(
+            replay_raw, "human attestation replay ledger"
+        ),
+    )
+
+
 def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     """Return the opted-in Git root for legacy path-based callers."""
     # pylint: disable=import-outside-toplevel
@@ -90,6 +118,7 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
             base_ref=protected_base,
             head_ref="HEAD",
             signer=attestation_signer_from_environment(),
+            config=protected_runner_config_from_environment(root),
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise CanonicalFinalizationError(
@@ -184,24 +213,20 @@ def _reusable_result(
         snapshot.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(
-            profile,
-            root=root,
-            ref=head_sha,
-            config=RunnerConfig(
-                playwright_command=envelope.binding.playwright_command,
-                playwright_toolchain_manifest=Path(
-                    envelope.binding.playwright_toolchain_manifest
-                ) if envelope.binding.playwright_toolchain_manifest else None,
-            ),
-        ),
-        TRUSTED_RUNNER_VERSION,
+        envelope.binding.runner_digest,
+        envelope.binding.tool_version,
         base_sha,
         envelope.binding.checked_sha,
         envelope.binding.playwright_command,
         envelope.binding.playwright_toolchain_manifest,
+        snapshot.digest(),
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
+    runner_error = attested_runner_identity_error(
+        root, head_sha, profile, envelope.binding
+    )
+    if runner_error is not None:
+        raise ValueError(runner_error)
     ancestry = subprocess.run(
         ["git", "merge-base", "--is-ancestor", binding.checked_sha, head_sha],
         cwd=root,
@@ -301,7 +326,7 @@ def finalize_unit(
     envelope, executions = run_profile(
         repository_root,
         profile,
-        RunBinding(snapshot.digest(), base_sha, head_sha),
+        RunBinding(snapshot.digest(), base_sha, head_sha, snapshot.digest()),
         AttestationIssue(signer, attestation_id, str(uuid.uuid4()), now),
         config,
     )
