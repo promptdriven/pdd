@@ -49,6 +49,7 @@ from .finalize import (
     attestation_signer_from_environment,
     canonical_root_for_paths,
     finalize_legacy_paths,
+    protected_runner_config_from_environment,
     finalize_unit,
 )
 from .evidence_store import (
@@ -238,6 +239,7 @@ __all__ = [
     "evidence_relpath",
     "finalize_unit",
     "finalize_legacy_paths",
+    "protected_runner_config_from_environment",
     "build_include_closure",
     "build_canonical_report",
     "build_global_certificate",

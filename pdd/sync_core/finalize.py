@@ -60,6 +60,34 @@ class CanonicalFinalizationError(RuntimeError):
     """Raised when an opted-in mutation cannot commit trusted final state."""
 
 
+def protected_runner_config_from_environment(root: Path) -> RunnerConfig:
+    """Load external protected-runner state shared by canonical finalizers."""
+    store_raw = os.environ.get("PDD_SYNC_HUMAN_ATTESTATION_STORE")
+    replay_raw = os.environ.get("PDD_SYNC_HUMAN_ATTESTATION_REPLAY_LEDGER")
+    if bool(store_raw) != bool(replay_raw):
+        raise ValueError(
+            "human attestation store and replay ledger must be configured together"
+        )
+    if not store_raw:
+        return RunnerConfig()
+    candidate_root = Path(root).resolve()
+
+    def external(value: str, label: str) -> Path:
+        resolved = Path(value).expanduser().resolve()
+        try:
+            resolved.relative_to(candidate_root)
+        except ValueError:
+            return resolved
+        raise ValueError(f"{label} must be outside the candidate checkout")
+
+    return RunnerConfig(
+        human_attestation_store=external(store_raw, "human attestation store"),
+        human_attestation_replay_ledger=external(
+            replay_raw, "human attestation replay ledger"
+        ),
+    )
+
+
 def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     """Return the opted-in Git root for legacy path-based callers."""
     # pylint: disable=import-outside-toplevel
@@ -90,6 +118,7 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
             base_ref=protected_base,
             head_ref="HEAD",
             signer=attestation_signer_from_environment(),
+            config=protected_runner_config_from_environment(root),
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise CanonicalFinalizationError(
