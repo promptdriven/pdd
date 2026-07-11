@@ -1279,7 +1279,7 @@ def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
             "2) Direct prompt commands (local route):",
             "   With a Codex (ChatGPT) subscription login these work WITHOUT an API",
             "   key on the LOCAL route (PDD routes them through the chatgpt/ model",
-            "   family; set PDD_MODEL_DEFAULT=chatgpt/gpt-5.3-codex). If PDD Cloud is",
+            "   family; set PDD_MODEL_DEFAULT=chatgpt/gpt-5.6). If PDD Cloud is",
             "   configured, also pass --local so the subscription path is used. Other",
             "   providers call litellm directly and need ANTHROPIC_API_KEY /",
             "   OPENAI_API_KEY / GEMINI_API_KEY.",
