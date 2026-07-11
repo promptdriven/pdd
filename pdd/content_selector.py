@@ -739,32 +739,45 @@ def _jest_config_from_package_json(package_json: Path) -> Optional[Mapping[str, 
 
 
 # Test-discovery keys whose presence in an unparseable JS/TS config means we
-# cannot assume jest's defaults (issue #1903 §A, review round 3).
+# cannot assume default discovery (issue #1903 §A). Covers BOTH the jest dialect
+# (testMatch/testRegex/testPathIgnorePatterns/roots/rootDir) and the vitest
+# dialect (test.include/exclude, projects, workspace) — matched as whole words
+# so generic tokens (e.g. ``__dirname``, ``rootReducer``) do not false-trigger.
 _JS_RUNNER_DISCOVERY_KEYS = (
     "testMatch",
     "testRegex",
     "testPathIgnorePatterns",
     "roots",
     "rootDir",
+    "include",
+    "exclude",
+    "projects",
+    "workspace",
 )
-_JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config")
+_JS_RUNNER_DISCOVERY_RE = re.compile(
+    r"\b(?:" + "|".join(_JS_RUNNER_DISCOVERY_KEYS) + r")\b"
+)
+_JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
 
 
 def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
     """True when a JS/TS config *text* references a test-discovery key.
 
-    We cannot execute/parse a ``jest.config.js`` in Python, but we CAN read it
-    as text: if it mentions ``testMatch``/``roots``/``rootDir``/``testRegex``/
-    ``testPathIgnorePatterns`` it customizes where tests are collected and we
-    must NOT assume the default convention. If it references none of them, the
-    project uses jest's default discovery (which collects the co-located
-    ``__test__/{stem}.test.{ext}`` we would write). Total — errors -> ``False``.
+    We cannot execute/parse a ``jest.config.js`` / ``vitest.config.ts`` in
+    Python, but we CAN read it as text: if it mentions a jest OR vitest discovery
+    key it customizes where tests are collected and we must NOT assume the
+    default convention — the caller conservatively refuses to claim a co-located
+    path is collected. If it references none of them the project uses default
+    discovery (jest's default ``testMatch`` and vitest's default ``include`` both
+    collect the co-located ``.test.``/``.spec.`` file we would write). Whole-word
+    match so ``__dirname``/``rootReducer``/``includes(`` do not false-trigger.
+    Total — errors -> ``False``.
     """
     try:
         text = config_file.read_text(encoding="utf-8", errors="ignore")
     except (OSError, ValueError):
         return False
-    return any(key in text for key in _JS_RUNNER_DISCOVERY_KEYS)
+    return _JS_RUNNER_DISCOVERY_RE.search(text) is not None
 
 
 def _collect_js_runner_config(
@@ -973,6 +986,26 @@ def _testmatch_literal_dir(glob: str, root_dir: Path) -> Optional[Path]:
         return None
 
 
+def _module_rel_dir(
+    module_path: Path, root_dir: Path, config_dir: Path
+) -> Optional[Path]:
+    """The module's directory relative to the effective rootDir (or config dir).
+
+    Preserved under a centralized test anchor so a same-stem module in a
+    different source directory does not collide onto one shared test path.
+    Returns ``None`` when the module sits directly at the base (no relative
+    component) or cannot be related to either base.
+    """
+    parent = module_path.parent
+    for base in (root_dir, config_dir):
+        try:
+            rel = parent.relative_to(base)
+        except (ValueError, TypeError):
+            continue
+        return None if str(rel) in ("", ".") else rel
+    return None
+
+
 def _greenfield_candidate_paths(
     module_path: Path, config: Mapping[str, Any], config_dir: Optional[Path]
 ) -> list[Path]:
@@ -1014,6 +1047,12 @@ def _greenfield_candidate_paths(
 
     if config_dir is not None:
         roots, root_dir = _resolve_config_roots(config, config_dir)
+        # Mirror the module's directory (relative to the effective rootDir) under
+        # each centralized anchor so DISTINCT modules that share a stem
+        # (``src/a/util.ts`` vs ``src/b/util.ts``) map to DISTINCT collected test
+        # paths — never onto one shared file that a second sync would overwrite
+        # (issue #1903 "never fork, never overwrite").
+        rel_dir = _module_rel_dir(module_path, root_dir, config_dir)
         anchor_dirs: list[Path] = []
         for glob in _as_str_list(config.get("testMatch")):
             literal = _testmatch_literal_dir(glob, root_dir)
@@ -1023,7 +1062,8 @@ def _greenfield_candidate_paths(
             anchor_dirs.extend(roots)
         seen = {str(c) for c in candidates}
         for anchor in anchor_dirs:
-            for cand in _variants(anchor):
+            base = anchor / rel_dir if rel_dir is not None else anchor
+            for cand in _variants(base):
                 key = str(cand)
                 if key not in seen:
                     candidates.append(cand)
@@ -1066,26 +1106,43 @@ def _candidate_is_collected(
         except re.error:
             continue
 
-    # testMatch / testRegex collection patterns.
+    # testMatch / testRegex collection patterns. jest/micromatch apply patterns
+    # in ORDER: a leading-``!`` glob is a NEGATION that removes matches, not
+    # another positive alternative. So a candidate is collected iff it matches at
+    # least one POSITIVE pattern AND is excluded by NO negation. An unevaluable
+    # negation could exclude the candidate, so we stay conservative (no verdict).
     match_globs = _as_str_list(config.get("testMatch"))
     test_regexes = _as_str_list(config.get("testRegex"))
     if not match_globs and not test_regexes:
         return None  # no collection constraint declared -> no verdict
 
-    verdicts: list[bool] = []
     for glob in match_globs:
-        v = _glob_matches(_sub_root_dir(glob, root_dir), posix)
-        if v is None:
+        g = _sub_root_dir(glob, root_dir)
+        if g.startswith("!"):
+            excluded = _glob_matches(g[1:], posix)
+            if excluded is None:
+                return None  # cannot evaluate an exclusion -> conservative
+            if excluded is True:
+                return False  # a negation removes this candidate
+
+    positive_verdicts: list[bool] = []
+    for glob in match_globs:
+        g = _sub_root_dir(glob, root_dir)
+        if g.startswith("!"):
             continue
-        verdicts.append(v)
+        v = _glob_matches(g, posix)
+        if v is not None:
+            positive_verdicts.append(v)
     for rgx in test_regexes:
         try:
-            verdicts.append(re.search(_sub_root_dir(rgx, root_dir), posix) is not None)
+            positive_verdicts.append(
+                re.search(_sub_root_dir(rgx, root_dir), posix) is not None
+            )
         except re.error:
             continue
-    if not verdicts:
-        return None  # patterns present but none evaluable -> no verdict
-    return any(verdicts)
+    if not positive_verdicts:
+        return None  # only negations / unevaluable positives -> no verdict
+    return any(positive_verdicts)
 
 
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
@@ -1134,6 +1191,15 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
         # where tests are collected, so refuse to write a possibly-uncollected
         # test (fall back to the derived path) rather than guess the default.
         if opaque_custom:
+            return None
+        # A parseable config that composes discovery in ways we do not resolve
+        # (jest ``projects`` multi-project, or a vitest ``test``/``include``/
+        # ``exclude`` block) — refuse rather than risk certifying an uncollected
+        # path.
+        if isinstance(config, Mapping) and any(
+            config.get(k) is not None
+            for k in ("projects", "workspace", "include", "exclude")
+        ):
             return None
         candidates = _greenfield_candidate_paths(module_path, config, config_dir)
 
