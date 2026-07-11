@@ -357,6 +357,39 @@ def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
     assert (pdd_project / ".pdd/meta/widget_python.json").read_text(encoding="utf-8") == fingerprint_before
 
 
+def test_issue_1996_symlinked_generated_artifact_is_failure_not_in_sync(
+    pdd_project: Path,
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside-widget.py"
+    outside.write_text(
+        (pdd_project / "src/widget.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    artifact = pdd_project / "src/widget.py"
+    artifact.unlink()
+    try:
+        artifact.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform permission guard
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    report = _pdd_json(
+        pdd_project,
+        "reconcile",
+        "--json",
+        "--strict",
+        "--module",
+        "widget",
+        check=False,
+    )
+    assert report["ok"] is False
+    assert report["summary"]["synced"] == 0
+    assert report["failures"][0]["classification"] == "FAILURE"
+    assert report["failures"][0]["failure"] == "unsafe_artifacts"
+    assert report["failures"][0]["changed_files"] == ["code"]
+    assert "code is a symlink" in report["failures"][0]["reason"]
+
+
 def test_issue_1932_deleted_canonical_artifact_is_not_masked_by_duplicate(
     pdd_project: Path,
 ) -> None:

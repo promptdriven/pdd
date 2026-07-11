@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -643,8 +644,12 @@ def _discovery_failure_payload(failure: DiscoveryFailure, root: Path) -> Dict[st
 
 
 def _load_fingerprint_json(path: Path) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
-    if not path.exists():
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
         return None, "missing"
+    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+        return None, "invalid"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -672,12 +677,20 @@ def _fingerprint_from_payload(payload: Dict[str, Any]) -> Optional[Fingerprint]:
         return None
 
 
+def _relative_or_raw(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
+    resolved_root = root.resolve()
     for key, value in paths.items():
         if isinstance(value, Path):
             try:
-                payload[key] = value.resolve().relative_to(root.resolve()).as_posix()
+                payload[key] = value.resolve().relative_to(resolved_root).as_posix()
             except (OSError, ValueError):
                 payload[key] = str(value)
         elif isinstance(value, list):
@@ -745,6 +758,52 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
         "test": base / "tests" / f"test_{code_stem}{suffix}",
         "test_files": [base / "tests" / f"test_{code_stem}{suffix}"],
     }
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _artifact_path_violation(path: Path, root: Path) -> Optional[str]:
+    root = root.resolve()
+    candidate = path if path.is_absolute() else root / path
+    try:
+        mode = candidate.lstat().st_mode
+    except FileNotFoundError:
+        mode = None
+    if mode is not None and stat.S_ISLNK(mode):
+        return "is a symlink"
+    resolved = candidate.resolve(strict=False)
+    if not _is_within_root(resolved, root):
+        return "resolves outside project"
+    if mode is None:
+        return None
+    if not stat.S_ISREG(mode):
+        return "is not a regular file"
+    return None
+
+
+def _unsafe_fingerprinted_artifacts(
+    paths: Dict[str, Any],
+    root: Path,
+) -> Dict[str, str]:
+    unsafe: Dict[str, str] = {}
+    for artifact in ("prompt", "code", "example", "test"):
+        path = paths.get(artifact)
+        if isinstance(path, Path):
+            violation = _artifact_path_violation(path, root)
+            if violation:
+                unsafe[artifact] = violation
+    for path in paths.get("test_files", []):
+        if isinstance(path, Path):
+            violation = _artifact_path_violation(path, root)
+            if violation:
+                unsafe[f"test_files:{_relative_or_raw(path, root.resolve())}"] = violation
+    return unsafe
 
 
 def _changed_artifacts(
@@ -821,6 +880,7 @@ def _find_matching_artifact(
     expected_hash: str,
 ) -> tuple[Optional[Path], Optional[DiscoveryFailure]]:
     matches: List[Path] = []
+    resolved_root = root.resolve()
     visited_entries = 0
     walk_failure: DiscoveryFailure | None = None
 
@@ -856,6 +916,8 @@ def _find_matching_artifact(
             if candidate_name != filename:
                 continue
             candidate = current / candidate_name
+            if _artifact_path_violation(candidate, resolved_root):
+                continue
             if candidate.is_file() and calculate_sha256(candidate) == expected_hash:
                 matches.append(candidate)
     if len(matches) == 1:
@@ -955,7 +1017,7 @@ def _classification_for_changes(changes: List[str]) -> str:
 
 
 def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]:
-    # pylint: disable=broad-exception-caught
+    # pylint: disable=broad-exception-caught,too-many-locals,too-many-return-statements
     """Classify one sync unit without mutating files."""
     base = project_root(root)
     # A report must not create `.pdd/meta` just to discover that no fingerprint
@@ -1019,6 +1081,28 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
                 "paths": _paths_as_json(paths, base),
                 "failure": repair_failure.failure,
             }
+
+    unsafe_artifacts = _unsafe_fingerprinted_artifacts(paths, base)
+    if unsafe_artifacts:
+        changed_files = sorted(
+            key.split(":", 1)[0] for key in unsafe_artifacts
+        )
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": "unsafe fingerprinted artifacts: "
+            + ", ".join(
+                f"{artifact} {reason}"
+                for artifact, reason in sorted(unsafe_artifacts.items())
+            ),
+            "changed_files": changed_files,
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": _paths_as_json(paths, base),
+            "failure": "unsafe_artifacts",
+        }
 
     missing_hashes = _missing_required_hashes(fingerprint, paths)
     if missing_hashes:
