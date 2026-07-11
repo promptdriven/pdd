@@ -563,6 +563,73 @@ def test_validate_command_wires_protected_playwright_runner_config(
     )
 
 
+def test_validate_command_wires_protected_human_attestation_config(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    store = tmp_path / "external-human-store"
+    ledger = tmp_path / "external-human-replay.json"
+    store.mkdir()
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--human-attestation-store",
+                str(store),
+                "--human-attestation-replay-ledger",
+                str(ledger),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    call = mocked_finalize.call_args
+    assert call.kwargs["signer"] is signer
+    assert call.kwargs["config"].human_attestation_store == store.resolve()
+    assert call.kwargs["config"].human_attestation_replay_ledger == ledger.resolve()
+
+
+def test_validate_command_rejects_candidate_local_human_attestation_paths(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    candidate_store = root / ".pdd" / "candidate-approvals"
+    candidate_ledger = root / ".pdd" / "candidate-replay.json"
+    candidate_store.mkdir()
+    monkeypatch.chdir(root)
+    with patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--human-attestation-store",
+                str(candidate_store),
+                "--human-attestation-replay-ledger",
+                str(candidate_ledger),
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "candidate checkout" in result.output
+    mocked_finalize.assert_not_called()
+
+
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
