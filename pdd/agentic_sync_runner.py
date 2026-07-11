@@ -325,6 +325,30 @@ def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
     return None
 
 
+def _is_adopted_collocated_test_path(test_path: Optional[str]) -> bool:
+    """True only when *test_path* is a co-located (adopted) test, not PDD's own
+    derived ``tests/`` shadow (issue #1903 §B.4).
+
+    The never-block relief exists to keep a HUMAN-authored co-located test that
+    PDD adopted — NOT to silently swallow coverage loss on a PDD-owned test.
+    Conservative by design: only paths that match a runner co-location
+    convention qualify (a jest/vitest ``.test.``/``.spec.`` file, or any file
+    under a ``__test__``/``__tests__`` directory). Anything else — notably a
+    plain ``tests/test_*.py`` shadow — is NOT proven adopted and keeps the
+    strict test-churn hard-fail even inside the issue-driven runner.
+    """
+    if not test_path:
+        return False
+    normalized = test_path.replace("\\", "/").strip()
+    if not normalized:
+        return False
+    segments = [seg for seg in normalized.split("/") if seg]
+    if "__test__" in segments or "__tests__" in segments:
+        return True
+    name = segments[-1].lower() if segments else ""
+    return ".test." in name or ".spec." in name
+
+
 def _parse_prose_output_failure(
     stdout: str, stderr: str
 ) -> Optional[Tuple[str, Tuple[str, ...]]]:
@@ -1435,6 +1459,11 @@ class AsyncSyncRunner:
                     state.completed_phases = list(phases)
                 state.start_time = info.get("start_time")
                 state.end_time = info.get("end_time")
+                # Issue #1903 §B.4: restore the needs-review flag so a resumed
+                # run still surfaces it in the progress comment / final summary.
+                review_note = info.get("needs_review")
+                if isinstance(review_note, str) and review_note:
+                    state.needs_review = review_note
                 if basename not in self._resumed_modules:
                     self._resumed_modules.append(basename)
 
@@ -1468,6 +1497,10 @@ class AsyncSyncRunner:
                     "start_time": state.start_time,
                     "end_time": state.end_time,
                     "error": state.error,
+                    # Issue #1903 §B.4: persist so a durable resume does not drop
+                    # the "needs review" flag for an already-synced module (the
+                    # PR shipped with an adopted test left for review).
+                    "needs_review": state.needs_review,
                 }
 
         data = {
@@ -2662,22 +2695,31 @@ class AsyncSyncRunner:
             )
         elif last_failure_kind == "test_churn":
             # Issue #1903 §B.4 — never block the issue-driven workflow on an
-            # unreconcilable adopted test. Reaching here means: the child sync
-            # already RESTORED the human-authored co-located test to disk before
+            # unreconcilable ADOPTED co-located test. Reaching here means: the
+            # child sync already RESTORED the pre-existing test to disk before
             # re-raising, AND one-session's #2208 coverage-preserving auto-accept
             # already REFUSED (so this is the coverage-losing case the strict gate
             # would otherwise hard-fail). Per #1903 the command must still open the
             # working PR and flag that one test "needs review" rather than hand
-            # work back to the user. Keep the original test, record the flag, and
-            # report the module as succeeded so the PR is opened. (Standalone
+            # work back to the user — but ONLY when the churned test is a
+            # human-authored co-located test PDD adopted. A PDD-owned ``tests/``
+            # shadow that is NOT proven adopted keeps the strict hard-fail so
+            # coverage loss there is never silently swallowed. (Standalone
             # `pdd sync <module>` / `pdd test`, which do not run through this
-            # issue-driven runner, keep the strict hard-fail.)
-            note = self._register_test_churn_needs_review(
-                basename, last_stdout, last_stderr
+            # issue-driven runner, always keep the strict hard-fail.)
+            churned_test_path = _extract_test_churn_output_path(
+                last_stdout, last_stderr
             )
-            if not self.quiet:
-                console.print(f"[yellow]{note}[/yellow]")
-            return True, total_cost, ""
+            if _is_adopted_collocated_test_path(churned_test_path):
+                note = self._register_test_churn_needs_review(
+                    basename, churned_test_path
+                )
+                if not self.quiet:
+                    console.print(f"[yellow]{note}[/yellow]")
+                return True, total_cost, ""
+            hard_block = self._build_test_churn_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
         else:
             hard_block = self._build_conformance_hard_failure(
                 basename, last_error, last_stdout, last_stderr
@@ -2685,23 +2727,25 @@ class AsyncSyncRunner:
         return False, total_cost, hard_block
 
     def _register_test_churn_needs_review(
-        self, basename: str, stdout: str, stderr: str
+        self, basename: str, test_path: Optional[str]
     ) -> str:
         """Flag an unreconcilable adopted test for review instead of failing (#1903).
 
         The child sync already restored the human-authored test to disk before
         re-raising the churn error; the issue workflow opens the PR with the test
-        flagged for review. Records the note on the module state (surfaced in the
-        progress comment / PR thread), emits a machine-readable marker to stdout,
-        and returns the operator-facing note.
+        flagged for review. ``test_path`` is the adopted co-located test resolved
+        by the caller (already classified via ``_is_adopted_collocated_test_path``).
+        Records the note on the module state (surfaced in the progress comment /
+        PR thread), emits a machine-readable marker to stdout, and returns the
+        operator-facing note.
         """
-        test_path = _extract_test_churn_output_path(stdout, stderr) or "the adopted test"
+        kept = test_path or "the adopted test"
         note = (
             f"`{basename}`: test churn could not be reconciled after bounded "
-            f"repair — kept the existing test (`{test_path}`) unchanged and "
+            f"repair — kept the existing test (`{kept}`) unchanged and "
             f"flagged it for review (issue #1903); the PR still ships."
         )
-        print(f"{_TEST_CHURN_NEEDS_REVIEW_MARKER}: {test_path}", flush=True)
+        print(f"{_TEST_CHURN_NEEDS_REVIEW_MARKER}: {kept}", flush=True)
         with self.lock:
             state = self.module_states.get(basename)
             if state is not None:
