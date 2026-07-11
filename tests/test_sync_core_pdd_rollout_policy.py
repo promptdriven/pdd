@@ -47,6 +47,7 @@ FOUNDATION_OBLIGATIONS = {
         "tests": (
             "tests/test_sync_core_lifecycle_scenarios.py",
             "tests/test_sync_core_runner.py",
+            "tests/test_sync_core_supervisor.py",
         ),
         "code": ("pdd/sync_core/supervisor.py",),
     },
