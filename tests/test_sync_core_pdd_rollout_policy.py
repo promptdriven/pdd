@@ -14,6 +14,11 @@ EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
+FOUNDATION_PROFILE_PATHS = {
+    "pdd/sync_core/descriptor_store.py",
+    "pdd/sync_core/supervisor.py",
+    "tests/test_sync_core_descriptor_store.py",
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -134,4 +139,44 @@ def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -
     assert any(
         "removed managed unit lacks" in reason
         for reason in removal_manifest.invalid_reasons
+    )
+
+
+def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
+    tmp_path: Path,
+) -> None:
+    """A profile candidate cannot supply ownership missing from its protected base."""
+    root = tmp_path / "profile-candidate"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(ROOT), str(root)],
+        check=True,
+        capture_output=True,
+    )
+    (root / ".pdd" / "sync-ownership.json").write_bytes(OWNERSHIP_PATH.read_bytes())
+    base = _commit(root, "protected ownership baseline")
+
+    (root / ".pdd" / "verification-profiles.json").write_text(
+        '{"schema_version": 1, "profiles": []}\n', encoding="utf-8"
+    )
+    _git(root, "add", "-f", ".pdd/verification-profiles.json")
+    candidate = _commit(root, "candidate profile rollout")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=candidate)
+    assert manifest.refs.base == base
+    assert manifest.refs.head == candidate
+    assert not FOUNDATION_PROFILE_PATHS.intersection(
+        path.as_posix() for path in manifest.unaccounted_tracked_paths
+    )
+    records = {
+        item.candidate_id.artifact_relpath.as_posix(): item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath.as_posix() in FOUNDATION_PROFILE_PATHS
+    }
+    assert set(records) == FOUNDATION_PROFILE_PATHS
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path}"
+        for path, item in records.items()
     )
