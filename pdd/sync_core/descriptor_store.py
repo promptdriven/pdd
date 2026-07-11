@@ -33,13 +33,17 @@ def _unlock(descriptor: int) -> None:
     fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
-def _safe_directory(metadata: os.stat_result) -> bool:
-    """Return whether metadata describes a private checker-owned directory."""
+def _owned_directory(metadata: os.stat_result) -> bool:
+    """Return whether metadata describes a checker-owned directory."""
     return (
         stat.S_ISDIR(metadata.st_mode)
         and (not hasattr(os, "getuid") or metadata.st_uid == os.getuid())
-        and not stat.S_IMODE(metadata.st_mode) & 0o077
     )
+
+
+def _safe_directory(metadata: os.stat_result) -> bool:
+    """Return whether metadata describes a private checker-owned directory."""
+    return _owned_directory(metadata) and not stat.S_IMODE(metadata.st_mode) & 0o077
 
 
 def _legacy_safe_parent(path: Path) -> tuple[int, os.stat_result]:
@@ -75,6 +79,21 @@ def _legacy_safe_parent(path: Path) -> tuple[int, os.stat_result]:
     return descriptor, opened
 
 
+def _open_trust_root(trust_root: Path, flags: int) -> int:
+    """Open and privatize one owner-controlled root without following links."""
+    trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(trust_root, flags)
+    metadata = os.fstat(descriptor)
+    if not _owned_directory(metadata):
+        os.close(descriptor)
+        raise DescriptorStoreError("replay ledger root is unsafe")
+    os.fchmod(descriptor, 0o700)
+    if not _safe_directory(os.fstat(descriptor)):
+        os.close(descriptor)
+        raise DescriptorStoreError("replay ledger root is unsafe")
+    return descriptor
+
+
 def _safe_parent(
     path: Path, trust_root: Path | None
 ) -> tuple[int, os.stat_result]:
@@ -92,11 +111,7 @@ def _safe_parent(
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = -1
     try:
-        trust_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        descriptor = os.open(trust_root, flags)
-        root_metadata = os.fstat(descriptor)
-        if not _safe_directory(root_metadata):
-            raise DescriptorStoreError("replay ledger root is unsafe")
+        descriptor = _open_trust_root(trust_root, flags)
         for component in relative_parent.parts:
             if component in {"", ".", ".."}:
                 raise DescriptorStoreError("replay ledger parent is unsafe")

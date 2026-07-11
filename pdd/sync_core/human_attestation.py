@@ -243,7 +243,7 @@ class HumanAttestationVerifier:  # pylint: disable=too-few-public-methods
             raise HumanAttestationError(
                 "human attestation replay ledger must be outside the candidate checkout"
             )
-        self._replay = FileReplayStore(replay)
+        self._replay = FileReplayStore(replay, trust_root=replay.parent)
 
     def _load_approvals(self, store: Path) -> list[Mapping[str, Any]]:
         path = Path(store).resolve() / _APPROVALS_FILENAME

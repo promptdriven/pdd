@@ -75,8 +75,11 @@ class InMemoryReplayStore(ReplayStore):
 class FileReplayStore(ReplayStore):
     """Locked durable nonce ledger located outside candidate-controlled state."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, trust_root: Path | None = None) -> None:
         self.path = Path(path).absolute()
+        self.trust_root = (
+            Path(trust_root).absolute() if trust_root is not None else None
+        )
 
     def _ensure_parent(self) -> None:
         parent = self.path.parent
@@ -137,7 +140,9 @@ class FileReplayStore(ReplayStore):
         error = None
         for _attempt in range(3):
             try:
-                update_json(self.path, {}, consume_record)
+                update_json(
+                    self.path, {}, consume_record, trust_root=self.trust_root
+                )
                 return
             except DescriptorStoreError as exc:
                 error = exc
