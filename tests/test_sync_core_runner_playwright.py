@@ -71,6 +71,28 @@ def _fake_node_playwright(tmp_path: Path) -> Path:
     return runner
 
 
+def _fake_node_playwright_requiring_browser_path(tmp_path: Path) -> Path:
+    runner = tmp_path / "fake_node_playwright_browser_path.js"
+    runner.write_text(
+        "const path = require('path');\n"
+        "try { require.resolve('@playwright/test'); }\n"
+        "catch (error) {\n"
+        "  console.log(JSON.stringify({suites: [], errors: [{message: error.message}]}));\n"
+        "  process.exit(1);\n"
+        "}\n"
+        "if (process.env.PLAYWRIGHT_BROWSERS_PATH !== '0') {\n"
+        "  console.log(JSON.stringify({suites: [], errors: [{message: 'missing package-local browsers path'}]}));\n"
+        "  process.exit(1);\n"
+        "}\n"
+        "const file = path.resolve(process.cwd(), 'tests/widget.spec.ts');\n"
+        "const collection = process.argv.includes('--list');\n"
+        "const result = collection ? [] : [{status: 'passed'}];\n"
+        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', file, tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
+        encoding="utf-8",
+    )
+    return runner
+
+
 def _repository(
     tmp_path: Path, *, mode: str = "pass", config: str = "export default {};\n"
 ) -> tuple[Path, str]:
@@ -153,6 +175,37 @@ def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
         commit,
         commit,
         (node, str(_fake_node_playwright(tmp_path))),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_uses_pinned_package_local_browser_cache(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    module = root / "node_modules" / "@playwright" / "test"
+    module.mkdir(parents=True)
+    (module / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
+    browsers = (
+        root
+        / "node_modules"
+        / "playwright-core"
+        / ".local-browsers"
+        / "chromium_headless_shell-1181"
+    )
+    browsers.mkdir(parents=True)
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-q", "-m", "ignore package local Playwright install")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    node = shutil.which("node")
+    assert node is not None
+
+    _envelope, executions = _run(
+        root,
+        commit,
+        commit,
+        (node, str(_fake_node_playwright_requiring_browser_path(tmp_path))),
     )
 
     assert executions[0].outcome is EvidenceOutcome.PASS
