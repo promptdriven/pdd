@@ -778,6 +778,8 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
         raise ValueError("dynamic Playwright configuration is not supported")
     if re.search(r"\b(grep|grepInvert|shard|retries|workers|repeatEach)\s*:", text):
         raise ValueError("Playwright execution filters or retries are not allowed")
+    if re.search(r"\b(?:const|let|var)\s+(globalSetup|globalTeardown|reporter|webServer)\b", text):
+        raise ValueError("indirect Playwright executable controls are not bound by this adapter")
     if re.search(r"\bwebServer\s*:", text):
         raise ValueError("Playwright webServer is not bound by this adapter")
     # Parse direct relative imports here; the closure resolver checks each blob.
@@ -1490,15 +1492,20 @@ def _run_vitest(
         return RunnerExecution("vitest", outcome, digest, detail), identities
 
 
-def _playwright_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+def _playwright_command(config: RunnerConfig) -> tuple[str, ...] | None:
     """Return the checked-in local Playwright CLI, never an npm script."""
     if config.playwright_command is not None:
         return config.playwright_command
-    node = shutil.which("node")
-    binary = root / "node_modules" / "@playwright" / "test" / "cli.js"
-    if node is None or not binary.is_file():
-        return None
-    return (node, str(binary))
+    return None
+
+
+def _playwright_candidate_toolchain(root: Path) -> bool:
+    """Return whether candidate checkout infrastructure would affect Playwright."""
+    node_modules = root / "node_modules"
+    return (
+        (node_modules / "@playwright" / "test").exists()
+        or (node_modules / "playwright-core" / ".local-browsers").exists()
+    )
 
 
 def _playwright_environment(home: Path, module_root: Path) -> dict[str, str]:
@@ -1590,7 +1597,10 @@ def _run_playwright(
     command_root: Path | None = None, collection: bool = False,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute exact paths through Playwright's JSON reporter without filters."""
-    prefix = _playwright_command(command_root or root, config)
+    tool_root = command_root or root
+    if _playwright_candidate_toolchain(tool_root):
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "candidate node_modules Playwright toolchain is not trusted"), ()
+    prefix = _playwright_command(config)
     if prefix is None:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
     try:
