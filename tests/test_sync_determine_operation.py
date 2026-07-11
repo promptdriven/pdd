@@ -3205,6 +3205,99 @@ def test_get_pdd_file_paths_ignores_unsafe_symlink_in_sibling_context(
     assert external.read_text(encoding="utf-8") == original
 
 
+def test_get_pdd_file_paths_rejects_language_traversal(tmp_path, monkeypatch):
+    """Language is one filename component and cannot traverse artifact roots."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("foo", "../../../outside", prompts_dir="prompts")
+
+    assert not (tmp_path.parent / "outside").exists()
+
+
+def test_get_pdd_file_paths_active_unsafe_prompt_beats_safe_sibling(
+    tmp_path,
+    monkeypatch,
+):
+    """A safe frontend prompt cannot mask an unsafe requested backend prompt."""
+    backend = tmp_path / "prompts" / "backend"
+    frontend = tmp_path / "prompts" / "frontend"
+    backend.mkdir(parents=True)
+    frontend.mkdir()
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (backend / "foo_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    (frontend / "foo_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths(
+            "foo", "python", prompts_dir="prompts", context_override="backend",
+        )
+
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_explicit_context_does_not_borrow_safe_sibling(
+    tmp_path,
+    monkeypatch,
+):
+    """A lone safe frontend prompt is not a fallback for explicit backend creation."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    frontend = tmp_path / "prompts" / "frontend"
+    frontend.mkdir()
+    (frontend / "foo_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts", context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "backend" / "foo_python.prompt"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_flat_arch_hint_aligns_path_qualified_basename(
+    tmp_path,
+    monkeypatch,
+):
+    """A flat hint cannot pair an unrelated directory's prompt with canonical code."""
+    wrong = tmp_path / "prompts" / "afoo"
+    wrong.mkdir(parents=True)
+    (wrong / "page_Python.prompt").write_text("% wrong afoo page\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "page_Python.prompt",
+            "filepath": "foo/page.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo/page", "python", prompts_dir="prompts")
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "prompts" / "foo" / "page_python.prompt"
+    ).resolve(strict=False)
+    assert "/prompts/afoo/" not in paths["prompt"].resolve(strict=False).as_posix()
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)

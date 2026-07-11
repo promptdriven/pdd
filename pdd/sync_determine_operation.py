@@ -310,6 +310,7 @@ def _resolve_prompt_path_from_architecture(
     prompts_root: Path,
     architecture_filename: str,
     context_prefix: Optional[str] = None,
+    basename: Optional[str] = None,
 ) -> Optional[Path]:
     """Build a prompt path from architecture.json without duplicating subdirectories.
 
@@ -338,7 +339,9 @@ def _resolve_prompt_path_from_architecture(
     )
     if not contained:
         return None
-    if resolved_joined:
+    if resolved_joined and (
+        basename is None or _prompt_candidate_aligns_basename(resolved_joined, basename)
+    ):
         return resolved_joined
 
     # Recursive search for the filename under prompts_root. Collect all matches
@@ -352,20 +355,22 @@ def _resolve_prompt_path_from_architecture(
         for candidate in prompts_root.rglob("*.prompt"):
             if not candidate.is_file() or candidate.name.lower() != target_lower:
                 continue
+            if basename is not None and not _prompt_candidate_aligns_basename(
+                candidate, basename
+            ):
+                continue
             try:
                 candidate.resolve(strict=False).relative_to(resolved_root)
             except (OSError, RuntimeError, ValueError):
                 unsafe_matches.append(candidate)
                 continue
             matches.append(candidate)
+        if matches and context_prefix:
+            matches = [
+                m for m in matches
+                if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
+            ]
         if matches:
-            if len(matches) > 1 and context_prefix:
-                ctx_filtered = [
-                    m for m in matches
-                    if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
-                ]
-                if ctx_filtered:
-                    matches = ctx_filtered
             matches.sort(key=lambda p: (len(p.parts), str(p)))
             return matches[0]
         if unsafe_matches:
@@ -439,6 +444,14 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
     if filename.is_absolute() or ".." in filename.parts:
         return None
     return filename
+
+
+def _safe_prompt_language(value: Any) -> Optional[str]:
+    """Return a language safe to interpolate as one prompt filename component."""
+    safe = _safe_architecture_prompt_filename(value)
+    if safe is None or len(safe.parts) != 1:
+        return None
+    return safe.parts[0]
 
 
 @lru_cache(maxsize=512)
@@ -564,6 +577,19 @@ def _prompt_path_has_context_prefix(
         return False
     return tuple(part.lower() for part in relative_parts[:len(prefix_parts)]) == tuple(
         part.lower() for part in prefix_parts
+    )
+
+
+def _prompt_candidate_aligns_basename(candidate: Path, basename: str) -> bool:
+    """Whether a prompt candidate aligns with a path-qualified module basename."""
+    basename_parts = PurePosixPath(basename).parts
+    if len(basename_parts) <= 1:
+        return True
+    module_leaf = extract_module_from_include(candidate.name) or candidate.stem
+    module_parts = candidate.parent.parts + (module_leaf,)
+    return (
+        len(basename_parts) <= len(module_parts)
+        and tuple(module_parts[-len(basename_parts):]) == tuple(basename_parts)
     )
 
 
@@ -1088,6 +1114,8 @@ def _find_prompt_file(
     """
     if _safe_architecture_prompt_filename(basename) is None:
         raise UnsafePromptPathError(Path(basename), prompts_root.resolve(strict=False))
+    if _safe_prompt_language(language) is None:
+        raise UnsafePromptPathError(Path(str(language)), prompts_root.resolve(strict=False))
     name = basename.split('/')[-1] if '/' in basename else basename
     # Containment anchor for recursive discovery AND the CWD-independent .pddrc anchor
     # for context detection / prefix stripping: resolution is often driven from a
@@ -1164,7 +1192,10 @@ def _find_prompt_file(
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
             joined = _resolve_prompt_path_from_architecture(
-                prompts_root, arch_filename, context_prefix=context_prefix
+                prompts_root,
+                arch_filename,
+                context_prefix=context_prefix,
+                basename=basename,
             )
             if joined is None:
                 arch_filename = None
@@ -1193,22 +1224,21 @@ def _find_prompt_file(
             for candidate in prompts_root.rglob("*.prompt"):
                 if not candidate.is_file() or candidate.name.lower() != arch_basename_lower:
                     continue
+                if not _prompt_candidate_aligns_basename(candidate, basename):
+                    continue
                 if _prompt_candidate_within_root(candidate, resolved_prompts_root):
                     arch_matches.append(candidate)
                 else:
                     unsafe_arch_matches.append(candidate)
+            if arch_matches and context_prefix:
+                arch_matches = [
+                    m for m in arch_matches
+                    if _prompt_path_has_context_prefix(
+                        m, prompts_root, context_prefix
+                    )
+                ]
             if arch_matches:
                 if len(arch_matches) > 1:
-                    # Prefer match within context prefix (e.g., backend/utils)
-                    if context_prefix:
-                        ctx_filtered = [
-                            m for m in arch_matches
-                            if _prompt_path_has_context_prefix(
-                                m, prompts_root, context_prefix
-                            )
-                        ]
-                        if ctx_filtered:
-                            arch_matches = ctx_filtered
                     # Then prefer match matching directory hint from basename
                     dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
                     if dir_hint and len(arch_matches) > 1:
@@ -1257,15 +1287,12 @@ def _find_prompt_file(
             if candidate_lower == target_lower:
                 matches.append(candidate)
                 break
+    if matches and context_prefix:
+        matches = [
+            m for m in matches
+            if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
+        ]
     if matches:
-        if len(matches) > 1 and context_prefix:
-            # Prefer match within context prefix (e.g., backend/utils)
-            ctx_filtered = [
-                m for m in matches
-                if _prompt_path_has_context_prefix(m, prompts_root, context_prefix)
-            ]
-            if ctx_filtered:
-                matches = ctx_filtered
         # Issue #1677: a path-qualified basename (e.g. `app/login/page`) must resolve
         # to a prompt WITHIN its own directory. Do not fall back to a same-leaf prompt
         # in a different directory — that silently syncs the wrong module for a
@@ -2160,6 +2187,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if _safe_architecture_prompt_filename(basename) is None:
             raise UnsafePromptPathError(
                 Path(basename), prompts_root.resolve(strict=False)
+            )
+        if _safe_prompt_language(language) is None:
+            raise UnsafePromptPathError(
+                Path(str(language)), prompts_root.resolve(strict=False)
             )
         name = basename.split('/')[-1] if '/' in basename else basename
 
