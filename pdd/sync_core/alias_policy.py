@@ -7,10 +7,12 @@ import json
 from itertools import combinations
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from .git_io import read_git_blob
-from .manifest import UnitManifest
+
+if TYPE_CHECKING:
+    from .manifest import UnitManifest
 
 
 ALIAS_POLICY_PATH = PurePosixPath(".pdd/sync-aliases.json")
@@ -25,7 +27,8 @@ def _relpath(value: object, field: str) -> PurePosixPath:
     return path
 
 
-def _parse(raw: bytes) -> Mapping[PurePosixPath, PurePosixPath]:
+def parse_protected_alias_policy(raw: bytes) -> Mapping[PurePosixPath, PurePosixPath]:
+    """Parse protected approved aliases with all ambiguity checks."""
     try:
         payload = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -62,7 +65,7 @@ def _path_contains(parent: PurePosixPath, child: PurePosixPath) -> bool:
 
 
 def load_protected_aliases(
-    root: Path, manifest: UnitManifest
+    root: Path, manifest: "UnitManifest"
 ) -> Mapping[PurePosixPath, PurePosixPath]:
     """Load immutable base aliases and reject candidate policy changes."""
     base = read_git_blob(root, manifest.base_ref, ALIAS_POLICY_PATH)
@@ -75,7 +78,7 @@ def load_protected_aliases(
         raise ValueError("candidate removed protected alias policy")
     if head != base:
         raise ValueError("candidate changed protected alias policy")
-    return _parse(base)
+    return parse_protected_alias_policy(base)
 
 
 def load_committed_aliases(
@@ -85,4 +88,4 @@ def load_committed_aliases(
     raw = read_git_blob(root, ref, ALIAS_POLICY_PATH)
     if raw is None:
         return MappingProxyType({})
-    return _parse(raw)
+    return parse_protected_alias_policy(raw)

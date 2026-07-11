@@ -698,6 +698,44 @@ def test_approved_alias_target_does_not_blanket_account_candidate_files(
     assert "canonical/rogue.py" in "\n".join(report["errors"])
 
 
+def test_overlapping_alias_policy_cannot_account_rogue_counterparts(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    (root / "canonical/nested").mkdir()
+    (root / "canonical/widget.py").rename(root / "canonical/nested/widget.py")
+    (root / "other").mkdir()
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"}]
+        )
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {"alias_path": "src", "canonical_path": "canonical"},
+                    {"alias_path": "src/nested", "canonical_path": "other"},
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "overlapping protected alias policy")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "other/widget.py").write_text("candidate = 'unowned'\n")
+    _git(root, "add", "other/widget.py")
+    _git(root, "commit", "-q", "-m", "candidate adds alternate alias target")
+    head = _git(root, "rev-parse", "HEAD")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+
+    errors = "\n".join(manifest.invalid_reasons)
+    assert manifest.invalid_reasons
+    assert "overlap" in errors or "other/widget.py" in errors
+
+
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"

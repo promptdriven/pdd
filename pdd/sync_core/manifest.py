@@ -13,6 +13,7 @@ from typing import Optional
 
 import yaml
 
+from .alias_policy import ALIAS_POLICY_PATH, parse_protected_alias_policy
 from .decommission import (
     DecommissionTombstone,
     control_transition_invalid,
@@ -820,23 +821,13 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
     return tuple(sorted(rules))
 
 
-def _alias_relpath(value: object, field: str) -> PurePosixPath:
-    if not isinstance(value, str) or not value:
-        raise ManifestError(f"protected alias {field} must be a non-empty path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or not path.parts or ".." in path.parts:
-        raise ManifestError(f"protected alias {field} must be repository-relative")
-    return path
-
-
 def _approved_aliases(
     root: Path,
     base_ref: str,
     head_ref: str,
 ) -> tuple[dict[PurePosixPath, PurePosixPath], list[str]]:
-    path = PurePosixPath(".pdd/sync-aliases.json")
-    base = read_git_blob(root, base_ref, path)
-    head = read_git_blob(root, head_ref, path)
+    base = read_git_blob(root, base_ref, ALIAS_POLICY_PATH)
+    head = read_git_blob(root, head_ref, ALIAS_POLICY_PATH)
     if base is None:
         if head is not None:
             return {}, ["candidate added protected alias policy"]
@@ -846,25 +837,9 @@ def _approved_aliases(
     if head != base:
         return {}, ["candidate changed protected alias policy"]
     try:
-        payload = json.loads(base)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise ManifestError("protected alias policy is malformed") from exc
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != {"schema_version", "aliases"}
-        or payload["schema_version"] != 1
-        or not isinstance(payload["aliases"], list)
-    ):
-        raise ManifestError("protected alias policy schema is invalid")
-    aliases: dict[PurePosixPath, PurePosixPath] = {}
-    for row in payload["aliases"]:
-        if not isinstance(row, dict) or set(row) != {"alias_path", "canonical_path"}:
-            raise ManifestError("protected alias entry is malformed")
-        alias = _alias_relpath(row["alias_path"], "path")
-        canonical = _alias_relpath(row["canonical_path"], "canonical path")
-        if alias == canonical or alias in aliases:
-            raise ManifestError("protected alias entry is ambiguous")
-        aliases[alias] = canonical
+        aliases = parse_protected_alias_policy(base)
+    except ValueError as exc:
+        return {}, [str(exc)]
     return dict(sorted(aliases.items())), []
 
 
