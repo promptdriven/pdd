@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
@@ -454,6 +455,10 @@ def test_legacy_finalizers_fail_closed_when_prompt_alias_is_live_retargeted(
     assert not list((root / ".pdd/meta/v2").glob("*.json"))
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="protected subprocess validation requires Linux process isolation",
+)
 def test_prompt_alias_uses_canonical_prompt_requirements_and_finalizes(tmp_path) -> None:
     root, _commit = _repository(tmp_path)
     canonical = root / "canonical-prompts"
@@ -813,6 +818,10 @@ def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None
         )
 
 
+@pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="protected subprocess validation requires Linux process isolation",
+)
 def test_trusted_finalizer_commits_artifact_through_protected_alias(tmp_path) -> None:
     root, commit = _repository(tmp_path, approved_alias=True)
     report = build_canonical_report(root, _options(tmp_path, commit))

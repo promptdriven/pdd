@@ -75,12 +75,21 @@ def preflight_legacy_mutation(paths: dict[str, Path] | None = None) -> None:
 def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     """Return the opted-in Git root for legacy path-based callers."""
     # pylint: disable=import-outside-toplevel
-    from ..continuous_sync import canonical_sync_enabled, repository_root
+    from ..continuous_sync import canonical_sync_enabled, lexical_repository_root
 
     start = Path(paths.get("prompt", Path.cwd())) if paths else Path.cwd()
-    if not canonical_sync_enabled(start):
+    lexical_start = Path(os.path.abspath(start))
+    if not lexical_start.is_dir():
+        lexical_start = lexical_start.parent
+    if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is None and not any(
+        (candidate / ".pdd/sync-policy.json").is_file()
+        for candidate in (lexical_start, *lexical_start.parents)
+    ):
         return None
-    return repository_root(start)
+    root = lexical_repository_root(start)
+    if not canonical_sync_enabled(root):
+        return None
+    return root
 
 
 def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:

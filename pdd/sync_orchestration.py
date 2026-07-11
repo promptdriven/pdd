@@ -682,28 +682,32 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
-    from .continuous_sync import canonical_sync_enabled, repository_root
+    from .sync_core.finalize import canonical_root_for_paths
 
-    start = Path(paths.get("prompt") or Path.cwd())
-    if canonical_sync_enabled(start):
+    root = canonical_root_for_paths(paths)
+    if root is not None:
         from .sync_core import (
             attestation_signer_from_environment,
             finalize_unit,
         )
         from .sync_core.finalize import lexical_managed_module
 
-        root = repository_root(start)
         protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
         if not protected_base:
             raise RuntimeError(
                 "canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA"
             )
-        module = lexical_managed_module(
-            root,
-            Path(paths["prompt"]),
-            base_ref=protected_base,
-            head_ref="HEAD",
-        )
+        try:
+            module = lexical_managed_module(
+                root,
+                Path(paths["prompt"]),
+                base_ref=protected_base,
+                head_ref="HEAD",
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise RuntimeError(
+                f"trusted canonical finalization failed: {exc}"
+            ) from exc
         finalize_unit(
             root,
             module,
