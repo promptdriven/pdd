@@ -70,14 +70,14 @@ jobs:
 
           root = Path(os.environ["PRIVATE_ROOT"])
           script = """from pathlib import Path
-Path('ok').write_text('ok')
-try:
-    Path('../outside').write_text('forbidden')
-except OSError:
-    pass
-else:
-    raise SystemExit('write escaped private scratch root')
-"""
+          Path('ok').write_text('ok')
+          try:
+              Path('../outside').write_text('forbidden')
+          except OSError:
+              pass
+          else:
+              raise SystemExit('write escaped private scratch root')
+          """
           result, surviving = run_supervised(
               [sys.executable, "-c", script],
               cwd=root / "scratch", timeout=10, env=dict(os.environ),
