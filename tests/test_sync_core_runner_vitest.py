@@ -416,6 +416,53 @@ def test_explicit_candidate_local_vitest_command_is_not_trusted(tmp_path: Path) 
     assert "candidate checkout" in executions[0].detail
 
 
+def test_pathless_vitest_script_operand_is_not_resolved_from_candidate(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    (root / "fake_vitest.py").write_text(
+        _fake_vitest(tmp_path).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add pathless candidate Vitest command")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "fake_vitest.py").write_text(
+        _fake_vitest(tmp_path).read_text(encoding="utf-8") + "\n# changed\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate pathless Vitest command")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    obligation = VerificationObligation(
+        "vitest",
+        "test",
+        "vitest",
+        vitest_validator_config_digest(root, base, paths),
+        ("REQ-1",),
+        paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+
+    _envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", base, _git(root, "rev-parse", "HEAD")),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "id",
+            "nonce",
+            datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        config=RunnerConfig(
+            timeout_seconds=2,
+            vitest_command=(sys.executable, "fake_vitest.py"),
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "pathless" in executions[0].detail
+
+
 def test_vitest_subprocess_cannot_read_secret(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

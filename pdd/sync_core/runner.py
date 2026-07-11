@@ -1142,13 +1142,13 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
         payload["jest_toolchain"] = [
             _directory_identity(path)
             for path in _jest_toolchain_roots(config.jest_command)
+        ]
     if config.vitest_command is not None:
         payload["vitest"] = (
             list(config.vitest_command)
             if config.vitest_toolchain_identity is not None
             else [_command_part_identity(root, part) for part in config.vitest_command]
         )
-        ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1796,8 +1796,11 @@ def _run_vitest(
         if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
-    if _command_uses_candidate_checkout(root, command_prefix):
-        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "explicit Vitest command inside the candidate checkout is not trusted"), ()
+    command_error = _protected_command_error(root, command_prefix)
+    if command_error is not None:
+        return RunnerExecution(
+            "vitest", EvidenceOutcome.ERROR, "vitest-untrusted", command_error
+        ), ()
     try:
         config_path, _config_data = _vitest_config(root, "HEAD")
     except ValueError as exc:
