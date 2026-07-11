@@ -13,7 +13,6 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from .operation_log import (
     _safe_basename,
-    get_fingerprint_path,
     infer_module_identity,
 )
 from .sync_determine_operation import (
@@ -24,6 +23,7 @@ from .sync_determine_operation import (
     read_fingerprint,
 )
 from .sync_core import CanonicalReportOptions, build_canonical_report
+from .construct_paths import _find_pddrc_file, _load_pddrc_config
 
 
 DRIFT_CLASSIFICATIONS = {
@@ -255,6 +255,35 @@ def _prompt_units(prompt_root: Path) -> List[SyncUnit]:
     return units
 
 
+def _configured_prompt_roots(base: Path) -> List[Path]:
+    """Return normalized prompt roots configured for the legacy report.
+
+    The report owns discovery, so configured roots must be resolved before it
+    passes a fixed relative pattern to ``Path.rglob``.  In particular, an
+    absolute ``prompts_dir`` is a root, never a glob pattern to append to one.
+    """
+    pddrc_path = _find_pddrc_file(base)
+    configured: List[Path] = []
+    if pddrc_path is not None:
+        try:
+            contexts = _load_pddrc_config(pddrc_path).get("contexts", {})
+        except ValueError:
+            contexts = {}
+        for context in contexts.values():
+            defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
+            raw_root = defaults.get("prompts_dir")
+            if not isinstance(raw_root, str) or not raw_root.strip():
+                continue
+            root = Path(raw_root).expanduser()
+            if not root.is_absolute():
+                root = pddrc_path.parent / root
+            configured.append(root.resolve(strict=False))
+
+    if not configured:
+        configured.append((base / "prompts").resolve(strict=False))
+    return list(dict.fromkeys(configured))
+
+
 def _matches_module(unit: SyncUnit, wanted: set[str]) -> bool:
     return (
         unit.basename in wanted
@@ -408,8 +437,13 @@ def discover_units(
     """Discover prompt-backed units under ``root``."""
     base = project_root(root)
     wanted = set(modules or [])
-    prompt_root = base / "prompts"
-    prompt_units = _prompt_units(prompt_root) if prompt_root.exists() else []
+    prompt_roots = _configured_prompt_roots(base)
+    prompt_units = [
+        unit
+        for prompt_root in prompt_roots
+        if prompt_root.is_dir()
+        for unit in _prompt_units(prompt_root)
+    ]
     meta_root = base / ".pdd" / "meta"
     metadata_identities = _metadata_identities(meta_root)
 
@@ -425,7 +459,7 @@ def discover_units(
                 continue
             unit = _unit_from_metadata_identity(
                 identity,
-                prompt_root,
+                prompt_roots[0],
                 prompt_index,
                 requested_basename=_requested_basename_for_identity(identity, wanted),
             )
@@ -447,7 +481,7 @@ def discover_units(
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
     for identity in metadata_identities:
-        unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
+        unit = _unit_from_metadata_identity(identity, prompt_roots[0], prompt_index)
         dedupe_key = (unit.basename, unit.language, unit.prompt_path)
         if dedupe_key in seen:
             continue
@@ -666,6 +700,24 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
     # pylint: disable=broad-exception-caught
     """Classify one sync unit without mutating files."""
     base = project_root(root)
+    # A report must not create `.pdd/meta` just to discover that no fingerprint
+    # exists.  The legacy helper creates its parent directory as a write-side
+    # convenience, so derive the read-only project-relative location here.
+    fp_path = base / ".pdd" / "meta" / f"{_safe_basename(unit.basename)}_{unit.language}.json"
+    _raw_fp, raw_error = _load_fingerprint_json(fp_path)
+    if raw_error is not None:
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": UNBASELINED_CLASSIFICATION,
+            "operation": "none",
+            "reason": f"fingerprint {raw_error}",
+            "changed_files": [],
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": {"prompt": str(unit.prompt_path)},
+        }
+
     try:
         paths = get_pdd_file_paths(
             unit.basename,
@@ -682,21 +734,6 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "changed_files": [],
             "metadata_valid": False,
             "paths": {"prompt": str(unit.prompt_path)},
-        }
-
-    fp_path = get_fingerprint_path(unit.basename, unit.language, paths=paths)
-    _raw_fp, raw_error = _load_fingerprint_json(fp_path)
-    if raw_error is not None:
-        return {
-            "basename": unit.basename,
-            "language": unit.language,
-            "classification": UNBASELINED_CLASSIFICATION,
-            "operation": "none",
-            "reason": f"fingerprint {raw_error}",
-            "changed_files": [],
-            "metadata_valid": False,
-            "fingerprint_path": str(fp_path),
-            "paths": _paths_as_json(paths, base),
         }
 
     fingerprint = read_fingerprint(unit.basename, unit.language, paths=paths)
