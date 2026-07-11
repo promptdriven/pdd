@@ -3415,6 +3415,8 @@ def test_get_pdd_file_paths_nested_directories_match_case_insensitively(
         ("foo", "python "),
         ("foo", "py\x00thon"),
         ("foo", "py\nthon"),
+        ("foo\u202ebar", "python"),
+        ("foo", "py\u2066thon"),
     ],
 )
 def test_get_pdd_file_paths_rejects_noncanonical_or_control_input(
@@ -3487,6 +3489,59 @@ def test_get_pdd_file_paths_validates_before_logging_raw_input(
         get_pdd_file_paths(basename, "python", prompts_dir="prompts")
 
     assert not caplog.records
+
+
+def test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """A control-bearing prompt root is neither resolved nor emitted into INFO logs."""
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths("foo", "python", prompts_dir="prompts\nFORGED")
+
+    assert not caplog.records
+
+
+@pytest.mark.parametrize(
+    "basename",
+    ["foo:bar", "CON", "NUL", "COM1", "LPT9.txt", "dir/PRN.py", "AUX"],
+)
+def test_get_pdd_file_paths_rejects_windows_device_or_ads_basename(
+    tmp_path,
+    monkeypatch,
+    basename,
+):
+    """Portable module identities cannot address NTFS streams or device names."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="Unsafe prompt path"):
+        get_pdd_file_paths(basename, "python", prompts_dir="prompts")
+
+
+def test_directory_index_case_collision_fallback_is_deterministic(tmp_path):
+    """Case-fold collisions have a stable fallback independent of scandir order."""
+    import sync_determine_operation as sync_determine_module
+
+    lower = tmp_path / "foo"
+    upper = tmp_path / "Foo"
+    lower.mkdir()
+    try:
+        upper.mkdir()
+    except FileExistsError:
+        pytest.skip("filesystem does not support case-distinct sibling directories")
+    if lower.samefile(upper):
+        pytest.skip("filesystem is case-insensitive")
+
+    found = sync_determine_module._indexed_directory_child(
+        tmp_path, "FOO", directory=True
+    )
+
+    assert found == upper
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):

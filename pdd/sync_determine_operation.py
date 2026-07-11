@@ -14,6 +14,7 @@ import json
 import hashlib
 import subprocess
 import fnmatch
+import unicodedata
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
@@ -436,7 +437,10 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
         return None
     if value != value.strip():
         return None
-    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+    if any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs"}
+        for char in value
+    ):
         return None
     raw = value
     if not raw or "\\" in raw:
@@ -454,6 +458,20 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
         or ".." in filename.parts
     ):
         return None
+    reserved_windows_names = {"CON", "PRN", "AUX", "NUL"}
+    for part in filename.parts:
+        windows_identity = part.rstrip(" .").split(".", 1)[0].upper()
+        if (
+            ":" in part
+            or part.endswith((" ", "."))
+            or windows_identity in reserved_windows_names
+            or (
+                len(windows_identity) == 4
+                and windows_identity[:3] in {"COM", "LPT"}
+                and windows_identity[3] in "123456789"
+            )
+        ):
+            return None
     return filename
 
 
@@ -488,9 +506,14 @@ def _directory_entry_index(
                     files.setdefault(entry.name.lower(), []).append(path)
             except OSError:
                 continue
+    def _stable(values: List[Path]) -> Tuple[Path, ...]:
+        return tuple(
+            sorted(values, key=lambda path: (path.name.casefold(), path.name, str(path)))
+        )
+
     return (
-        {key: tuple(value) for key, value in directories.items()},
-        {key: tuple(value) for key, value in files.items()},
+        {key: _stable(value) for key, value in directories.items()},
+        {key: _stable(value) for key, value in files.items()},
     )
 
 
@@ -2221,6 +2244,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
     try:
         # Use construct_paths to get configuration-aware paths
+        if (
+            not isinstance(prompts_dir, str)
+            or not prompts_dir
+            or prompts_dir != prompts_dir.strip()
+            or any(
+                unicodedata.category(char) in {"Cc", "Cf", "Cs"}
+                for char in prompts_dir
+            )
+        ):
+            raise UnsafePromptPathError(Path(str(prompts_dir)), Path.cwd())
         prompts_root = _resolve_prompts_root(prompts_dir)
         if _safe_architecture_prompt_filename(basename) is None:
             raise UnsafePromptPathError(
@@ -2231,7 +2264,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 Path(str(language)), prompts_root.resolve(strict=False)
             )
         logger.info(
-            "get_pdd_file_paths called: basename=%s, language=%s, prompts_dir=%s",
+            "get_pdd_file_paths called: basename=%s, language=%s, prompts_dir=%r",
             basename,
             language,
             prompts_dir,
