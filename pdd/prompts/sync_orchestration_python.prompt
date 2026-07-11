@@ -14,6 +14,7 @@
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
 
@@ -180,10 +181,10 @@ from .operation_log import (
     update_log_entry,
     append_log_entry,
     log_event,
-    save_fingerprint,
     save_run_report,
     clear_run_report,
 )
+from .fingerprint_transaction import FingerprintTransaction, FingerprintFinalizeError
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -290,9 +291,11 @@ Detect headless environments (no TTY, CI environment variable, or `quiet=True`) 
 Use `AtomicStateUpdate` context manager for consistent state writes:
 - Ensures run_report and fingerprint are both written or neither is written
 - Uses temp file + atomic rename pattern for crash safety
-- After each successful operation, save a `Fingerprint` to disk with current file hashes
+- After each successful operation, save a `Fingerprint` to disk with current file hashes via `FingerprintTransaction`. `FingerprintFinalizeError` propagates through the operation dispatch to Click; it MUST NOT be caught by per-operation `except` handlers.
+- **No-op fix handling**: a zero-cost fix with an empty/none/unknown/n/a model performed no mutation. Detect it before finalization and do not call `_save_fingerprint_atomic`; this intentional non-mutating path must not claim `fix` completed.
+- The fingerprint-write leg of `AtomicStateUpdate` and `_save_fingerprint_atomic` MUST route through `FingerprintTransaction`. `_save_fingerprint_atomic` becomes a thin wrapper that constructs and enters a `FingerprintTransaction`.
 - **Case-insensitive language in paths**: All metadata file paths (fingerprint `.json`, run report `_run.json`, sync log `_sync.log`) must use `language.lower()` for consistent paths on case-sensitive filesystems. This applies to any direct path construction in this module (e.g., `f"{_safe_basename(basename)}_{language.lower()}_run.json"`).
-- **Subproject anchoring (issue #1211)**: never compose `META_DIR / <file>` directly for runtime writes — the module-level `META_DIR` is CWD-resolved at import time and won't follow a subproject `.pddrc` that lives below the run CWD. Instead, route fingerprint/run-report/log paths through `get_fingerprint_path(...)`, `get_run_report_path(...)`, and `get_log_path(...)` (from `operation_log`) and pass `paths=pdd_files` so the helper resolves the meta dir via upward `.pddrc` detection from those paths. `_save_run_report_atomic` and `_save_fingerprint_atomic` both accept `paths` and forward them into the atomic-state file path AND into `read_fingerprint` for stored-deps lookup. Every `read_run_report` / `clear_run_report` / `log_event` / `append_log_entry` call inside `sync_orchestration` must pass `paths=pdd_files` once `pdd_files` is in scope — including the post-`pdd_files` branches in coverage retry, crash-detection, generate logic, lifecycle events (sync_start, lock_acquired, lock_released, budget_warning/exceeded, cycle_detected, steering_override, etc.), and per-operation log_entry appends. The dry-run / `_display_sync_log` branch executes BEFORE `pdd_files` is set, so it does a best-effort `get_pdd_file_paths(...)` lookup (wrapped in try/except) and forwards the result via `paths=` so log display still finds the subproject log when invoked from a parent CWD. Mismatched paths leave stale state behind and let stale parent metadata leak into decision logic. The only acceptable `META_DIR` reference outside of these helpers is the `if __name__ == '__main__':` demo block at the end of the file.
+- **Subproject anchoring (issue #1211)**: never compose `META_DIR / <file>` directly for runtime writes — the module-level `META_DIR` is CWD-resolved at import time and won't follow a subproject `.pddrc` that lives below the run CWD. Instead, route fingerprint/run-report/log paths through `get_fingerprint_path(...)`, `get_run_report_path(...)`, and `get_log_path(...)` (from `operation_log`) and pass `paths=pdd_files` so the helper resolves the meta dir via upward `.pddrc` detection from those paths. `_save_run_report_atomic` both accepts `paths` and forwards it into the atomic-state file path AND into `read_fingerprint` for stored-deps lookup. Every `read_run_report` / `clear_run_report` / `log_event` / `append_log_entry` call inside `sync_orchestration` must pass `paths=pdd_files` once `pdd_files` is in scope — including the post-`pdd_files` branches in coverage retry, crash-detection, generate logic, lifecycle events (sync_start, lock_acquired, lock_released, budget_warning/exceeded, cycle_detected, steering_override, etc.), and per-operation log_entry appends. The dry-run / `_display_sync_log` branch executes BEFORE `pdd_files` is set, so it does a best-effort `get_pdd_file_paths(...)` lookup (wrapped in try/except) and forwards the result via `paths=` so log display still finds the subproject log when invoked from a parent CWD. Mismatched paths leave stale state behind and let stale parent metadata leak into decision logic. The only acceptable `META_DIR` reference outside of these helpers is the `if __name__ == '__main__':` demo block at the end of the file.
 
 ### Skip Handling
 
@@ -373,7 +376,7 @@ Use these functions from `operation_log` module (already imported above):
 - `update_log_entry(entry, success, cost, model, duration, error)` - Add execution results to log entry
 - `append_log_entry(basename, language, entry, paths=None)` - Append entry to log file; pass `paths=pdd_files` so the log anchors at the subproject `.pdd/meta` (issue #1211)
 - `log_event(basename, language, event_type, details, invocation_mode, paths=None)` - Log system events (lock_acquired, budget_warning, etc.); pass `paths=pdd_files` for subproject anchoring
-- `save_fingerprint(basename, language, operation, paths=None, cost, model)` - Save fingerprint after success; pass `paths=pdd_files` for subproject anchoring
+- `_save_fingerprint_atomic(...)` - Thin sync adapter around `FingerprintTransaction`. Pass `paths=pdd_files`, the outer `AtomicStateUpdate`, and any include-deps override; `FingerprintFinalizeError` propagates.
 - `save_run_report(basename, language, report_data, paths=None)` - Save RunReport dict; pass `paths=pdd_files` for subproject anchoring (issue #1211)
 - `clear_run_report(basename, language, paths=None)` - Remove stale run report; pass `paths=pdd_files` for subproject anchoring
 
@@ -443,7 +446,7 @@ Handle command results in multiple formats:
 - For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
 - For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
 - For `ArchitectureConformanceError` exception paths, extract `total_cost` and `model_name` from the exception into a result-shaped dict before logging so failed conformance attempts do not report `$0.00`.
-- Save fingerprint after successful operations regardless of format, **except** for no-op fix operations. A no-op fix is detected when `operation == 'fix'` and `actual_cost == 0.0` and `model_name` is empty/`'none'`/`'unknown'`/`'n/a'`. This check **must run before** `_save_fingerprint_atomic` so that a logical failure (consecutive no-op breaker) does not persist stale "fix completed" state. Do not call `_save_fingerprint_atomic` for no-op fixes.
+- After parsing a successful mutating result, call `_save_fingerprint_atomic`, which constructs `FingerprintTransaction` with the outer atomic-state buffer. **For no-op fix operations**, omit the adapter call because no artifact mutation occurred. A no-op fix is detected when `operation == 'fix'`, `actual_cost == 0.0`, and `model_name` is empty/`'none'`/`'unknown'`/`'n/a'`. This check must run before finalization so the consecutive-no-op breaker cannot persist stale "fix completed" state.
 
 ### Non-Python Language Handling and Agentic Mode
 

@@ -391,6 +391,68 @@ def _prompts_root_for_fingerprint(prompt_file: Union[str, Path]) -> Path:
     return prompt_path.parent
 
 
+def resolve_fingerprint_paths(
+    basename: str,
+    language: str,
+    prompt_file: Union[str, Path],
+    *,
+    paths: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Resolve a complete unit path set without losing explicit caller paths.
+
+    Mutating commands often know only the prompt and the artifact they wrote.
+    Persisting that partial set would replace previously valid example/test
+    hashes with ``null`` and make the next sync report those untouched files as
+    changed.  Resolve the remaining paths from the prompt's own project, then
+    overlay every explicit path so caller-selected locations stay authoritative
+    (issues #983, #1211/#1290, and #1305).
+
+    Resolution is best-effort because derivative/new prompt outputs may not yet
+    be registered in project configuration. The explicit touched paths remain
+    available for hard hash validation even when optional sibling discovery
+    cannot complete.
+    """
+    explicit: Dict[str, Any] = dict(paths or {})
+    explicit_prompt = Path(prompt_file)
+    explicit["prompt"] = explicit_prompt
+    try:
+        from .sync_determine_operation import get_pdd_file_paths
+
+        discovered: Dict[str, Any] = get_pdd_file_paths(
+            basename,
+            language,
+            prompts_dir=str(_prompts_root_for_fingerprint(prompt_file)),
+        )
+    except (ImportError, OSError, ValueError) as exc:
+        logger.warning(
+            "Could not resolve complete fingerprint paths for %s/%s: %s",
+            basename,
+            language,
+            exc,
+        )
+        return explicit
+
+    resolved_prompt = discovered.get("prompt")
+    if not isinstance(resolved_prompt, Path) or not resolved_prompt.exists():
+        logger.warning(
+            "Resolved fingerprint prompt is missing for %s/%s: %s",
+            basename,
+            language,
+            resolved_prompt,
+        )
+        return explicit
+
+    # A CLI may supply a relative prompt spelling while path discovery returns
+    # the real absolute file.  Keep the discovered prompt when that spelling
+    # does not exist from the current process CWD; otherwise an otherwise good
+    # resolution would be overwritten with a null-hash path (issue #1305).
+    overlay = dict(explicit)
+    if not explicit_prompt.exists():
+        overlay.pop("prompt", None)
+    discovered.update(overlay)
+    return discovered
+
+
 def load_operation_log(
     basename: str,
     language: str,
@@ -578,56 +640,22 @@ def save_fingerprint(
     cost: float = 0.0,
     model: str = "unknown"
 ) -> None:
+    """Finalize the current fingerprint through the shared transaction.
+
+    Fingerprint persistence is part of command success.  Any path, hash, or
+    atomic-write failure therefore propagates as ``FingerprintFinalizeError``.
     """
-    Save the current fingerprint/state to the state file.
+    from .fingerprint_transaction import FingerprintTransaction
 
-    Writes the full Fingerprint dataclass format compatible with read_fingerprint()
-    in sync_determine_operation.py. This ensures manual commands (generate, example)
-    don't break sync's fingerprint tracking.
-    """
-    from dataclasses import asdict
-    from datetime import timezone
-    from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-    from . import __version__
-
-    # Issue #983: when the caller provides `paths`, use them directly — do
-    # NOT call get_pdd_file_paths. Issue #1211: at the same time, use those
-    # caller-supplied paths to detect the subproject root so the meta dir
-    # anchors at the .pddrc rather than the run CWD.
-    if not paths:
-        from .sync_determine_operation import get_pdd_file_paths
-        try:
-            paths = get_pdd_file_paths(basename, language)
-        except (ImportError, OSError, ValueError) as e:
-            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
-            paths = {}
-
-    path = get_fingerprint_path(basename, language, paths=paths)
-
-    # Issue #522: Pass stored include deps for prompt hash calculation
-    prev_fp = read_fingerprint(basename, language, paths=paths)
-    stored_deps = prev_fp.include_deps if prev_fp else None
-    current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
-
-    # Create Fingerprint with same format as _save_fingerprint_atomic
-    fingerprint = Fingerprint(
-        pdd_version=__version__,
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        command=operation,
-        prompt_hash=current_hashes.get('prompt_hash'),
-        code_hash=current_hashes.get('code_hash'),
-        example_hash=current_hashes.get('example_hash'),
-        test_hash=current_hashes.get('test_hash'),
-        test_files=current_hashes.get('test_files'),
-        include_deps=current_hashes.get('include_deps'),  # Issue #522
-    )
-
-    try:
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(asdict(fingerprint), f, indent=2)
-    except Exception as e:
-        console = Console()
-        console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
+    with FingerprintTransaction(
+        basename=basename,
+        language=language,
+        operation=operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+    ):
+        pass
 
 
 def save_run_report(
@@ -782,7 +810,20 @@ def log_operation(
                     pass
                 elif basename and language:
                     append_log_entry(basename, language, entry, paths=log_paths)
-                    if success:
+                    no_op_fix = (
+                        operation == "fix"
+                        and cost == 0.0
+                        and str(model).strip().lower()
+                        in {"", "none", "unknown", "n/a"}
+                    )
+                    if success and no_op_fix:
+                        logger.info(
+                            "Skipping fix metadata finalization for %s/%s: "
+                            "no LLM invocation",
+                            basename,
+                            language,
+                        )
+                    elif success:
                         fingerprint_allowed = True
                         # Clear the stale run report only after the command
                         # succeeds, so a failed run cannot erase existing
@@ -794,6 +835,20 @@ def log_operation(
                         if clears_run_report:
                             fingerprint_allowed = _clear_run_report_before_fingerprint(
                                 basename, language, paths=log_paths
+                            )
+                        if updates_fingerprint and not fingerprint_allowed:
+                            from .fingerprint_transaction import (
+                                FingerprintFinalizeError,
+                            )
+
+                            raise FingerprintFinalizeError(
+                                operation,
+                                get_fingerprint_path(
+                                    basename,
+                                    language,
+                                    paths=log_paths,
+                                ),
+                                "run report not cleared",
                             )
                         if updates_fingerprint and fingerprint_allowed:
                             # Issue #1305 + #1211: save_fingerprint hashes only
@@ -814,35 +869,11 @@ def log_operation(
                             # resolution fails, so anchoring still works. The
                             # #983 contract is preserved: the caller resolves the
                             # paths, so save_fingerprint does not.
-                            from .sync_determine_operation import get_pdd_file_paths
-                            try:
-                                prompts_root = _prompts_root_for_fingerprint(
-                                    prompt_file
-                                )
-                                fingerprint_paths: Dict[str, Any] = get_pdd_file_paths(
-                                    basename, language, prompts_dir=str(prompts_root)
-                                )
-                                # Existence-gate the resolution: if it silently
-                                # resolved the prompt to a path that is not on
-                                # disk (a mis-resolution that did not raise), the
-                                # other paths are wrong too, so the fingerprint
-                                # would be null and mis-anchored. Fall back to the
-                                # real prompt path so prompt_hash is real and the
-                                # write still anchors at the subproject.
-                                resolved_prompt = fingerprint_paths.get("prompt")
-                                if not (
-                                    isinstance(resolved_prompt, Path)
-                                    and resolved_prompt.exists()
-                                ):
-                                    fingerprint_paths = {"prompt": Path(prompt_file)}
-                            except (ImportError, OSError, ValueError) as e:
-                                logger.warning(
-                                    "Could not resolve paths for %s/%s: %s",
-                                    basename,
-                                    language,
-                                    e,
-                                )
-                                fingerprint_paths = {"prompt": Path(prompt_file)}
+                            fingerprint_paths = resolve_fingerprint_paths(
+                                basename,
+                                language,
+                                prompt_file,
+                            )
                             save_fingerprint(
                                 basename,
                                 language,

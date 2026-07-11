@@ -15,6 +15,7 @@
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
 # sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
@@ -125,7 +126,7 @@
     - Merge costs: add `pre_cost` (including failed conformance attempts and the final successful generate attempt) to the one-session result's `total_cost`; pass only `remaining_budget - pre_cost` into the one-session phase.
     - Include snapshot status and artifact paths from generation in the one-session summary/result when available, without displaying sensitive artifact contents or forbidden detail strings.
     - If code generation fails (code file still missing), return failure without proceeding to one-session
-    - **Post-sync**: Save fingerprint via `save_fingerprint()` so next sync sees files as up-to-date
+    - **Post-sync**: Save the complete `pdd_files` mapping through `operation_log.save_fingerprint`, the shared `FingerprintTransaction` wrapper, so the next sync sees files as up to date. Do not catch its `FingerprintFinalizeError`; one-session sync must exit non-zero when finalization fails.
     - **Auto-submit**: On success and not local mode, call `_auto_submit_example()` to submit the example to PDD Cloud
 
 9. **Auto-Submit Example** (`_auto_submit_example` helper):
