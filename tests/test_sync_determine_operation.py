@@ -4187,6 +4187,20 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
+    def test_legacy_include_hash_matches_pre_versioned_bytes_across_cwds(
+        self, pdd_test_environment, monkeypatch
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        dependency = pdd_test_environment / "shared.py"
+        create_file(dependency, "VALUE = 1\n")
+        create_file(prompt, "Build it.\n<include>shared.py</include>\n")
+        expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+        hashes = []
+        for cwd in (pdd_test_environment, pdd_test_environment.parent):
+            monkeypatch.chdir(cwd)
+            hashes.append(calculate_prompt_hash(prompt))
+        assert hashes == [expected, expected]
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
