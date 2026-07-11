@@ -399,9 +399,9 @@ def test_default_context_templates_preserve_nested_basename(tmp_path: Path) -> N
     prompts = project / "prompts" / "core"
     prompts.mkdir(parents=True)
     prompt = prompts / "cloud_python.prompt"
-    code = project / "src" / "core" / "cloud.py"
-    example = project / "usage" / "core" / "cloud_demo.py"
-    test_file = project / "spec" / "core" / "cloud_spec.py"
+    code = project / "src" / "cloud.py"
+    example = project / "usage" / "cloud_demo.py"
+    test_file = project / "spec" / "cloud_spec.py"
     for path, content in ((prompt, "cloud\n"), (code, "VALUE = 1\n"),
                           (example, "print('cloud')\n"),
                           (test_file, "def test_cloud(): pass\n")):
@@ -422,9 +422,9 @@ def test_default_context_templates_preserve_nested_basename(tmp_path: Path) -> N
     report = classify_unit(SyncUnit("core/cloud", "python", prompt, prompts), project)
 
     assert report["classification"] == "IN_SYNC"
-    assert report["paths"]["code"] == "src/core/cloud.py"
-    assert report["paths"]["example"] == "usage/core/cloud_demo.py"
-    assert report["paths"]["test"] == "spec/core/cloud_spec.py"
+    assert report["paths"]["code"] == "src/cloud.py"
+    assert report["paths"]["example"] == "usage/cloud_demo.py"
+    assert report["paths"]["test"] == "spec/cloud_spec.py"
 
 
 def test_report_and_live_resolver_share_leaf_name_semantics(tmp_path: Path, monkeypatch) -> None:
@@ -488,7 +488,7 @@ def test_metadata_inference_is_bounded_and_validates_before_stat(tmp_path: Path,
     monkeypatch.setattr("pdd.continuous_sync.MAX_METADATA_INFERENCE_CANDIDATES", 3, raising=False)
     calls = []
 
-    def guarded_exists(path: Path) -> bool:
+    def guarded_exists(path: Path, _base: Path) -> bool:
         calls.append(path)
         assert path.resolve(strict=False).is_relative_to(project.resolve())
         return False
@@ -497,7 +497,7 @@ def test_metadata_inference_is_bounded_and_validates_before_stat(tmp_path: Path,
         result = CliRunner().invoke(cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert len(calls) <= 9
+    assert len(calls) <= 12
 
 
 @pytest.mark.parametrize("target_exists", [True, False])

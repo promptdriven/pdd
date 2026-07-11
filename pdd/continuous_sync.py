@@ -34,6 +34,7 @@ from .construct_paths import _load_pddrc_config
 MAX_PROMPT_DISCOVERY_FILES = 10000
 MAX_PROMPT_DISCOVERY_ENTRIES = 50000
 MAX_PROMPT_DISCOVERY_ROOTS = 100
+MAX_METADATA_INFERENCE_CANDIDATES = 32
 MAX_REPAIR_DISCOVERY_ENTRIES = 50000
 SKIPPED_DISCOVERY_DIRS = {
     ".git",
@@ -429,18 +430,12 @@ def _prompt_ownership(
         if not _safe_control_file(pddrc_path, base):
             raise UnsafeConfigError(f"unsafe nested config: {pddrc_path}")
         config = _load_pddrc_config(pddrc_path)
-        contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
+        contexts = _validate_pddrc_structure(config)
         owned: list[tuple[int, str, Path]] = []
         if isinstance(contexts, dict):
             for context_name, context in contexts.items():
-                if not isinstance(context_name, str) or not isinstance(context, dict):
-                    continue
                 defaults = context.get("defaults", {})
-                if not isinstance(defaults, dict):
-                    continue
                 raw_root = defaults.get("prompts_dir", "prompts")
-                if not isinstance(raw_root, str) or not raw_root:
-                    continue
                 prompt_root = Path(raw_root).expanduser()
                 if not prompt_root.is_absolute():
                     prompt_root = pddrc_path.parent / prompt_root
@@ -501,6 +496,25 @@ def _configured_prompt_roots(
                 f".pddrc exceeds configured prompt root limit of {MAX_PROMPT_DISCOVERY_ROOTS}"
             )
     return collapsed
+
+
+def _validate_pddrc_structure(config: Any) -> Dict[str, Any]:
+    """Return strictly validated contexts shared by root and nested configs."""
+    if not isinstance(config, dict):
+        raise ValueError(".pddrc must contain a mapping")
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        raise ValueError(".pddrc contexts must contain a mapping")
+    for context_name, context in contexts.items():
+        if not isinstance(context_name, str) or not isinstance(context, dict):
+            raise ValueError(".pddrc context must contain a mapping")
+        defaults = context.get("defaults", {})
+        if not isinstance(defaults, dict):
+            raise ValueError(".pddrc defaults must contain a mapping")
+        raw_root = defaults.get("prompts_dir", "prompts")
+        if not isinstance(raw_root, str) or not raw_root.strip():
+            raise ValueError(".pddrc prompts_dir must be a non-empty string")
+    return contexts
 
 
 def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailure]]:
@@ -593,19 +607,15 @@ def _slash_candidates(safe_basename: str) -> List[str]:
     if len(parts) <= 1:
         return []
 
-    candidates: List[str] = []
-    separators = range(1, len(parts))
-    for count in range(1, len(parts)):
-        for slash_positions in combinations(separators, count):
-            chunks: List[str] = [parts[0]]
-            for index, part in enumerate(parts[1:], start=1):
-                if index in slash_positions:
-                    chunks.append("/")
-                else:
-                    chunks.append("_")
-                chunks.append(part)
-            candidates.append("".join(chunks))
-    return candidates
+    candidates = [safe_basename.replace("_", "/")]
+    for index in range(1, len(parts)):
+        candidates.append("_".join(parts[:index]) + "/" + "_".join(parts[index:]))
+    return list(dict.fromkeys(candidates))[:MAX_METADATA_INFERENCE_CANDIDATES]
+
+
+def _validated_artifact_exists(path: Path, base: Path) -> bool:
+    """Stat an inferred artifact only after logical containment/link validation."""
+    return _safe_architecture_candidate(path, base) and path.exists()
 
 
 def _existing_artifact_score(
@@ -621,10 +631,11 @@ def _existing_artifact_score(
         )
     except ValueError:
         return 0
+    base = project_root(prompt_root)
     score = 0
     for artifact in ("code", "example", "test"):
         path = paths.get(artifact)
-        if path is not None and path.exists():
+        if path is not None and _validated_artifact_exists(path, base):
             score += 1
     return score
 
@@ -633,10 +644,14 @@ def _infer_basename_from_artifacts(
     safe_basename: str,
     language: str,
     prompt_root: Path,
+    budget: Dict[str, int],
 ) -> str:
     best = safe_basename
     best_score = _existing_artifact_score(best, language, prompt_root)
     for candidate in _slash_candidates(safe_basename):
+        if budget["entries"] >= MAX_PROMPT_DISCOVERY_ENTRIES:
+            break
+        budget["entries"] += 1
         score = _existing_artifact_score(candidate, language, prompt_root)
         if score > best_score:
             best = candidate
@@ -649,6 +664,7 @@ def _unit_from_metadata_identity(
     prompt_root: Path,
     prompt_index: Dict[tuple[str, str], SyncUnit],
     requested_basename: Optional[str] = None,
+    budget: Optional[Dict[str, int]] = None,
 ) -> SyncUnit:
     safe_basename, language = identity
     prompt_unit = prompt_index.get((safe_basename, language))
@@ -659,6 +675,7 @@ def _unit_from_metadata_identity(
         safe_basename,
         language,
         prompt_root,
+        budget or {"entries": 0, "files": 0},
     )
     prompt_path = _prompt_path_for_basename(prompt_root, basename, language)
     return SyncUnit(
@@ -709,9 +726,9 @@ def _metadata_identities(
 ) -> tuple[List[tuple[str, str]], Optional[DiscoveryFailure]]:
     identities: List[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    if not meta_root.exists():
-        return identities, None
     violation = _path_component_violation(meta_root, base, leaf_directory=True)
+    if violation == "missing":
+        return identities, None
     if violation is not None:
         return [], DiscoveryFailure(
             prompt_root=meta_root,
@@ -774,6 +791,7 @@ def _metadata_units(
     prompt_root: Path,
     prompt_index: Dict[tuple[str, str], SyncUnit],
     wanted: set[str],
+    budget: Dict[str, int],
 ) -> List[SyncUnit]:
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
@@ -785,6 +803,7 @@ def _metadata_units(
             prompt_root,
             prompt_index,
             requested_basename=_requested_basename_for_identity(identity, wanted),
+            budget=budget,
         )
         _append_unique_unit(units, seen, unit)
     return units
@@ -825,6 +844,7 @@ def _discover_units_and_failures(
         prompt_roots[0] if prompt_roots else base / "prompts",
         _prompt_index(prompt_units),
         wanted,
+        budget,
     )
     seen = {(unit.basename, unit.language, unit.prompt_path) for unit in units}
     if wanted:
@@ -1119,9 +1139,7 @@ def _configured_output_defaults(
         pddrc_path, config = _project_config(base)
     if pddrc_path is None:
         return {}, None, None, config
-    contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
-    if not isinstance(contexts, dict):
-        return {}, None, pddrc_path, config
+    contexts = _validate_pddrc_structure(config)
     context_name = _resolve_context_name_for_basename(
         unit.basename,
         context_override=unit.context_name,
@@ -1180,7 +1198,6 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
             extension,
             outputs,
             str(unit.prompt_path),
-            path_aware_name=True,
         )
         for output_name, rendered in generated.items():
             if output_name not in {"prompt", "code", "example", "test"}:

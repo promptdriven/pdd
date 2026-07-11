@@ -1012,7 +1012,6 @@ def _expand_output_templates(
     extension: str,
     outputs_config: Dict[str, Any],
     prompt_path: str,
-    path_aware_name: bool = False,
 ) -> Dict[str, Path]:
     """Purely expand configured output templates without filesystem access."""
     import logging
@@ -1045,15 +1044,7 @@ def _expand_output_templates(
     for output_type, config in outputs_config.items():
         if isinstance(config, dict) and 'path' in config:
             template = config['path']
-            output_context = dict(template_context)
-            if (
-                path_aware_name
-                and len(parts) > 1
-                and '{category}' not in template
-                and '{dir_prefix}' not in template
-            ):
-                output_context['name'] = basename
-            expanded = expand_template(template, output_context)
+            expanded = expand_template(template, template_context)
             if Path(template).is_absolute() and not Path(expanded).is_absolute():
                 expanded = str(Path(Path(template).anchor) / expanded)
             result[output_type] = Path(expanded)
@@ -1156,6 +1147,20 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override)
         if resolved_prompt:
             prompt_path = str(resolved_prompt)
+            try:
+                relative_prompt = resolved_prompt.resolve().relative_to(prompts_root.resolve())
+                prompt_stem = relative_prompt.stem
+                suffix = f"_{language}"
+                if prompt_stem.lower().endswith(suffix.lower()):
+                    prompt_stem = prompt_stem[:-len(suffix)]
+                discovered_basename = (
+                    relative_prompt.parent / prompt_stem
+                ).as_posix()
+                construct_paths_basename = _relative_basename_for_context(
+                    discovered_basename, resolved_context_name
+                )
+            except ValueError:
+                pass
         else:
             # File doesn't exist yet (new module being created) — construct expected path
             # Respect .pddrc context's prompts_dir prefix so new modules land in the
@@ -1506,7 +1511,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
             context_name = context_override or resolved_config.get('_matched_context')
-            basename_for_templates = _relative_basename_for_context(basename, context_name)
+            basename_for_templates = construct_paths_basename
             result = _generate_paths_from_templates(
                 basename=basename_for_templates,
                 language=language,
