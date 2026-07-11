@@ -781,6 +781,126 @@ def test_chained_aliases_cannot_hide_terminal_canonical_owner(tmp_path) -> None:
     assert "namespace" in "\n".join(report["errors"])
 
 
+def test_unlisted_canonical_symlink_cannot_hide_terminal_owner(tmp_path) -> None:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    (root / "src").unlink()
+    (root / "middle").symlink_to("canonical", target_is_directory=True)
+    (root / "src").symlink_to("middle", target_is_directory=True)
+    (root / "prompts/helper_python.prompt").write_text("REQ-2: Build helper\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "widget_python.prompt", "filepath": "src/widget.py"},
+                {
+                    "filename": "helper_python.prompt",
+                    "filepath": "canonical/widget.py",
+                },
+            ]
+        )
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [{"alias_path": "src", "canonical_path": "middle"}],
+            }
+        )
+    )
+    ownership = json.loads((root / ".pdd/sync-ownership.json").read_text())
+    ownership["rules"].append(
+        {
+            "pattern": "middle",
+            "inventory": "HUMAN_OWNED",
+            "role": "compatibility-link",
+            "owner": "platform@example.com",
+        }
+    )
+    (root / ".pdd/sync-ownership.json").write_text(json.dumps(ownership))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "unlisted terminal alias owner")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=commit,
+            head_ref=commit,
+            replay_ledger_path=tmp_path / "external-trust/unlisted-terminal.json",
+        ),
+    )
+
+    assert report["counts"]["invalid"] > 0
+    errors = "\n".join(report["errors"])
+    assert "unapproved" in errors and "middle" in errors
+
+
+def _alias_collision_repository(tmp_path: Path, *, different_unit: bool) -> tuple[Path, str]:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    prompt = "widget_python.prompt"
+    if different_unit:
+        prompt = "helper_python.prompt"
+        (root / "prompts" / prompt).write_text("REQ-2: Build helper\n")
+    architecture = json.loads((root / "architecture.json").read_text())
+    architecture.append({"filename": prompt, "filepath": "canonical/widget.py"})
+    (root / "architecture.json").write_text(json.dumps(architecture))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "alias ownership collision")
+    return root, _git(root, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("different_unit", [False, True])
+def test_baseline_rejects_invalid_alias_manifest_before_writes(
+    tmp_path, monkeypatch, different_unit
+) -> None:
+    root, _commit = _alias_collision_repository(
+        tmp_path, different_unit=different_unit
+    )
+    monkeypatch.chdir(root)
+    with patch("pdd.commands.sync_core.TransactionManager.prepare") as prepare:
+        result = CliRunner().invoke(
+            baseline_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--reviewed-by",
+                "reviewer@example.com",
+                "--reason",
+                "collision probe",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "manifest is invalid" in result.output
+    prepare.assert_not_called()
+    assert not (root / ".pdd/meta/v2").exists()
+
+
+@pytest.mark.parametrize("different_unit", [False, True])
+def test_finalizer_rejects_invalid_alias_manifest_before_validation_or_writes(
+    tmp_path, different_unit
+) -> None:
+    root, commit = _alias_collision_repository(
+        tmp_path, different_unit=different_unit
+    )
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile, patch(
+        "pdd.sync_core.finalize.TransactionManager.prepare"
+    ) as prepare:
+        with pytest.raises(ValueError, match="manifest is invalid"):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=commit,
+                head_ref=commit,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / "external-trust/invalid-manifest.json",
+            )
+
+    run_profile.assert_not_called()
+    prepare.assert_not_called()
+    assert not (root / ".pdd/meta/v2").exists()
+    assert not (root / ".pdd/evidence/v2").exists()
+
+
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"

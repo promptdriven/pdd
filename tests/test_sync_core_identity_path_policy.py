@@ -113,6 +113,27 @@ def test_path_policy_accepts_unchanged_tracked_alias(repository) -> None:
     assert resolved.alias_relpath == PurePosixPath("alias")
 
 
+def test_path_policy_rejects_unapproved_symlink_below_approved_target(tmp_path) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    (tmp_path / "middle").symlink_to("canonical", target_is_directory=True)
+    (tmp_path / "alias").symlink_to("middle", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "tracked outer alias")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("middle")},
+        base_ref=commit,
+        head_ref=commit,
+    )
+
+    with pytest.raises(PathPolicyError, match="unapproved managed symlink: middle"):
+        policy.resolve(PurePosixPath("alias/widget.py"))
+
+
 def _git(root, *args: str) -> str:
     return subprocess.run(
         ["git", *args],
