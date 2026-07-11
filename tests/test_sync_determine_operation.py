@@ -3417,6 +3417,8 @@ def test_get_pdd_file_paths_nested_directories_match_case_insensitively(
         ("foo", "py\nthon"),
         ("foo\u202ebar", "python"),
         ("foo", "py\u2066thon"),
+        ("foo\u2028bar", "python"),
+        ("foo", "py\u2029thon"),
     ],
 )
 def test_get_pdd_file_paths_rejects_noncanonical_or_control_input(
@@ -3508,7 +3510,11 @@ def test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging(
 
 @pytest.mark.parametrize(
     "basename",
-    ["foo:bar", "CON", "NUL", "COM1", "LPT9.txt", "dir/PRN.py", "AUX"],
+    [
+        "foo:bar", "foo?bar", "foo*bar", "foo|bar", 'foo"bar',
+        "foo<bar", "foo>bar", "CON", "NUL", "COM1", "LPT9.txt",
+        "dir/PRN.py", "AUX",
+    ],
 )
 def test_get_pdd_file_paths_rejects_windows_device_or_ads_basename(
     tmp_path,
@@ -3542,6 +3548,26 @@ def test_directory_index_case_collision_fallback_is_deterministic(tmp_path):
     )
 
     assert found == upper
+
+
+@pytest.mark.parametrize(
+    "architecture_filepath",
+    [
+        "CON.py",
+        "src/NUL.txt",
+        "src/foo:bar.py",
+        "src/foo?.py",
+        "src/foo|bar.py",
+        "src/foo\u202ebar.py",
+        "src/foo\u2028bar.py",
+    ],
+)
+def test_contained_architecture_code_path_rejects_nonportable_components(
+    tmp_path,
+    architecture_filepath,
+):
+    """Architecture outputs obey the same portable component rules as prompts."""
+    assert _contained_architecture_code_path(tmp_path, architecture_filepath) is None
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):

@@ -426,6 +426,32 @@ def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
     return fallback_match
 
 
+def _contains_disallowed_path_text(value: str) -> bool:
+    """Return whether text contains controls or Unicode line/format separators."""
+    return any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+        for char in value
+    )
+
+
+def _unsafe_portable_path_component(part: str) -> bool:
+    """Return whether one POSIX component is invalid or special on Windows."""
+    windows_identity = part.rstrip(" .").split(".", 1)[0].upper()
+    reserved_windows_names = {
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$",
+    }
+    return (
+        any(char in '<>:"\\|?*' for char in part)
+        or part.endswith((" ", "."))
+        or windows_identity in reserved_windows_names
+        or (
+            len(windows_identity) == 4
+            and windows_identity[:3] in {"COM", "LPT"}
+            and windows_identity[3] in "123456789"
+        )
+    )
+
+
 def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
     """Return one safe repository-relative architecture filename.
 
@@ -437,10 +463,7 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
         return None
     if value != value.strip():
         return None
-    if any(
-        unicodedata.category(char) in {"Cc", "Cf", "Cs"}
-        for char in value
-    ):
+    if _contains_disallowed_path_text(value):
         return None
     raw = value
     if not raw or "\\" in raw:
@@ -458,20 +481,8 @@ def _safe_architecture_prompt_filename(value: Any) -> Optional[PurePosixPath]:
         or ".." in filename.parts
     ):
         return None
-    reserved_windows_names = {"CON", "PRN", "AUX", "NUL"}
-    for part in filename.parts:
-        windows_identity = part.rstrip(" .").split(".", 1)[0].upper()
-        if (
-            ":" in part
-            or part.endswith((" ", "."))
-            or windows_identity in reserved_windows_names
-            or (
-                len(windows_identity) == 4
-                and windows_identity[:3] in {"COM", "LPT"}
-                and windows_identity[3] in "123456789"
-            )
-        ):
-            return None
+    if any(_unsafe_portable_path_component(part) for part in filename.parts):
+        return None
     return filename
 
 
@@ -1749,8 +1760,10 @@ def _contained_architecture_code_path(
     if not isinstance(architecture_filepath, str):
         return None
 
-    raw = architecture_filepath.strip()
-    if not raw or "\\" in raw:
+    if architecture_filepath != architecture_filepath.strip():
+        return None
+    raw = architecture_filepath
+    if not raw or _contains_disallowed_path_text(raw):
         return None
     # Drive-qualified output metadata (e.g. "D:/x.py", "D:x.py") is POSIX-relative
     # but escapes the project root when joined on Windows. Reject it so callers fall
@@ -1760,7 +1773,16 @@ def _contained_architecture_code_path(
 
     try:
         relative = PurePosixPath(raw)
-        if relative.is_absolute() or ".." in relative.parts:
+        if (
+            not relative.parts
+            or relative.as_posix() != raw
+            or relative.is_absolute()
+            or ".." in relative.parts
+            or any(
+                _unsafe_portable_path_component(part)
+                for part in relative.parts
+            )
+        ):
             return None
 
         resolved_root = project_root.resolve(strict=False)
@@ -2248,10 +2270,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             not isinstance(prompts_dir, str)
             or not prompts_dir
             or prompts_dir != prompts_dir.strip()
-            or any(
-                unicodedata.category(char) in {"Cc", "Cf", "Cs"}
-                for char in prompts_dir
-            )
+            or _contains_disallowed_path_text(prompts_dir)
         ):
             raise UnsafePromptPathError(Path(str(prompts_dir)), Path.cwd())
         prompts_root = _resolve_prompts_root(prompts_dir)
