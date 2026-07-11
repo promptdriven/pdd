@@ -411,19 +411,27 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
 
 
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
-    """Find a filename by scanning a directory instead of joining an input leaf."""
+    """Find a filename by scanning a directory instead of joining an input leaf.
+
+    An exact-cased match wins. Otherwise the case-insensitive fallback is chosen by
+    a stable ``(name, path)`` sort so a case-fold collision on a case-sensitive
+    filesystem (e.g. ``Foo_example.py`` beside ``FOO_example.py``) resolves the same
+    way regardless of directory iteration order.
+    """
     if not parent.is_dir():
         return None
     target_lower = filename.lower()
-    fallback_match = None
+    fallback_matches: List[Path] = []
     for child in parent.iterdir():
         if not child.is_file():
             continue
         if child.name == filename:
             return child
-        if fallback_match is None and child.name.lower() == target_lower:
-            fallback_match = child
-    return fallback_match
+        if child.name.lower() == target_lower:
+            fallback_matches.append(child)
+    if not fallback_matches:
+        return None
+    return sorted(fallback_matches, key=lambda p: (p.name, str(p)))[0]
 
 
 def _contains_disallowed_path_text(value: str) -> bool:

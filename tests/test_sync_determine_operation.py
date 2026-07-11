@@ -2294,6 +2294,26 @@ def test_get_pdd_file_paths_no_torn_pair_on_concurrent_architecture_rewrite(tmp_
     assert not paths["code"].as_posix().endswith("credits_v2.py")
 
 
+def test_find_named_file_case_collision_is_deterministic(tmp_path):
+    """A case-fold collision for an artifact lookup resolves to a stable pick,
+    independent of directory iteration order (matching the resolver's determinism
+    guarantee elsewhere), instead of the first `iterdir()` entry.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    a = tmp_path / "Foo_example.py"
+    b = tmp_path / "FOO_example.py"
+    a.write_text("", encoding="utf-8")
+    b.write_text("", encoding="utf-8")
+    if a.samefile(b):
+        pytest.skip("filesystem is case-insensitive")
+
+    # Exact-cased target is absent; both files match case-insensitively. The stable
+    # (name, path) sort picks 'FOO_example.py' ('F'..'O' sort before 'oo').
+    found = sync_determine_module._find_named_file(tmp_path, "foo_example.py")
+    assert found is not None and found.name == "FOO_example.py"
+
+
 def _write_two_context_pddrc(root):
     (root / ".pdd" / "meta").mkdir(parents=True)
     (root / ".pdd" / "locks").mkdir(parents=True)
