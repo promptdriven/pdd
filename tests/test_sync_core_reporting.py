@@ -676,6 +676,28 @@ def test_trusted_finalizer_commits_artifact_through_protected_alias(tmp_path) ->
     assert (root / "canonical/widget.py").read_text() == "value = 1\n"
 
 
+def test_approved_alias_target_does_not_blanket_account_candidate_files(
+    tmp_path,
+) -> None:
+    root, commit = _repository(tmp_path, approved_alias=True)
+    (root / "canonical/rogue.py").write_text("candidate = 'unowned'\n")
+    _git(root, "add", "canonical/rogue.py")
+    _git(root, "commit", "-q", "-m", "candidate adds unowned alias-target file")
+    head = _git(root, "rev-parse", "HEAD")
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=commit,
+            head_ref=head,
+            replay_ledger_path=tmp_path / "external-trust/rogue-alias-target.json",
+        ),
+    )
+
+    assert report["counts"]["invalid"] > 0
+    assert "canonical/rogue.py" in "\n".join(report["errors"])
+
+
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"

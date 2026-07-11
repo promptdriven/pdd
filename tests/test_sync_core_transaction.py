@@ -2,10 +2,13 @@
 
 import json
 import os
+import subprocess
 from pathlib import PurePosixPath
 
+from click.testing import CliRunner
 import pytest
 
+from pdd.cli import cli
 from pdd.sync_core import (
     PlannedWrite,
     TransactionConflict,
@@ -13,6 +16,12 @@ from pdd.sync_core import (
     TransactionManager,
     TransactionPhase,
 )
+
+
+def _git(root, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
 
 
 def _writes():
@@ -446,3 +455,46 @@ def test_recovery_requires_protected_alias_authority_not_only_journal(tmp_path) 
     with pytest.raises(TransactionConflict, match="alias policy"):
         TransactionManager(tmp_path).recover("tx-recovery-authority")
     assert target.read_text() == "value = 1\n"
+
+
+def test_public_recover_loads_committed_protected_alias_policy(
+    tmp_path, monkeypatch
+) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "recover@example.com")
+    _git(tmp_path, "config", "user.name", "Recover Test")
+    (tmp_path / ".pdd").mkdir()
+    (tmp_path / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [{"alias_path": "alias", "canonical_path": "canonical"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "canonical").mkdir()
+    target = tmp_path / "canonical/widget.py"
+    target.write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".pdd/sync-aliases.json", "canonical/widget.py", "alias")
+    _git(tmp_path, "commit", "-q", "-m", "protected alias policy")
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare(
+        "tx-cli-recovery",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),),
+    )
+    with pytest.raises(SystemExit):
+        manager.commit(
+            "tx-cli-recovery",
+            crash_hook=lambda event: (_ for _ in ()).throw(SystemExit())
+            if event == "after_committing"
+            else None,
+        )
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["recover", "--transaction", "tx-cli-recovery"])
+
+    assert result.exit_code == 0, result.output
+    assert '"phase": "COMMITTED"' in result.output
+    assert target.read_text() == "value = 2\n"
