@@ -168,6 +168,25 @@ def _protected_command(value: str | None, option: str, cwd: Path) -> tuple[str, 
     return command
 
 
+def _protected_playwright_command(
+    value: str | None, cwd: Path
+) -> tuple[str, ...] | None:
+    """Parse the fixed executable-plus-entrypoint Playwright descriptor."""
+    command = _protected_command(value, "--playwright-command", cwd)
+    if command is None:
+        return None
+    if len(command) != 2 or not Path(command[1]).expanduser().is_absolute():
+        raise click.ClickException(
+            "--playwright-command must contain exactly an absolute executable "
+            "and absolute external CLI entrypoint"
+        )
+    if any(part.startswith("-") for part in command[1:]):
+        raise click.ClickException(
+            "--playwright-command must not contain interpreter options"
+        )
+    return command
+
+
 def _runner_config_from_options(
     options: dict[str, object], cwd: Path
 ) -> RunnerConfig:
@@ -186,9 +205,8 @@ def _runner_config_from_options(
             "--vitest-command",
             cwd,
         ),
-        playwright_command=_protected_command(
+        playwright_command=_protected_playwright_command(
             playwright_command if isinstance(playwright_command, str) else None,
-            "--playwright-command",
             cwd,
         ),
     )

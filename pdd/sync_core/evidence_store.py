@@ -117,6 +117,10 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "tool_version"),
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
+            tuple(binding_data["playwright_command"])
+            if isinstance(binding_data.get("playwright_command"), list)
+            and all(isinstance(item, str) for item in binding_data["playwright_command"])
+            else None,
         )
         results = tuple(
             ObligationEvidence(

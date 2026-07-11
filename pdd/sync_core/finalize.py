@@ -184,10 +184,18 @@ def _reusable_result(
         snapshot.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(profile, root=root, ref=head_sha),
+        runner_identity_digest(
+            profile,
+            root=root,
+            ref=head_sha,
+            config=RunnerConfig(
+                playwright_command=envelope.binding.playwright_command
+            ),
+        ),
         TRUSTED_RUNNER_VERSION,
         base_sha,
         envelope.binding.checked_sha,
+        envelope.binding.playwright_command,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(

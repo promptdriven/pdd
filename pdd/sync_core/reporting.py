@@ -19,7 +19,7 @@ from .fingerprint_store import CorruptFingerprintError, FingerprintStore
 from .git_io import resolve_git_commit
 from .manifest import ManifestUnit, UnitManifest, build_unit_manifest
 from .snapshot import SnapshotError, build_unit_snapshot
-from .runner import TRUSTED_RUNNER_VERSION, runner_identity_digest
+from .runner import RunnerConfig, TRUSTED_RUNNER_VERSION, runner_identity_digest
 from .transaction import TransactionError, TransactionManager
 from .trust import AttestationError, ValidationEvidence
 from .types import (
@@ -165,7 +165,10 @@ def _evidence(
         profile is None
         or binding.runner_digest
         != runner_identity_digest(
-            profile, root=context.root, ref=context.manifest.head_ref
+            profile,
+            root=context.root,
+            ref=context.manifest.head_ref,
+            config=RunnerConfig(playwright_command=binding.playwright_command),
         )
         or binding.tool_version != TRUSTED_RUNNER_VERSION
     ):

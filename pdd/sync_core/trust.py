@@ -166,6 +166,7 @@ def _parse_timestamp(value: str) -> datetime:
 
 
 @dataclass(frozen=True)
+# pylint: disable=too-many-instance-attributes
 class AttestationBinding:
     """Complete subject, input, runner, and Git closure for an attestation."""
 
@@ -176,6 +177,7 @@ class AttestationBinding:
     tool_version: str
     base_sha: str
     checked_sha: str
+    playwright_command: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,10 @@ class AttestationEnvelope:
                 "nonce": self.validity.nonce,
             },
         }
+        if self.binding.playwright_command is not None:
+            data["binding"]["playwright_command"] = list(
+                self.binding.playwright_command
+            )
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
 

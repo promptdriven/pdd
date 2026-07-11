@@ -795,11 +795,22 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
 
 
 def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePosixPath]:
+    # pylint: disable=too-many-branches
     """Reject dynamic controls and return literal local config imports."""
     try:
         text = source.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("Playwright configuration must be UTF-8") from exc
+    # Playwright config is executable code.  Only accept the deliberately small,
+    # directly inspectable object-literal subset; syntactic indirection makes a
+    # security decision based on token matching unsound.
+    if re.search(r"/\*|//|\.\.\.|\[[^\]]+\]\s*:", text):
+        raise ValueError("Playwright configuration must use direct declarative keys")
+    if re.search(
+        r"\b(?:storageState|projects|dependencies|snapshotPathTemplate|executablePath)\b",
+        text,
+    ):
+        raise ValueError("Playwright configuration references unsupported runtime resources")
     if re.search(r"\b(process|require|import\s*\(|await|function|=>|\beval\b)\b", text):
         raise ValueError("dynamic Playwright configuration is not supported")
     sensitive_execution_keys = (
@@ -845,6 +856,7 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
 def _playwright_support_closure(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    # pylint: disable=too-many-locals
     """Bind config, local support, and test imports without executing them."""
     config_path, config_source = _playwright_config(root, ref)
     paths = {config_path}
@@ -871,6 +883,26 @@ def _playwright_support_closure(
                 text = source.decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ValueError(f"Playwright source is not UTF-8: {path.as_posix()}") from exc
+            if re.search(r"\bimport\s*\(\s*(?!['\"])", text) or re.search(
+                r"\b(?:const|let|var)\s+\w+\s*=\s*require\b", text
+            ):
+                raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            if re.search(
+                r"(?:from\s+|import\s*\(|require\s*\()\s*['\"](?:node:)?fs(?:/[^'\"]*)?['\"]",
+                text,
+            ):
+                raise ValueError("Playwright runtime file access is not bound by this adapter")
+            if "toHaveScreenshot" in text:
+                snapshot_prefix = PurePosixPath(f"{path.as_posix()}-snapshots")
+                listed = subprocess.run(
+                    ["git", "ls-tree", "-r", "--name-only", ref, "--", snapshot_prefix.as_posix()],
+                    cwd=root, capture_output=True, text=True, check=True,
+                )
+                for name in listed.stdout.splitlines():
+                    snapshot_path = PurePosixPath(name)
+                    snapshot = read_git_blob(root, ref, snapshot_path)
+                    if snapshot is not None:
+                        paths.add(snapshot_path)
             if re.search(r"\b(?:test|describe)\.(?:only|skip|fixme|slow)\s*\(", text):
                 raise ValueError("Playwright focused, skipped, fixme, or slow tests are ambiguous")
     return tuple(
@@ -1092,12 +1124,22 @@ def _directory_identity(path: Path) -> str:
     if not path.is_dir():
         digest.update(str(path).encode() + b"\0<missing>")
         return digest.hexdigest()
-    for item in sorted(child for child in path.rglob("*") if child.is_file()):
+    for item in sorted(path.rglob("*")):
+        relative = item.relative_to(path).as_posix().encode()
+        if item.is_symlink():
+            try:
+                target = os.readlink(item).encode()
+            except OSError:
+                target = b"<unreadable>"
+            digest.update(relative + b"\0<symlink>\0" + target + b"\0")
+            continue
+        if not item.is_file():
+            continue
         try:
             data = item.read_bytes()
         except OSError:
             data = b"<unreadable>"
-        digest.update(item.relative_to(path).as_posix().encode() + b"\0" + data + b"\0")
+        digest.update(relative + b"\0" + data + b"\0")
     return digest.hexdigest()
 
 
@@ -1601,6 +1643,20 @@ def _playwright_command(config: RunnerConfig) -> tuple[str, ...] | None:
     return None
 
 
+def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Enforce the exact protected Playwright launcher grammar."""
+    error = _protected_command_error(root, command)
+    if error is not None:
+        return error
+    if len(command) != 2:
+        return "Playwright command must be exactly an executable and CLI entrypoint"
+    if any(part.startswith("-") for part in command[1:]):
+        return "Playwright command options are not trusted in the protected prefix"
+    if not Path(command[1]).expanduser().is_absolute():
+        return "Playwright CLI entrypoint must be an absolute external path"
+    return None
+
+
 def _playwright_candidate_toolchain(root: Path) -> bool:
     """Return whether candidate checkout infrastructure would affect Playwright."""
     node_modules = root / "node_modules"
@@ -1614,15 +1670,11 @@ def _playwright_environment(
     home: Path, node_modules: Path | None
 ) -> dict[str, str]:
     """Return an isolated credential-free environment for Playwright."""
-    environment = {
-        key: value for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
-        and not key.startswith(("PLAYWRIGHT_", "NODE_", "npm_config_", "NPM_CONFIG_"))
-        and key not in {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}
-    } | {
-        "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
-        "XDG_CACHE_HOME": str(home / "cache"), "NODE_ENV": "test",
-    }
+    environment = untrusted_child_environment(
+        home=home,
+        extra={"NODE_ENV": "test"},
+        drop={"NODE_PATH", "PLAYWRIGHT_BROWSERS_PATH"},
+    )
     if node_modules is not None and node_modules.is_dir():
         environment["NODE_PATH"] = str(node_modules)
         local_browsers = node_modules / "playwright-core" / ".local-browsers"
@@ -1638,6 +1690,8 @@ def _playwright_result(
     """Normalize JSON reporter output to project, file, title-path identities."""
     try:
         payload = json.loads(output)
+        if not isinstance(payload, dict):
+            raise ValueError("malformed Playwright reporter payload")
         tests = payload.get("tests")
         if tests is None:
             tests = []
@@ -1646,7 +1700,10 @@ def _playwright_result(
                     raise ValueError("malformed Playwright suite")
                 title = suite.get("title", "")
                 next_parents = parents + ((title,) if isinstance(title, str) and title else ())
-                for spec in suite.get("specs", []):
+                specs = suite.get("specs", [])
+                if not isinstance(specs, list):
+                    raise ValueError("malformed Playwright specs")
+                for spec in specs:
                     if not isinstance(spec, dict):
                         raise ValueError("malformed Playwright spec")
                     spec_file = Path(spec["file"])
@@ -1654,8 +1711,16 @@ def _playwright_result(
                         spec_file = Path(os.path.abspath(root / spec_file))
                     filename = spec_file.resolve().relative_to(root.resolve()).as_posix()
                     title_path = " > ".join(next_parents + (spec["title"],))
-                    for item in spec.get("tests", []):
-                        result = (item.get("results") or [{}])[-1]
+                    spec_tests = spec.get("tests", [])
+                    if not isinstance(spec_tests, list):
+                        raise ValueError("malformed Playwright tests")
+                    for item in spec_tests:
+                        if not isinstance(item, dict):
+                            raise ValueError("malformed Playwright test")
+                        results = item.get("results") or [{}]
+                        if not isinstance(results, list) or not results or not isinstance(results[-1], dict):
+                            raise ValueError("malformed Playwright results")
+                        result = results[-1]
                         tests.append({
                             "identity": f"{item['projectName']}::{filename}::{title_path}",
                             "status": result.get("status", "passed" if collection else "skipped"),
@@ -1706,7 +1771,7 @@ def _run_playwright(
     prefix = _playwright_command(config)
     if prefix is None:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
-    command_error = _protected_command_error(root, prefix)
+    command_error = _playwright_command_error(root, prefix)
     if command_error is not None:
         return RunnerExecution(
             "playwright", EvidenceOutcome.ERROR, "playwright-untrusted", command_error
@@ -2508,6 +2573,7 @@ def run_profile(
         TRUSTED_RUNNER_VERSION,
         binding.base_sha,
         binding.head_sha,
+        config.playwright_command,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions
