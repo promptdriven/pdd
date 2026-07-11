@@ -217,6 +217,16 @@ def certify(
                             if "PDD_CANDIDATE_WHEEL" in os.environ
                             else None
                         ),
+                        candidate_wheelhouse=(
+                            Path(os.environ["PDD_CANDIDATE_WHEELHOUSE"])
+                            if "PDD_CANDIDATE_WHEELHOUSE" in os.environ
+                            else None
+                        ),
+                        candidate_runtime_lock=(
+                            Path(os.environ["PDD_CANDIDATE_RUNTIME_LOCK"])
+                            if "PDD_CANDIDATE_RUNTIME_LOCK" in os.environ
+                            else None
+                        ),
                         cloud_root=targets[1].path,
                         cloud_base_ref=targets[1].base_ref,
                         cloud_head_ref=targets[1].head_ref,
