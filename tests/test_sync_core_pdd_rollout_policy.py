@@ -29,6 +29,20 @@ FOUNDATION_PROFILE_PATHS = {
     "tests/test_sync_core_descriptor_store.py",
 }
 REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
+FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
+FOUNDATION_OBLIGATIONS = {
+    "pytest-descriptor-store": {
+        "tests": (
+            "tests/test_sync_core_candidate_artifact_provenance.py",
+            "tests/test_sync_core_trust.py",
+        ),
+        "code": ("pdd/sync_core/descriptor_store.py",),
+    },
+    "pytest-supervisor": {
+        "tests": ("tests/test_sync_core_lifecycle_scenarios.py",),
+        "code": ("pdd/sync_core/supervisor.py",),
+    },
+}
 
 
 def _git(root: Path, *args: str) -> None:
@@ -104,6 +118,25 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     } == identities
     assert len(manifest.expected_managed) == EXPECTED_MANAGED_UNITS
 
+    foundation_paths = {
+        PurePosixPath(path)
+        for obligation in FOUNDATION_OBLIGATIONS.values()
+        for path in obligation["code"]
+    }
+    foundation_candidates = {
+        item.candidate_id.artifact_relpath: item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath in foundation_paths
+    }
+    assert set(foundation_candidates) == foundation_paths
+    assert all(
+        item.inventory.value == "HUMAN_OWNED"
+        and item.candidate_id.role == "human-maintained"
+        and item.ownership_provenance
+        == f"protected-ownership:pdd-maintainers:{path.as_posix()}"
+        for path, item in foundation_candidates.items()
+    )
+
     managed_prompt_paths = {
         unit.unit_id.prompt_relpath.as_posix() for unit in manifest.managed_units
     }
@@ -139,8 +172,13 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         prompt_path = PurePosixPath(row["prompt_path"])
         requirements = _requirements(prompt_path)
         assert row["required_requirement_ids"] == requirements
-        assert len(row["obligations"]) == 1
-        obligation = row["obligations"][0]
+        human_obligations = [
+            item
+            for item in row["obligations"]
+            if item["validator_id"] == "threshold-ed25519"
+        ]
+        assert len(human_obligations) == 1
+        obligation = human_obligations[0]
         assert obligation["obligation_id"] == "threshold-human-attestation"
         assert obligation["kind"] == "human-attestation"
         assert obligation["validator_id"] == "threshold-ed25519"
@@ -170,7 +208,28 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         assert obligation.validator_config_digest == pytest_validator_config_digest(
             ROOT, "HEAD", obligation.artifact_paths
         )
-    assert pytest_obligations == []
+    foundation_profile = next(
+        profile
+        for profile in profiles.profiles
+        if profile.unit_id.prompt_relpath.as_posix() == FOUNDATION_PROFILE
+    )
+    foundation_pytest = {
+        obligation.obligation_id: obligation
+        for obligation in foundation_profile.obligations
+        if obligation.validator_id == "pytest"
+    }
+    assert set(foundation_pytest) == set(FOUNDATION_OBLIGATIONS)
+    for obligation_id, expected_obligation in FOUNDATION_OBLIGATIONS.items():
+        obligation = foundation_pytest[obligation_id]
+        assert obligation.kind == "test"
+        assert obligation.required is True
+        assert obligation.requirement_ids == foundation_profile.required_requirement_ids
+        assert tuple(path.as_posix() for path in obligation.artifact_paths) == (
+            expected_obligation["tests"]
+        )
+        assert tuple(path.as_posix() for path in obligation.code_under_test_paths) == (
+            expected_obligation["code"]
+        )
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:

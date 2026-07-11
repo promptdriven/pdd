@@ -114,6 +114,32 @@ def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
     assert any("changed protected obligation" in item for item in profiles.invalid_reasons)
 
 
+def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
+    root = _repository(tmp_path)
+    first = _profile()
+    first["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "pdd/sync_core/descriptor_store.py"
+    ]
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile_path.write_text(json.dumps(first))
+    first_commit = _commit(root, "first protected code assignment")
+    first_digest = load_verification_profiles(
+        root, _manifest(root, first_commit, first_commit)
+    ).profiles[0].profile_digest
+
+    second = _profile()
+    second["profiles"][0]["obligations"][0]["code_under_test_paths"] = [
+        "pdd/sync_core/supervisor.py"
+    ]
+    profile_path.write_text(json.dumps(second))
+    second_commit = _commit(root, "second protected code assignment")
+    second_digest = load_verification_profiles(
+        root, _manifest(root, second_commit, second_commit)
+    ).profiles[0].profile_digest
+
+    assert first_digest != second_digest
+
+
 def test_new_requirement_without_mapping_is_incomplete(tmp_path) -> None:
     root = _repository(tmp_path)
     profile_path = root / ".pdd/verification-profiles.json"
