@@ -11,7 +11,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Set, NamedTuple
+from typing import List, Tuple, Dict, Any, Optional, Sequence, Set, NamedTuple
 
 from rich.console import Console
 
@@ -47,6 +47,11 @@ from .ci_validation import (
     run_ci_validation_loop,
 )
 from .pre_checkup_gate import run_pre_checkup_gate
+from .mock_contract_validation import (
+    MockContractReport,
+    format_mock_contract_report,
+    validate_changed_files,
+)
 
 # Constants
 STEP_NAMES = {
@@ -981,6 +986,20 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 )
 
     return all_passed, "\n".join(all_outputs)
+
+
+def _validate_changed_mock_contracts(
+    *,
+    cwd: Path,
+    changed_files: Sequence[str],
+    baseline_ref: Optional[str],
+) -> MockContractReport:
+    """Run the deterministic schema/mock gate over workflow-owned changes."""
+    return validate_changed_files(
+        project_root=cwd,
+        changed_files=changed_files,
+        baseline_ref=baseline_ref,
+    )
 
 
 def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identified_units_str: str) -> Dict[str, Any]:
@@ -1920,6 +1939,26 @@ def _run_step11_code_cleanup(
         verified, verify_output = _verify_tests_independently(test_files, cwd)
         if _fallback_scan_was_capped and verified:
             verified = False
+        if verified:
+            cleanup_candidate_files = _detect_changed_files(cwd, initial_file_hashes)
+            cleanup_contract_report = _validate_changed_mock_contracts(
+                cwd=cwd,
+                changed_files=cleanup_candidate_files,
+                baseline_ref=initial_sha,
+            )
+            if cleanup_contract_report.diverged:
+                verified = False
+                verify_output = format_mock_contract_report(cleanup_contract_report)
+                if not quiet:
+                    console.print(
+                        "[yellow]Step 11: Mock-contract validation failed after "
+                        "cleanup; reverting cleanup changes.[/yellow]"
+                    )
+            elif cleanup_contract_report.status == "inconclusive" and not quiet:
+                console.print(
+                    "[yellow]Step 11: "
+                    f"{format_mock_contract_report(cleanup_contract_report)}[/yellow]"
+                )
         if verified:
             # Commit cleanup as a separate commit
             cleanup_changed = _detect_changed_files(cwd, initial_file_hashes)
@@ -3328,6 +3367,25 @@ def run_agentic_e2e_fix_orchestrator(
             actual_changed_files = _detect_changed_files(cwd, initial_file_hashes)
             if actual_changed_files:
                 changed_files = actual_changed_files
+
+            # Independent test execution cannot detect a mock that fabricates
+            # the same nonexistent field the production fix now queries.  Gate
+            # the terminal success on repository schema/sibling evidence before
+            # committing or pushing anything.  This applies to every success
+            # route (normal Step 9, retries, cached resume, and early exits).
+            mock_contract_report = _validate_changed_mock_contracts(
+                cwd=cwd,
+                changed_files=changed_files,
+                baseline_ref=initial_sha,
+            )
+            if mock_contract_report.diverged:
+                final_message = format_mock_contract_report(mock_contract_report)
+                console.print(f"\n[bold red]{final_message}[/bold red]")
+                return False, final_message, total_cost, model_used, changed_files
+            if mock_contract_report.status == "inconclusive":
+                contract_warning = format_mock_contract_report(mock_contract_report)
+                console.print(f"\n[bold yellow]{contract_warning}[/bold yellow]")
+                final_message = f"{final_message} {contract_warning}".strip()
 
             console.print("\n[bold green]E2E fix complete[/bold green]")
             console.print(f"   Total cost: ${total_cost:.4f}")
