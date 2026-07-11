@@ -9,7 +9,6 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
-from itertools import combinations, islice
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -18,6 +17,7 @@ from .operation_log import (
 )
 from .sync_determine_operation import (
     Fingerprint,
+    _architecture_artifact_paths,
     _expand_output_templates,
     _module_filepath_matches_basename,
     _relative_basename_for_context,
@@ -34,6 +34,7 @@ from .construct_paths import _load_pddrc_config
 MAX_PROMPT_DISCOVERY_FILES = 10000
 MAX_PROMPT_DISCOVERY_ENTRIES = 50000
 MAX_PROMPT_DISCOVERY_ROOTS = 100
+MAX_CONFIG_CONTEXTS = 1000
 MAX_METADATA_INFERENCE_CANDIDATES = 32
 MAX_REPAIR_DISCOVERY_ENTRIES = 50000
 SKIPPED_DISCOVERY_DIRS = {
@@ -69,6 +70,7 @@ class SyncUnit:
     prompts_dir: Path
     context_name: str | None = None
     pddrc_path: Path | None = None
+    config: Dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -326,7 +328,8 @@ def _bounded_prompt_paths(
 
 
 def _prompt_units(
-    prompt_root: Path, budget: Dict[str, int], identity_roots: List[Path], base: Path
+    prompt_root: Path, budget: Dict[str, int], identity_roots: List[Path], base: Path,
+    config_cache: Dict[Path, Dict[str, Any]],
 ) -> tuple[List[SyncUnit], List[DiscoveryFailure]]:
     units: List[SyncUnit] = []
     failures: List[DiscoveryFailure] = []
@@ -361,7 +364,7 @@ def _prompt_units(
             continue
         try:
             basename, context_name, pddrc_path, owner = _prompt_ownership(
-                prompt_path, stem, owner, base
+                prompt_path, stem, owner, base, config_cache
             )
         except (OSError, RuntimeError, ValueError) as exc:
             failures.append(
@@ -381,6 +384,7 @@ def _prompt_units(
                 prompts_dir=owner,
                 context_name=context_name,
                 pddrc_path=pddrc_path,
+                config=config_cache.get(pddrc_path) if pddrc_path else None,
             )
         )
     return units, failures
@@ -419,6 +423,7 @@ def _prompt_ownership(
     stem: str,
     fallback_root: Path,
     base: Path,
+    config_cache: Dict[Path, Dict[str, Any]] | None = None,
 ) -> tuple[str, str | None, Path | None, Path]:
     """Return basename and nearest validated config/context ownership."""
     config_candidates = [
@@ -431,7 +436,12 @@ def _prompt_ownership(
             continue
         if not _safe_control_file(pddrc_path, base):
             raise UnsafeConfigError(f"unsafe nested config: {pddrc_path}")
-        config = _load_pddrc_config(pddrc_path)
+        if config_cache is not None and pddrc_path in config_cache:
+            config = config_cache[pddrc_path]
+        else:
+            config = _load_pddrc_config(pddrc_path)
+            if config_cache is not None:
+                config_cache[pddrc_path] = config
         contexts = _validate_pddrc_structure(config)
         owned: list[tuple[int, str, Path]] = []
         if isinstance(contexts, dict):
@@ -507,6 +517,10 @@ def _validate_pddrc_structure(config: Any) -> Dict[str, Any]:
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):
         raise ValueError(".pddrc contexts must contain a mapping")
+    if len(contexts) > MAX_CONFIG_CONTEXTS:
+        raise ValueError(
+            f".pddrc exceeds context limit of {MAX_CONFIG_CONTEXTS}"
+        )
     for context_name, context in contexts.items():
         if not isinstance(context_name, str) or not isinstance(context, dict):
             raise ValueError(".pddrc context must contain a mapping")
@@ -519,11 +533,15 @@ def _validate_pddrc_structure(config: Any) -> Dict[str, Any]:
     return contexts
 
 
-def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailure]]:
+def _validated_prompt_roots(
+    base: Path, config_cache: Dict[Path, Dict[str, Any]] | None = None
+) -> tuple[List[Path], List[DiscoveryFailure]]:
     roots: List[Path] = []
     failures: List[DiscoveryFailure] = []
     try:
         pddrc_path, config = _project_config(base)
+        if pddrc_path is not None and config_cache is not None:
+            config_cache[pddrc_path] = config
         configured_roots = _configured_prompt_roots(base, pddrc_path, config)
     except UnsafeConfigError as exc:
         return [], [DiscoveryFailure(base / ".pddrc", str(exc), "unsafe_config")]
@@ -739,7 +757,12 @@ def _metadata_identities(
         )
     remaining = max(0, MAX_PROMPT_DISCOVERY_ENTRIES - budget["entries"])
     try:
-        paths = list(islice(meta_root.iterdir(), remaining + 1))
+        paths = []
+        with os.scandir(meta_root) as entries:
+            for entry in entries:
+                paths.append(meta_root / entry.name)
+                if len(paths) > remaining:
+                    break
     except OSError as exc:
         return [], DiscoveryFailure(meta_root, f"metadata traversal failed: {exc}", "metadata_traversal_error")
     exhausted = len(paths) > remaining
@@ -818,7 +841,8 @@ def _discover_units_and_failures(
     """Discover prompt-backed units and discovery failures under ``root``."""
     base = project_root(root)
     wanted = set(modules or [])
-    prompt_roots, failures = _validated_prompt_roots(base)
+    config_cache: Dict[Path, Dict[str, Any]] = {}
+    prompt_roots, failures = _validated_prompt_roots(base, config_cache)
     if any(failure.failure == "invalid_pddrc" for failure in failures):
         return [], failures
     prompt_units: List[SyncUnit] = []
@@ -830,7 +854,9 @@ def _discover_units_and_failures(
     for prompt_root in traversal_roots:
         if not prompt_root.is_dir():
             continue
-        units, unit_failures = _prompt_units(prompt_root, budget, prompt_roots, base)
+        units, unit_failures = _prompt_units(
+            prompt_root, budget, prompt_roots, base, config_cache
+        )
         prompt_units.extend(units)
         failures.extend(unit_failures)
     metadata_identities, metadata_failure = _metadata_identities(
@@ -1012,7 +1038,11 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
             except (OSError, RuntimeError, ValueError):
                 payload[key] = str(value)
         elif isinstance(value, list):
-            payload[key] = [str(item) for item in value]
+            payload[key] = [
+                _relative_or_raw(item, resolved_root)
+                if isinstance(item, Path) else str(item)
+                for item in value
+            ]
         else:
             payload[key] = str(value)
     return payload
@@ -1136,7 +1166,7 @@ def _configured_output_defaults(
         if not _safe_control_file(unit.pddrc_path, base):
             raise UnsafeConfigError(f"unsafe unit config: {unit.pddrc_path}")
         pddrc_path = unit.pddrc_path
-        config = _load_pddrc_config(pddrc_path)
+        config = unit.config if unit.config is not None else _load_pddrc_config(pddrc_path)
     else:
         pddrc_path, config = _project_config(base)
     if pddrc_path is None:
@@ -1152,7 +1182,8 @@ def _configured_output_defaults(
         stem, separator, language = unit.prompt_path.stem.rpartition("_")
         if separator and stem and language:
             _basename, owned_context, owned_config, _root = _prompt_ownership(
-                unit.prompt_path, stem, unit.prompts_dir, base
+                unit.prompt_path, stem, unit.prompts_dir, base,
+                {pddrc_path: config},
             )
             if owned_config == pddrc_path:
                 context_name = owned_context
@@ -1183,15 +1214,29 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
     for value in (code_dir, example_dir, test_dir):
         if not isinstance(value, str):
             raise ValueError("configured output directory must be a string")
+    architecture_paths = None
     if code_path is not None:
-        if code_path.parent == Path(".") and code_dir:
-            code_path = (architecture_root or base) / code_dir / code_path
-        else:
-            code_path = (architecture_root or base) / code_path
+        architecture_paths = _architecture_artifact_paths(
+            architecture_root or base,
+            code_path,
+            code_stem,
+            extension,
+            code_dir,
+            example_dir,
+            test_dir,
+        )
+        code_path = architecture_paths["code"]
     else:
         code_path = base / code_dir / f"{code_stem}{suffix}"
-    example_path = base / example_dir / f"{code_stem}_example{suffix}"
-    test_path = base / test_dir / f"test_{code_stem}{suffix}"
+    artifact_root = architecture_root or base
+    example_path = (
+        architecture_paths["example"] if architecture_paths is not None
+        else artifact_root / example_dir / f"{code_stem}_example{suffix}"
+    )
+    test_path = (
+        architecture_paths["test"] if architecture_paths is not None
+        else artifact_root / test_dir / f"test_{code_stem}{suffix}"
+    )
     outputs = defaults.get("outputs")
     if isinstance(outputs, dict) and outputs:
         generated = _expand_output_templates(
@@ -1236,7 +1281,10 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
         "code": code_path,
         "example": example_path,
         "test": test_path,
-        "test_files": [test_path],
+        "test_files": (
+            architecture_paths["test_files"]
+            if architecture_paths is not None else [test_path]
+        ),
     }
 
 

@@ -1098,6 +1098,34 @@ def _generate_paths_from_templates(
     return result
 
 
+def _architecture_artifact_paths(
+    project_root: Path,
+    architecture_filepath: Path,
+    artifact_stem: str,
+    extension: str,
+    generate_dir: str = "",
+    example_dir: str = "examples/",
+    test_dir: str = "tests/",
+) -> Dict[str, Any]:
+    """Return the complete non-mutating artifact result for one architecture row."""
+    code_path = project_root / architecture_filepath
+    if generate_dir and architecture_filepath.parent == Path("."):
+        code_path = project_root / generate_dir / architecture_filepath.name
+    example_path = project_root / example_dir / f"{artifact_stem}_example{_dot(extension)}"
+    test_path = project_root / test_dir / f"test_{artifact_stem}{_dot(extension)}"
+    matching = (
+        sorted(test_path.parent.glob(f"{glob.escape(test_path.stem)}*.{glob.escape(extension)}"))
+        if test_path.parent.exists()
+        else []
+    )
+    return {
+        "code": code_path,
+        "example": example_path,
+        "test": test_path,
+        "test_files": matching or [test_path],
+    }
+
+
 def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts", context_override: Optional[str] = None) -> Dict[str, Path]:
     """Returns a dictionary mapping file types to their expected Path objects.
 
@@ -1261,17 +1289,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     except ValueError:
                         pass
 
-                # Apply generate_output_path only when arch_filepath is a bare filename
-                # at the project root (no directory component). When arch_filepath already
-                # contains a subdirectory structure, that structure takes precedence.
-                # Preserve the explicit filename (including extension) from architecture.json;
-                # only the parent directory is overridden by .pddrc generate_output_path.
                 arch_filepath_path = Path(arch_filepath)
-                if generate_dir and str(arch_filepath_path.parent) in (".", ""):
-                    code_path = project_root / f"{generate_dir}{arch_filepath_path.name}"
-                    logger.debug(f"Path source: generate={code_path} (from pddrc generate_output_path)")
-                else:
-                    logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
                 # Issue #1677: when the leaf basename is ambiguous (several architecture
                 # modules share it, e.g. Next.js `page`), two path-qualified modules
@@ -1283,8 +1301,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if arch_path and len(_architecture_module_choices(arch_path, name, language)) > 1:
                     example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
 
-                example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"
-                test_path = project_root / f"{test_dir}test_{example_stem}{_dot(extension)}"
+                artifacts = _architecture_artifact_paths(
+                    project_root, arch_filepath_path, example_stem, extension,
+                    generate_dir, example_dir, test_dir,
+                )
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
@@ -1296,10 +1316,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     preferred_example = False
                     preferred_test = False
                     if basename_example_path.exists():
-                        example_path = basename_example_path
+                        artifacts["example"] = basename_example_path
                         preferred_example = True
                     if basename_test_path.exists():
-                        test_path = basename_test_path
+                        artifacts["test"] = basename_test_path
+                        artifacts["test_files"] = [basename_test_path]
                         preferred_test = True
                     if preferred_example or preferred_test:
                         logger.info(
@@ -1311,20 +1332,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                             preferred_test,
                         )
 
-                test_dir_path = test_path.parent
-                test_stem = glob.escape(test_path.stem)
-                if test_dir_path.exists():
-                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
-                else:
-                    matching_test_files = [test_path] if test_path.exists() else []
-
-                result = {
-                    'prompt': Path(prompt_path),
-                    'code': code_path,
-                    'example': example_path,
-                    'test': test_path,
-                    'test_files': matching_test_files or [test_path]
-                }
+                result = {"prompt": Path(prompt_path), **artifacts}
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
                 return result
 
@@ -1765,7 +1773,7 @@ def _safe_report_include(reference: str, prompt_path: Path, root: Path) -> Optio
 
 def _validated_report_live_includes(
     prompt_path: Path, root: Path
-) -> tuple[bool, Optional[List[Path]]]:
+) -> tuple[bool, Optional[List[tuple[str, Path]]]]:
     """Resolve all live legacy includes once, before any dependency is read."""
     from pdd.continuous_sync import canonical_sync_enabled
     from pdd.sync_core.includes import parse_include_references
@@ -1779,12 +1787,12 @@ def _validated_report_live_includes(
     references = parse_include_references(content)
     if not references:
         return False, None
-    resolved: List[Path] = []
+    resolved: List[tuple[str, Path]] = []
     for reference in references:
         dependency = _safe_report_include(reference.path, prompt_path, root)
         if dependency is None:
-            return True, None
-        resolved.append(dependency)
+            return True, []
+        resolved.append((reference.path, dependency))
     return True, resolved
 
 
@@ -1792,7 +1800,7 @@ def extract_include_deps(
     prompt_path: Path,
     dependency_root: Optional[Path] = None,
     *,
-    resolved_live_dependencies: Optional[List[Path]] = None,
+    resolved_live_dependencies: Optional[List[tuple[str, Path]]] = None,
 ) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
@@ -1810,7 +1818,7 @@ def extract_include_deps(
     if not canonical_sync_enabled(prompt_path):
         if resolved_live_dependencies is not None:
             dependencies: Dict[str, str] = {}
-            for dependency in resolved_live_dependencies:
+            for _declared, dependency in resolved_live_dependencies:
                 digest = calculate_sha256(dependency)
                 if digest:
                     key_root = dependency_root or Path.cwd()
@@ -1888,7 +1896,7 @@ def calculate_prompt_hash(
     dependency_root: Optional[Path] = None,
     *,
     hash_version: int = 1,
-    resolved_live_dependencies: Optional[List[Path]] = None,
+    resolved_live_dependencies: Optional[List[tuple[str, Path]]] = None,
 ) -> Optional[str]:
     """Hash a prompt file including the content of all its <include> dependencies.
 
@@ -1916,9 +1924,17 @@ def calculate_prompt_hash(
 
     references = parse_include_references(prompt_content)
     if references and resolved_live_dependencies is not None:
-        resolved_dependencies = list(resolved_live_dependencies)
+        if not resolved_live_dependencies:
+            return None
+        validated_dependencies = list(resolved_live_dependencies)
         if hash_version == 1:
-            resolved_dependencies = sorted(set(resolved_dependencies))
+            by_declaration = dict(validated_dependencies)
+            resolved_dependencies = [
+                by_declaration[declared]
+                for declared in sorted(set(by_declaration))
+            ]
+        else:
+            resolved_dependencies = [path for _declared, path in validated_dependencies]
     else:
         declared_dependencies = (
             [reference.path for reference in references]

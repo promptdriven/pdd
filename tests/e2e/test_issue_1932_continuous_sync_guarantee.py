@@ -340,8 +340,8 @@ def test_issue_1996_object_architecture_uses_context_derived_artifact_paths(
     paths = continuous_sync._resolve_report_paths(unit, pdd_project)
 
     assert paths["code"] == pdd_project / "prompts/frontend/web/src/page.tsx"
-    assert paths["example"] == pdd_project / "web/examples/page_example.tsx"
-    assert paths["test"] == pdd_project / "web/tests/test_page.tsx"
+    assert paths["example"] == pdd_project / "prompts/frontend/web/examples/page_example.tsx"
+    assert paths["test"] == pdd_project / "prompts/frontend/web/tests/test_page.tsx"
 
 
 def test_issue_1996_nested_architecture_anchors_qualified_filepath_at_owner(
@@ -486,18 +486,35 @@ def test_issue_1996_metadata_enumeration_stops_at_remaining_budget(
 ) -> None:
     meta = pdd_project / ".pdd/meta"
     enumerated = 0
-    original_iterdir = Path.iterdir
+    real_scandir = os.scandir
 
-    def observing_iterdir(path: Path):
+    def observing_scandir(path: Path):
         nonlocal enumerated
         if path != meta:
-            yield from original_iterdir(path)
-            return
-        for index in range(20):
-            enumerated += 1
-            yield meta / f"candidate_{index}_python.json"
+            return real_scandir(path)
+        iterator = real_scandir(path)
 
-    monkeypatch.setattr(Path, "iterdir", observing_iterdir)
+        class Observed:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                iterator.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal enumerated
+                entry = next(iterator)
+                enumerated += 1
+                return entry
+
+        return Observed()
+
+    for index in range(20):
+        (meta / f"candidate_{index}_python.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(continuous_sync.os, "scandir", observing_scandir)
     monkeypatch.setattr(continuous_sync, "MAX_PROMPT_DISCOVERY_ENTRIES", 2)
 
     _identities, failure = continuous_sync._metadata_identities(
