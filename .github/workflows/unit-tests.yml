@@ -89,6 +89,14 @@ jobs:
           assert not (root / "outside").exists()
           PY
 
+      - name: Run focused protected-runner tests
+        run: >
+          pytest -q
+          tests/test_sync_core_supervisor.py
+          tests/test_sync_core_runner.py
+          tests/test_sync_core_reporting.py
+          --timeout=60
+
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
 
