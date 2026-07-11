@@ -113,7 +113,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
         version_data = payload.get("payload_version")
         if version_data is None:
             payload_version = 1 if "artifact_closure_digest" not in binding_data else 2
-        elif type(version_data) is int and version_data in {1, 2}:
+        elif (
+            isinstance(version_data, int)
+            and not isinstance(version_data, bool)
+            and version_data in {1, 2}
+        ):
             payload_version = version_data
         else:
             raise ValueError("attestation payload version is unsupported")
