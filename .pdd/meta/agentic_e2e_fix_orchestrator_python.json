@@ -1,9 +1,9 @@
 {
   "pdd_version": "0.0.301.dev0",
-  "timestamp": "2026-07-11T01:11:46.291636+00:00",
+  "timestamp": "2026-07-11T02:08:25.328878+00:00",
   "command": "test",
-  "prompt_hash": "6cce794c989b2c311ba0a464f97ebdc13d50cc8f4270c0d0c9b50d371b6d9012",
-  "code_hash": "7becf45416690b9aa97d3d963e5a5d42b4b76342b58e5da2d9722410f06a6304",
+  "prompt_hash": "3eeb2661ceda026900c186a547e69fa49d458346827475355d983b6e227c84ce",
+  "code_hash": "6c50c10258cc8d55d039c5b6aec82abcc7456d0a6f58573367b8b97dc1e69be3",
   "example_hash": "180cc2c4316b531586040d61fc5f82f1f605d5c5736fd23bad63a889ac0b7d1e",
   "test_hash": "c1880aa902e7e4650c5ca4900b9ab6adec5362c0706fbf4a393016626f14644f",
   "test_files": {
@@ -18,6 +18,7 @@
     "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
     "context/change/16/fix_error_loop.py": "01872cfcc6c3f5095551acd109e06b35ece96c15ca75dcf40ac395c3ed867e40",
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/mock_contract_validation.py": "635d6bc4cccdf9cdb2dd638dd60379c756e51adbe870b72f65923d5cee2e07f0"
   }
 }

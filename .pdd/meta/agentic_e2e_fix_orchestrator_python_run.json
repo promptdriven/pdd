@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-11T01:25:49.530490+00:00",
+  "timestamp": "2026-07-11T02:08:25.325077+00:00",
   "exit_code": 0,
   "tests_passed": 422,
   "tests_failed": 0,
-  "coverage": 78.43,
+  "coverage": 85.0,
   "test_hash": "c1880aa902e7e4650c5ca4900b9ab6adec5362c0706fbf4a393016626f14644f",
   "test_files": {
     "test_agentic_e2e_fix_orchestrator.py": "c1880aa902e7e4650c5ca4900b9ab6adec5362c0706fbf4a393016626f14644f",

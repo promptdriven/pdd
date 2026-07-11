@@ -2953,14 +2953,15 @@
   },
   {
     "reason": "CLI wrapper for unit-test repair with loop mode, cloud/local execution, and compressed repair context.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. Before persisting a passing fix, the Issue #1939 mock-contract gate compares prospective query/mock shapes with repository schema and sibling evidence and hard-fails real divergences. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "fix_error_loop_python.prompt",
       "fix_focus_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "mock_contract_validation_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -6525,11 +6526,12 @@
   },
   {
     "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and code cleanup.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and a deterministic pre-checkup drift-sync gate.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, repository-backed mock-contract validation, CI validation, and a deterministic pre-checkup drift-sync gate.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "ci_validation_python.prompt",
-      "pre_checkup_gate_python.prompt"
+      "pre_checkup_gate_python.prompt",
+      "mock_contract_validation_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -11688,6 +11690,62 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Rejects green fixes whose generated mocks contradict repository-backed schema and interface evidence.",
+    "description": "Diff-aware AST and schema gate that extracts Python query fields and mock payload shapes, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "mock_contract_validation_python.prompt",
+    "filepath": "pdd/mock_contract_validation.py",
+    "tags": [
+      "fix",
+      "gate",
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_query_fields",
+            "signature": "(source: str, source_path: str = '<memory>') -> tuple[QueryFieldUse, ...]",
+            "returns": "tuple[QueryFieldUse, ...]"
+          },
+          {
+            "name": "extract_mock_fields",
+            "signature": "(source: str, source_path: str = '<memory>') -> tuple[MockFieldUse, ...]",
+            "returns": "tuple[MockFieldUse, ...]"
+          },
+          {
+            "name": "validate_mock_contracts",
+            "signature": "(*, project_root: Path, production_sources: Mapping[str | Path, str], test_sources: Mapping[str | Path, str], baseline_production_sources: Optional[Mapping[str | Path, str]] = None, baseline_test_sources: Optional[Mapping[str | Path, str]] = None) -> MockContractReport",
+            "returns": "MockContractReport"
+          },
+          {
+            "name": "validate_changed_files",
+            "signature": "(*, project_root: Path, changed_files: Sequence[str], baseline_ref: Optional[str] = None) -> MockContractReport",
+            "returns": "MockContractReport"
+          },
+          {
+            "name": "format_mock_contract_report",
+            "signature": "(report: MockContractReport) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "enforce_mock_contracts",
+            "signature": "(report: MockContractReport) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11600,
+      "y": 2200
     }
   }
 ]
