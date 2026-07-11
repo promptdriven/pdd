@@ -401,6 +401,10 @@ def _complete_nightly(
         return False
     if not isinstance(counts, dict) or not isinstance(lifecycle, dict):
         return False
+    try:
+        checked_at = _row_checked_at(row)
+    except ValueError:
+        return False
     required_counts = {
         "unaccounted_tracked_paths",
         "managed_units",
@@ -427,13 +431,25 @@ def _complete_nightly(
         )
     ):
         return False
-    return _nightly_candidate_artifact_valid(repositories, lifecycle, policy)
+    return _nightly_candidate_artifact_valid(repositories, lifecycle, policy, checked_at)
+
+
+def _row_checked_at(row: dict[str, Any]) -> datetime:
+    """Return one immutable nightly row timestamp as UTC."""
+    try:
+        checked_at = datetime.fromisoformat(str(row["checked_at"]))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("nightly row checked_at is invalid") from exc
+    if checked_at.tzinfo is None:
+        raise ValueError("nightly row checked_at is not timezone-aware")
+    return checked_at.astimezone(timezone.utc)
 
 
 def _nightly_candidate_artifact_valid(
     repositories: list[Any],
     lifecycle: dict[str, Any],
     policy: _NightlyVerificationPolicy,
+    checked_at: datetime,
 ) -> bool:
     """Verify the candidate artifact embedded in one historical nightly row."""
     by_name = {
@@ -449,6 +465,7 @@ def _nightly_candidate_artifact_valid(
         artifact.verify(
             policy.candidate_artifact_policy,
             expected_source_sha=str(pdd_report.get("head_sha", "")),
+            now=checked_at,
             consume_replay=False,
         )
     except (CandidateArtifactProvenanceError, ValueError):
@@ -491,12 +508,10 @@ def _nightly_streak(
         if not _complete_nightly(row, policy):
             break
         try:
-            checked_at = datetime.fromisoformat(str(row["checked_at"]))
-        except (KeyError, ValueError):
+            checked_at = _row_checked_at(row)
+        except ValueError:
             break
-        if checked_at.tzinfo is None:
-            break
-        date = checked_at.astimezone(timezone.utc).date()
+        date = checked_at.date()
         if previous_date is None and date not in {today, today - timedelta(days=1)}:
             break
         if previous_date is not None and (previous_date - date).days != 1:
