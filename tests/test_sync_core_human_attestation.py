@@ -44,13 +44,17 @@ def _public(key: Ed25519PrivateKey) -> str:
     return base64.b64encode(key.public_key().public_bytes_raw()).decode("ascii")
 
 
-def _request() -> HumanAttestationRequest:
+def _request(
+    unit: UnitId = UNIT,
+    *,
+    profile_digest: str = "profile-digest",
+) -> HumanAttestationRequest:
     obligation = VerificationObligation(
         "human", "human-attestation", "threshold-ed25519", "policy-digest",
         ("CONTRACT-SHA256:abc",), (),
     )
     profile = VerificationProfile(
-        UNIT, (obligation,), ("CONTRACT-SHA256:abc",), "profile-digest"
+        unit, (obligation,), ("CONTRACT-SHA256:abc",), profile_digest
     )
     return HumanAttestationRequest(
         profile,
@@ -155,6 +159,39 @@ def test_external_threshold_approvals_pass_every_opaque_requirement(tmp_path: Pa
     _write_approvals(store, approvals)
     verifier = HumanAttestationVerifier(policy, store / "replay.json")
     assert verifier.verify(request, now=NOW) is EvidenceOutcome.PASS
+
+
+def test_shared_store_selects_each_units_exact_quorum(tmp_path: Path) -> None:
+    """Repository-wide approvals must not make unrelated unit checks fail."""
+    root, base, store, keys = _repository(tmp_path)
+    first = _request()
+    second = _request(
+        UnitId(
+            "repository-1",
+            PurePosixPath("prompts/second.prompt"),
+            "python",
+        ),
+        profile_digest="second-profile-digest",
+    )
+    policy = load_human_attestation_policy(root, base, store)
+    approvals = []
+    for request, suffix in ((first, "first"), (second, "second")):
+        for index, identity in enumerate(("alice", "bob")):
+            approval = _approval(
+                keys[index],
+                identity,
+                request,
+                nonce=f"{identity}-{suffix}",
+            )
+            approval["approval_id"] = f"approval-{identity}-{suffix}"
+            approval["policy_digest"] = policy.digest
+            _sign(keys[index], approval)
+            approvals.append(approval)
+    _write_approvals(store, approvals)
+    verifier = HumanAttestationVerifier(policy, store / "replay.json")
+
+    assert verifier.verify(first, now=NOW) is EvidenceOutcome.PASS
+    assert verifier.verify(second, now=NOW) is EvidenceOutcome.PASS
 
 
 @pytest.mark.parametrize("mutator", ["candidate_policy", "single", "mixed", "rebind"])
