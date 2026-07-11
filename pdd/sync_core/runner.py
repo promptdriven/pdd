@@ -1490,18 +1490,32 @@ def _playwright_config(root: Path, ref: str) -> tuple[PurePosixPath, bytes]:
 
 def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePosixPath]:
     """Validate a data-only AST config and return its bound local references."""
-    tree = get_parser("typescript").parse(source)
+    tree = _javascript_parser(path).parse(source)
     if tree.root_node.has_error:
         raise ValueError("Playwright configuration is not valid JavaScript/TypeScript")
     statements = tree.root_node.named_children
     references: set[PurePosixPath] = set()
     config_node: Node | None = None
+    define_config = False
     for statement in statements:
         if statement.type == "import_statement":
-            if len(statement.named_children) != 1:
+            imported_node = next(
+                (child for child in statement.named_children if child.type == "string"), None
+            )
+            if imported_node is None:
+                raise ValueError("Playwright config import is malformed")
+            imported = _javascript_string(source, imported_node)
+            if imported == "@playwright/test":
+                if not re.fullmatch(
+                    r"\s*import\s*\{\s*defineConfig\s*\}\s*from\s*['\"]@playwright/test['\"]\s*;?\s*",
+                    _node_text(source, statement),
+                ):
+                    raise ValueError("only defineConfig may be imported from Playwright")
+                define_config = True
+            elif len(statement.named_children) == 1:
+                references.add(_playwright_local_reference(path, imported, "config import"))
+            else:
                 raise ValueError("Playwright config imports must be side-effect-only")
-            imported = _javascript_string(source, statement.named_children[0])
-            references.add(_playwright_local_reference(path, imported, "config import"))
         elif statement.type == "export_statement":
             config_node = statement.child_by_field_name("value")
             if config_node is None:
@@ -1516,6 +1530,17 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
             config_node = expression.child_by_field_name("right")
         else:
             raise ValueError("Playwright configuration must be one declarative object")
+    if config_node is not None and config_node.type == "call_expression":
+        function = config_node.child_by_field_name("function")
+        arguments = config_node.child_by_field_name("arguments")
+        values = arguments.named_children if arguments is not None else []
+        if (
+            not define_config or function is None
+            or _node_text(source, function) != "defineConfig"
+            or len(values) != 1 or values[0].type != "object"
+        ):
+            raise ValueError("Playwright configuration must be one declarative defineConfig wrapper")
+        config_node = values[0]
     if config_node is None or config_node.type != "object":
         raise ValueError("Playwright configuration must be a declarative object literal")
     try:
@@ -1528,6 +1553,15 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
 def _node_text(source: bytes, node: Node) -> str:
     """Return the exact UTF-8 text covered by an AST node."""
     return source[node.start_byte:node.end_byte].decode("utf-8")
+
+
+def _javascript_parser(path: PurePosixPath):
+    """Select the grammar matching JavaScript, JSX, TypeScript, or TSX."""
+    if path.suffix == ".tsx":
+        return get_parser("tsx")
+    if path.suffix in {".ts", ".cts", ".mts"}:
+        return get_parser("typescript")
+    return get_parser("javascript")
 
 
 def _javascript_string(source: bytes, node: Node) -> str:
@@ -1560,13 +1594,14 @@ def _validate_playwright_config_object(
     allowed_data = {
         "timeout", "expect", "fullyParallel", "forbidOnly", "outputDir",
         "testDir", "testMatch", "testIgnore", "preserveOutput", "quiet",
-        "updateSnapshots", "updateSourceMethod", "captureGitInfo", "metadata",
+        "captureGitInfo", "metadata",
     }
     executable = {"globalSetup", "globalTeardown", "reporter"}
     forbidden = {
         "grep", "grepInvert", "shard", "retries", "workers", "repeatEach",
         "webServer", "storageState", "projects", "dependencies",
         "snapshotPathTemplate", "executablePath", "use",
+        "updateSnapshots", "updateSourceMethod",
     }
     references: set[PurePosixPath] = set()
     for pair in config.named_children:
@@ -1615,27 +1650,35 @@ def _playwright_support_closure(
     """Bind config, local support, and test imports without executing them."""
     config_path, config_source = _playwright_config(root, ref)
     paths = {config_path}
-    pending = list(_playwright_static_config(config_path, config_source)) + list(test_paths)
-    visited: set[PurePosixPath] = set()
+    all_owners = frozenset(test_paths)
+    pending = [
+        (item, all_owners) for item in _playwright_static_config(config_path, config_source)
+    ] + [(item, frozenset({item})) for item in test_paths]
+    visited: dict[PurePosixPath, frozenset[PurePosixPath]] = {}
+    snapshot_owners: set[PurePosixPath] = set()
     while pending:
-        path = pending.pop()
-        if path in visited:
+        path, owners = pending.pop()
+        known_owners = visited.get(path, frozenset())
+        new_owners = owners - known_owners
+        if not new_owners:
             continue
-        visited.add(path)
+        visited[path] = known_owners | owners
         path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
         paths.add(path)
         if path.suffix in _JAVASCRIPT_SUFFIXES:
-            imports, bare_imports, has_snapshot = _playwright_source_syntax(source)
-            for imported in imports:
+            imports, bare_imports, has_snapshot, resources = _playwright_source_syntax(
+                path, source
+            )
+            for imported in imports | resources:
                 normalized = _normalize_repo_relative_path(path.parent / PurePosixPath(imported))
                 if normalized is None:
                     raise ValueError("Playwright import escapes the repository")
                 resolved, imported_source = _read_javascript_support_blob(root, ref, normalized)
                 if imported_source is None:
                     raise ValueError(f"Playwright local support path is missing: {resolved}")
-                pending.append(resolved)
+                pending.append((resolved, owners))
             unbound_bare = bare_imports - {"@playwright/test"}
             if unbound_bare:
                 raise ValueError(
@@ -1643,30 +1686,62 @@ def _playwright_support_closure(
                     + ", ".join(sorted(unbound_bare))
                 )
             if has_snapshot:
-                snapshot_prefix = PurePosixPath(f"{path.as_posix()}-snapshots")
-                listed = subprocess.run(
-                    ["git", "ls-tree", "-r", "--name-only", ref, "--", snapshot_prefix.as_posix()],
-                    cwd=root, capture_output=True, text=True, check=True,
-                )
-                for name in listed.stdout.splitlines():
-                    snapshot_path = PurePosixPath(name)
-                    snapshot = read_git_blob(root, ref, snapshot_path)
-                    if snapshot is not None:
-                        paths.add(snapshot_path)
+                snapshot_owners.update(owners)
+    for owner in snapshot_owners:
+        snapshot_prefix = PurePosixPath(f"{owner.as_posix()}-snapshots")
+        listed = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", ref, "--", snapshot_prefix.as_posix()],
+            cwd=root, capture_output=True, text=True, check=True,
+        )
+        for name in listed.stdout.splitlines():
+            snapshot_path = PurePosixPath(name)
+            snapshot = read_git_blob(root, ref, snapshot_path)
+            if snapshot is not None:
+                paths.add(snapshot_path)
     return tuple(
         (path, read_git_blob(root, ref, path)) for path in sorted(paths)
         if read_git_blob(root, ref, path) is not None
     )
 
 
-def _playwright_source_syntax(source: bytes) -> tuple[set[str], set[str], bool]:
+def _playwright_source_syntax(
+    path: PurePosixPath, source: bytes
+) -> tuple[set[str], set[str], bool, set[str]]:
     """Derive module/snapshot edges under an AST runtime-capability allowlist."""
-    tree = get_parser("typescript").parse(source)
+    tree = _javascript_parser(path).parse(source)
     if tree.root_node.has_error:
         raise ValueError("Playwright source is not valid JavaScript/TypeScript syntax")
     local: set[str] = set()
     bare: set[str] = set()
+    resources: set[str] = set()
     snapshot = False
+    allowed_calls = {
+        "test", "describe", "expect", "check",
+        "toBe", "toEqual", "toStrictEqual", "toBeTruthy", "toBeFalsy",
+        "toContain", "toMatch", "toHaveTitle", "toHaveURL", "toBeVisible",
+        "toBeHidden", "toHaveText", "toContainText", "toHaveValue",
+        "toHaveScreenshot", "toMatchSnapshot", "includes", "append",
+        "click", "fill", "goto", "locator", "getByRole", "getByText",
+        "waitFor", "press", "selectOption", "uncheck",
+        "addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR",
+    }
+    resource_calls = {"addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR"}
+    reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
+    local_callables: set[str] = set()
+    discovery = [tree.root_node]
+    while discovery:
+        candidate = discovery.pop()
+        discovery.extend(candidate.named_children)
+        if candidate.type == "import_statement":
+            local_callables.update(
+                _node_text(source, child)
+                for child in candidate.named_children
+                if child.type == "identifier"
+            )
+        elif candidate.type in {"function_declaration", "variable_declarator"}:
+            name_node = candidate.child_by_field_name("name")
+            if name_node is not None and name_node.type == "identifier":
+                local_callables.add(_node_text(source, name_node))
     stack = [tree.root_node]
     while stack:
         node = stack.pop()
@@ -1712,6 +1787,58 @@ def _playwright_source_syntax(source: bytes) -> tuple[set[str], set[str], bool]:
                 "require", "eval", "Function", "createRequire",
             }:
                 raise ValueError("dynamic or aliased Playwright module loading is not supported")
+            elif function.type == "member_expression":
+                prop = function.child_by_field_name("property")
+                obj = function.child_by_field_name("object")
+                name = _node_text(source, prop) if prop is not None else ""
+                root_name = _node_text(source, obj).split(".", 1)[0] if obj is not None else ""
+                if name in {"require", "createRequire"}:
+                    raise ValueError(
+                        "dynamic or aliased Playwright module loading is not supported"
+                    )
+                if name in {
+                    "getBuiltinModule", "exec", "execSync", "execFile", "execFileSync",
+                    "spawn", "spawnSync", "fork", "readFile", "readFileSync",
+                    "writeFile", "writeFileSync",
+                } or root_name == "process":
+                    raise ValueError(
+                        "Playwright runtime resource access violates the runtime capability schema"
+                    )
+                if root_name in reflective_roots or name not in allowed_calls:
+                    raise ValueError(
+                        "Playwright call violates the positive runtime capability schema"
+                    )
+                if name in resource_calls:
+                    values = arguments.named_children if arguments is not None else []
+                    resource_node = values[0] if values else None
+                    if resource_node is not None and resource_node.type == "object":
+                        for pair in resource_node.named_children:
+                            key = pair.child_by_field_name("key")
+                            if key is not None and _node_text(source, key).strip("'\"") == "path":
+                                resource_node = pair.child_by_field_name("value")
+                                break
+                    if resource_node is None or resource_node.type != "string":
+                        raise ValueError("Playwright runtime resource path must be static")
+                    value = _javascript_string(source, resource_node)
+                    if not value.startswith(("./", "../")):
+                        raise ValueError("Playwright runtime resource must be a local path")
+                    resources.add(value)
+            elif function.type == "identifier" and function_text in {
+                "exec", "execSync", "execFile", "execFileSync", "spawn",
+                "spawnSync", "fork", "readFile", "readFileSync", "writeFile",
+                "writeFileSync",
+            }:
+                raise ValueError(
+                    "Playwright runtime resource access violates the runtime capability schema"
+                )
+            elif (
+                function.type == "identifier"
+                and function_text not in allowed_calls
+                and function_text not in local_callables
+            ):
+                raise ValueError(
+                    "Playwright call violates the positive runtime capability schema"
+                )
         if node.type == "member_expression":
             prop = node.child_by_field_name("property")
             if prop is None:
@@ -1737,7 +1864,7 @@ def _playwright_source_syntax(source: bytes) -> tuple[set[str], set[str], bool]:
                 raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
         if node.type == "string" and _javascript_string(source, node).startswith("node:"):
             raise ValueError("Playwright runtime resource access violates the runtime capability allowlist")
-    return local, bare, snapshot
+    return local, bare, snapshot, resources
 
 
 def playwright_validator_config_digest(
@@ -2506,30 +2633,38 @@ def _directory_identity(path: Path) -> str:
 
 
 def _manifest_path_identity(path: Path, seen: set[Path]) -> bytes:
-    """Return identity bytes for a declared path and symlink target closure."""
+    """Return a streaming Merkle digest for a path and symlink closure."""
+    digest = hashlib.sha256()
     absolute = path.absolute()
     if absolute in seen:
-        return b"cycle\0" + str(absolute).encode()
+        digest.update(b"cycle\0" + str(absolute).encode())
+        return digest.digest()
     seen.add(absolute)
     try:
         if path.is_symlink():
             target_text = os.readlink(path)
             target = (path.parent / target_text).absolute()
-            return (
-                b"link\0" + str(path).encode() + b"\0" + target_text.encode()
-                + b"\0" + _manifest_path_identity(target, seen)
-            )
+            digest.update(b"link\0" + str(path).encode() + b"\0" + target_text.encode())
+            digest.update(b"\0" + _manifest_path_identity(target, seen))
+            return digest.digest()
         if path.is_file():
-            return b"file\0" + str(path).encode() + b"\0" + path.read_bytes()
+            digest.update(b"file\0" + str(path).encode() + b"\0")
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.digest()
         if path.is_dir():
-            content = bytearray(b"dir\0" + str(path).encode() + b"\0")
+            digest.update(b"dir\0" + str(path).encode() + b"\0")
             for child in sorted(path.iterdir(), key=lambda item: item.name):
-                content.extend(_manifest_path_identity(child, seen.copy()))
-                content.extend(b"\0")
-            return bytes(content)
+                digest.update(child.name.encode() + b"\0")
+                digest.update(_manifest_path_identity(child, seen.copy()))
+                digest.update(b"\0")
+            return digest.digest()
     except OSError as exc:
-        return b"error\0" + str(path).encode() + b"\0" + str(exc).encode()
-    return b"missing\0" + str(path).encode()
+        digest.update(b"error\0" + str(path).encode() + b"\0" + str(exc).encode())
+        return digest.digest()
+    digest.update(b"missing\0" + str(path).encode())
+    return digest.digest()
 
 
 def _toolchain_manifest_identity(manifest_path: Path) -> str:
@@ -2568,7 +2703,6 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
 
 def _toolchain_manifest_roles(manifest_path: Path) -> dict[str, Path]:
     """Return canonical roles after the manifest has passed identity validation."""
-    _toolchain_manifest_identity(manifest_path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     return {role: Path(value).resolve(strict=True) for role, value in payload["roles"].items()}
 
@@ -2580,7 +2714,15 @@ def _playwright_toolchain_identity(
     candidate = root.resolve()
     if _path_is_relative_to(manifest.resolve(), candidate):
         raise ValueError("Playwright toolchain manifest must be external to candidate checkout")
+    manifest_identity = _toolchain_manifest_identity(manifest)
     roles = _toolchain_manifest_roles(manifest)
+    for role, role_path in roles.items():
+        if _path_is_relative_to(role_path, candidate):
+            raise ValueError(f"Playwright toolchain role {role} must be external")
+    if roles["dependencies"].name != "node_modules":
+        raise ValueError("Playwright dependencies role must be the NODE_PATH node_modules root")
+    if roles["lockfile"].parent != roles["dependencies"].parent:
+        raise ValueError("Playwright lockfile must govern the declared dependency tree")
     command_paths = []
     for part in command[:2]:
         path = Path(part).expanduser()
@@ -2595,7 +2737,7 @@ def _playwright_toolchain_identity(
         raise ValueError("Playwright toolchain launcher role does not cover command")
     if len(command_paths) < 2 or command_paths[1] != roles["entrypoint"]:
         raise ValueError("Playwright toolchain entrypoint role does not cover command")
-    return _toolchain_manifest_identity(manifest)
+    return manifest_identity
 
 
 def _command_part_identity(root: Path, part: str) -> str:
@@ -3614,7 +3756,7 @@ def _playwright_candidate_toolchain(root: Path) -> bool:
 
 
 def _playwright_environment(
-    home: Path, node_modules: Path | None
+    home: Path, dependencies: Path | None, browser_runtime: Path | None = None
 ) -> dict[str, str]:
     """Return an isolated credential-free environment for Playwright."""
     environment = untrusted_child_environment(
@@ -3622,11 +3764,9 @@ def _playwright_environment(
         extra={"NODE_ENV": "test"},
         drop={"NODE_PATH", "PLAYWRIGHT_BROWSERS_PATH"},
     )
-    if node_modules is not None and node_modules.is_dir():
-        environment["NODE_PATH"] = str(node_modules)
-        local_browsers = node_modules / "playwright-core" / ".local-browsers"
-        if local_browsers.is_dir():
-            environment["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+    if dependencies is not None and browser_runtime is not None:
+        environment["NODE_PATH"] = str(dependencies)
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_runtime)
     return environment
 
 
@@ -3741,16 +3881,23 @@ def _run_playwright(
             "playwright", EvidenceOutcome.COLLECTION_ERROR,
             "playwright-untrusted", command_error,
         ), ()
-    node_modules = _external_node_modules_root(root, prefix)
+    roles = _toolchain_manifest_roles(config.playwright_toolchain_manifest)
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)), ()
-    command = [*prefix, "test", *(path.as_posix() for path in paths), f"--config={root / config_path}", "--reporter=json"]
-    if collection:
-        command.append("--list")
-    digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-playwright-") as directory:
+        temporary = Path(directory)
+        command = [
+            *prefix, "test", *(path.as_posix() for path in paths),
+            f"--config={root / config_path}", "--reporter=json",
+            "--update-snapshots=none", f"--output={temporary / 'results'}",
+        ]
+        if collection:
+            command.append("--list")
+        digest = hashlib.sha256(
+            json.dumps(command, separators=(",", ":")).encode()
+        ).hexdigest()
         try:
             result = subprocess.run(
                 command,
@@ -3760,8 +3907,9 @@ def _run_playwright(
                 check=False,
                 timeout=timeout_seconds,
                 env=_playwright_environment(
-                    Path(directory),
-                    node_modules,
+                    temporary,
+                    roles["dependencies"],
+                    roles["browser_runtime"],
                 ),
             )
         except subprocess.TimeoutExpired:
@@ -3770,6 +3918,19 @@ def _run_playwright(
             return RunnerExecution(
                 "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
                 f"Playwright launch failed: {exc}",
+            ), ()
+        mutated = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=root, capture_output=True, text=True, check=False,
+        )
+        if mutated.returncode != 0 or mutated.stdout.strip():
+            changed = ", ".join(
+                line[3:] for line in mutated.stdout.splitlines() if len(line) > 3
+            )
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest,
+                "protected Playwright execution tree was modified"
+                + (f": {changed}" if changed else ""),
             ), ()
     try:
         if _playwright_toolchain_identity(
