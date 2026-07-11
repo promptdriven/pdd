@@ -117,6 +117,7 @@ class _CandidateSources:
     prompt_owner: dict[PurePosixPath, UnitId]
     output_owner: dict[PurePosixPath, UnitId]
     ownership_rules: tuple[OwnershipRule, ...]
+    approved_aliases: dict[PurePosixPath, PurePosixPath]
 
 
 @dataclass(frozen=True)
@@ -666,6 +667,14 @@ def _candidate_records(
             role = rule.role
             inventory = rule.inventory
             provenance = f"protected-ownership:{rule.owner}:{rule.pattern}"
+        elif path in sources.approved_aliases:
+            role = "approved-alias"
+            inventory = InventoryStatus.MANAGED
+            provenance = "protected-alias-policy"
+        elif _under_approved_alias_target(path, sources.approved_aliases):
+            role = "approved-alias-target"
+            inventory = InventoryStatus.MANAGED
+            provenance = "protected-alias-policy"
         elif _is_protected_control(path):
             role = "policy"
             inventory = InventoryStatus.MANAGED
@@ -709,6 +718,16 @@ def _candidate_records(
     return candidates, accounted, invalid
 
 
+def _under_approved_alias_target(
+    path: PurePosixPath,
+    approved_aliases: dict[PurePosixPath, PurePosixPath],
+) -> bool:
+    for canonical in approved_aliases.values():
+        if path == canonical or path.parts[: len(canonical.parts)] == canonical.parts:
+            return True
+    return False
+
+
 def _is_protected_control(path: PurePosixPath) -> bool:
     """Return whether a path is an intrinsic canonical policy/config input."""
     under_canonical_state = _is_dynamic_canonical_state(path)
@@ -719,6 +738,7 @@ def _is_protected_control(path: PurePosixPath) -> bool:
             PurePosixPath(".pdd/repository-id"),
             PurePosixPath(".pdd/expected-managed.json"),
             PurePosixPath(".pdd/sync-policy.json"),
+            PurePosixPath(".pdd/sync-aliases.json"),
             PurePosixPath(".pdd/verification-profiles.json"),
             PurePosixPath(".pdd/verification-profile-rotations.json"),
             PurePosixPath(".pdd/attestation-trust.json"),
@@ -784,6 +804,54 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
         patterns.add(pattern)
         rules.append(rule)
     return tuple(sorted(rules))
+
+
+def _alias_relpath(value: object, field: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value:
+        raise ManifestError(f"protected alias {field} must be a non-empty path")
+    path = PurePosixPath(value)
+    if path.is_absolute() or not path.parts or ".." in path.parts:
+        raise ManifestError(f"protected alias {field} must be repository-relative")
+    return path
+
+
+def _approved_aliases(
+    root: Path,
+    base_ref: str,
+    head_ref: str,
+) -> tuple[dict[PurePosixPath, PurePosixPath], list[str]]:
+    path = PurePosixPath(".pdd/sync-aliases.json")
+    base = read_git_blob(root, base_ref, path)
+    head = read_git_blob(root, head_ref, path)
+    if base is None:
+        if head is not None:
+            return {}, ["candidate added protected alias policy"]
+        return {}, []
+    if head is None:
+        return {}, ["candidate removed protected alias policy"]
+    if head != base:
+        return {}, ["candidate changed protected alias policy"]
+    try:
+        payload = json.loads(base)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ManifestError("protected alias policy is malformed") from exc
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"schema_version", "aliases"}
+        or payload["schema_version"] != 1
+        or not isinstance(payload["aliases"], list)
+    ):
+        raise ManifestError("protected alias policy schema is invalid")
+    aliases: dict[PurePosixPath, PurePosixPath] = {}
+    for row in payload["aliases"]:
+        if not isinstance(row, dict) or set(row) != {"alias_path", "canonical_path"}:
+            raise ManifestError("protected alias entry is malformed")
+        alias = _alias_relpath(row["alias_path"], "path")
+        canonical = _alias_relpath(row["canonical_path"], "canonical path")
+        if alias == canonical or alias in aliases:
+            raise ManifestError("protected alias entry is ambiguous")
+        aliases[alias] = canonical
+    return dict(sorted(aliases.items())), []
 
 
 def _valid_ownership_rule(rule: OwnershipRule) -> bool:
@@ -903,8 +971,9 @@ def _assemble_manifest(
     tombstones: dict[PurePosixPath, DecommissionTombstone],
     expected_registry: set[UnitId] | None,
     ownership_rules: tuple[OwnershipRule, ...],
+    approved_aliases: dict[PurePosixPath, PurePosixPath],
 ) -> UnitManifest:
-    # pylint: disable=too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     """Combine parsed trees into the final candidate and unit partition."""
     invalid = list(base.invalid_reasons + head.invalid_reasons)
     units, tombstone_invalid = _manifest_units(
@@ -922,6 +991,7 @@ def _assemble_manifest(
             {**base.units, **head.units},
             {**base.outputs, **head.outputs},
             ownership_rules,
+            approved_aliases,
         )
     )
     invalid.extend(ownership_invalid)
@@ -980,20 +1050,33 @@ def build_unit_manifest(
         head_expected_registry = load_expected_registry(
             repository_root, head_ref, repository_id
         )
+        approved_aliases, alias_invalid = _approved_aliases(
+            repository_root, base_ref, head_ref
+        )
     except ValueError as exc:
         raise ManifestError(str(exc)) from exc
+    if alias_invalid:
+        base = _TreeManifest(
+            base.ref,
+            base.entries,
+            base.units,
+            base.outputs,
+            tuple(base.invalid_reasons + tuple(alias_invalid)),
+        )
     transition = _assemble_manifest(repository_id, language_registry.digest(),
                                     base, head, tombstones, expected_registry,
-                                    ownership)
+                                    ownership, approved_aliases)
     if base_ref == head_ref:
         return transition
 
     head_ownership = _ownership_rules(repository_root, head_ref)
+    head_aliases, _ = _approved_aliases(repository_root, head_ref, head_ref)
     stable_base = _tree_manifest(repository_root, head_ref, repository_id,
                                  language_registry, head_ownership)
     stable = _assemble_manifest(repository_id, language_registry.digest(),
                                 stable_base, stable_base, head_tombstones,
-                                head_expected_registry, head_ownership)
+                                head_expected_registry, head_ownership,
+                                head_aliases)
     control_invalid = control_transition_invalid(
         repository_root, base_ref, head_ref, ownership, head_ownership
     )

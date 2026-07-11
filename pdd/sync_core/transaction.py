@@ -81,6 +81,24 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _alias_policy_payload(
+    aliases: Mapping[PurePosixPath, PurePosixPath],
+) -> list[dict[str, str]]:
+    return [
+        {"alias_path": alias.as_posix(), "canonical_path": canonical.as_posix()}
+        for alias, canonical in sorted(aliases.items())
+    ]
+
+
+def _alias_policy_digest(aliases: Mapping[PurePosixPath, PurePosixPath]) -> str:
+    encoded = json.dumps(
+        _alias_policy_payload(aliases),
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _digest(encoded)
+
+
 def _git_mode(mode: int) -> str:
     executable = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     return "100755" if mode & executable else "100644"
@@ -360,6 +378,11 @@ class TransactionManager:
         paths = [write.relpath for write in writes]
         if len(paths) != len(set(paths)):
             raise TransactionError("transaction plan contains duplicate destinations")
+        canonical_paths = [self._canonical_relpath(write.relpath) for write in writes]
+        if len(canonical_paths) != len(set(canonical_paths)):
+            raise TransactionError(
+                "transaction plan contains duplicate canonical destinations"
+            )
         if any(write.secret for write in writes):
             raise TransactionError(
                 "secret-labeled rollback content requires configured encryption"
@@ -444,10 +467,10 @@ class TransactionManager:
                 "transaction_id": transaction_id,
                 "phase": TransactionPhase.PREPARED.value,
                 "shared_resources": [path.as_posix() for path in sorted(shared_resources)],
-                "approved_aliases": [
-                    {"alias_path": alias.as_posix(), "canonical_path": canonical.as_posix()}
-                    for alias, canonical in self.policy.approved_aliases.items()
-                ],
+                "approved_aliases": _alias_policy_payload(self.policy.approved_aliases),
+                "approved_aliases_digest": _alias_policy_digest(
+                    self.policy.approved_aliases
+                ),
                 "entries": entries,
             }
             self._write_journal(temporary, payload)
@@ -742,6 +765,8 @@ class TransactionManager:
             if invalid_alias or invalid_canonical or alias in aliases:
                 raise TransactionError("transaction alias policy is malformed")
             aliases[alias] = canonical
-        if self.policy.approved_aliases and self.policy.approved_aliases != aliases:
+        digest = payload.get("approved_aliases_digest")
+        if not isinstance(digest, str) or digest != _alias_policy_digest(aliases):
+            raise TransactionError("transaction alias policy digest is malformed")
+        if self.policy.approved_aliases != aliases:
             raise TransactionConflict("transaction alias policy changed before recovery")
-        self.policy = PathPolicy(self.checkout_root, aliases)
