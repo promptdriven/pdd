@@ -4458,6 +4458,19 @@ class TestHealModuleConflict:
         assert result is False
         mock_run.assert_not_called()
 
+    def test_manual_merge_terminal_operation_is_skipped_not_unknown(self):
+        """fail_and_request_manual_merge is a known terminal manual-conflict state."""
+        drift = DriftInfo(
+            "auth", "python", "fail_and_request_manual_merge",
+            "Prompt and derived artifacts changed; manual conflict resolution required",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, {"PDD_FORCE": "1"})
+        assert result is None
+        mock_run.assert_not_called()
+
 
 class TestCommitAndPushMessage:
     def test_multi_module_message_lists_all_basenames(self):
