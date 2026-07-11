@@ -256,7 +256,7 @@ def test_missing_fingerprint_does_not_mask_path_resolution_failure(
     unit = SyncUnit("broken", "python", prompt, prompts)
 
     with patch(
-        "pdd.continuous_sync.get_pdd_file_paths",
+        "pdd.continuous_sync._resolve_report_paths",
         side_effect=ValueError("ambiguous module configuration"),
     ):
         report = classify_unit(unit, project)
@@ -282,7 +282,7 @@ def test_classify_unit_does_not_remove_concurrent_empty_directories(
         raise ValueError("ambiguous module configuration")
 
     with patch(
-        "pdd.continuous_sync.get_pdd_file_paths",
+        "pdd.continuous_sync._resolve_report_paths",
         side_effect=create_concurrent_dir,
     ):
         report = classify_unit(unit, project)

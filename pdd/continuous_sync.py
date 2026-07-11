@@ -19,13 +19,14 @@ from .sync_determine_operation import (
     Fingerprint,
     calculate_current_hashes,
     calculate_sha256,
-    get_pdd_file_paths,
+    get_extension,
 )
 from .sync_core import CanonicalReportOptions, build_canonical_report
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
 
 
 MAX_PROMPT_DISCOVERY_FILES = 10000
+MAX_PROMPT_DISCOVERY_ENTRIES = 50000
 SKIPPED_DISCOVERY_DIRS = {
     ".git",
     ".hg",
@@ -263,11 +264,34 @@ def _is_hidden_or_system_dir(path: Path) -> bool:
 
 def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[DiscoveryFailure]]:
     prompt_paths: List[Path] = []
-    for current_root, dirnames, filenames in os.walk(prompt_root):
+    visited_entries = 0
+    walk_failure: DiscoveryFailure | None = None
+
+    def on_walk_error(error: OSError) -> None:
+        nonlocal walk_failure
+        walk_failure = DiscoveryFailure(
+            prompt_root=prompt_root,
+            reason=f"configured prompt root traversal failed: {error}",
+            failure="prompt_traversal_error",
+        )
+
+    for current_root, dirnames, filenames in os.walk(prompt_root, onerror=on_walk_error):
+        if walk_failure is not None:
+            return prompt_paths, walk_failure
         current = Path(current_root)
+        visited_entries += 1 + len(dirnames) + len(filenames)
+        if visited_entries > MAX_PROMPT_DISCOVERY_ENTRIES:
+            return prompt_paths, DiscoveryFailure(
+                prompt_root=prompt_root,
+                reason=(
+                    "configured prompt root exceeded traversal budget "
+                    f"of {MAX_PROMPT_DISCOVERY_ENTRIES} directory entries"
+                ),
+                failure="prompt_traversal_budget",
+            )
         dirnames[:] = [
             dirname
-            for dirname in dirnames
+            for dirname in sorted(dirnames)
             if not _is_hidden_or_system_dir(current / dirname)
         ]
         for filename in sorted(filenames):
@@ -308,12 +332,9 @@ def _prompt_units(prompt_root: Path) -> tuple[List[SyncUnit], List[DiscoveryFail
 
 
 def _is_safe_prompt_root(base: Path, prompt_root: Path) -> bool:
-    """Return whether a configured prompt root is within the trusted workspace."""
-    if not prompt_root.is_absolute():
-        return True
-    trusted_workspace = base.resolve().parent
+    """Return whether a configured prompt root is within the project boundary."""
     try:
-        prompt_root.resolve(strict=False).relative_to(trusted_workspace)
+        prompt_root.resolve(strict=False).relative_to(base.resolve(strict=False))
     except ValueError:
         return False
     return True
@@ -358,7 +379,7 @@ def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailu
         failures.append(
             DiscoveryFailure(
                 prompt_root=prompt_root,
-                reason="configured prompt root is outside configured workspace",
+                reason="configured prompt root is outside project",
                 failure="unsafe_prompt_root",
             )
         )
@@ -446,8 +467,12 @@ def _existing_artifact_score(
     prompt_root: Path,
 ) -> int:
     try:
-        paths = get_pdd_file_paths(basename, language, prompts_dir=str(prompt_root))
-    except Exception:
+        prompt_path = prompt_root / f"{Path(basename).name}_{language}.prompt"
+        paths = _resolve_report_paths(
+            SyncUnit(basename, language, prompt_path, prompt_root),
+            project_root(prompt_root),
+        )
+    except ValueError:
         return 0
     score = 0
     for artifact in ("code", "example", "test"):
@@ -661,25 +686,64 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
     return payload
 
 
-def _directory_snapshot(root: Path) -> set[Path]:
-    if not root.exists():
-        return set()
-    return {path for path in root.rglob("*") if path.is_dir()}
-
-
-def _remove_new_empty_dirs(root: Path, before: set[Path]) -> None:
-    if not root.exists():
-        return
-    after = sorted(
-        (path for path in root.rglob("*") if path.is_dir() and path not in before),
-        key=lambda path: len(path.parts),
-        reverse=True,
-    )
-    for path in after:
+def _architecture_filepath(
+    unit: SyncUnit,
+    base: Path,
+) -> Path | None:
+    """Return an architecture.json filepath match without mutating project state."""
+    candidates = (unit.prompts_dir.parent / "architecture.json", base / "architecture.json")
+    for architecture_path in dict.fromkeys(path.resolve(strict=False) for path in candidates):
+        if not architecture_path.is_file():
+            continue
         try:
-            path.rmdir()
-        except OSError:
-            pass
+            payload = json.loads(architecture_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"architecture config is invalid: {architecture_path}") from exc
+        if not isinstance(payload, list):
+            raise ValueError(f"architecture config is invalid: {architecture_path}")
+        matches: list[Path] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            filename = item.get("filename")
+            filepath = item.get("filepath")
+            if not isinstance(filename, str) or not isinstance(filepath, str):
+                continue
+            filename_path = Path(filename)
+            prompt_matches = filename_path.name == unit.prompt_path.name
+            try:
+                prompt_matches = prompt_matches or filename_path == unit.prompt_path.relative_to(
+                    unit.prompts_dir
+                )
+            except ValueError:
+                pass
+            if prompt_matches:
+                output = Path(filepath)
+                if output.is_absolute() or ".." in output.parts:
+                    raise ValueError(f"architecture output is invalid: {filepath}")
+                matches.append(architecture_path.parent / output)
+        if len(matches) > 1:
+            raise ValueError("ambiguous module configuration")
+        if matches:
+            return matches[0]
+    return None
+
+
+def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
+    """Resolve report paths without creating directories or files."""
+    extension = get_extension(unit.language)
+    suffix = f".{extension}" if extension else ""
+    code_path = _architecture_filepath(unit, base)
+    code_stem = code_path.stem if code_path is not None else Path(unit.basename).name
+    if code_path is None:
+        code_path = base / f"{code_stem}{suffix}"
+    return {
+        "prompt": unit.prompt_path,
+        "code": code_path,
+        "example": base / "examples" / f"{code_stem}_example{suffix}",
+        "test": base / "tests" / f"test_{code_stem}{suffix}",
+        "test_files": [base / "tests" / f"test_{code_stem}{suffix}"],
+    }
 
 
 def _changed_artifacts(
@@ -863,15 +927,9 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
     # exists.  The legacy helper creates its parent directory as a write-side
     # convenience, so derive the read-only project-relative location here.
     fp_path = base / ".pdd" / "meta" / f"{_safe_basename(unit.basename)}_{unit.language}.json"
-    before_dirs = _directory_snapshot(base)
     try:
-        paths = get_pdd_file_paths(
-            unit.basename,
-            unit.language,
-            prompts_dir=str(unit.prompts_dir),
-        )
+        paths = _resolve_report_paths(unit, base)
     except Exception as exc:  # pragma: no cover - surfaced in JSON report
-        _remove_new_empty_dirs(base, before_dirs)
         return {
             "basename": unit.basename,
             "language": unit.language,
@@ -884,7 +942,6 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "paths": {"prompt": str(unit.prompt_path)},
             "failure": "path_resolution",
         }
-    _remove_new_empty_dirs(base, before_dirs)
 
     _raw_fp, raw_error = _load_fingerprint_json(fp_path)
     if raw_error is not None:
