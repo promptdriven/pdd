@@ -239,6 +239,53 @@ def test_playwright_candidate_browser_cache_is_not_trusted(tmp_path: Path) -> No
     assert "candidate node_modules" in executions[0].detail
 
 
+def test_playwright_ignored_bare_package_mutation_cannot_change_evidence(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "import { expected } from 'helper';\n"
+        "test('widget works', async () => expect(expected).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "ignore bare package dependencies")
+    commit = _git(root, "rev-parse", "HEAD")
+    helper = root / "node_modules" / "helper" / "index.js"
+    helper.parent.mkdir(parents=True)
+    helper.write_text("exports.expected = true;\n", encoding="utf-8")
+
+    _envelope, first = _run(root, commit, commit, _fake_playwright(tmp_path))
+    helper.write_text("exports.expected = false;\n", encoding="utf-8")
+    _envelope, second = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert first[0].outcome is EvidenceOutcome.ERROR
+    assert first[0].detail == second[0].detail
+    assert first[0].command_digest == second[0].command_digest
+    assert "bare package imports" in first[0].detail
+
+
+def test_playwright_external_node_modules_environment_is_available(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    protected = tmp_path / "protected"
+    package = protected / "node_modules" / "@playwright" / "test"
+    package.mkdir(parents=True)
+    (package / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
+    runner = package / "cli.js"
+    runner.write_text(_fake_node_playwright(tmp_path).read_text(encoding="utf-8"))
+
+    node = shutil.which("node")
+    assert node is not None
+
+    _envelope, executions = _run(root, commit, commit, (node, str(runner)))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
 def test_default_candidate_node_modules_playwright_is_not_trusted(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
