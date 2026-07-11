@@ -207,6 +207,16 @@ def test_include_many_glob_hashes_every_matching_file(tmp_path) -> None:
     ]
 
 
+def test_invalid_wildcard_include_is_unit_scoped_error(tmp_path) -> None:
+    prompt = tmp_path / "prompts/widget.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("<include-many>tests/**.yaml</include-many>", encoding="utf-8")
+    with pytest.raises(IncludeGraphError, match="wildcard pattern is invalid"):
+        build_include_closure(
+            PurePosixPath("prompts/widget.prompt"), PathPolicy(tmp_path)
+        )
+
+
 def test_prompt_tree_projects_include_to_generated_project_tree(tmp_path) -> None:
     prompt = tmp_path / "prompts/frontend/app/widget.prompt"
     config = tmp_path / "frontend/tsconfig.json"

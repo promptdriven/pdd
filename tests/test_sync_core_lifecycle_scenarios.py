@@ -107,6 +107,26 @@ def test_candidate_scenario_environment_strips_signer_capabilities(
     assert "PDD_RELEASED_CHECKER_COMMAND" not in captured
 
 
+def test_lifecycle_public_report_uses_root_certify(monkeypatch) -> None:
+    observed = {}
+
+    def fake_candidate(_arguments, _root, *command):
+        observed["command"] = command
+        output = Path(command[command.index("--output") + 1])
+        output.write_text(
+            json.dumps({"counts": {"unbaselined": 1}}),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(command, 1, "", "")
+
+    monkeypatch.setattr(scenario_harness, "_candidate", fake_candidate)
+    result = scenario_harness._candidate_public_report(
+        argparse.Namespace(candidate_python=sys.executable)
+    )
+    assert result.status == "PASS"
+    assert observed["command"][0] == "certify"
+
+
 def test_merge_base_movement_blocks_stale_repair_and_converges(tmp_path) -> None:
     """A repair planned before merge movement must never overwrite merged bytes."""
     root = tmp_path / "merge-repo"

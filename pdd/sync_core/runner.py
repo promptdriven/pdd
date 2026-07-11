@@ -39,6 +39,7 @@ PYTEST_CONFIG_PATHS = (
     PurePosixPath("setup.cfg"),
 )
 PYTEST_PROTECTED_FLAGS = ("--strict-config", "--strict-markers", "-ra")
+_CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
 
 
 @dataclass(frozen=True)
@@ -262,7 +263,7 @@ def runner_identity_digest(
             "--strict-config",
             "--strict-markers",
             "-p",
-            "pdd.sync_core.pytest_probe",
+            "<checker-owned-pytest-probe>",
             "<test-path>",
         ],
         "pytest_environment": {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
@@ -362,6 +363,30 @@ def _pytest_environment() -> dict[str, str]:
     )
 
 
+def _trusted_probe_plugin(directory: Path) -> tuple[str, Path]:
+    """Create a unique plugin shim that loads the checker-owned probe by path."""
+    plugin_name = "pdd_checker_pytest_probe"
+    plugin = directory / f"{plugin_name}.py"
+    plugin.write_text(
+        "\n".join(
+            (
+                "import importlib.util",
+                "_SPEC = importlib.util.spec_from_file_location(",
+                f"    {plugin_name!r}, {json.dumps(str(_CHECKER_PYTEST_PROBE))}",
+                ")",
+                "if _SPEC is None or _SPEC.loader is None:",
+                "    raise ImportError('checker pytest probe is unavailable')",
+                "_MODULE = importlib.util.module_from_spec(_SPEC)",
+                "_SPEC.loader.exec_module(_MODULE)",
+                "pytest_collection_modifyitems = _MODULE.pytest_collection_modifyitems",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    return plugin_name, directory
+
+
 def _run_test_node(
     root: Path,
     node_id: str,
@@ -413,7 +438,9 @@ def _collect_node_ids(
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Collect exact pytest node IDs through the protected adapter."""
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-collection-") as directory:
-        collection_output = Path(directory) / "node-ids.json"
+        temporary = Path(directory)
+        collection_output = temporary / "node-ids.json"
+        plugin_name, plugin_directory = _trusted_probe_plugin(temporary)
         command = [
             sys.executable,
             "-m",
@@ -423,7 +450,7 @@ def _collect_node_ids(
             "--strict-config",
             "--strict-markers",
             "-p",
-            "pdd.sync_core.pytest_probe",
+            plugin_name,
             path.as_posix(),
         ]
         digest = hashlib.sha256(
@@ -438,7 +465,10 @@ def _collect_node_ids(
                 check=False,
                 timeout=timeout_seconds,
                 env=_pytest_environment()
-                | {"PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output)},
+                | {
+                    "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
+                    "PYTHONPATH": str(plugin_directory),
+                },
             )
         except subprocess.TimeoutExpired:
             return (

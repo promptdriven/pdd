@@ -385,13 +385,18 @@ def _resolved_targets(
     wildcard = any(character in reference.path for character in "*?[")
     for candidate in candidates:
         if wildcard:
-            matches = tuple(
-                sorted(
-                    PurePosixPath(path.relative_to(policy.checkout_root).as_posix())
-                    for path in policy.checkout_root.glob(candidate.as_posix())
-                    if path.is_file()
+            try:
+                matches = tuple(
+                    sorted(
+                        PurePosixPath(path.relative_to(policy.checkout_root).as_posix())
+                        for path in policy.checkout_root.glob(candidate.as_posix())
+                        if path.is_file()
+                    )
                 )
-            )
+            except ValueError as exc:
+                raise IncludeGraphError(
+                    f"include wildcard pattern is invalid: {reference.path}"
+                ) from exc
             if matches:
                 return matches
             continue
