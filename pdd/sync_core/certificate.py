@@ -982,6 +982,7 @@ def verify_global_certificate(
 ) -> bool:
     # pylint: disable=too-many-arguments,too-many-return-statements,too-many-locals
     """Accept only a fresh green certificate for exact expected repository refs."""
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     if not _verify_certificate_integrity(
         certificate, public_key, expected_issuer=expected_issuer
     ):
@@ -1014,6 +1015,7 @@ def verify_global_certificate(
         artifact.verify(
             expected_candidate_artifact_policy,
             expected_source_sha=str(pdd_report.get("head_sha", "")),
+            now=current,
             consume_replay=False,
         )
     except (CandidateArtifactProvenanceError, AttributeError, ValueError):
@@ -1024,7 +1026,6 @@ def verify_global_certificate(
         return False
     if checked_at.tzinfo is None:
         return False
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     checked_at = checked_at.astimezone(timezone.utc)
     if checked_at > current or current - checked_at > maximum_age:
         return False
