@@ -240,3 +240,13 @@ def test_wrong_closure_binding_is_rejected(override) -> None:
             _envelope(),
             **override,
         )
+
+
+def test_file_replay_store_rejects_symlink_lock(tmp_path) -> None:
+    path = tmp_path / "replay.json"
+    outside = tmp_path / "outside.lock"
+    outside.write_text("do not touch")
+    path.with_name("replay.json.lock").symlink_to(outside)
+    store = FileReplayStore(path)
+    with pytest.raises(AttestationError, match="unsafe"):
+        store.consume("trusted-ci", "nonce", "attestation")

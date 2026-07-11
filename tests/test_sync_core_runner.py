@@ -1,5 +1,6 @@
 """Tests for pass-only trusted runner normalization and self-certification guards."""
 
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -552,3 +553,89 @@ def test_non_strict_xpass_cannot_pass(tmp_path) -> None:
     root, head = _repository(tmp_path, content)
     _envelope, executions = _run(root, head, head)
     assert executions[0].outcome is EvidenceOutcome.XFAIL
+
+
+def test_reflective_dynamic_repo_local_import_fails_closed(tmp_path) -> None:
+    root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/test_widget.py").write_text(
+        "import importlib\n"
+        "helper = getattr(importlib, 'import_module')('support.helper')\n"
+        "def test_widget(): assert helper.expected() == 1\n"
+    )
+    (root / "support").mkdir()
+    (root / "support/helper.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "reflective dynamic helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_file_loader_repo_local_import_fails_closed(tmp_path) -> None:
+    root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/test_widget.py").write_text(
+        "from importlib.machinery import SourceFileLoader\n"
+        "helper = SourceFileLoader('helper', 'support/helper.py').load_module()\n"
+        "def test_widget(): assert helper.expected() == 1\n"
+    )
+    (root / "support").mkdir()
+    (root / "support/helper.py").write_text("def expected(): return 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "file loader helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_compact_config_loaded_local_plugin_fails_closed(tmp_path) -> None:
+    root, _head = _repository(tmp_path, "def test_widget(): assert False\n")
+    (root / "local_plugin.py").write_text(
+        "def pytest_collection_modifyitems(items):\n"
+        "    for item in items: item.obj = lambda: None\n"
+    )
+    (root / "pytest.ini").write_text("[pytest]\naddopts = -plocal_plugin\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "compact configured local plugin")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "plugins are not bound" in executions[0].detail
+
+
+def test_self_restoring_protected_test_rewrite_cannot_pass(tmp_path) -> None:
+    root, _initial = _repository(
+        tmp_path, "import product\ndef test_widget(): assert False\n"
+    )
+    (root / "product.py").write_text(
+        "import atexit\nfrom pathlib import Path\n"
+        "p = Path('tests/test_widget.py')\noriginal = p.read_text()\n"
+        "p.write_text('import product\\ndef test_widget(): assert True\\n')\n"
+        "atexit.register(p.write_text, original)\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "self restoring rewrite")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head, (PurePosixPath("product.py"),))
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_surviving_validator_descendant_cannot_pass(tmp_path) -> None:
+    pid_file = tmp_path / "descendant.pid"
+    content = (
+        "import subprocess, sys\nfrom pathlib import Path\n"
+        "def test_widget():\n"
+        "    child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(30)'])\n"
+        f"    Path({str(pid_file)!r}).write_text(str(child.pid))\n"
+        "    assert True\n"
+    )
+    root, head = _repository(tmp_path, content)
+    try:
+        _envelope, executions = _run(root, head, head)
+        assert executions[0].outcome is not EvidenceOutcome.PASS
+    finally:
+        if pid_file.exists():
+            try:
+                os.kill(int(pid_file.read_text()), 9)
+            except ProcessLookupError:
+                pass

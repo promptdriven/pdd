@@ -265,3 +265,19 @@ def test_valid_exact_sha_artifact_is_accepted(tmp_path) -> None:
     provenance.verify(_policy(authority), expected_source_sha=SOURCE_SHA)
     assert provenance.source_sha == SOURCE_SHA
     assert provenance.wheel_sha256 == hashlib.sha256(wheel.read_bytes()).hexdigest()
+
+
+def test_durable_replay_ledger_rejects_symlink_lock(tmp_path) -> None:
+    authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
+    replay_ledger = tmp_path / "replay.json"
+    outside = tmp_path / "outside.lock"
+    outside.write_text("do not touch")
+    replay_ledger.with_name("replay.json.lock").symlink_to(outside)
+    provenance = _load(tmp_path, wheel, authority)
+    with pytest.raises(CandidateArtifactProvenanceError, match="unsafe"):
+        provenance.verify(
+            _policy_with_replay_ledger(authority, replay_ledger),
+            expected_source_sha=SOURCE_SHA,
+        )
