@@ -1665,6 +1665,12 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             label=f"pdd sync {drift.basename}",
         )
         return ok if ok else False
+    if op == "fail_and_request_manual_merge":
+        console.print(
+            f"[yellow]manual merge required for {drift.basename}; "
+            "skipping auto-heal[/yellow]"
+        )
+        return None
 
     console.print(f"[red]unknown operation '{op}' for {drift.basename}[/red]")
     return False
