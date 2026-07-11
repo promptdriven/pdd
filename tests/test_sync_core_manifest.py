@@ -121,6 +121,68 @@ def test_protected_tombstone_accounts_for_removed_unit(tmp_path) -> None:
     assert len(manifest.expected_managed) == 1
 
 
+def test_retired_unit_stale_alias_cannot_account_canonical_candidate(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / "prompts/helper_python.prompt").write_text("Build helper\n")
+    (root / "src/helper.py").write_text("helper = True\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "widget_python.prompt", "filepath": "src/widget.py"},
+                {"filename": "helper_python.prompt", "filepath": "src/helper.py"},
+            ]
+        )
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {"alias_path": "src", "canonical_path": "canonical"}
+                ],
+            }
+        )
+    )
+    (root / ".pdd/sync-tombstones.json").write_text(
+        json.dumps(
+            [
+                {
+                    "prompt_path": "prompts/widget_python.prompt",
+                    "artifact_paths": [
+                        "prompts/widget_python.prompt",
+                        "src/widget.py",
+                    ],
+                    "rationale": "Widget was deliberately retired",
+                    "owner": "sync-owner@example.com",
+                    "baseline_status": "IN_SYNC",
+                }
+            ]
+        )
+    )
+    base = _commit(root, "authorize retirement with stale alias")
+    (root / "canonical").mkdir()
+    (root / "canonical/widget.py").write_text("candidate = True\n")
+    (root / "prompts/widget_python.prompt").unlink()
+    (root / "src/widget.py").unlink()
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "helper_python.prompt", "filepath": "src/helper.py"}]
+        )
+    )
+    head = _commit(root, "retire widget and add canonical candidate")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+
+    assert any("unchanged symlink" in reason for reason in manifest.invalid_reasons)
+    assert PurePosixPath("canonical/widget.py") in manifest.unaccounted_tracked_paths
+    candidate = next(
+        item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath == PurePosixPath("canonical/widget.py")
+    )
+    assert candidate.inventory is InventoryStatus.INVALID
+
+
 def test_incomplete_tombstone_cannot_reduce_expected_managed(tmp_path) -> None:
     root = _repository(tmp_path)
     _commit(root, "base")

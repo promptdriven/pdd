@@ -159,6 +159,21 @@ def test_snapshot_accepts_base_protected_approved_alias(tmp_path) -> None:
     assert any(item.relpath.as_posix() == "src/widget.py" for item in snapshot.artifacts)
 
 
+def test_snapshot_allows_regular_code_edit_between_protected_trees(tmp_path) -> None:
+    root, base = _repository(tmp_path)
+    (root / "src/widget.py").write_text("value = 2\n")
+    _git(root, "add", "src/widget.py")
+    _git(root, "commit", "-q", "-m", "edit managed code")
+    head = _git(root, "rev-parse", "HEAD")
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+
+    snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
+
+    code = next(item for item in snapshot.artifacts if item.role == "code")
+    assert code.relpath.as_posix() == "src/widget.py"
+
+
 def test_query_expansion_cannot_receive_trusted_verified_status(tmp_path) -> None:
     root, commit = _repository(tmp_path, query=True)
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
