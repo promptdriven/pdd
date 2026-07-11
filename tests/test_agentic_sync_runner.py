@@ -2028,13 +2028,15 @@ class TestSyncOneModule:
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
     def test_test_churn_exhaustion_never_blocks_issue_workflow(
-        self, mock_find, mock_popen, mock_cost, mock_unlink, capsys
+        self, mock_find, mock_popen, mock_cost, mock_unlink, capsys, tmp_path,
+        monkeypatch,
     ):
         """Issue #1903 §B.4: when an adopted co-located test's churn cannot be
         reconciled after bounded repair, the issue-driven runner MUST NOT
         hard-fail. It keeps the (already-restored) human test, flags it 'needs
         review', and reports the module as synced so the PR still opens —
         instead of handing work back to the user."""
+        monkeypatch.chdir(tmp_path)  # isolate the on-disk resume state file
         churn_error = (
             "Test churn threshold exceeded for foo_python.prompt:\n"
             "ratio: 0.82\n"
@@ -2054,6 +2056,8 @@ class TestSyncOneModule:
             sync_options={},
             github_info=None,
             quiet=True,
+            # issue-driven workflow (opens a PR) — required for the never-block.
+            issue_url="https://github.com/o/r/issues/7",
         )
 
         success, cost, error = runner._sync_one_module("foo")
@@ -2081,13 +2085,53 @@ class TestSyncOneModule:
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
-    def test_test_churn_pdd_owned_shadow_still_hard_fails(
+    def test_test_churn_global_sync_no_issue_url_still_hard_fails(
         self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Issue #1903 §B.4 scope: the never-block is issue-driven ONLY. A
+        project-wide `pdd sync` builds this runner with issue_url=None and opens
+        NO PR, so even an adopted co-located test must keep the strict hard-fail
+        (there is no PR to flag 'needs review' against — relaxing it there would
+        silently bypass the churn gate)."""
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"  # co-located, but...
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=None,  # global sync, no PR
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success is False, "global sync (no issue_url) must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_pdd_owned_shadow_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
     ):
         """Issue #1903 §B.4 scope: the never-block relief is ONLY for adopted
         co-located human tests. A PDD-owned `tests/test_*.py` shadow that is NOT
         proven adopted keeps the strict test-churn hard-fail so coverage loss on
         a PDD-owned test is never silently swallowed."""
+        monkeypatch.chdir(tmp_path)  # isolate the on-disk resume state file
         churn_error = (
             "Test churn threshold exceeded for foo_python.prompt:\n"
             "ratio: 0.82\n"
@@ -2106,6 +2150,8 @@ class TestSyncOneModule:
             sync_options={},
             github_info=None,
             quiet=True,
+            # issue-driven, so ONLY the adopted-classifier guard can reject it.
+            issue_url="https://github.com/o/r/issues/7",
         )
 
         success, cost, error = runner._sync_one_module("foo")

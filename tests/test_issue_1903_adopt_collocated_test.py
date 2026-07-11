@@ -276,26 +276,52 @@ class TestGreenfieldRunnerDiscovery:
         got = find_runner_collected_test_path(code)
         assert Path(got).resolve() == (tmp_path / "src/__tests__/page.test.tsx").resolve()
 
-    def test_centralized_testmatch_falls_back_to_derived(self, tmp_path, monkeypatch):
+    def test_centralized_testmatch_derives_collected_path(self, tmp_path, monkeypatch):
         # A centralized layout (tests only under top-level test/) does NOT collect
-        # a co-located test -> must fall back to the derived path, never emit an
-        # uncollected co-located orphan.
+        # a co-located test -> DERIVE a path UNDER the collected directory (never
+        # the runner-blind tests/ shadow, and never an uncollected co-located
+        # orphan). The derived path must satisfy the configured testMatch.
         monkeypatch.chdir(tmp_path)
         _write(tmp_path / "package.json",
                json.dumps({"jest": {"testMatch": ["<rootDir>/test/**/*.test.ts"]}}))
-        code = _write(tmp_path / "src/page.tsx")
-        assert find_runner_collected_test_path(code) is None
-        shadow = tmp_path / "tests" / "test_page.tsx"
-        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
+        code = _write(tmp_path / "src/util.ts")
+        got = find_runner_collected_test_path(code)
+        assert got is not None
+        rel = Path(got).resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert rel.startswith("test/") and rel.endswith("util.test.ts"), rel
 
-    def test_roots_excluding_module_falls_back(self, tmp_path, monkeypatch):
+    def test_roots_excluding_module_derives_under_root(self, tmp_path, monkeypatch):
         # roots restricts collection to test/; a module under src/ cannot be
-        # co-located within a collected root -> fall back to derived.
+        # co-located within a collected root -> derive a path UNDER test/.
         monkeypatch.chdir(tmp_path)
         _write(tmp_path / "package.json",
                json.dumps({"jest": {"roots": ["<rootDir>/test"]}}))
         code = _write(tmp_path / "src/app/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert got is not None
+        rel = Path(got).resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert rel.startswith("test/") and rel.endswith("page.test.tsx"), rel
+
+    def test_js_config_plain_uses_default_convention(self, tmp_path, monkeypatch):
+        # A jest.config.js with NO discovery keys uses jest defaults, which
+        # collect the co-located __test__/*.test.tsx we write.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = { preset: 'ts-jest' };\n")
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "src/__test__/page.test.tsx").resolve()
+
+    def test_js_config_custom_discovery_refuses_conservatively(self, tmp_path, monkeypatch):
+        # A jest.config.js that customizes testMatch (unparseable in Python) ->
+        # we cannot prove where tests are collected -> refuse (fall back to
+        # derived) rather than emit a possibly-uncollected co-located test.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js",
+               "module.exports = { testMatch: ['<rootDir>/qa/**/*.test.ts'] };\n")
+        code = _write(tmp_path / "src/page.tsx")
         assert find_runner_collected_test_path(code) is None
+        shadow = tmp_path / "tests" / "test_page.tsx"
+        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
 
     def test_roots_including_module_co_locates(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -408,7 +434,9 @@ def _build_greenfield_jest_project(tmp_path: Path) -> tuple[Path, Path]:
         '      example_output_path: "examples/"\n'
     )
     _write(tmp_path / ".pddrc", pddrc)
-    _write(tmp_path / "frontend/jest.config.js", "module.exports = { rootDir: '.' };\n")
+    # A plain jest.config.js (no discovery keys) uses jest defaults, which
+    # collect the co-located __test__/*.test.tsx.
+    _write(tmp_path / "frontend/jest.config.js", "module.exports = { preset: 'ts-jest' };\n")
     _write(tmp_path / "frontend/package.json", '{"devDependencies": {"jest": "^29"}}\n')
     code = _write(
         tmp_path / "frontend/src/app/contributions/page.tsx",

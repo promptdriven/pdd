@@ -2710,7 +2710,17 @@ class AsyncSyncRunner:
             churned_test_path = _extract_test_churn_output_path(
                 last_stdout, last_stderr
             )
-            if _is_adopted_collocated_test_path(churned_test_path):
+            # Two guards, BOTH required, so the relief never escapes its scope:
+            #   (1) issue-driven workflow only — ``self.issue_url`` is set only
+            #       when this runner backs a GitHub issue → PR sync (agentic_sync
+            #       / durable_sync_runner). Project-wide ``pdd sync`` builds this
+            #       runner with ``issue_url=None`` and opens NO PR, so it must
+            #       keep the strict hard-fail (there is no PR to flag "needs
+            #       review" against — relaxing it there would silently bypass the
+            #       gate).
+            #   (2) adopted co-located test only — a PDD-owned ``tests/`` shadow
+            #       keeps the strict hard-fail (see ``_is_adopted_collocated_test_path``).
+            if self.issue_url and _is_adopted_collocated_test_path(churned_test_path):
                 note = self._register_test_churn_needs_review(
                     basename, churned_test_path
                 )
