@@ -191,6 +191,27 @@ def test_path_policy_rejects_alias_retarget_between_immutable_trees(tmp_path) ->
         policy.resolve(PurePosixPath("alias/widget.py"))
 
 
+def test_path_policy_rejects_configured_alias_absent_from_immutable_trees(
+    tmp_path,
+) -> None:
+    _git_repository(tmp_path)
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n", encoding="utf-8")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "protected tree without alias")
+    commit = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+
+    policy = PathPolicy(
+        tmp_path,
+        {PurePosixPath("alias"): PurePosixPath("canonical")},
+        base_ref=commit,
+        head_ref=commit,
+    )
+    with pytest.raises(PathPolicyError, match="protected trees"):
+        policy.resolve(PurePosixPath("alias/widget.py"))
+
+
 def test_path_policy_rejects_stale_alias_policy_over_real_directory(tmp_path) -> None:
     _git_repository(tmp_path)
     (tmp_path / "alias").mkdir()

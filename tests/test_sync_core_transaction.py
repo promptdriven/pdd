@@ -179,6 +179,50 @@ def test_prepared_transaction_recovers_by_rollback_without_destination_write(tmp
     assert manager.incomplete() == ()
 
 
+def test_prepared_alias_transaction_recovers_after_policy_changes(tmp_path) -> None:
+    (tmp_path / "canonical").mkdir()
+    target = tmp_path / "canonical/widget.py"
+    target.write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare(
+        "tx-prepared-alias-policy-change",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),),
+    )
+
+    recovered = TransactionManager(tmp_path).recover(
+        "tx-prepared-alias-policy-change"
+    )
+
+    assert recovered.phase is TransactionPhase.ROLLED_BACK
+    assert target.read_text() == "value = 1\n"
+
+
+@pytest.mark.parametrize("terminal_phase", ["COMMITTED", "ROLLED_BACK"])
+def test_terminal_alias_transaction_is_idempotent_after_policy_changes(
+    tmp_path, terminal_phase
+) -> None:
+    (tmp_path / "canonical").mkdir()
+    (tmp_path / "canonical/widget.py").write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare(
+        "tx-terminal-alias-policy-change",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),),
+    )
+    if terminal_phase == "COMMITTED":
+        manager.commit("tx-terminal-alias-policy-change")
+    else:
+        manager.recover("tx-terminal-alias-policy-change")
+
+    recovered = TransactionManager(tmp_path).recover(
+        "tx-terminal-alias-policy-change"
+    )
+
+    assert recovered.phase.value == terminal_phase
+    assert recovered.no_op is True
+
+
 def test_corrupt_prepared_blob_never_commits(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     target = tmp_path / "src/widget.py"
@@ -544,3 +588,44 @@ def test_public_recover_loads_committed_protected_alias_policy(
     assert result.exit_code == 0, result.output
     assert '"phase": "COMMITTED"' in result.output
     assert target.read_text() == "value = 2\n"
+
+
+def test_public_recover_defers_removed_alias_policy_for_prepared_journal(
+    tmp_path, monkeypatch
+) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "recover@example.com")
+    _git(tmp_path, "config", "user.name", "Recover Test")
+    (tmp_path / ".pdd").mkdir()
+    policy = tmp_path / ".pdd/sync-aliases.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [{"alias_path": "alias", "canonical_path": "canonical"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "canonical").mkdir()
+    target = tmp_path / "canonical/widget.py"
+    target.write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "protected alias policy")
+    TransactionManager(tmp_path, approved_aliases=_approved_aliases()).prepare(
+        "tx-cli-prepared-policy-removal",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),),
+    )
+    policy.unlink()
+    _git(tmp_path, "add", "-u")
+    _git(tmp_path, "commit", "-q", "-m", "remove alias policy")
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        cli, ["recover", "--transaction", "tx-cli-prepared-policy-removal"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert '"phase": "ROLLED_BACK"' in result.output
+    assert target.read_text() == "value = 1\n"
