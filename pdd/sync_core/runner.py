@@ -3192,9 +3192,9 @@ def _playwright_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | N
     return (node, str(binary))
 
 
-def _playwright_environment(home: Path) -> dict[str, str]:
+def _playwright_environment(home: Path, module_root: Path) -> dict[str, str]:
     """Return an isolated credential-free environment for Playwright."""
-    return {
+    environment = {
         key: value for key, value in os.environ.items()
         if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
         and not key.startswith(("PLAYWRIGHT_", "NODE_", "npm_config_", "NPM_CONFIG_"))
@@ -3203,6 +3203,10 @@ def _playwright_environment(home: Path) -> dict[str, str]:
         "HOME": str(home), "XDG_CONFIG_HOME": str(home / "config"),
         "XDG_CACHE_HOME": str(home / "cache"), "NODE_ENV": "test",
     }
+    node_modules = module_root / "node_modules"
+    if node_modules.is_dir():
+        environment["NODE_PATH"] = str(node_modules)
+    return environment
 
 
 def _playwright_result(
@@ -3284,8 +3288,18 @@ def _run_playwright(
     digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-playwright-") as directory:
         try:
-            result = subprocess.run(command, cwd=root, capture_output=True, text=True,
-                check=False, timeout=timeout_seconds, env=_playwright_environment(Path(directory)))
+            result = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+                env=_playwright_environment(
+                    Path(directory),
+                    command_root or root,
+                ),
+            )
         except subprocess.TimeoutExpired:
             return RunnerExecution("playwright", EvidenceOutcome.TIMEOUT, digest, "Playwright execution timed out"), ()
     outcome, detail, identities = _playwright_result(
