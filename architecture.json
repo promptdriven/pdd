@@ -8597,7 +8597,8 @@
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
     "dependencies": [
       "auto_deps_main_python.prompt",
-      "architecture_sync_python.prompt"
+      "architecture_sync_python.prompt",
+      "fingerprint_transaction_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",

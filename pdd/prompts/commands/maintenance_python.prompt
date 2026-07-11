@@ -16,6 +16,7 @@
 
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>fingerprint_transaction_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
