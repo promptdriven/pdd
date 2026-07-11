@@ -1466,12 +1466,28 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
         raise ValueError("Playwright configuration must be UTF-8") from exc
     if re.search(r"\b(process|require|import\s*\(|await|function|=>|\beval\b)\b", text):
         raise ValueError("dynamic Playwright configuration is not supported")
-    if re.search(r"\b(grep|grepInvert|shard|retries|workers|repeatEach)\s*:", text):
+    sensitive_execution_keys = (
+        "grep",
+        "grepInvert",
+        "shard",
+        "retries",
+        "workers",
+        "repeatEach",
+    )
+    quoted_or_bare = (
+        r"(?:\b(?:{keys})\b|['\"](?:{keys})['\"])\s*:"
+    )
+    if re.search(
+        quoted_or_bare.format(keys="|".join(sensitive_execution_keys)),
+        text,
+    ):
         raise ValueError("Playwright execution filters or retries are not allowed")
     if re.search(r"\b(?:const|let|var)\s+(globalSetup|globalTeardown|reporter|webServer)\b", text):
         raise ValueError("indirect Playwright executable controls are not bound by this adapter")
-    if re.search(r"\bwebServer\s*:", text):
+    if re.search(quoted_or_bare.format(keys="webServer"), text):
         raise ValueError("Playwright webServer is not bound by this adapter")
+    if re.search(r"['\"](?:globalSetup|globalTeardown|reporter)['\"]\s*:", text):
+        raise ValueError("quoted Playwright executable controls are not bound by this adapter")
     # Parse direct relative imports here; the closure resolver checks each blob.
     references = {
         path.parent / PurePosixPath(item)
@@ -2287,6 +2303,14 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
             }
         except (OSError, ValueError):
             payload["vitest"] = "invalid-vitest-toolchain"
+    if config.playwright_command is not None:
+        payload["playwright"] = [
+            _file_identity(Path(part).resolve())
+            if (Path(part).is_absolute() or "/" in part)
+            and Path(part).expanduser().exists()
+            else part
+            for part in config.playwright_command
+        ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -3294,6 +3318,8 @@ def _run_playwright(
     prefix = _playwright_command(config)
     if prefix is None:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-unavailable", "no local Playwright CLI is available"), ()
+    if _command_uses_candidate_checkout(root, prefix):
+        return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-untrusted", "explicit Playwright command inside the candidate checkout is not trusted"), ()
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
