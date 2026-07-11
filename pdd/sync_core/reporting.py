@@ -101,6 +101,7 @@ class EvidenceExpectation:
 
     unit: ManifestUnit
     snapshot_digest: str
+    artifact_closure_digest: str
     profile_digest: str
     attestation_ref: str | None
 
@@ -156,6 +157,7 @@ def _evidence(
     if (
         binding.subject != expectation.unit.unit_id
         or binding.snapshot_digest != expectation.snapshot_digest
+        or binding.artifact_closure_digest != expectation.artifact_closure_digest
         or binding.profile_digest != expectation.profile_digest
         or binding.base_sha != context.manifest.base_ref
     ):
@@ -192,6 +194,7 @@ def _unit_verdict(context: ReportContext, unit: ManifestUnit) -> SyncVerdict:
             context,
             EvidenceExpectation(
                 unit,
+                snapshot.digest(),
                 snapshot.digest(),
                 profile.profile_digest,
                 attestation_ref,

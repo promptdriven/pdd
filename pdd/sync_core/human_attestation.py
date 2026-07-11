@@ -22,6 +22,8 @@ from .types import EvidenceOutcome, VerificationObligation, VerificationProfile
 
 HUMAN_ATTESTATION_POLICY_PATH = PurePosixPath(".pdd/human-attestation-policy.json")
 _APPROVALS_FILENAME = "approvals.json"
+_SUPPORTED_POLICY_VERSION = "v1"
+_MAXIMUM_LIFETIME_SECONDS = 24 * 60 * 60
 
 
 class HumanAttestationError(AttestationError):
@@ -110,6 +112,10 @@ def _optional_timestamp(value: object, name: str) -> datetime | None:
     return None if value is None else _timestamp(value, name)
 
 
+def _positive_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def load_human_attestation_policy(
     root: Path, protected_base_ref: str, external_store: Path
 ) -> HumanAttestationPolicy:
@@ -134,15 +140,16 @@ def load_human_attestation_policy(
     if not isinstance(payload, dict):
         raise HumanAttestationError("protected human attestation policy must be an object")
     version = _required_string(payload, "version")
+    if version != _SUPPORTED_POLICY_VERSION:
+        raise HumanAttestationError("protected human attestation version is unsupported")
     threshold = payload.get("threshold")
     maximum_lifetime_seconds = payload.get("maximum_lifetime_seconds")
     required_role = _required_string(payload, "required_role")
     rows = payload.get("signers")
     if (
-        not isinstance(threshold, int)
-        or threshold < 1
-        or not isinstance(maximum_lifetime_seconds, int)
-        or maximum_lifetime_seconds < 1
+        not _positive_integer(threshold)
+        or not _positive_integer(maximum_lifetime_seconds)
+        or maximum_lifetime_seconds > _MAXIMUM_LIFETIME_SECONDS
         or not isinstance(rows, list)
     ):
         raise HumanAttestationError("protected human attestation threshold is invalid")
@@ -277,7 +284,8 @@ class HumanAttestationVerifier:  # pylint: disable=too-few-public-methods
         if (
             signer.not_before and issued < signer.not_before
         ) or (
-            signer.not_after and issued >= signer.not_after
+            signer.not_after
+            and (issued >= signer.not_after or expires > signer.not_after)
         ):
             raise HumanAttestationError("human approval signer is outside its validity window")
         expected = {
