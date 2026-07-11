@@ -92,14 +92,14 @@ def _sandbox_command(
         profile = Path(name)
         profile.write_text("\n".join(rules), encoding="utf-8")
         return ["sandbox-exec", "-f", str(profile), *command], profile
-    if (sys.platform.startswith("linux") and shutil.which("bwrap")
-            and shutil.which("unshare")):
-        # util-linux creates the network namespace but does not configure its
-        # loopback device, avoiding the RTM_NEWADDR operation denied by hosted
-        # GitHub runners. Bubblewrap supplies the mount and PID containment.
-        argv = ["unshare", "--user", "--map-root-user", "--net", "--",
-                "bwrap", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-                "--die-with-parent", "--new-session", "--ro-bind", "/", "/",
+    if sys.platform.startswith("linux") and shutil.which("bwrap"):
+        elevated = bool(shutil.which("sudo")) and subprocess.run(
+            ["sudo", "-n", "true"], capture_output=True, check=False,
+        ).returncode == 0
+        prefix = ["sudo", "-n", "-E"] if elevated else []
+        argv = [*prefix, "bwrap", "--unshare-all", "--die-with-parent",
+                "--new-session", "--uid", str(os.getuid()), "--gid",
+                str(os.getgid()), "--ro-bind", "/", "/",
                 "--dev", "/dev", "--proc", "/proc"]
         for item in writable_roots:
             resolved = str(item.resolve())

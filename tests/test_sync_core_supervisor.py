@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -11,15 +12,20 @@ import pytest
 from pdd.sync_core.supervisor import _sandbox_command, run_supervised
 
 
-def test_linux_sandbox_uses_network_namespace_without_loopback_setup(
+def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
-    assert argv[:5] == ["unshare", "--user", "--map-root-user", "--net", "--"]
-    assert "--unshare-net" not in argv
+    assert argv[:4] == ["sudo", "-n", "-E", "bwrap"]
+    assert "--unshare-all" in argv
+    assert argv[argv.index("--uid") + 1] == str(os.getuid())
 
 
 @pytest.mark.skipif(
