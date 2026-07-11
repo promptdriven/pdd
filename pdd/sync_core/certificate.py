@@ -147,6 +147,17 @@ class NightlyObservation:
 
 
 @dataclass(frozen=True)
+class _NightlyVerificationPolicy:
+    """Protected inputs required to accept one historical nightly row."""
+
+    public_key: bytes
+    expected_issuer: str
+    targets: tuple[RepositoryTarget, ...]
+    checker_identity: CheckerIdentity
+    candidate_artifact_policy: CandidateArtifactPolicy
+
+
+@dataclass(frozen=True)
 class GlobalCertificateOptions:
     """Trust and external evidence inputs for global certification."""
 
@@ -377,10 +388,7 @@ def _nightly_lineage(
 
 def _complete_nightly(
     row: Any,
-    public_key: bytes,
-    expected_issuer: str,
-    targets: tuple[RepositoryTarget, ...],
-    checker_identity: CheckerIdentity,
+    policy: _NightlyVerificationPolicy,
 ) -> bool:
     if not isinstance(row, dict) or row.get("scan_ok") is not True:
         return False
@@ -408,16 +416,44 @@ def _complete_nightly(
         "dependency_environment_digest",
         "candidate_artifact",
     }
-    return (
+    if not (
         required_counts <= counts.keys()
         and required_lifecycle <= lifecycle.keys()
         and _nightly_observation_complete(row.get("nightly_observation"))
-        and row.get("checker") == checker_identity.payload()
-        and _nightly_lineage(row, targets)
+        and row.get("checker") == policy.checker_identity.payload()
+        and _nightly_lineage(row, policy.targets)
         and _verify_certificate_integrity(
-            row, public_key, expected_issuer=expected_issuer
+            row, policy.public_key, expected_issuer=policy.expected_issuer
         )
-    )
+    ):
+        return False
+    return _nightly_candidate_artifact_valid(repositories, lifecycle, policy)
+
+
+def _nightly_candidate_artifact_valid(
+    repositories: list[Any],
+    lifecycle: dict[str, Any],
+    policy: _NightlyVerificationPolicy,
+) -> bool:
+    """Verify the candidate artifact embedded in one historical nightly row."""
+    by_name = {
+        item.get("repository"): item for item in repositories if isinstance(item, dict)
+    }
+    pdd_report = by_name.get("pdd")
+    if not isinstance(pdd_report, dict):
+        return False
+    try:
+        artifact = CandidateArtifactProvenance.from_payload(
+            lifecycle.get("candidate_artifact")
+        )
+        artifact.verify(
+            policy.candidate_artifact_policy,
+            expected_source_sha=str(pdd_report.get("head_sha", "")),
+            consume_replay=False,
+        )
+    except (CandidateArtifactProvenanceError, ValueError):
+        return False
+    return artifact.wheel_sha256 == lifecycle.get("candidate_wheel_sha256")
 
 
 def _nightly_observation_complete(payload: Any) -> bool:
@@ -438,10 +474,7 @@ def _nightly_observation_complete(payload: Any) -> bool:
 
 def _nightly_streak(
     path: Path,
-    public_key: bytes,
-    expected_issuer: str,
-    targets: tuple[RepositoryTarget, ...],
-    checker_identity: CheckerIdentity,
+    policy: _NightlyVerificationPolicy,
 ) -> int:
     if not path.exists():
         return 0
@@ -455,9 +488,7 @@ def _nightly_streak(
     previous_date = None
     today = datetime.now(timezone.utc).date()
     for row in reversed(rows):
-        if not _complete_nightly(
-            row, public_key, expected_issuer, targets, checker_identity
-        ):
+        if not _complete_nightly(row, policy):
             break
         try:
             checked_at = datetime.fromisoformat(str(row["checked_at"]))
@@ -796,10 +827,13 @@ def _build_global_certificate_from_targets(
         ),
         "nightly_streak": _nightly_streak(
             options.nightly_ledger,
-            signer.public_key_bytes(),
-            signer.issuer,
-            targets,
-            options.checker_identity,
+            _NightlyVerificationPolicy(
+                signer.public_key_bytes(),
+                signer.issuer,
+                targets,
+                options.checker_identity,
+                options.candidate_artifact_policy,
+            ),
         ),
         "required_nightly_streak": options.required_nightly_streak,
         "nightly_observation_complete": int(

@@ -70,6 +70,7 @@ class CandidateArtifactPolicy:
     python_version: str
     python_abi: str
     python_platform: str
+    replay_ledger_path: Path | None = None
     _consumed: set[tuple[str, str, str]] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
@@ -100,9 +101,40 @@ class CandidateArtifactPolicy:
     def consume(self, attestation_id: str, nonce: str) -> None:
         """Reject a build statement reused by a second certification attempt."""
         key = (self.issuer, attestation_id, nonce)
+        if self.replay_ledger_path is not None:
+            self._consume_durable(key)
+            return
         if key in self._consumed:
             raise CandidateArtifactProvenanceError("candidate attestation is replayed")
         self._consumed.add(key)
+
+    def _consume_durable(self, key: tuple[str, str, str]) -> None:
+        path = Path(self.replay_ledger_path).expanduser().resolve()
+        if path.is_symlink():
+            raise CandidateArtifactProvenanceError("candidate replay ledger is unsafe")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            try:
+                records = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise CandidateArtifactProvenanceError(
+                    "candidate replay ledger is corrupt"
+                ) from exc
+            if not isinstance(records, list) or any(
+                not isinstance(item, list)
+                or len(item) != 3
+                or any(not isinstance(value, str) for value in item)
+                for item in records
+            ):
+                raise CandidateArtifactProvenanceError(
+                    "candidate replay ledger is corrupt"
+                )
+        else:
+            records = []
+        if list(key) in records:
+            raise CandidateArtifactProvenanceError("candidate attestation is replayed")
+        records.append(list(key))
+        path.write_text(json.dumps(records, sort_keys=True) + "\n", encoding="utf-8")
 
 
 @dataclass(frozen=True)
