@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .artifact_provenance import CandidateArtifactPolicy
 from .certificate import CheckerIdentity, verify_global_certificate
 
 
@@ -19,6 +20,7 @@ class CertificateExpectations:
     issuer: str
     public_key: bytes
     checker: CheckerIdentity
+    candidate_artifact_policy: CandidateArtifactPolicy
     repository_shas: dict[str, tuple[str, str]]
     repository_ids: dict[str, str]
 
@@ -30,6 +32,25 @@ def _sha(value: Any) -> str:
     return text
 
 
+def _candidate_policy(payload: Any) -> CandidateArtifactPolicy:
+    if not isinstance(payload, dict):
+        raise ValueError("candidate artifact policy is malformed")
+    python = payload.get("python")
+    if not isinstance(python, dict):
+        raise ValueError("candidate artifact policy interpreter is malformed")
+    public_key = base64.b64decode(str(payload["public_key_base64"]), validate=True)
+    return CandidateArtifactPolicy(
+        str(payload["issuer"]),
+        public_key,
+        str(payload["builder_workflow_identity"]),
+        str(payload["dependency_lock_sha256"]),
+        str(python["implementation"]),
+        str(python["version"]),
+        str(python["abi"]),
+        str(python["platform"]),
+    )
+
+
 def load_expectations(path: Path) -> CertificateExpectations:
     """Load and strictly validate one protected expectations document."""
     try:
@@ -37,6 +58,7 @@ def load_expectations(path: Path) -> CertificateExpectations:
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             raise ValueError("expectations schema is invalid")
         checker_payload = payload["checker"]
+        candidate_policy_payload = payload["candidate_artifact_policy"]
         repositories = payload["repositories"]
         if not isinstance(checker_payload, dict) or not isinstance(repositories, dict):
             raise ValueError("expectations payload is malformed")
@@ -53,6 +75,7 @@ def load_expectations(path: Path) -> CertificateExpectations:
         issuer = str(payload["issuer"])
         if not issuer:
             raise ValueError("certificate issuer is absent")
+        candidate_policy = _candidate_policy(candidate_policy_payload)
         repository_shas: dict[str, tuple[str, str]] = {}
         repository_ids: dict[str, str] = {}
         for name, row in repositories.items():
@@ -63,7 +86,12 @@ def load_expectations(path: Path) -> CertificateExpectations:
     except (KeyError, TypeError, json.JSONDecodeError, OSError) as exc:
         raise ValueError("protected certificate expectations are malformed") from exc
     return CertificateExpectations(
-        issuer, public_key, checker, repository_shas, repository_ids
+        issuer,
+        public_key,
+        checker,
+        candidate_policy,
+        repository_shas,
+        repository_ids,
     )
 
 
@@ -85,6 +113,7 @@ def main() -> None:
             expected_repository_shas=expected.repository_shas,
             expected_repository_ids=expected.repository_ids,
             expected_checker_identity=expected.checker,
+            expected_candidate_artifact_policy=expected.candidate_artifact_policy,
         )
     except (OSError, ValueError, json.JSONDecodeError):
         verified = False
