@@ -876,7 +876,7 @@ def _vitest_support_closure(
         if path in visited:
             continue
         visited.add(path)
-        source = read_git_blob(root, ref, path)
+        path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Vitest support path is missing: {path.as_posix()}")
         paths.add(path)

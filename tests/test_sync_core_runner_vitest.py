@@ -323,6 +323,29 @@ def test_vitest_parent_directory_imports_change_validator_digest(tmp_path: Path)
     assert head_digest != base_digest
 
 
+def test_vitest_config_reference_index_candidate_changes_validator_digest(tmp_path: Path) -> None:
+    config = '{"test":{"setupFiles":["support/setup"]}}'
+    root, _commit = _repository(tmp_path, config=config)
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    (root / "support/setup").mkdir(parents=True)
+    (root / "support/setup/index.ts").write_text(
+        "globalThis.expected = true;\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add extensionless setup index")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = vitest_validator_config_digest(root, base, paths)
+
+    (root / "support/setup/index.ts").write_text(
+        "globalThis.expected = false;\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate extensionless setup index")
+    head_digest = vitest_validator_config_digest(root, _git(root, "rev-parse", "HEAD"), paths)
+
+    assert head_digest != base_digest
+
+
 def test_vitest_repository_escape_import_is_not_bound(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     imports = _local_javascript_imports(
