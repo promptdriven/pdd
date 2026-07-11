@@ -481,6 +481,60 @@ def test_issue_1996_legacy_include_deps_reject_fifo_before_hashing(
     ]
 
 
+@pytest.mark.parametrize("include_deps", [["docs/widget.md"], "docs/widget.md", {"docs/widget.md": 7}])
+def test_issue_1996_malformed_include_deps_report_failure_json(
+    pdd_project: Path,
+    include_deps: object,
+) -> None:
+    fingerprint = _fingerprint(pdd_project)
+    fingerprint["include_deps"] = include_deps
+    _write_fingerprint(pdd_project, fingerprint)
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    widget = next(unit for unit in report["units"] if unit["basename"] == "widget")
+    assert widget["classification"] == "FAILURE"
+    assert widget["failure"] == "unsafe_include_deps"
+    assert widget["metadata_valid"] is False
+
+
+@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlink unavailable")
+def test_issue_1996_symlinked_metadata_ancestor_reports_failure_without_reading(
+    pdd_project: Path,
+) -> None:
+    meta = pdd_project / ".pdd" / "meta"
+    outside_meta = pdd_project.parent / "outside-meta"
+    meta.rename(outside_meta)
+    os.symlink(outside_meta, meta)
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "unsafe_metadata" for item in report["failures"])
+    assert all(item["basename"] != "widget" for item in report["units"])
+
+
+@pytest.mark.parametrize(
+    "pddrc",
+    [
+        "contexts: []\n",
+        "contexts:\n  default:\n    defaults: []\n",
+        "contexts: [\n",
+    ],
+)
+def test_issue_1996_invalid_pddrc_reports_discovery_failure_json(
+    pdd_project: Path,
+    pddrc: str,
+) -> None:
+    (pdd_project / ".pddrc").write_text(pddrc, encoding="utf-8")
+
+    report = _pdd_json(pdd_project, "sync", "--dry-run", "--json", check=False)
+
+    assert report["ok"] is False
+    assert any(item["failure"] == "invalid_pddrc" for item in report["failures"])
+    assert all(item["basename"] != "widget" for item in report["units"])
+
+
 def test_issue_1932_deleted_generated_artifact_is_failure_not_in_sync(
     pdd_project: Path,
 ) -> None:
