@@ -801,10 +801,12 @@ def _playwright_static_config(path: PurePosixPath, source: bytes) -> set[PurePos
     if re.search(r"\b(?:globalSetup|globalTeardown|reporter)\s*:\s*(?!['\"])", text):
         raise ValueError("indirect Playwright executable controls are not bound by this adapter")
     # Parse direct relative imports here; the closure resolver checks each blob.
-    references = {
-        path.parent / PurePosixPath(item)
-        for item in re.findall(r"(?:from\s+|import\s+)['\"](\.{1,2}/[^'\"]+)['\"]", text)
-    }
+    references: set[PurePosixPath] = set()
+    for item in re.findall(r"(?:from\s+|import\s+)['\"](\.{1,2}/[^'\"]+)['\"]", text):
+        reference = _normalize_repo_relative_path(path.parent / PurePosixPath(item))
+        if reference is None:
+            raise ValueError("Playwright config import escapes the repository")
+        references.add(reference)
     for key in ("globalSetup", "globalTeardown", "reporter"):
         for value in re.findall(rf"\b{key}\s*:\s*['\"]([^'\"]+)['\"]", text):
             local = _jest_local_path(value)
@@ -827,7 +829,7 @@ def _playwright_support_closure(
         if path in visited:
             continue
         visited.add(path)
-        source = read_git_blob(root, ref, path)
+        path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
         paths.add(path)
@@ -849,9 +851,8 @@ def playwright_validator_config_digest(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> str:
     """Hash Playwright config and every bound local executable dependency."""
-    del test_paths
     digest = hashlib.sha256()
-    for path, content in _playwright_support_closure(root, ref, ()):
+    for path, content in _playwright_support_closure(root, ref, test_paths):
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
 
