@@ -2078,6 +2078,74 @@ class TestSyncOneModule:
         assert runner.module_states["foo"].status == "success"
 
     @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_pdd_owned_shadow_still_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Issue #1903 §B.4 scope: the never-block relief is ONLY for adopted
+        co-located human tests. A PDD-owned `tests/test_*.py` shadow that is NOT
+        proven adopted keeps the strict test-churn hard-fail so coverage loss on
+        a PDD-owned test is never silently swallowed."""
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"  # PDD-owned shadow, not co-located
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success is False, "PDD-owned tests/ shadow must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    def test_needs_review_persists_across_resume(self, tmp_path):
+        """Issue #1903 §B.4: a durable resume must not drop the needs-review
+        flag for an already-synced module."""
+        issue = "https://github.com/o/r/issues/7"
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=issue,
+        )
+        runner.project_root = tmp_path
+        note = "`foo`: test churn ... kept the existing test (`x/__test__/foo.test.tsx`) ... for review"
+        runner.module_states["foo"].status = "success"
+        runner.module_states["foo"].needs_review = note
+        runner._save_state()
+
+        resumed = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            issue_url=issue,
+        )
+        resumed.project_root = tmp_path
+        resumed._load_state()
+
+        assert resumed.module_states["foo"].needs_review == note
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")

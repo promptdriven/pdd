@@ -714,16 +714,295 @@ def _project_uses_js_test_runner(module_path: Path, root_resolved: Path) -> bool
     return False
 
 
+def _as_str_list(value: Any) -> list[str]:
+    """Coerce a jest config value (str | list | None) to a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if isinstance(v, str)]
+    return []
+
+
+def _jest_config_from_package_json(package_json: Path) -> Optional[Mapping[str, Any]]:
+    """Return the inline ``jest``/``vitest`` config block from a package.json."""
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, Mapping):
+        return None
+    for key in ("jest", "vitest"):
+        block = data.get(key)
+        if isinstance(block, Mapping):
+            return block
+    return None
+
+
+def _collect_js_runner_config(
+    module_path: Path, root_resolved: Path
+) -> tuple[Mapping[str, Any], Optional[Path]]:
+    """Return the nearest JSON-readable jest/vitest config and its directory.
+
+    Walks from the module's directory up to (and including) *root_resolved*,
+    reading ``jest.config.json`` / ``.jestrc`` / ``.jestrc.json`` and the
+    ``package.json`` ``"jest"``/``"vitest"`` block (nearest wins). JS/TS config
+    files (``jest.config.js``/``.ts``) are NOT parseable in Python and are
+    skipped here — the caller still treats such a project as jest-configured and
+    falls back to the default co-located convention (which jest's default
+    ``testMatch`` collects). Returns ``({}, None)`` when no JSON config is found.
+    Total — any error is swallowed.
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return {}, None
+    root_s = str(root_resolved)
+    while True:
+        for fname in ("jest.config.json", ".jestrc", ".jestrc.json"):
+            candidate = current / fname
+            if candidate.is_file():
+                try:
+                    data = json.loads(
+                        candidate.read_text(encoding="utf-8", errors="ignore")
+                    )
+                    if isinstance(data, Mapping):
+                        return data, current
+                except (OSError, ValueError):
+                    pass
+        pkg = current / "package.json"
+        if pkg.is_file():
+            block = _jest_config_from_package_json(pkg)
+            if block is not None:
+                return block, current
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return {}, None
+
+
+def _micromatch_to_regex(glob: str) -> Optional[str]:
+    """Translate a jest/micromatch ``testMatch`` glob to an anchored regex.
+
+    Single pass. Handles the constructs jest's default and typical custom
+    ``testMatch`` use: ``**``/``**/`` globstar, ``*``, ``?``, extglobs
+    ``?(...)`` ``*(...)`` ``+(...)`` ``@(...)`` (with their quantifiers applied
+    to the group), brace alternation ``{a,b}``, ``|`` alternation inside groups,
+    and character classes ``[...]``. Returns ``None`` for negation ``!(...)`` (we
+    refuse to guess). ``<rootDir>`` must already be substituted by the caller.
+    """
+    out = ["^"]
+    # Each open group pushes its trailing regex quantifier ("", "?", "*", "+").
+    group_quant: list[str] = []
+    i, n = 0, len(glob)
+    while i < n:
+        c = glob[i]
+        if c == "!" and glob[i + 1 : i + 2] == "(":
+            return None  # negation — refuse to guess
+        if c in "?*+@" and glob[i + 1 : i + 2] == "(":
+            group_quant.append({"?": "?", "*": "*", "+": "+", "@": ""}[c])
+            out.append("(?:")
+            i += 2
+            continue
+        if c == "*":
+            if glob[i : i + 3] == "**/":
+                out.append("(?:.*/)?")
+                i += 3
+            elif glob[i : i + 2] == "**":
+                out.append(".*")
+                i += 2
+            else:
+                out.append("[^/]*")
+                i += 1
+            continue
+        if c == "?":
+            out.append("[^/]")
+            i += 1
+            continue
+        if c == "(":
+            group_quant.append("")
+            out.append("(?:")
+            i += 1
+            continue
+        if c == ")":
+            out.append(")")
+            out.append(group_quant.pop() if group_quant else "")
+            i += 1
+            continue
+        if c == "|":
+            out.append("|" if group_quant else r"\|")
+            i += 1
+            continue
+        if c == "{":
+            group_quant.append("")
+            out.append("(?:")
+            i += 1
+            continue
+        if c == "}":
+            out.append(")")
+            out.append(group_quant.pop() if group_quant else "")
+            i += 1
+            continue
+        if c == ",":
+            out.append("|" if group_quant else ",")
+            i += 1
+            continue
+        if c == "[":
+            j = glob.find("]", i)
+            if j == -1:
+                out.append(r"\[")
+                i += 1
+            else:
+                out.append(glob[i : j + 1])
+                i = j + 1
+            continue
+        out.append(re.escape(c))
+        i += 1
+    out.append("$")
+    return "".join(out)
+
+
+def _glob_matches(glob: str, posix_path: str) -> Optional[bool]:
+    """Best-effort: does *posix_path* match jest ``testMatch`` *glob*?
+
+    Returns ``True``/``False`` when the glob is translatable, or ``None`` when it
+    is not (negation, or a regex-compile failure) so the caller stays
+    conservative rather than guessing.
+    """
+    pattern = _micromatch_to_regex(glob)
+    if pattern is None:
+        return None
+    try:
+        return re.search(pattern, posix_path) is not None
+    except re.error:
+        return None
+
+
+def _sub_root_dir(value: str, root_dir: Path) -> str:
+    """Substitute jest's ``<rootDir>`` token with the effective root directory."""
+    return value.replace("<rootDir>", str(root_dir))
+
+
+def _greenfield_candidate_paths(module_path: Path, config: Mapping[str, Any]) -> list[Path]:
+    """Ordered co-located first-test candidates, biased by config conventions.
+
+    Chooses the ``.test``/``.spec`` infix and ``__test__``/``__tests__``/beside
+    placement to match hints in ``testMatch``/``testRegex`` when present, else
+    the jest-default-friendly ``__test__/{stem}.test.{ext}``.
+    """
+    stem = module_path.stem
+    ext = module_path.suffix
+    parent = module_path.parent
+    hint = " ".join(
+        _as_str_list(config.get("testMatch")) + _as_str_list(config.get("testRegex"))
+    ).lower()
+
+    if "spec" in hint and "test" not in hint:
+        infixes = [".spec", ".test"]
+    else:
+        infixes = [".test", ".spec"]
+
+    if "__tests__" in hint and "__test__" not in hint:
+        subdirs = ["__tests__", "__test__", ""]
+    elif "__test__" in hint:
+        subdirs = ["__test__", "__tests__", ""]
+    else:
+        subdirs = ["__test__", "__tests__", ""]
+
+    candidates: list[Path] = []
+    for infix in infixes:
+        for sub in subdirs:
+            base = parent / sub if sub else parent
+            candidates.append(base / f"{stem}{infix}{ext}")
+    return candidates
+
+
+def _candidate_is_collected(
+    candidate: Path,
+    config: Mapping[str, Any],
+    config_dir: Optional[Path],
+) -> Optional[bool]:
+    """Would the runner collect a test written at *candidate*?
+
+    Enforces the config knobs issue #1903 §A names — ``roots``/``rootDir``
+    (containment), ``testPathIgnorePatterns`` (exclusion), and
+    ``testMatch``/``testRegex`` (collection patterns). Returns ``True`` when
+    collected, ``False`` when provably NOT collected (so the caller falls back to
+    the derived path rather than emit an uncollected test), or ``None`` when the
+    config gives no verdict (no relevant keys, or unparseable patterns) so the
+    caller keeps the default-convention behavior.
+    """
+    if config_dir is None:
+        return None
+    posix = candidate.as_posix()
+    root_dir = config_dir
+    root_dir_value = config.get("rootDir")
+    if isinstance(root_dir_value, str) and root_dir_value:
+        root_dir = (config_dir / root_dir_value).resolve()
+
+    # roots / rootDir containment.
+    roots_values = _as_str_list(config.get("roots"))
+    resolved_roots = []
+    for r in roots_values:
+        try:
+            resolved_roots.append((config_dir / _sub_root_dir(r, root_dir)).resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+    if not resolved_roots:
+        resolved_roots = [root_dir]
+    if roots_values or (isinstance(root_dir_value, str) and root_dir_value):
+        if not any(_contained_in_root(candidate, root) for root in resolved_roots):
+            return False
+
+    # testPathIgnorePatterns exclusion (regex over the path).
+    for pat in _as_str_list(config.get("testPathIgnorePatterns")):
+        try:
+            if re.search(_sub_root_dir(pat, root_dir), posix):
+                return False
+        except re.error:
+            continue
+
+    # testMatch / testRegex collection patterns.
+    match_globs = _as_str_list(config.get("testMatch"))
+    test_regexes = _as_str_list(config.get("testRegex"))
+    if not match_globs and not test_regexes:
+        return None  # no collection constraint declared -> no verdict
+
+    verdicts: list[bool] = []
+    for glob in match_globs:
+        v = _glob_matches(_sub_root_dir(glob, root_dir), posix)
+        if v is None:
+            continue
+        verdicts.append(v)
+    for rgx in test_regexes:
+        try:
+            verdicts.append(re.search(_sub_root_dir(rgx, root_dir), posix) is not None)
+        except re.error:
+            continue
+    if not verdicts:
+        return None  # patterns present but none evaluable -> no verdict
+    return any(verdicts)
+
+
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
     """Greenfield runner-aware first-test path for a NEW JS/TS module (#1903 §A).
 
     When no co-located test yet exists (:func:`find_collocated_test` returns
     ``None``) but the project configures a jest/vitest runner, return the
-    co-located path the runner will collect — ``{module_dir}/__test__/{stem}.
-    test.{ext}`` — so the FIRST generated test lands where ``npm test`` looks
-    instead of a runner-blind root ``tests/`` shadow (the primary false-green in
-    issue #1903). Python keeps its pytest-idiomatic ``tests/`` default
-    (unchanged). Any other language, or no detectable runner, yields ``None``.
+    co-located path the runner will actually collect so the FIRST generated test
+    lands where ``npm test`` looks instead of a runner-blind root ``tests/``
+    shadow (the primary false-green in issue #1903). The write location honors
+    JSON-readable config: ``testMatch``/``testRegex`` pick the ``.test``/``.spec``
+    + ``__test__``/``__tests__`` convention, and ``roots``/``rootDir``/
+    ``testPathIgnorePatterns`` are enforced so a custom layout never yields an
+    UNCOLLECTED test — if no co-located candidate would be collected, return
+    ``None`` (fall back to the derived path). When the config is only a JS file
+    (``jest.config.js``, unparseable in Python) the jest-default convention
+    ``__test__/{stem}.test.{ext}`` is used (jest's default ``testMatch`` collects
+    it). Python keeps its pytest-idiomatic ``tests/`` default (unchanged). Any
+    other language, or no detectable runner, yields ``None``.
 
     The module path is caller/issue-influenced, so it flows through
     :func:`_validated_project_path` (CWE-022) before any filesystem use and the
@@ -739,17 +1018,27 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             return None
         if not _project_uses_js_test_runner(module_path, root_resolved):
             return None
-        candidate = (
-            module_path.parent
-            / "__test__"
-            / f"{module_path.stem}.test{module_path.suffix}"
-        )
-        resolved = _validated_project_path(candidate, root=root_resolved)
-        if resolved is None or not _contained_in_root(resolved, root_resolved):
-            return None
-        if resolved == module_path:
-            return None
-        return resolved
+
+        config, config_dir = _collect_js_runner_config(module_path, root_resolved)
+        candidates = _greenfield_candidate_paths(module_path, config)
+
+        fallback_default: Optional[Path] = None
+        for candidate in candidates:
+            resolved = _validated_project_path(candidate, root=root_resolved)
+            if resolved is None or not _contained_in_root(resolved, root_resolved):
+                continue
+            if resolved == module_path:
+                continue
+            verdict = _candidate_is_collected(resolved, config, config_dir)
+            if verdict is True:
+                return resolved
+            if verdict is False:
+                continue
+            # verdict is None (no config verdict): remember the first valid
+            # default-convention candidate but keep looking for a proven match.
+            if fallback_default is None:
+                fallback_default = resolved
+        return fallback_default
     except Exception:  # pylint: disable=broad-except
         return None
 

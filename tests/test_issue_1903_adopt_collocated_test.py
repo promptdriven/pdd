@@ -257,6 +257,74 @@ class TestGreenfieldRunnerDiscovery:
         got = resolve_test_output_path(code, shadow, user_pinned=True)
         assert Path(got) == shadow
 
+    # --- config-aware placement (issue #1903 §A: honor testMatch/roots/rootDir) ---
+
+    def test_custom_testmatch_spec_co_locates_spec(self, tmp_path, monkeypatch):
+        # testMatch requires `.spec` -> write `.spec`, not `.test`.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["**/*.spec.tsx"]}}))
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "src/__test__/page.spec.tsx").resolve()
+
+    def test_custom_testmatch_requires_dunder_tests_dir(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["**/__tests__/**/*.tsx"]}}))
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "src/__tests__/page.test.tsx").resolve()
+
+    def test_centralized_testmatch_falls_back_to_derived(self, tmp_path, monkeypatch):
+        # A centralized layout (tests only under top-level test/) does NOT collect
+        # a co-located test -> must fall back to the derived path, never emit an
+        # uncollected co-located orphan.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["<rootDir>/test/**/*.test.ts"]}}))
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+        shadow = tmp_path / "tests" / "test_page.tsx"
+        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
+
+    def test_roots_excluding_module_falls_back(self, tmp_path, monkeypatch):
+        # roots restricts collection to test/; a module under src/ cannot be
+        # co-located within a collected root -> fall back to derived.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"roots": ["<rootDir>/test"]}}))
+        code = _write(tmp_path / "src/app/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_roots_including_module_co_locates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"roots": ["<rootDir>/src"]}}))
+        code = _write(tmp_path / "src/app/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (
+            tmp_path / "src/app/__test__/page.test.tsx"
+        ).resolve()
+
+    def test_testpathignore_routes_to_alternate_dir(self, tmp_path, monkeypatch):
+        # testPathIgnorePatterns excludes __test__/ -> use __tests__ (default
+        # testMatch still collects it).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testPathIgnorePatterns": ["__test__/"]}}))
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "src/__tests__/page.test.tsx").resolve()
+
+    def test_jest_config_json_is_parsed(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.json",
+               json.dumps({"testMatch": ["**/*.spec.ts"]}))
+        code = _write(tmp_path / "lib/util.ts")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (tmp_path / "lib/__test__/util.spec.ts").resolve()
+
 
 # ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the
