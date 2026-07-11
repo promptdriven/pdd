@@ -12,7 +12,11 @@ import pytest
 
 from pdd import cli
 from pdd.continuous_sync import SyncUnit, _find_matching_artifact, classify_unit
-from pdd.sync_determine_operation import calculate_current_hashes, get_pdd_file_paths
+from pdd.sync_determine_operation import (
+    calculate_current_hashes,
+    calculate_prompt_hash,
+    get_pdd_file_paths,
+)
 
 
 def _write_fingerprint(project: Path, basename: str, hashes: dict) -> None:
@@ -308,6 +312,54 @@ def test_prompt_traversal_stops_scandir_at_entry_budget(
     )
 
     assert json.loads(result.output)["failures"][0]["failure"] == "prompt_traversal_budget"
+    assert yielded == 4
+
+
+def test_metadata_traversal_stops_scandir_at_entry_budget(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Metadata enumeration consumes only the remaining allowance plus one."""
+    project = tmp_path / "project"
+    meta = project / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    for index in range(8):
+        (meta / f"unit{index}_python.json").write_text("{}", encoding="utf-8")
+    real_scandir = __import__("os").scandir
+    yielded = 0
+
+    def observing_scandir(path):
+        nonlocal yielded
+        iterator = real_scandir(path)
+
+        class Observed:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                iterator.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal yielded
+                entry = next(iterator)
+                if Path(path) == meta:
+                    yielded += 1
+                return entry
+
+        return Observed()
+
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.os.scandir", observing_scandir)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_PROMPT_DISCOVERY_ENTRIES", 3)
+
+    result = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert json.loads(result.output)["failures"][0]["failure"] == "discovery_budget"
     assert yielded == 4
 
 
@@ -678,6 +730,33 @@ def test_architecture_duplicate_leaves_match_relative_prompt_path(tmp_path: Path
     assert report["paths"]["code"] == "src/app/settings/page.tsx"
 
 
+def test_nested_architecture_report_matches_all_live_artifact_paths(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Nested architecture ownership applies to every derived artifact."""
+    project = tmp_path / "project"
+    owner = project / "packages" / "store"
+    prompts = owner / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "cart_typescriptreact.prompt"
+    prompt.write_text("cart\n", encoding="utf-8")
+    (owner / "architecture.json").write_text(json.dumps([
+        {"filename": "cart_typescriptreact.prompt", "filepath": "src/pages/cart.tsx"},
+    ]), encoding="utf-8")
+    monkeypatch.chdir(project)
+
+    live = get_pdd_file_paths("cart", "typescriptreact", str(prompts))
+    report = classify_unit(
+        SyncUnit("cart", "typescriptreact", prompt, prompts), project
+    )["paths"]
+
+    for key in ("code", "example", "test"):
+        assert report[key] == live[key].relative_to(project).as_posix()
+    assert report["test_files"] == [
+        path.relative_to(project).as_posix() for path in live["test_files"]
+    ]
+
+
 def test_global_dry_run_json_rejects_symlinked_pddrc_before_read(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -810,6 +889,95 @@ def test_live_include_is_validated_once_before_dependency_read(
 
     assert report["failure"] == "hash_calculation"
     assert outside_reads == 0
+
+
+def test_unresolved_live_include_never_reads_ancestor_fallback(tmp_path: Path) -> None:
+    """A validated unresolved include fails closed without ancestor lookup."""
+    project = tmp_path / "workspace" / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    ancestor = project.parent / "ancestor-only.txt"
+    ancestor.write_text("outside\n", encoding="utf-8")
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("<include>ancestor-only.txt</include>\n", encoding="utf-8")
+    reads = 0
+    original = Path.read_bytes
+
+    def observing(path: Path) -> bytes:
+        nonlocal reads
+        if path == ancestor:
+            reads += 1
+        return original(path)
+
+    with patch.object(Path, "read_bytes", observing):
+        hashes = calculate_current_hashes({"prompt": prompt}, dependency_root=project)
+
+    assert hashes["prompt_hash"] is None
+    assert reads == 0
+
+
+def test_validated_v1_hash_preserves_declared_alias_multiplicity(tmp_path: Path) -> None:
+    """v1 deduplicates declared strings, not their resolved path aliases."""
+    project = tmp_path / "project"
+    project.mkdir()
+    dependency = project / "dep.txt"
+    dependency.write_text("dependency\n", encoding="utf-8")
+    prompt = project / "widget_python.prompt"
+    prompt.write_text(
+        "<include>dep.txt</include>\n<include>./dep.txt</include>\n",
+        encoding="utf-8",
+    )
+
+    legacy = calculate_prompt_hash(prompt, dependency_root=project, hash_version=1)
+    validated = calculate_current_hashes(
+        {"prompt": prompt}, dependency_root=project
+    )["prompt_hash"]
+
+    assert validated == legacy
+
+
+def test_report_caches_config_ownership_and_caps_contexts(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """One config is parsed once and context ownership has a hard command cap."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    for name in ("alpha", "beta"):
+        (prompts / f"{name}_python.prompt").write_text(name, encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    from pdd import continuous_sync
+    original = continuous_sync._load_pddrc_config
+    loads = 0
+
+    def observing(path):
+        nonlocal loads
+        loads += 1
+        return original(path)
+
+    monkeypatch.setattr(continuous_sync, "_load_pddrc_config", observing)
+    first = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+    assert json.loads(first.output)["summary"]["total"] == 2
+    assert loads == 1
+
+    monkeypatch.setattr(continuous_sync, "MAX_CONFIG_CONTEXTS", 1, raising=False)
+    (project / ".pddrc").write_text(
+        "contexts:\n  one: {defaults: {prompts_dir: prompts}}\n"
+        "  two: {defaults: {prompts_dir: prompts}}\n",
+        encoding="utf-8",
+    )
+    second = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+    assert json.loads(second.output)["failures"][0]["failure"] == "invalid_pddrc"
 
 
 @pytest.mark.parametrize("include_kind", ["absolute", "symlink"])
