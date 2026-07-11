@@ -152,8 +152,9 @@ def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(
         check=True,
         capture_output=True,
     )
-    (root / ".pdd" / "sync-ownership.json").write_bytes(OWNERSHIP_PATH.read_bytes())
-    base = _commit(root, "protected ownership baseline")
+    base = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
 
     (root / ".pdd" / "verification-profiles.json").write_text(
         '{"schema_version": 1, "profiles": []}\n', encoding="utf-8"
