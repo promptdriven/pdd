@@ -707,11 +707,11 @@ def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     metrics_path = os.environ.get("PDD_LIFECYCLE_METRICS_PATH")
     if metrics_path:
         path = Path(metrics_path)
-        payload = json.loads(path.read_text()) if path.exists() else {}
+        payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         payload["post_repair_second_run_writes"] = (
             len(second.transaction.changed_paths) + int(before != after)
         )
-        path.write_text(json.dumps(payload, sort_keys=True))
+        path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
 
 
 def test_trusted_finalizer_rejects_dirty_support_before_reuse(tmp_path) -> None:
