@@ -3101,6 +3101,74 @@ def test_run_agentic_task_routing_preserves_explicit_codex_model(
     assert os.environ["CODEX_MODEL"] == "o3-pro"
 
 
+def test_run_agentic_task_same_provider_model_tier_escalation_replaces_routed_model(
+    mock_cwd,
+    monkeypatch,
+):
+    """A route-owned model must not masquerade as a caller override.
+
+    The initial OpenAI tier-2 value remains in the process environment until
+    routing escalation begins.  A same-harness model-tier promotion must
+    replace that PDD-owned value with tier 1 while still preserving genuine
+    caller-supplied ``CODEX_MODEL`` values in the test above.
+    """
+    from pdd.routing_policy import (
+        EscalationStep,
+        RoutingConfig,
+        RoutingPolicy,
+        RoutingPolicyRow,
+    )
+
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_agent_provider_preference", lambda: ["openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.resolve_model_for_tier",
+        lambda tier, provider=None: f"tier-{tier}-model",
+    )
+
+    models = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        models.append(os.environ.get("CODEX_MODEL"))
+        if len(models) == 1:
+            return (False, "tier 2 failed", 0.1, models[-1], None)
+        return (True, "tier 1 passed", 0.2, models[-1], None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+    policy = RoutingPolicy(
+        rows={
+            "bug-fix": RoutingPolicyRow(
+                initial_config=RoutingConfig(harness="openai", model_tier=2),
+                escalation_steps=[
+                    EscalationStep(
+                        axis="model_tier",
+                        value=1,
+                        reason="promote model tier",
+                    )
+                ],
+            )
+        }
+    )
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=policy,
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "tier 1 passed"
+    assert models == ["tier-2-model", "tier-1-model"]
+    assert os.environ.get("CODEX_MODEL") is None
+
+
 def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
     mock_cwd,
     monkeypatch,
@@ -6502,37 +6570,86 @@ def test_codex_model_default_is_runtime_verified_slug():
 
 
 @pytest.mark.skipif(
-    not (shutil.which("codex") and os.environ.get("PDD_CODEX_LIVE_SMOKE")),
-    reason="live Codex smoke needs the codex CLI, a Codex/ChatGPT login, and PDD_CODEX_LIVE_SMOKE=1",
+    not (
+        shutil.which("codex")
+        and os.environ.get("PDD_CODEX_LIVE_SMOKE")
+        and os.environ.get("PDD_CODEX_LIVE_CODEX_HOME")
+    ),
+    reason=(
+        "live Codex smoke needs the codex CLI, PDD_CODEX_LIVE_SMOKE=1, "
+        "and an explicit PDD_CODEX_LIVE_CODEX_HOME containing real auth"
+    ),
 )
-def test_codex_default_model_live_smoke():
-    """Real-backend smoke (opt-in): drive the shared Codex default through the
-    actual ``codex ... exec`` argv shape PDD builds and assert the backend does
-    NOT reject the model. This is the coverage that would have caught the
-    ``gpt-5.6`` -> HTTP 400 rejection that mocked-argv tests miss. Enable with a
-    Codex/ChatGPT login and ``PDD_CODEX_LIVE_SMOKE=1``."""
+@pytest.mark.uses_real_cli_detector
+def test_codex_default_model_live_smoke(tmp_path, monkeypatch):
+    """Run default and explicit Codex models through PDD's production entrypoint.
+
+    This opt-in test deliberately overrides pytest's fake ``CODEX_HOME`` only
+    for this test, using an explicit caller-provided auth directory.  Ordinary
+    tests retain the repository-wide home isolation.  Both calls enter through
+    ``run_agentic_task`` so provider discovery, PDD argv construction, Codex
+    JSONL parsing, model provenance, and explicit override handling are all
+    exercised against the real backend.
+    """
     from pdd.model_defaults import CODEX_MODEL_DEFAULT
 
-    # Mirrors the isolated argv shape the reviewer used to confirm gpt-5.6-sol
-    # is accepted while bare gpt-5.6 is rejected (Codex 0.144.1): a read-only,
-    # ephemeral, user-config-ignoring exec that only exercises model acceptance.
-    cmd = [
-        "codex", "--model", CODEX_MODEL_DEFAULT,
-        "-c", "model_reasoning_effort=low",
-        "exec", "--sandbox", "read-only", "--ephemeral",
-        "--ignore-user-config", "--json", "-",
-    ]
-    proc = subprocess.run(
-        cmd,
-        input="Reply with exactly: PDD_SMOKE_OK",
+    live_codex_home = Path(os.environ["PDD_CODEX_LIVE_CODEX_HOME"]).expanduser()
+    auth_path = live_codex_home / "auth.json"
+    assert auth_path.is_file(), f"real Codex auth file not found: {auth_path}"
+
+    override_model = (
+        os.environ.get("PDD_CODEX_LIVE_OVERRIDE_MODEL") or "gpt-5.4"
+    ).strip()
+    assert override_model
+    assert override_model != CODEX_MODEL_DEFAULT, (
+        "PDD_CODEX_LIVE_OVERRIDE_MODEL must differ from the default so the "
+        "live run proves explicit override preservation"
+    )
+
+    monkeypatch.setenv("CODEX_HOME", str(live_codex_home))
+    monkeypatch.setenv("PDD_CODEX_AUTH_AVAILABLE", "1")
+    monkeypatch.setenv("PDD_AGENTIC_PROVIDER", "openai")
+    monkeypatch.setenv("CODEX_SANDBOX_MODE", "read-only")
+    monkeypatch.setenv("CODEX_REASONING_EFFORT", "low")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+
+    # Production PDD agentic workflows run inside a repository.  Give the
+    # isolated smoke cwd that same invariant so Codex's trusted-directory gate
+    # is exercised normally instead of bypassed with --skip-git-repo-check.
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=tmp_path,
+        check=True,
         capture_output=True,
         text=True,
-        timeout=240,
     )
-    combined = f"{proc.stdout}\n{proc.stderr}".lower()
-    assert "not supported" not in combined, combined
-    assert "model metadata for" not in combined, combined  # "... not found"
-    assert proc.returncode == 0, combined
+
+    default_sentinel = "PDD_DEFAULT_SMOKE_OK_MODEL_GPT_5_6_SOL"
+    default_result = run_agentic_task(
+        f"Reply with exactly: {default_sentinel}",
+        tmp_path,
+        timeout=240,
+        single_provider_attempt=True,
+        label="codex-live-default",
+    )
+    assert default_result.success, default_result.output_text
+    assert default_result.output_text.strip() == default_sentinel
+    assert default_result.provider == "openai"
+    assert default_result.model_id == CODEX_MODEL_DEFAULT
+
+    monkeypatch.setenv("CODEX_MODEL", override_model)
+    override_sentinel = "PDD_EXPLICIT_OVERRIDE_SMOKE_OK"
+    override_result = run_agentic_task(
+        f"Reply with exactly: {override_sentinel}",
+        tmp_path,
+        timeout=240,
+        single_provider_attempt=True,
+        label="codex-live-explicit-override",
+    )
+    assert override_result.success, override_result.output_text
+    assert override_result.output_text.strip() == override_sentinel
+    assert override_result.provider == "openai"
+    assert override_result.model_id == override_model
 
 
 # ---------------------------------------------------------------------------

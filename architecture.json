@@ -415,7 +415,7 @@
           },
           {
             "name": "resolve_model_for_tier",
-            "signature": "(tier: int) -> Optional[str]",
+            "signature": "(tier: int, provider: Optional[str] = None) -> Optional[str]",
             "returns": "Optional[str]"
           },
           {

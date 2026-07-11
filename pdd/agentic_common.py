@@ -5499,6 +5499,14 @@ def run_agentic_task(
         )
 
         if routing_policy is not None and routing_record is not None:
+            # The initial routed attempt may have populated a provider model
+            # env var from its tier.  Restore the caller's environment before
+            # entering the escalation ladder so a later same-provider config
+            # can apply its own tier instead of mistaking the previous
+            # route-owned value for an explicit user override.  Genuine
+            # caller-supplied overrides are restored here and therefore remain
+            # authoritative in every escalated attempt.
+            _restore_routing_model_env(routing_model_env_originals)
             current_record = routing_record
             last_result = failure_result
             # Providers already exercised by this task (the initial routed/
