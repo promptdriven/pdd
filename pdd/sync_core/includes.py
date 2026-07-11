@@ -98,16 +98,6 @@ class IncludeClosure:
         return hashlib.sha256(encoded).hexdigest()
 
 
-_INCLUDE_PATTERN = re.compile(
-    r'<include(?P<attrs>\s[^>]*?)?(?<!/)>'
-    r'\s*(?P<content>[^<>\r\n]+?)\s*</include>'
-    r'|<include(?P<attrs_self>\s[^>]*?)/>',
-)
-_INCLUDE_MANY_PATTERN = re.compile(
-    r'<include-many(?P<attrs>\s[^>]*+)?>(?P<inner>.*?)</include-many>',
-    re.DOTALL,
-)
-_BACKTICK_PATTERN = re.compile(r"```<([^>]*+)>```")
 _ATTRIBUTE_PATTERN = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']')
 
 
@@ -130,19 +120,56 @@ def _enabled(value: str | None) -> bool:
     }
 
 
-def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
-    """Parse includes once, preserving duplicates and deterministic source order."""
-    if not text:
-        return ()
+def _tag_end(text: str, start: int) -> int:
+    """Return the exclusive end of an opening tag, or ``-1`` when incomplete."""
+    return text.find(">", start)
+
+
+def _is_tag_boundary(text: str, index: int) -> bool:
+    """Return whether *index* is a valid character after an include tag name."""
+    return index == len(text) or text[index].isspace() or text[index] in ">/"
+
+
+def _parse_xml_includes(text: str) -> list[IncludeReference]:
+    """Scan ``<include>`` markup without regex backtracking over user text."""
     references: list[IncludeReference] = []
-    for match in _INCLUDE_PATTERN.finditer(text):
-        attrs = _parse_attrs(match.group("attrs") or match.group("attrs_self") or "")
-        body = match.group("content") or ""
-        path = (attrs.get("path") or body).strip()
+    cursor = 0
+    tag_name = "<include"
+    close_tag = "</include>"
+    while True:
+        start = text.find(tag_name, cursor)
+        if start < 0:
+            return references
+        name_end = start + len(tag_name)
+        if not _is_tag_boundary(text, name_end):
+            cursor = name_end
+            continue
+        opening_end = _tag_end(text, name_end)
+        if opening_end < 0:
+            return references
+        raw_attrs = text[name_end:opening_end]
+        self_closing = raw_attrs.rstrip().endswith("/")
+        if self_closing:
+            raw_attrs = raw_attrs.rstrip()[:-1]
+        attrs = _parse_attrs(raw_attrs)
+        if self_closing:
+            path = attrs.get("path", "").strip()
+            cursor = opening_end + 1
+        else:
+            close_start = text.find(close_tag, opening_end + 1)
+            if close_start < 0:
+                cursor = opening_end + 1
+                continue
+            body = text[opening_end + 1:close_start]
+            if any(character in body for character in "<>\r\n"):
+                cursor = opening_end + 1
+                continue
+            path = (attrs.get("path") or body).strip()
+            cursor = close_start + len(close_tag)
         if path:
             references.append(
                 IncludeReference(
-                    match.start(),
+                    start,
                     path,
                     IncludeSyntax.XML,
                     attrs.get("select"),
@@ -151,29 +178,73 @@ def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
                     _enabled(attrs.get("expand")),
                 )
             )
-    for match in _INCLUDE_MANY_PATTERN.finditer(text):
-        attrs = _parse_attrs(match.group("attrs") or "")
-        values = (
-            item.strip()
-            for line in match.group("inner").splitlines()
-            for item in line.split(",")
-        )
-        for offset, path in enumerate(value for value in values if value):
+
+
+def _parse_include_many(text: str) -> list[IncludeReference]:
+    """Scan ``<include-many>`` markup with a single forward cursor."""
+    references: list[IncludeReference] = []
+    cursor = 0
+    tag_name = "<include-many"
+    close_tag = "</include-many>"
+    while True:
+        start = text.find(tag_name, cursor)
+        if start < 0:
+            return references
+        name_end = start + len(tag_name)
+        if not _is_tag_boundary(text, name_end):
+            cursor = name_end
+            continue
+        opening_end = _tag_end(text, name_end)
+        if opening_end < 0:
+            return references
+        raw_attrs = text[name_end:opening_end]
+        close_start = text.find(close_tag, opening_end + 1)
+        if close_start < 0:
+            cursor = opening_end + 1
+            continue
+        attrs = _parse_attrs(raw_attrs)
+        inner = text[opening_end + 1:close_start]
+        for offset, path in enumerate(
+            item.strip() for line in inner.splitlines() for item in line.split(",") if item.strip()
+        ):
             references.append(
                 IncludeReference(
-                    match.start() + offset,
+                    start + offset,
                     path,
                     IncludeSyntax.XML_MANY,
                     optional=_enabled(attrs.get("optional")),
                     expand_dependencies=_enabled(attrs.get("expand")),
                 )
             )
-    for match in _BACKTICK_PATTERN.finditer(text):
-        path = match.group(1).strip()
+        cursor = close_start + len(close_tag)
+
+
+def _parse_backtick_includes(text: str) -> list[IncludeReference]:
+    """Scan backtick include fences without regex matching on prompt text."""
+    references: list[IncludeReference] = []
+    cursor = 0
+    opening = "```<"
+    closing = ">```"
+    while True:
+        start = text.find(opening, cursor)
+        if start < 0:
+            return references
+        path_end = text.find(closing, start + len(opening))
+        if path_end < 0:
+            return references
+        path = text[start + len(opening):path_end].strip()
         if path:
-            references.append(
-                IncludeReference(match.start(), path, IncludeSyntax.BACKTICK)
-            )
+            references.append(IncludeReference(start, path, IncludeSyntax.BACKTICK))
+        cursor = path_end + len(closing)
+
+
+def parse_include_references(text: str) -> tuple[IncludeReference, ...]:
+    """Parse includes once, preserving duplicates and deterministic source order."""
+    if not text:
+        return ()
+    references = _parse_xml_includes(text)
+    references.extend(_parse_include_many(text))
+    references.extend(_parse_backtick_includes(text))
     return tuple(sorted(references))
 
 
