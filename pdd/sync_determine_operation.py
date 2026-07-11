@@ -872,12 +872,18 @@ def _find_prompt_file(
         arch_modules is not _ARCH_MODULES_UNSET or architecture_path.exists()
     )
     if have_architecture:
+        # Pass the resolved context so the architecture hint respects context
+        # territory: with a broad prompts root, a bare-leaf lookup must NOT borrow a
+        # sibling context's row (e.g. a backend resolution picking up a
+        # frontend/credits row) and return its prompt before the context-aware
+        # recursive fallback runs. _context_owned_filepath rejects the foreign row.
         _, arch_filename = _get_filepath_from_architecture(
             architecture_path,
             f"{basename_candidates[0]}_{language}.prompt",
             basename=basename,
             language=language,
             modules=arch_modules,
+            resolved_context_name=context_name,
         )
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
@@ -1124,13 +1130,16 @@ def _get_filepath_from_architecture(
             ):
                 return module.get("filepath"), module.get("filename")
 
-        # Try case-insensitive filename match
+        # Try case-insensitive filename match. A module may carry ``"filename": null``
+        # (identified only by filepath); coerce to a string so .lower() never raises
+        # AttributeError, which the broad get_pdd_file_paths fallback would otherwise
+        # swallow into a cwd-relative default path.
         prompt_filename_lower = prompt_filename.lower()
         for module in modules:
             if not isinstance(module, dict):
                 continue
             if (
-                module.get("filename", "").lower() == prompt_filename_lower
+                str(module.get("filename") or "").lower() == prompt_filename_lower
                 and _aligns(module)
                 and _belongs_to_resolved_prompt(module)
             ):
@@ -1186,7 +1195,7 @@ def _get_filepath_from_architecture(
                 for module in modules:
                     if not isinstance(module, dict):
                         continue
-                    module_filename = module.get("filename", "")
+                    module_filename = str(module.get("filename") or "")
                     if (
                         module_filename.lower() == expected_filename_lower
                         and _belongs_to_resolved_prompt(module)
@@ -1201,7 +1210,7 @@ def _get_filepath_from_architecture(
                 matching_modules = [
                     module for module in modules
                     if isinstance(module, dict)
-                    and module.get("filename", "").lower() == simple_filename_lower
+                    and str(module.get("filename") or "").lower() == simple_filename_lower
                     and _belongs_to_resolved_prompt(module)
                 ]
                 safe_matches = [
@@ -1343,7 +1352,19 @@ def _architecture_module_choices(
         filepath = str(module.get("filepath") or "").strip()
         if not filepath:
             continue
-        filename = module.get("filename", "") or ""
+        filename_value = module.get("filename")
+        # An unsafe metadata filename (absolute, parent traversal, backslash, Windows
+        # drive) is rejected elsewhere before it can reach generation; it must not
+        # count toward ambiguity either, or its same-leaf collision with a VALID row
+        # raises AmbiguousModuleError and blocks the valid module. A null/empty
+        # filename is left to the filepath-stem branch (the module is filepath-owned).
+        if (
+            isinstance(filename_value, str)
+            and filename_value.strip()
+            and _safe_architecture_prompt_filename(filename_value) is None
+        ):
+            continue
+        filename = filename_value if isinstance(filename_value, str) else ""
         if filename.endswith("_LLM.prompt"):
             continue
         leaf = Path(filename).name

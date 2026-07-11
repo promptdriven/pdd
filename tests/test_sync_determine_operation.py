@@ -2241,6 +2241,113 @@ def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
     )
 
 
+def _write_two_context_pddrc(root):
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"frontend/src/\"\n",
+        encoding="utf-8",
+    )
+
+
+def test_get_pdd_file_paths_arch_hint_respects_context_from_broad_root(tmp_path, monkeypatch):
+    """A broad-root backend resolution must not borrow a sibling frontend arch row.
+
+    With the project-level prompts root, `_find_prompt_file`'s architecture hint runs
+    a bare-leaf lookup. If it ignores context ownership it returns the frontend row's
+    prompt (and code) via the direct join, before the context-aware recursive fallback
+    runs — so `pdd sync credits` in the backend context overwrites frontend/credits.py.
+    The hint must reject a row whose filepath is outside the resolving context.
+    """
+    for ctx in ("backend", "frontend"):
+        d = tmp_path / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx} credits\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    # Only a frontend row exists (no backend row => no ambiguity error).
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "frontend/credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "/prompts/backend/" in paths["prompt"].resolve(strict=False).as_posix()
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_unsafe_same_leaf_row_does_not_block_valid_module(tmp_path, monkeypatch):
+    """An unsafe same-leaf architecture row must not raise AmbiguousModuleError.
+
+    A valid ``foo_Python.prompt`` row plus an unsafe ``../../foo_Python.prompt`` row
+    share the leaf ``foo``. The unsafe row is rejected before generation; it must also
+    be excluded from ambiguity counting, otherwise its collision with the valid row
+    blocks a legitimate module instead of resolving to the safe target.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+            {"filename": "../../foo_Python.prompt", "filepath": "escaped/foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")  # must NOT raise
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
+def test_get_pdd_file_paths_null_filename_uses_architecture_filepath(tmp_path, monkeypatch):
+    """A module with ``"filename": null`` must resolve to its architecture filepath.
+
+    Coercing the null filename avoids ``None.lower()`` (an AttributeError the broad
+    fallback swallows into a cwd-relative default); the module is then matched by its
+    filepath stem and resolves to the architecture-declared ``src/foo.py``.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n      generate_output_path: \"src/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": None, "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
