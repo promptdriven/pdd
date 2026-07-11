@@ -673,12 +673,19 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     for key in ("workspace", "projects", "plugins", "globalSetup"):
         if config.get(key):
             raise ValueError(f"Vitest {key} is not bound by this adapter")
+    resolve = config.get("resolve", {})
+    if resolve and not isinstance(resolve, dict):
+        raise ValueError("Vitest resolve must be an object")
+    if isinstance(resolve, dict) and resolve.get("alias"):
+        raise ValueError("Vitest resolve.alias is not bound by this adapter")
     test_config = config.get("test", {})
     if not isinstance(test_config, dict):
         raise ValueError("Vitest test configuration must be an object")
     for key in ("workspace", "projects", "plugins", "globalSetup"):
         if test_config.get(key):
             raise ValueError(f"Vitest {key} is not bound by this adapter")
+    if test_config.get("alias"):
+        raise ValueError("Vitest test.alias is not bound by this adapter")
     for key in ("testNamePattern", "shard", "watch", "related", "changed"):
         if test_config.get(key):
             raise ValueError(f"Vitest {key} is not allowed by this adapter")
@@ -938,6 +945,14 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
     if config.jest_command is not None:
         payload["jest"] = [
             _command_part_identity(root, part) for part in config.jest_command
+        ]
+    if config.vitest_command is not None:
+        payload["vitest"] = [
+            _file_identity(Path(part).resolve())
+            if (Path(part).is_absolute() or "/" in part)
+            and Path(part).expanduser().exists()
+            else part
+            for part in config.vitest_command
         ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -1333,6 +1348,8 @@ def _run_vitest(
         if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
+    if _command_uses_candidate_checkout(root, command_prefix):
+        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "explicit Vitest command inside the candidate checkout is not trusted"), ()
     try:
         config_path, _config_data = _vitest_config(root, "HEAD")
     except ValueError as exc:
