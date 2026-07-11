@@ -860,10 +860,9 @@ def _vitest_support_closure(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Return static config and transitive local Vitest support modules."""
-    del test_paths
     config_path, config = _vitest_config(root, ref)
     paths = {config_path}
-    pending = list(_vitest_config_references(config))
+    pending = list(test_paths) + list(_vitest_config_references(config))
     visited: set[PurePosixPath] = set()
     while pending:
         path = pending.pop()
@@ -1700,15 +1699,11 @@ def _run_jest(
         return RunnerExecution("jest", outcome, digest, detail), identities
 
 
-def _vitest_command(root: Path, config: RunnerConfig) -> tuple[str, ...] | None:
+def _vitest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     """Return an explicit local Vitest argv prefix; never invoke an npm script."""
     if config.vitest_command is not None:
         return config.vitest_command
-    node = shutil.which("node")
-    binary = root / "node_modules" / "vitest" / "vitest.mjs"
-    if node is None or not binary.is_file():
-        return None
-    return (node, str(binary))
+    return None
 
 
 def _vitest_environment(home: Path) -> dict[str, str]:
@@ -1782,8 +1777,11 @@ def _run_vitest(
     command_root: Path | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run exact protected Vitest paths with the built-in JSON reporter."""
-    command_prefix = _vitest_command(command_root or root, config)
+    tool_root = command_root or root
+    command_prefix = _vitest_command(config)
     if command_prefix is None:
+        if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
     try:
         config_path, _config_data = _vitest_config(root, "HEAD")
