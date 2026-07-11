@@ -122,7 +122,7 @@ def _repository(
 
 def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
-    dependencies = directory / "dependencies"
+    dependencies = directory / "node_modules"
     browsers = directory / "browsers"
     dependencies.mkdir(exist_ok=True)
     browsers.mkdir(exist_ok=True)
@@ -143,6 +143,170 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
         encoding="utf-8",
     )
     return manifest
+
+
+def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    resource = root / "tests/oracle.js"
+    resource.write_text("window.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test('widget works', async ({ page }) => {\n"
+        "  await page.addInitScript({ path: './oracle.js' });\n"
+        "  await expect(page).toHaveTitle('Widget');\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "bind runtime oracle")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    resource.write_text("window.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change runtime oracle")
+    assert playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    ) != before
+
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test('reflect', () => Object.getOwnPropertyDescriptor({}, 'x'));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "attempt reflection")
+    with pytest.raises(ValueError, match="capability|reflect"):
+        playwright_validator_config_digest(
+            root, _git(root, "rev-parse", "HEAD"), paths
+        )
+
+
+def test_playwright_support_snapshot_binds_owning_spec_directory(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/assertions.ts").write_text(
+        "export const check = (value: string) => expect(value).toMatchSnapshot();\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "import { check } from './assertions';\n"
+        "test('widget works', () => check('base'));\n",
+        encoding="utf-8",
+    )
+    snapshot = root / "tests/widget.spec.ts-snapshots/oracle.txt"
+    snapshot.parent.mkdir()
+    snapshot.write_text("base", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "helper-owned snapshot assertion")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    snapshot.write_text("candidate", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change owning snapshot")
+    assert playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    ) != before
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "export default { updateSnapshots: 'all' };\n",
+        "export default { updateSourceMethod: 'overwrite' };\n",
+    ],
+)
+def test_playwright_rejects_snapshot_update_configuration(
+    tmp_path: Path, config: str
+) -> None:
+    root, commit = _repository(tmp_path, config=config)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "update" in executions[0].detail.lower()
+
+
+def test_playwright_forces_snapshot_updates_off_and_detects_tree_writes(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    fake = _fake_playwright(tmp_path)
+    fake.write_text(
+        fake.read_text(encoding="utf-8")
+        + "\nassert '--update-snapshots=none' in sys.argv\n"
+        + "\n(root / 'tests/widget.spec.ts').write_text('mutated')\n",
+        encoding="utf-8",
+    )
+    _envelope, executions = _run(root, commit, commit, fake)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "modified" in executions[0].detail.lower()
+
+
+def test_playwright_manifest_roles_drive_runtime_environment(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_playwright(tmp_path)
+    runner.write_text(
+        runner.read_text(encoding="utf-8")
+        + "\nassert os.environ['NODE_PATH'].endswith('node_modules')\n"
+        + "assert os.environ['PLAYWRIGHT_BROWSERS_PATH'].endswith('browsers')\n",
+        encoding="utf-8",
+    )
+    _envelope, executions = _run(root, commit, commit, runner)
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+@pytest.mark.parametrize(
+    ("suffix", "source"),
+    [
+        ("js", "const view = <div />; test('widget works', () => expect(view).toBeTruthy());\n"),
+        ("jsx", "const view = <div />; test('widget works', () => expect(view).toBeTruthy());\n"),
+        ("ts", "const value: string = 'ok'; test('widget works', () => expect(value).toBeTruthy());\n"),
+        ("tsx", "const view: JSX.Element = <div />; test('widget works', () => expect(view).toBeTruthy());\n"),
+    ],
+)
+def test_playwright_selects_parser_for_js_jsx_ts_tsx(
+    tmp_path: Path, suffix: str, source: str
+) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        config=(
+            "import { defineConfig } from '@playwright/test';\n"
+            "export default defineConfig({ timeout: 1000 });\n"
+        ),
+    )
+    old = root / "tests/widget.spec.ts"
+    spec = old.with_suffix(f".{suffix}")
+    old.rename(spec)
+    spec.write_text(
+        "import { expect, test } from '@playwright/test';\n" + source,
+        encoding="utf-8",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "parser-specific source")
+    playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"),
+        (PurePosixPath(f"tests/widget.spec.{suffix}"),),
+    )
+
+
+def test_toolchain_identity_streams_role_files_without_read_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _fake_playwright(tmp_path)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", Path(sys.executable), runner)
+    dependency = tmp_path / "toolchain/node_modules/large.bin"
+    dependency.write_bytes(b"x" * 1024 * 1024)
+    original = Path.read_bytes
+
+    def guarded_read_bytes(path: Path) -> bytes:
+        if path == dependency:
+            raise AssertionError("toolchain role files must be streamed")
+        return original(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    assert _toolchain_manifest_identity(manifest)
 
 
 def _run(
