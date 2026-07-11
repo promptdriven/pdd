@@ -102,3 +102,29 @@ def test_protected_alias_policy_rejects_overlapping_authorities(tmp_path) -> Non
 
     with pytest.raises(ValueError, match="overlap"):
         load_committed_aliases(root)
+
+
+def test_protected_alias_policy_rejects_alias_targeting_an_alias(tmp_path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "aliases@example.com")
+    _git(root, "config", "user.name", "Alias Test")
+    (root / ".pdd").mkdir()
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {"alias_path": "outer", "canonical_path": "inner"},
+                    {"alias_path": "inner", "canonical_path": "canonical"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _git(root, "add", ".pdd/sync-aliases.json")
+    _git(root, "commit", "-qm", "chained aliases")
+
+    with pytest.raises(ValueError, match="namespace"):
+        load_committed_aliases(root)

@@ -399,6 +399,41 @@ def test_alias_counterpart_collision_with_concrete_owner_is_invalid(tmp_path) ->
     )
 
 
+def test_same_unit_alias_and_canonical_outputs_are_invalid(tmp_path) -> None:
+    root = _repository(tmp_path)
+    (root / "canonical").mkdir()
+    (root / "src/widget.py").rename(root / "canonical/widget.py")
+    (root / "src").rmdir()
+    (root / "src").symlink_to("canonical", target_is_directory=True)
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [{"alias_path": "src", "canonical_path": "canonical"}],
+            }
+        )
+    )
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "widget_python.prompt", "filepath": "src/widget.py"},
+                {
+                    "filename": "widget_python.prompt",
+                    "filepath": "canonical/widget.py",
+                },
+            ]
+        )
+    )
+    commit = _commit(root, "same unit alias and canonical outputs")
+
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+
+    assert any(
+        "canonical counterpart" in reason and "canonical/widget.py" in reason
+        for reason in manifest.invalid_reasons
+    )
+
+
 def test_architecture_resolves_prompt_from_repository_prompt_root(tmp_path) -> None:
     root = _repository(tmp_path)
     nested_prompt = root / "prompts/backend/widget_python.prompt"

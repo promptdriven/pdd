@@ -736,6 +736,51 @@ def test_overlapping_alias_policy_cannot_account_rogue_counterparts(
     assert "overlap" in errors or "other/widget.py" in errors
 
 
+def test_chained_aliases_cannot_hide_terminal_canonical_owner(tmp_path) -> None:
+    root, _commit = _repository(tmp_path, approved_alias=True)
+    (root / "src").unlink()
+    (root / "middle").symlink_to("canonical", target_is_directory=True)
+    (root / "src").symlink_to("middle", target_is_directory=True)
+    (root / "prompts/helper_python.prompt").write_text("REQ-2: Build helper\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "widget_python.prompt", "filepath": "src/widget.py"},
+                {
+                    "filename": "helper_python.prompt",
+                    "filepath": "canonical/widget.py",
+                },
+            ]
+        )
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {"alias_path": "src", "canonical_path": "middle"},
+                    {"alias_path": "middle", "canonical_path": "canonical"},
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "immutable chained alias owners")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    report = build_canonical_report(
+        root,
+        CanonicalReportOptions(
+            base_ref=commit,
+            head_ref=commit,
+            replay_ledger_path=tmp_path / "external-trust/chained-alias.json",
+        ),
+    )
+
+    assert report["counts"]["invalid"] > 0
+    assert "namespace" in "\n".join(report["errors"])
+
+
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
