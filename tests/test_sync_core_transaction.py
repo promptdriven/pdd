@@ -325,3 +325,80 @@ def test_prepare_failure_never_publishes_orphan_transaction(tmp_path, monkeypatc
         manager.prepare("tx-failed", _writes())
     assert not (tmp_path / ".pdd/transactions/tx-failed").exists()
     assert manager.incomplete() == ()
+
+
+def _approved_aliases():
+    return {PurePosixPath("alias"): PurePosixPath("canonical")}
+
+
+def test_transaction_commits_through_protected_approved_alias(tmp_path) -> None:
+    (tmp_path / "canonical").mkdir()
+    target = tmp_path / "canonical/widget.py"
+    target.write_text("value = 1\n")
+    (tmp_path / "alias").symlink_to("canonical", target_is_directory=True)
+    writes = (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),)
+
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare("tx-approved-alias", writes)
+    assert manager.commit("tx-approved-alias").phase is TransactionPhase.COMMITTED
+    assert target.read_text() == "value = 2\n"
+
+
+def test_descriptor_time_approved_alias_swap_cannot_redirect_commit(tmp_path, monkeypatch) -> None:
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    target = canonical / "widget.py"
+    target.write_text("value = 1\n")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-alias"
+    outside.mkdir()
+    outside_target = outside / "widget.py"
+    outside_target.write_text("outside = True\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to("canonical", target_is_directory=True)
+    writes = (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare("tx-alias-swap", writes)
+    original = manager._canonical_relpath  # pylint: disable=protected-access
+
+    def swap_after_resolution(relpath):
+        result = original(relpath)
+        alias.unlink()
+        alias.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(manager, "_canonical_relpath", swap_after_resolution)
+    with pytest.raises(TransactionConflict):
+        manager.commit("tx-alias-swap")
+    assert outside_target.read_text() == "outside = True\n"
+    assert target.read_text() == "value = 1\n"
+
+
+def test_committing_recovery_rejects_retargeted_approved_alias(tmp_path) -> None:
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    target = canonical / "widget.py"
+    target.write_text("value = 1\n")
+    other = tmp_path / "other"
+    other.mkdir()
+    other_target = other / "widget.py"
+    other_target.write_text("outside = True\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to("canonical", target_is_directory=True)
+    writes = (PlannedWrite(PurePosixPath("alias/widget.py"), b"value = 2\n", "100644"),)
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare("tx-recovery-alias", writes)
+
+    with pytest.raises(SystemExit):
+        manager.commit(
+            "tx-recovery-alias",
+            crash_hook=lambda event: (_ for _ in ()).throw(SystemExit())
+            if event == "after_committing"
+            else None,
+        )
+    alias.unlink()
+    alias.symlink_to("other", target_is_directory=True)
+
+    with pytest.raises(TransactionConflict, match="alias"):
+        manager.recover("tx-recovery-alias")
+    assert target.read_text() == "value = 1\n"
+    assert other_target.read_text() == "outside = True\n"

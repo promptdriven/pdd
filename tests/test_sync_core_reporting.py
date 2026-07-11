@@ -59,7 +59,7 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _repository(tmp_path: Path) -> tuple[Path, str]:
+def _repository(tmp_path: Path, *, approved_alias: bool = False) -> tuple[Path, str]:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -125,6 +125,21 @@ def _repository(tmp_path: Path) -> tuple[Path, str]:
             }
         )
     )
+    if approved_alias:
+        (root / "canonical").mkdir()
+        (root / "src/widget.py").rename(root / "canonical/widget.py")
+        (root / "src").rmdir()
+        (root / "src").symlink_to("canonical", target_is_directory=True)
+        (root / ".pdd/sync-aliases.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "aliases": [
+                        {"alias_path": "src", "canonical_path": "canonical"}
+                    ],
+                }
+            )
+        )
     (root / ".pdd/attestation-trust.json").write_text(
         json.dumps(
             {
@@ -640,6 +655,20 @@ def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None
             signer=SIGNER,
             replay_ledger_path=tmp_path / "external-trust/invalid-base.json",
         )
+
+
+def test_trusted_finalizer_commits_artifact_through_protected_alias(tmp_path) -> None:
+    root, commit = _repository(tmp_path, approved_alias=True)
+    result = finalize_unit(
+        root,
+        PurePosixPath("prompts/widget_python.prompt"),
+        base_ref=commit,
+        head_ref=commit,
+        signer=SIGNER,
+        replay_ledger_path=tmp_path / "external-trust/finalizer-alias.json",
+    )
+    assert result.transaction.phase.value == "COMMITTED"
+    assert (root / "canonical/widget.py").read_text() == "value = 1\n"
 
 
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:

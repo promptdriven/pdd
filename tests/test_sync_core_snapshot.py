@@ -22,7 +22,9 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
+def _repository(
+    tmp_path: Path, *, query: bool = False, approved_alias: bool = False
+) -> tuple[Path, str]:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -90,6 +92,21 @@ def _repository(tmp_path: Path, *, query: bool = False) -> tuple[Path, str]:
             }
         )
     )
+    if approved_alias:
+        (root / "canonical").mkdir()
+        (root / "src/widget.py").rename(root / "canonical/widget.py")
+        (root / "src").rmdir()
+        (root / "src").symlink_to("canonical", target_is_directory=True)
+        (root / ".pdd/sync-aliases.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "aliases": [
+                        {"alias_path": "src", "canonical_path": "canonical"}
+                    ],
+                }
+            )
+        )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "snapshot fixture")
     return root, _git(root, "rev-parse", "HEAD")
@@ -130,6 +147,16 @@ def test_code_under_test_bytes_invalidate_snapshot(tmp_path) -> None:
         root, changed_manifest, changed_manifest.managed_units[0], changed_profile
     )
     assert before.digest() != after.digest()
+
+
+def test_snapshot_accepts_base_protected_approved_alias(tmp_path) -> None:
+    root, commit = _repository(tmp_path, approved_alias=True)
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+
+    snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
+
+    assert any(item.relpath.as_posix() == "src/widget.py" for item in snapshot.artifacts)
 
 
 def test_query_expansion_cannot_receive_trusted_verified_status(tmp_path) -> None:
