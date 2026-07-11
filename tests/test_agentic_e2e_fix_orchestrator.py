@@ -10716,6 +10716,65 @@ class TestPreCheckupGateRemediation:
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
 
+    def test_local_gate_remediation_revalidates_mock_contract_before_commit(
+        self, tmp_path, monkeypatch
+    ):
+        """A remediation edit that diverges from repository contracts is not pushed."""
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: (False, "pre_checkup_gate blocked", 0.0),
+        )
+        monkeypatch.setattr(
+            orch,
+            "_detect_changed_files",
+            lambda _cwd, _hashes: ["app/foo.py", "tests/test_foo.py"],
+        )
+        divergent = MagicMock(diverged=True)
+        monkeypatch.setattr(
+            orch,
+            "_validate_changed_mock_contracts",
+            lambda **_kwargs: divergent,
+        )
+        monkeypatch.setattr(
+            orch,
+            "format_mock_contract_report",
+            lambda _report: "fabricated field foo",
+        )
+        commit_fix = MagicMock(return_value=(True, "committed"))
+        monkeypatch.setattr(orch, "_commit_ci_fix", commit_fix)
+
+        success, message, cost, changed_files = (
+            orch._run_pre_checkup_gate_with_remediation(
+                cwd=tmp_path,
+                changed_files=["app/foo.py"],
+                repo_owner="owner",
+                repo_name="repo",
+                issue_url="https://github.com/owner/repo/issues/42",
+                issue_number=42,
+                step10_template="{ci_check_results}",
+                run_agentic_task_fn=lambda **_kwargs: (
+                    True,
+                    "CI_FIX_APPLIED",
+                    0.25,
+                    "model",
+                ),
+                ci_retries=1,
+                timeout=60.0,
+                initial_file_hashes={},
+                quiet=True,
+                initial_sha="base-sha",
+            )
+        )
+
+        assert success is False
+        assert cost == 0.25
+        assert "fabricated field foo" in message
+        assert changed_files == ["app/foo.py", "tests/test_foo.py"]
+        commit_fix.assert_not_called()
+
 
 class TestVerifierOutputDetail:
     """Independent verifier rejection detail must be reproducible."""

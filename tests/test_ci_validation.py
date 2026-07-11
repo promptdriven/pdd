@@ -2883,3 +2883,37 @@ def test_loop_fails_closed_when_timeout_without_any_checks_read(tmp_path: Path) 
     # the unread case posts a CI-failure comment instead.
     info_comment.assert_not_called()
     failure_comment.assert_called_once()
+
+
+def test_ci_fix_runs_caller_pre_commit_check_before_push(tmp_path: Path) -> None:
+    """A caller invariant can reject CI-agent edits before commit/push."""
+    failed_check = {"name": "tests", "state": "FAILURE", "bucket": "fail"}
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1998), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", [failed_check])), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value="failure"), \
+         patch("pdd.ci_validation._commit_ci_fix") as commit_fix, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1939,
+            max_retries=1,
+            step_template="{ci_failure_logs}",
+            run_agentic_task_fn=lambda **_: (
+                True,
+                "CI_FIX_APPLIED",
+                0.25,
+                "model",
+            ),
+            timeout=60.0,
+            quiet=True,
+            pre_commit_check=lambda: "mock-contract divergence",
+        )
+
+    assert success is False
+    assert cost == 0.25
+    assert "mock-contract divergence" in message
+    commit_fix.assert_not_called()

@@ -805,84 +805,110 @@ def log_operation(
                         cost = _extract_cost_from_result(operation, result)
                         model = _extract_model_from_result(operation, result)
 
-                update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
                 if _estimate_mode_active():
                     pass
                 elif basename and language:
-                    append_log_entry(basename, language, entry, paths=log_paths)
-                    no_op_fix = (
-                        operation == "fix"
-                        and cost == 0.0
-                        and str(model).strip().lower()
-                        in {"", "none", "unknown", "n/a"}
-                    )
-                    if success and no_op_fix:
-                        logger.info(
-                            "Skipping fix metadata finalization for %s/%s: "
-                            "no LLM invocation",
-                            basename,
-                            language,
+                    try:
+                        no_op_fix = (
+                            operation == "fix"
+                            and cost == 0.0
+                            and str(model).strip().lower()
+                            in {"", "none", "unknown", "n/a"}
                         )
-                    elif success:
-                        fingerprint_allowed = True
-                        # Clear the stale run report only after the command
-                        # succeeds, so a failed run cannot erase existing
-                        # runtime verification state that still describes the
-                        # current code. The clear must happen before
-                        # save_fingerprint so a fresh fingerprint never
-                        # coexists with a stale per-module run report
-                        # (issue #1057).
-                        if clears_run_report:
-                            fingerprint_allowed = _clear_run_report_before_fingerprint(
-                                basename, language, paths=log_paths
+                        if success and no_op_fix:
+                            logger.info(
+                                "Skipping fix metadata finalization for %s/%s: "
+                                "no LLM invocation",
+                                basename,
+                                language,
                             )
-                        if updates_fingerprint and not fingerprint_allowed:
-                            from .fingerprint_transaction import (
-                                FingerprintFinalizeError,
-                            )
+                        elif success:
+                            fingerprint_allowed = True
+                            # Clear the stale run report only after the command
+                            # succeeds, so a failed run cannot erase existing
+                            # runtime verification state that still describes the
+                            # current code. The clear must happen before
+                            # save_fingerprint so a fresh fingerprint never
+                            # coexists with a stale per-module run report
+                            # (issue #1057).
+                            if clears_run_report:
+                                fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                    basename, language, paths=log_paths
+                                )
+                            if updates_fingerprint and not fingerprint_allowed:
+                                from .fingerprint_transaction import (
+                                    FingerprintFinalizeError,
+                                )
 
-                            raise FingerprintFinalizeError(
-                                operation,
-                                get_fingerprint_path(
+                                raise FingerprintFinalizeError(
+                                    operation,
+                                    get_fingerprint_path(
+                                        basename,
+                                        language,
+                                        paths=log_paths,
+                                    ),
+                                    "run report not cleared",
+                                )
+                            if updates_fingerprint and fingerprint_allowed:
+                                # Issue #1305 + #1211: save_fingerprint hashes only
+                                # Path values, so a bare {"prompt": <str>} hint
+                                # yields all-null hashes (the prompt string is
+                                # skipped and code/example/test keys are absent) and
+                                # the fingerprint never converges (CI auto-heal
+                                # loops). Resolve the authoritative, complete Path
+                                # set here. get_pdd_file_paths re-resolves the
+                                # prompts root from the run CWD, so anchor it at the
+                                # prompt file's subproject via an absolute
+                                # prompts_dir — otherwise a command run from a PARENT
+                                # CWD for a nested subproject resolves to the parent
+                                # (null hashes again) and writes the fingerprint
+                                # outside the subproject, splitting it from the log /
+                                # run report that log_paths anchors. Fall back to a
+                                # Path-coerced prompt hint (never a raw string) if
+                                # resolution fails, so anchoring still works. The
+                                # #983 contract is preserved: the caller resolves the
+                                # paths, so save_fingerprint does not.
+                                fingerprint_paths = resolve_fingerprint_paths(
                                     basename,
                                     language,
-                                    paths=log_paths,
-                                ),
-                                "run report not cleared",
-                            )
-                        if updates_fingerprint and fingerprint_allowed:
-                            # Issue #1305 + #1211: save_fingerprint hashes only
-                            # Path values, so a bare {"prompt": <str>} hint
-                            # yields all-null hashes (the prompt string is
-                            # skipped and code/example/test keys are absent) and
-                            # the fingerprint never converges (CI auto-heal
-                            # loops). Resolve the authoritative, complete Path
-                            # set here. get_pdd_file_paths re-resolves the
-                            # prompts root from the run CWD, so anchor it at the
-                            # prompt file's subproject via an absolute
-                            # prompts_dir — otherwise a command run from a PARENT
-                            # CWD for a nested subproject resolves to the parent
-                            # (null hashes again) and writes the fingerprint
-                            # outside the subproject, splitting it from the log /
-                            # run report that log_paths anchors. Fall back to a
-                            # Path-coerced prompt hint (never a raw string) if
-                            # resolution fails, so anchoring still works. The
-                            # #983 contract is preserved: the caller resolves the
-                            # paths, so save_fingerprint does not.
-                            fingerprint_paths = resolve_fingerprint_paths(
-                                basename,
-                                language,
-                                prompt_file,
-                            )
-                            save_fingerprint(
-                                basename,
-                                language,
-                                operation=operation,
-                                paths=fingerprint_paths,
-                                cost=cost,
-                                model=model,
-                            )
-                        if updates_run_report and isinstance(result, dict):
-                            save_run_report(basename, language, result, paths=log_paths)
+                                    prompt_file,
+                                )
+                                save_fingerprint(
+                                    basename,
+                                    language,
+                                    operation=operation,
+                                    paths=fingerprint_paths,
+                                    cost=cost,
+                                    model=model,
+                                )
+                            if updates_run_report and isinstance(result, dict):
+                                save_run_report(basename, language, result, paths=log_paths)
+                    except Exception as finalization_error:
+                        # Metadata persistence is part of command success. If it
+                        # fails after the wrapped command returned, persist a
+                        # failed audit entry before propagating the fail-closed
+                        # exception to the CLI.
+                        success = False
+                        error_msg = str(finalization_error)
+                        update_log_entry(
+                            entry,
+                            success=False,
+                            cost=cost,
+                            model=model,
+                            duration=duration,
+                            error=error_msg,
+                        )
+                        append_log_entry(basename, language, entry, paths=log_paths)
+                        raise
+
+                    update_log_entry(
+                        entry,
+                        success=success,
+                        cost=cost,
+                        model=model,
+                        duration=duration,
+                        error=error_msg,
+                    )
+                    append_log_entry(basename, language, entry, paths=log_paths)
         return wrapper
     return decorator

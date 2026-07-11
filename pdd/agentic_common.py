@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 import time
 import uuid
 import re
@@ -22,7 +24,18 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 from dataclasses import dataclass
 from enum import Enum
 
@@ -1815,8 +1828,14 @@ def get_agent_provider_preference() -> List[str]:
 # never adds one, so a staged-auth hint (`_has_codex_auth_file` /
 # `PDD_CODEX_AUTH_AVAILABLE`) cannot re-pin a provider once its auth is known bad.
 PDD_AGENTIC_DISABLED_PROVIDERS_ENV: str = "PDD_AGENTIC_DISABLED_PROVIDERS"
-_disabled_providers_lock = threading.Lock()
-_disabled_providers: Dict[str, str] = {}
+_disabled_providers: ContextVar[Optional[Dict[str, str]]] = ContextVar(
+    "pdd_agentic_disabled_providers",
+    default=None,
+)
+_disabled_provider_scope_depth: ContextVar[int] = ContextVar(
+    "pdd_agentic_disabled_provider_scope_depth",
+    default=0,
+)
 
 
 def _parse_disabled_providers_env() -> Dict[str, str]:
@@ -1837,15 +1856,15 @@ def _parse_disabled_providers_env() -> Dict[str, str]:
 def get_disabled_providers() -> Dict[str, str]:
     """Return providers disabled for this run as {provider: classification}.
 
-    Unions the in-process registry with the inherited
-    `PDD_AGENTIC_DISABLED_PROVIDERS` env var so both a parent `pdd` process and
-    any re-entrant `pdd` subprocess honor the same permanent-failure skip-list.
+    A workflow scope starts from the inherited
+    `PDD_AGENTIC_DISABLED_PROVIDERS` env var, then keeps later failures in a
+    context-local registry.  This prevents independent workflows in a
+    long-lived or concurrent host from poisoning each other.
     """
-    with _disabled_providers_lock:
-        merged = dict(_parse_disabled_providers_env())
-        for provider, classification in _disabled_providers.items():
-            merged.setdefault(provider, classification)
-    return merged
+    current = _disabled_providers.get()
+    if current is None:
+        return _parse_disabled_providers_env()
+    return dict(current)
 
 
 def mark_provider_permanently_failed(
@@ -1853,20 +1872,17 @@ def mark_provider_permanently_failed(
 ) -> None:
     """Record *provider* as permanently failed for the remainder of the run.
 
-    Idempotent: the first classification recorded for a provider wins. Writes
-    through to `PDD_AGENTIC_DISABLED_PROVIDERS` so `pdd` subprocesses spawned
-    afterward inherit the skip-list.
+    Idempotent: the first classification recorded for a provider wins.  The
+    registry is copied into each provider CLI subprocess environment by
+    :func:`_run_with_provider`, so re-entrant ``pdd`` commands inherit it
+    without mutating process-global environment state.
     """
     if not provider:
         return
     token = (classification or "permanent").strip() or "permanent"
-    with _disabled_providers_lock:
-        _disabled_providers.setdefault(provider, token)
-        current = _parse_disabled_providers_env()
-        current.setdefault(provider, token)
-        os.environ[PDD_AGENTIC_DISABLED_PROVIDERS_ENV] = ",".join(
-            f"{name}:{cls}" for name, cls in current.items()
-        )
+    current = get_disabled_providers()
+    current.setdefault(provider, token)
+    _disabled_providers.set(current)
 
 
 def reset_disabled_providers() -> None:
@@ -1875,9 +1891,42 @@ def reset_disabled_providers() -> None:
     Provided for test isolation and for callers that deliberately start a fresh
     provider-health epoch within one process.
     """
-    with _disabled_providers_lock:
-        _disabled_providers.clear()
+    _disabled_providers.set({})
     os.environ.pop(PDD_AGENTIC_DISABLED_PROVIDERS_ENV, None)
+
+
+@contextmanager
+def provider_failure_scope() -> Iterator[None]:
+    """Create one isolated provider-health epoch for a logical workflow.
+
+    Nested scopes share the outer workflow's failures.  A new outer scope
+    starts only with failures explicitly inherited through the environment,
+    and restores the caller's context on exit.  Context variables keep
+    concurrent threads/tasks isolated without holding a workflow-long lock.
+    """
+    depth = _disabled_provider_scope_depth.get()
+    depth_token = _disabled_provider_scope_depth.set(depth + 1)
+    registry_token = None
+    if depth == 0:
+        registry_token = _disabled_providers.set(_parse_disabled_providers_env())
+    try:
+        yield
+    finally:
+        _disabled_provider_scope_depth.reset(depth_token)
+        if registry_token is not None:
+            _disabled_providers.reset(registry_token)
+
+
+def _provider_failure_scoped(func: Callable) -> Callable:
+    """Run a direct agentic call in a fresh scope unless a workflow owns one."""
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if _disabled_provider_scope_depth.get() > 0:
+            return func(*args, **kwargs)
+        with provider_failure_scope():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 TASK_CLASS_SINGLE_FILE: str = "single_file"
@@ -4965,6 +5014,7 @@ def build_agentic_task_instruction(
     )
 
 
+@_provider_failure_scoped
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -7289,6 +7339,14 @@ def _run_with_provider(
 
     # Prepare Environment
     env = os.environ.copy()
+    disabled_providers = get_disabled_providers()
+    if disabled_providers:
+        env[PDD_AGENTIC_DISABLED_PROVIDERS_ENV] = ",".join(
+            f"{name}:{classification}"
+            for name, classification in disabled_providers.items()
+        )
+    else:
+        env.pop(PDD_AGENTIC_DISABLED_PROVIDERS_ENV, None)
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"

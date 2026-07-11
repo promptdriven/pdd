@@ -961,6 +961,13 @@ def test_log_operation_decorator_fails_when_clear_silently_fails(temp_pdd_env):
 
     assert run_report_path.exists()
     mock_save_fingerprint.assert_not_called()
+    entries = operation_log.load_operation_log(
+        "demo",
+        "python",
+        paths={"prompt": str(prompt_path)},
+    )
+    assert entries[-1]["success"] is False
+    assert "run report not cleared" in entries[-1]["error"]
 
 
 # --------------------------------------------------------------------------------

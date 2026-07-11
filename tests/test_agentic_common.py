@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     get_agent_provider_preference,
     get_disabled_providers,
     mark_provider_permanently_failed,
+    provider_failure_scope,
     reset_disabled_providers,
     run_agentic_task,
     select_harness_for_task,
@@ -13993,7 +13994,6 @@ def test_run_agentic_task_permanent_auth_falls_through_to_next_provider(mock_cwd
     assert result.success
     assert result.provider == "anthropic"
     assert attempted == ["openai", "anthropic"]
-    assert get_disabled_providers().get("openai") == "auth"
 
 
 def test_run_agentic_task_later_call_skips_permanently_failed_provider(mock_cwd):
@@ -14001,7 +14001,7 @@ def test_run_agentic_task_later_call_skips_permanently_failed_provider(mock_cwd)
     same run does not re-attempt it (no per-step dead-provider re-burn)."""
     reset_disabled_providers()
 
-    with patch("pdd.agentic_common.time.sleep"):
+    with provider_failure_scope(), patch("pdd.agentic_common.time.sleep"):
         # Call 1: openai permanent-auth, fall through to anthropic.
         attempted1, fake_run1 = _provider_recorder(
             success_providers={"anthropic"}, permanent_auth_providers={"openai"}
@@ -14039,22 +14039,23 @@ def test_run_agentic_task_single_provider_attempt_skips_disabled_first(mock_cwd)
     provider, but a provider already known dead this run is dropped BEFORE the
     truncation so the surviving single provider is a healthy one."""
     reset_disabled_providers()
-    mark_provider_permanently_failed("openai", "auth")
     attempted, fake_run = _provider_recorder(success_providers={"anthropic"})
 
-    with patch(
-        "pdd.agentic_common.get_agent_provider_preference",
-        return_value=["openai", "anthropic"],
-    ), patch(
-        "pdd.agentic_common.get_available_agents",
-        return_value=["openai", "anthropic"],
-    ), patch(
-        "pdd.agentic_common._run_with_provider", side_effect=fake_run
-    ), patch("pdd.agentic_common.time.sleep"):
-        result = run_agentic_task(
-            "side effect", mock_cwd, quiet=True, label="single",
-            single_provider_attempt=True,
-        )
+    with provider_failure_scope():
+        mark_provider_permanently_failed("openai", "auth")
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["openai", "anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["openai", "anthropic"],
+        ), patch(
+            "pdd.agentic_common._run_with_provider", side_effect=fake_run
+        ), patch("pdd.agentic_common.time.sleep"):
+            result = run_agentic_task(
+                "side effect", mock_cwd, quiet=True, label="single",
+                single_provider_attempt=True,
+            )
 
     assert result.success and result.provider == "anthropic"
     assert attempted == ["anthropic"], "dead openai must not consume the single attempt"
@@ -14065,20 +14066,21 @@ def test_run_agentic_task_all_providers_disabled_reports_aggregated_reasons(mock
     run, fail fast with a per-provider aggregated message and DO NOT re-attempt
     any provider."""
     reset_disabled_providers()
-    mark_provider_permanently_failed("openai", "auth")
-    mark_provider_permanently_failed("google", "quota")
 
     def boom(provider, *args, **kwargs):
         raise AssertionError(f"provider {provider} should not be attempted")
 
-    with patch(
-        "pdd.agentic_common.get_agent_provider_preference",
-        return_value=["openai", "google"],
-    ), patch(
-        "pdd.agentic_common.get_available_agents",
-        return_value=["openai", "google"],
-    ), patch("pdd.agentic_common._run_with_provider", side_effect=boom):
-        result = run_agentic_task("do work", mock_cwd, quiet=True, label="all-dead")
+    with provider_failure_scope():
+        mark_provider_permanently_failed("openai", "auth")
+        mark_provider_permanently_failed("google", "quota")
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["openai", "google"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["openai", "google"],
+        ), patch("pdd.agentic_common._run_with_provider", side_effect=boom):
+            result = run_agentic_task("do work", mock_cwd, quiet=True, label="all-dead")
 
     assert not result.success
     assert "openai: auth" in result.output_text
@@ -14107,6 +14109,37 @@ def test_run_agentic_task_honors_disabled_providers_env_from_subprocess(mock_cwd
 
     assert result.success and result.provider == "anthropic"
     assert attempted == ["anthropic"]
+
+
+def test_run_with_provider_exports_scope_registry_to_child_environment(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Provider CLIs receive the current skip-list without global env mutation."""
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("test prompt", encoding="utf-8")
+
+    with provider_failure_scope():
+        mark_provider_permanently_failed("openai", "auth")
+        result = _run_with_provider(
+            "anthropic",
+            prompt_file,
+            mock_cwd,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert result[0] is True
+    child_env = mock_subprocess.call_args.kwargs["env"]
+    assert child_env[PDD_AGENTIC_DISABLED_PROVIDERS_ENV] == "openai:auth"
+    assert PDD_AGENTIC_DISABLED_PROVIDERS_ENV not in os.environ
 
 
 def test_run_agentic_task_provider_preference_is_a_hard_filter(mock_cwd):
@@ -14155,20 +14188,30 @@ def test_run_agentic_task_success_does_not_disable_any_provider(mock_cwd):
     assert get_disabled_providers() == {}
 
 
-def test_mark_provider_permanently_failed_is_idempotent_and_writes_env():
-    """The registry keeps the first classification for a provider and mirrors the
-    skip-list into PDD_AGENTIC_DISABLED_PROVIDERS for subprocess inheritance."""
+def test_mark_provider_permanently_failed_is_idempotent_and_context_local():
+    """The first classification wins without mutating process-global env."""
     reset_disabled_providers()
     try:
-        mark_provider_permanently_failed("openai", "auth")
-        mark_provider_permanently_failed("openai", "quota")  # ignored: first wins
-        mark_provider_permanently_failed("google", "credential-limit")
+        with provider_failure_scope():
+            mark_provider_permanently_failed("openai", "auth")
+            mark_provider_permanently_failed("openai", "quota")  # first wins
+            mark_provider_permanently_failed("google", "credential-limit")
 
-        disabled = get_disabled_providers()
-        assert disabled == {"openai": "auth", "google": "credential-limit"}
+            disabled = get_disabled_providers()
+            assert disabled == {"openai": "auth", "google": "credential-limit"}
+            assert PDD_AGENTIC_DISABLED_PROVIDERS_ENV not in os.environ
 
-        env_val = os.environ.get(PDD_AGENTIC_DISABLED_PROVIDERS_ENV, "")
-        tokens = dict(t.split(":", 1) for t in env_val.split(",") if t)
-        assert tokens == {"openai": "auth", "google": "credential-limit"}
+        assert get_disabled_providers() == {}
     finally:
         reset_disabled_providers()
+
+
+def test_provider_failure_scope_starts_fresh_logical_workflow():
+    """A permanent failure in one workflow cannot poison the next workflow."""
+    reset_disabled_providers()
+    with provider_failure_scope():
+        mark_provider_permanently_failed("openai", "auth")
+        assert get_disabled_providers() == {"openai": "auth"}
+
+    with provider_failure_scope():
+        assert get_disabled_providers() == {}
