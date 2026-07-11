@@ -179,6 +179,7 @@ class UnitSnapshot:
 @dataclass(frozen=True, order=True)
 class VerificationObligation:
     """One protected requirement that must receive trusted evidence."""
+    # pylint: disable=too-many-instance-attributes
 
     obligation_id: str
     kind: str
