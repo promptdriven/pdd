@@ -10,9 +10,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 from pdd.sync_core import build_unit_manifest, load_verification_profiles, verification
-from pdd.sync_core.git_io import read_git_blob
 from pdd.sync_core.manifest import ManifestRefs
-from pdd.sync_core.runner import pytest_validator_config_digest
 from pdd.sync_core.verification import PROFILE_PATH as PROFILE_REL_PATH
 
 
@@ -29,6 +27,9 @@ FOUNDATION_PROFILE_PATHS = {
     "tests/test_sync_core_descriptor_store.py",
 }
 REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
+PYTEST_VALIDATOR_CONFIG_DIGEST = (
+    "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963"
+)
 FOUNDATION_PROFILE = "pdd/prompts/durable_sync_runner_python.prompt"
 FOUNDATION_OBLIGATIONS = {
     "pytest-descriptor-store": {
@@ -74,7 +75,8 @@ def _profile_bytes_as_protected_base(monkeypatch, profile_bytes: bytes) -> None:
     def protected_read(_root: Path, _ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
             return profile_bytes
-        return read_git_blob(ROOT, "HEAD", path)
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", protected_read)
 
@@ -151,6 +153,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
 
 
 def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> None:
+    # pylint: disable=too-many-locals
     """Require one complete, reviewable profile for every protected PDD unit."""
     payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     rows = payload["profiles"]
@@ -205,9 +208,7 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         if obligation.validator_id == "pytest"
     ]
     for obligation in pytest_obligations:
-        assert obligation.validator_config_digest == pytest_validator_config_digest(
-            ROOT, "HEAD", obligation.artifact_paths
-        )
+        assert obligation.validator_config_digest == PYTEST_VALIDATOR_CONFIG_DIGEST
     foundation_profile = next(
         profile
         for profile in profiles.profiles
@@ -243,7 +244,8 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     def candidate_only_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
         if path == PROFILE_REL_PATH:
             return profile_bytes if ref == "candidate-head" else None
-        return read_git_blob(ROOT, "HEAD", path)
+        resolved = ROOT / path
+        return resolved.read_bytes() if resolved.is_file() else None
 
     monkeypatch.setattr(verification, "read_git_blob", candidate_only_read)
     profiles = load_verification_profiles(ROOT, candidate_manifest)

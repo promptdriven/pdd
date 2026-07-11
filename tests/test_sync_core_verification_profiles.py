@@ -115,6 +115,7 @@ def test_candidate_cannot_remap_protected_validator(tmp_path) -> None:
 
 
 def test_profile_digest_binds_declared_code_under_test(tmp_path) -> None:
+    """The profile identity must bind its explicit product-code assignment."""
     root = _repository(tmp_path)
     first = _profile()
     first["profiles"][0]["obligations"][0]["code_under_test_paths"] = [

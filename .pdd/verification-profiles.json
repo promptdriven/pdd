@@ -5212,6 +5212,39 @@
             "pdd/prompts/durable_sync_runner_python.prompt"
           ],
           "required": true
+        },
+        {
+          "obligation_id": "pytest-descriptor-store",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e"
+          ],
+          "artifact_paths": [
+            "tests/test_sync_core_candidate_artifact_provenance.py",
+            "tests/test_sync_core_trust.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/sync_core/descriptor_store.py"
+          ],
+          "required": true
+        },
+        {
+          "obligation_id": "pytest-supervisor",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e"
+          ],
+          "artifact_paths": [
+            "tests/test_sync_core_lifecycle_scenarios.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/sync_core/supervisor.py"
+          ],
+          "required": true
         }
       ]
     },
