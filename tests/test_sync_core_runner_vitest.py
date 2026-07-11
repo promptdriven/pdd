@@ -19,6 +19,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import vitest_validator_config_digest
+from pdd.sync_core.runner import _local_javascript_imports
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
@@ -241,6 +242,96 @@ def test_vitest_side_effect_import_helper_mutation_cannot_pass(tmp_path: Path) -
     )
 
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_vitest_parent_directory_import_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/helper.ts").write_text("export const expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import { expected } from '../shared/helper';\n"
+        "test('widget works', () => expect(expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/helper.ts").write_text("export const expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_vitest(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_vitest_parent_directory_side_effect_import_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "shared").mkdir()
+    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import '../shared/setup';\n"
+        "test('widget works', () => expect(globalThis.expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent side effect helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "shared/setup.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent side effect helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_vitest(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_vitest_parent_directory_imports_change_validator_digest(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    (root / "shared/helpers").mkdir(parents=True)
+    (root / "shared/helpers/index.ts").write_text(
+        "export const expected = true;\n", encoding="utf-8"
+    )
+    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import { expected } from '../shared/helpers';\n"
+        "import '../shared/setup';\n"
+        "test('widget works', () => expect(expected && globalThis.expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add parent import helpers")
+    base = _git(root, "rev-parse", "HEAD")
+    base_digest = vitest_validator_config_digest(root, base, paths)
+
+    (root / "shared/helpers/index.ts").write_text(
+        "export const expected = false;\n", encoding="utf-8"
+    )
+    (root / "shared/setup.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate parent import helpers")
+    head_digest = vitest_validator_config_digest(root, _git(root, "rev-parse", "HEAD"), paths)
+
+    assert head_digest != base_digest
+
+
+def test_vitest_repository_escape_import_is_not_bound(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    imports = _local_javascript_imports(
+        root,
+        commit,
+        PurePosixPath("tests/widget.test.ts"),
+        b"import '../../outside.js';\n",
+    )
+    assert imports == set()
 
 
 def test_vitest_local_alias_config_fails_closed(tmp_path: Path) -> None:
