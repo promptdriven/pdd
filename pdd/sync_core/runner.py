@@ -37,8 +37,8 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import untrusted_child_environment
-from .git_io import read_git_blob, read_git_regular_blob
+from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
+from .git_io import read_git_blob, read_git_mode, read_git_regular_blob
 from .types import (
     EvidenceOutcome,
     ObligationEvidence,
@@ -1644,12 +1644,14 @@ def _validate_playwright_data_value(source: bytes, node: Node) -> None:
 
 
 def _playwright_support_closure(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     # pylint: disable=too-many-locals
     """Bind config, local support, and test imports without executing them."""
     config_path, config_source = _playwright_config(root, ref)
     paths = {config_path}
+    product_paths = frozenset(code_under_test_paths)
     all_owners = frozenset(test_paths)
     pending = [
         (item, all_owners) for item in _playwright_static_config(config_path, config_source)
@@ -1666,18 +1668,35 @@ def _playwright_support_closure(
         path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
+        if read_git_mode(root, ref, path) == "120000":
+            raise ValueError(f"Playwright closure member must not be a symlink: {path}")
         paths.add(path)
         if path.suffix in _JAVASCRIPT_SUFFIXES:
             imports, bare_imports, has_snapshot, resources = _playwright_source_syntax(
                 path, source
             )
-            for imported in imports | resources:
-                normalized = _normalize_repo_relative_path(path.parent / PurePosixPath(imported))
+            for imported in imports:
+                normalized = _normalize_repo_relative_path(
+                    path.parent / PurePosixPath(imported)
+                )
                 if normalized is None:
                     raise ValueError("Playwright import escapes the repository")
                 resolved, imported_source = _read_javascript_support_blob(root, ref, normalized)
                 if imported_source is None:
                     raise ValueError(f"Playwright local support path is missing: {resolved}")
+                if resolved not in product_paths:
+                    pending.append((resolved, owners))
+            for resource in resources:
+                normalized = _normalize_repo_relative_path(PurePosixPath(resource))
+                if normalized is None:
+                    raise ValueError("Playwright runtime resource escapes the repository")
+                resolved, resource_source = _read_javascript_support_blob(
+                    root, ref, normalized
+                )
+                if resource_source is None:
+                    raise ValueError(
+                        f"Playwright runtime resource path is missing: {resolved}"
+                    )
                 pending.append((resolved, owners))
             unbound_bare = bare_imports - {"@playwright/test"}
             if unbound_bare:
@@ -1695,6 +1714,10 @@ def _playwright_support_closure(
         )
         for name in listed.stdout.splitlines():
             snapshot_path = PurePosixPath(name)
+            if read_git_mode(root, ref, snapshot_path) == "120000":
+                raise ValueError(
+                    f"Playwright closure member must not be a symlink: {snapshot_path}"
+                )
             snapshot = read_git_blob(root, ref, snapshot_path)
             if snapshot is not None:
                 paths.add(snapshot_path)
@@ -1724,8 +1747,19 @@ def _playwright_source_syntax(
         "click", "fill", "goto", "locator", "getByRole", "getByText",
         "waitFor", "press", "selectOption", "uncheck",
         "addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR",
+        "use", "beforeEach", "afterEach", "beforeAll", "afterAll", "step",
+        "waitForSelector", "toBeEnabled", "toBeDisabled", "toBeChecked",
+        "toHaveAttribute", "toHaveClass", "toHaveCount", "toHaveCSS",
+        "toHaveJSProperty", "toHaveId", "toHaveAccessibleName",
     }
     resource_calls = {"addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR"}
+    test_calls = {"use", "beforeEach", "afterEach", "beforeAll", "afterAll", "step"}
+    matcher_calls = {name for name in allowed_calls if name.startswith("to")}
+    browser_calls = {
+        "click", "fill", "goto", "locator", "getByRole", "getByText",
+        "waitFor", "waitForSelector", "press", "selectOption", "uncheck",
+        "addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR",
+    }
     reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
     local_callables: set[str] = set()
     discovery = [tree.root_node]
@@ -1791,6 +1825,7 @@ def _playwright_source_syntax(
                 prop = function.child_by_field_name("property")
                 obj = function.child_by_field_name("object")
                 name = _node_text(source, prop) if prop is not None else ""
+                receiver = _node_text(source, obj) if obj is not None else ""
                 root_name = _node_text(source, obj).split(".", 1)[0] if obj is not None else ""
                 if name in {"require", "createRequire"}:
                     raise ValueError(
@@ -1808,15 +1843,43 @@ def _playwright_source_syntax(
                     raise ValueError(
                         "Playwright call violates the positive runtime capability schema"
                     )
+                if name in test_calls and root_name not in {"test", "describe"}:
+                    raise ValueError(
+                        "Playwright test capability is not valid for this receiver"
+                    )
+                if name in matcher_calls and "expect(" not in receiver:
+                    raise ValueError(
+                        "Playwright assertion capability is not valid for this receiver"
+                    )
+                if name in browser_calls and not any(
+                    token in receiver
+                    for token in (
+                        "page", "locator", "context", "frame", "request",
+                        "browser", "dialog", "download", "response",
+                    )
+                ):
+                    raise ValueError(
+                        "Playwright browser capability is not valid for this receiver"
+                    )
                 if name in resource_calls:
                     values = arguments.named_children if arguments is not None else []
                     resource_node = values[0] if values else None
                     if resource_node is not None and resource_node.type == "object":
-                        for pair in resource_node.named_children:
-                            key = pair.child_by_field_name("key")
-                            if key is not None and _node_text(source, key).strip("'\"") == "path":
-                                resource_node = pair.child_by_field_name("value")
-                                break
+                        pairs = resource_node.named_children
+                        if len(pairs) != 1 or pairs[0].type != "pair":
+                            raise ValueError(
+                                "Playwright runtime resource object schema requires one path property"
+                            )
+                        key = pairs[0].child_by_field_name("key")
+                        if (
+                            key is None
+                            or key.type == "computed_property_name"
+                            or _node_text(source, key).strip("'\"") != "path"
+                        ):
+                            raise ValueError(
+                                "Playwright runtime resource object schema requires one static path property"
+                            )
+                        resource_node = pairs[0].child_by_field_name("value")
                     if resource_node is None or resource_node.type != "string":
                         raise ValueError("Playwright runtime resource path must be static")
                     value = _javascript_string(source, resource_node)
@@ -1868,11 +1931,14 @@ def _playwright_source_syntax(
 
 
 def playwright_validator_config_digest(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> str:
     """Hash Playwright config and every bound local executable dependency."""
     digest = hashlib.sha256()
-    for path, content in _playwright_support_closure(root, ref, test_paths):
+    for path, content in _playwright_support_closure(
+        root, ref, test_paths, code_under_test_paths
+    ):
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
 
@@ -1972,8 +2038,13 @@ def _playwright_support_digest(
         if obligation.validator_id == "playwright"
         for path in obligation.artifact_paths
     )
+    product = tuple(
+        path for obligation in profile.obligations
+        if obligation.validator_id == "playwright"
+        for path in obligation.code_under_test_paths
+    )
     try:
-        closure = _playwright_support_closure(root, ref, tests)
+        closure = _playwright_support_closure(root, ref, tests, product)
     except ValueError:
         return "invalid-playwright-closure", ()
     digest = hashlib.sha256()
@@ -2723,6 +2794,13 @@ def _playwright_toolchain_identity(
         raise ValueError("Playwright dependencies role must be the NODE_PATH node_modules root")
     if roles["lockfile"].parent != roles["dependencies"].parent:
         raise ValueError("Playwright lockfile must govern the declared dependency tree")
+    package_root = roles["dependencies"] / "@playwright" / "test"
+    if not package_root.is_dir() or not _path_is_relative_to(
+        roles["entrypoint"], package_root
+    ):
+        raise ValueError(
+            "Playwright entrypoint must be inside the declared @playwright/test dependency package"
+        )
     command_paths = []
     for part in command[:2]:
         path = Path(part).expanduser()
@@ -3898,26 +3976,28 @@ def _run_playwright(
         digest = hashlib.sha256(
             json.dumps(command, separators=(",", ":")).encode()
         ).hexdigest()
-        try:
-            result = subprocess.run(
-                command,
-                cwd=root,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout_seconds,
-                env=_playwright_environment(
-                    temporary,
-                    roles["dependencies"],
-                    roles["browser_runtime"],
-                ),
-            )
-        except subprocess.TimeoutExpired:
-            return RunnerExecution("playwright", EvidenceOutcome.TIMEOUT, digest, "Playwright execution timed out"), ()
-        except OSError as exc:
+        result, surviving = run_supervised(
+            command,
+            cwd=root,
+            timeout=timeout_seconds,
+            env=_playwright_environment(
+                temporary,
+                roles["dependencies"],
+                roles["browser_runtime"],
+            ),
+            # Browsers and reporters routinely create checkout-local artifacts;
+            # the immutable Git status check below rejects every such write.
+            writable_roots=(temporary, root),
+        )
+        if result.returncode == 124:
             return RunnerExecution(
-                "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
-                f"Playwright launch failed: {exc}",
+                "playwright", EvidenceOutcome.TIMEOUT, digest,
+                "Playwright execution timed out and descendants were reaped",
+            ), ()
+        if surviving:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, digest,
+                "Playwright left surviving descendants after execution",
             ), ()
         mutated = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=all"],
