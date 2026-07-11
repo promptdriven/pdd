@@ -24,11 +24,12 @@ from .sync_determine_operation import (
     get_extension,
 )
 from .sync_core import CanonicalReportOptions, build_canonical_report
-from .construct_paths import _find_pddrc_file, _load_pddrc_config
+from .construct_paths import _load_pddrc_config
 
 
 MAX_PROMPT_DISCOVERY_FILES = 10000
 MAX_PROMPT_DISCOVERY_ENTRIES = 50000
+MAX_PROMPT_DISCOVERY_ROOTS = 100
 MAX_REPAIR_DISCOVERY_ENTRIES = 50000
 SKIPPED_DISCOVERY_DIRS = {
     ".git",
@@ -265,9 +266,10 @@ def _is_hidden_or_system_dir(path: Path) -> bool:
     return path.name.startswith(".") or path.name in SKIPPED_DISCOVERY_DIRS
 
 
-def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[DiscoveryFailure]]:
+def _bounded_prompt_paths(
+    prompt_root: Path, budget: Dict[str, int]
+) -> tuple[List[Path], Optional[DiscoveryFailure]]:
     prompt_paths: List[Path] = []
-    visited_entries = 0
     walk_failure: DiscoveryFailure | None = None
 
     def on_walk_error(error: OSError) -> None:
@@ -282,8 +284,8 @@ def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[Disco
         if walk_failure is not None:
             return prompt_paths, walk_failure
         current = Path(current_root)
-        visited_entries += 1 + len(dirnames) + len(filenames)
-        if visited_entries > MAX_PROMPT_DISCOVERY_ENTRIES:
+        budget["entries"] += 1 + len(dirnames) + len(filenames)
+        if budget["entries"] > MAX_PROMPT_DISCOVERY_ENTRIES:
             return prompt_paths, DiscoveryFailure(
                 prompt_root=prompt_root,
                 reason=(
@@ -301,7 +303,8 @@ def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[Disco
             if not filename.endswith(".prompt") or "_" not in filename:
                 continue
             prompt_paths.append(current / filename)
-            if len(prompt_paths) > MAX_PROMPT_DISCOVERY_FILES:
+            budget["files"] += 1
+            if budget["files"] > MAX_PROMPT_DISCOVERY_FILES:
                 return prompt_paths, DiscoveryFailure(
                     prompt_root=prompt_root,
                     reason=(
@@ -313,10 +316,12 @@ def _bounded_prompt_paths(prompt_root: Path) -> tuple[List[Path], Optional[Disco
     return sorted(prompt_paths), None
 
 
-def _prompt_units(prompt_root: Path) -> tuple[List[SyncUnit], List[DiscoveryFailure]]:
+def _prompt_units(
+    prompt_root: Path, budget: Dict[str, int]
+) -> tuple[List[SyncUnit], List[DiscoveryFailure]]:
     units: List[SyncUnit] = []
     failures: List[DiscoveryFailure] = []
-    prompt_paths, failure = _bounded_prompt_paths(prompt_root)
+    prompt_paths, failure = _bounded_prompt_paths(prompt_root, budget)
     if failure is not None:
         failures.append(failure)
     for prompt_path in prompt_paths[:MAX_PROMPT_DISCOVERY_FILES]:
@@ -343,17 +348,37 @@ def _is_safe_prompt_root(base: Path, prompt_root: Path) -> bool:
     return True
 
 
-def _configured_prompt_roots(base: Path) -> List[Path]:
+def _safe_control_file(path: Path, base: Path) -> bool:
+    """Validate a candidate-controlled file path without following links."""
+    return _safe_architecture_candidate(path, base)
+
+
+def _project_config(base: Path) -> tuple[Path | None, Dict[str, Any]]:
+    """Load the project config only after validating its logical path."""
+    path = base / ".pddrc"
+    if not _safe_control_file(path, base):
+        raise UnsafeConfigError(f"unsafe project config: {path}")
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return None, {}
+    if not stat.S_ISREG(mode):
+        raise UnsafeConfigError(f"unsafe project config: {path}")
+    return path, _load_pddrc_config(path)
+
+
+def _configured_prompt_roots(
+    base: Path, pddrc_path: Path | None, config: Dict[str, Any]
+) -> List[Path]:
+    # pylint: disable=too-many-branches
     """Return normalized prompt roots configured for the legacy report.
 
     The report owns discovery, so configured roots must be resolved before it
     passes a fixed relative pattern to ``Path.rglob``.  In particular, an
     absolute ``prompts_dir`` is a root, never a glob pattern to append to one.
     """
-    pddrc_path = _find_pddrc_file(base)
     configured: List[Path] = []
     if pddrc_path is not None:
-        config = _load_pddrc_config(pddrc_path)
         if not isinstance(config, dict):
             raise ValueError(".pddrc must contain a mapping")
         contexts = config.get("contexts", {})
@@ -377,14 +402,27 @@ def _configured_prompt_roots(base: Path) -> List[Path]:
 
     if not configured:
         configured.append((base / "prompts").resolve(strict=False))
-    return list(dict.fromkeys(configured))
+    unique = sorted(dict.fromkeys(configured), key=lambda item: len(item.parts))
+    collapsed: List[Path] = []
+    for candidate in unique:
+        if any(_is_within_root(candidate, accepted) for accepted in collapsed):
+            continue
+        collapsed.append(candidate)
+        if len(collapsed) > MAX_PROMPT_DISCOVERY_ROOTS:
+            raise ValueError(
+                f".pddrc exceeds configured prompt root limit of {MAX_PROMPT_DISCOVERY_ROOTS}"
+            )
+    return collapsed
 
 
 def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailure]]:
     roots: List[Path] = []
     failures: List[DiscoveryFailure] = []
     try:
-        configured_roots = _configured_prompt_roots(base)
+        pddrc_path, config = _project_config(base)
+        configured_roots = _configured_prompt_roots(base, pddrc_path, config)
+    except UnsafeConfigError as exc:
+        return [], [DiscoveryFailure(base / ".pddrc", str(exc), "unsafe_config")]
     except (OSError, RuntimeError, ValueError) as exc:
         return [], [
             DiscoveryFailure(
@@ -653,10 +691,11 @@ def _discover_units_and_failures(
     if any(failure.failure == "invalid_pddrc" for failure in failures):
         return [], failures
     prompt_units: List[SyncUnit] = []
+    budget = {"entries": 0, "files": 0}
     for prompt_root in prompt_roots:
         if not prompt_root.is_dir():
             continue
-        units, unit_failures = _prompt_units(prompt_root)
+        units, unit_failures = _prompt_units(prompt_root, budget)
         prompt_units.extend(units)
         failures.extend(unit_failures)
     metadata_identities, metadata_failure = _metadata_identities(
@@ -833,7 +872,7 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
         if isinstance(value, Path):
             try:
                 payload[key] = value.resolve().relative_to(resolved_root).as_posix()
-            except (OSError, ValueError):
+            except (OSError, RuntimeError, ValueError):
                 payload[key] = str(value)
         elif isinstance(value, list):
             payload[key] = [str(item) for item in value]
@@ -844,6 +883,10 @@ def _paths_as_json(paths: Dict[str, Any], root: Path) -> Dict[str, Any]:
 
 class UnsafeArchitectureError(ValueError):
     """Raised when architecture metadata is unsafe to inspect."""
+
+
+class UnsafeConfigError(ValueError):
+    """Raised when project configuration is unsafe to inspect."""
 
 
 def _safe_architecture_candidate(path: Path, base: Path) -> bool:
@@ -896,13 +939,13 @@ def _architecture_filepath(
             if not isinstance(filename, str) or not isinstance(filepath, str):
                 continue
             filename_path = Path(filename)
-            prompt_matches = filename_path.name == unit.prompt_path.name
-            try:
-                prompt_matches = prompt_matches or filename_path == unit.prompt_path.relative_to(
-                    unit.prompts_dir
+            expected = Path(f"{unit.basename}_{unit.language}.prompt")
+            prompt_matches = filename_path.as_posix().lower() == expected.as_posix().lower()
+            if "/" not in unit.basename:
+                prompt_matches = (
+                    prompt_matches
+                    or filename_path.name.lower() == unit.prompt_path.name.lower()
                 )
-            except ValueError:
-                pass
             if prompt_matches:
                 output = Path(filepath)
                 if output.is_absolute() or ".." in output.parts:
@@ -915,12 +958,11 @@ def _architecture_filepath(
     return None
 
 
-def _configured_output_dirs(unit: SyncUnit, base: Path) -> Dict[str, str]:
-    """Return output defaults for the context owning ``unit``, without writes."""
-    pddrc_path = _find_pddrc_file(unit.prompts_dir) or _find_pddrc_file(base)
+def _configured_output_defaults(unit: SyncUnit, base: Path) -> Dict[str, Any]:
+    """Return complete output defaults for the context owning ``unit``."""
+    pddrc_path, config = _project_config(base)
     if pddrc_path is None:
         return {}
-    config = _load_pddrc_config(pddrc_path)
     contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
     if not isinstance(contexts, dict):
         return {}
@@ -932,23 +974,35 @@ def _configured_output_dirs(unit: SyncUnit, base: Path) -> Dict[str, str]:
         if not isinstance(defaults, dict):
             continue
         raw_prompts = defaults.get("prompts_dir")
-        if not isinstance(raw_prompts, str) or not raw_prompts.strip():
-            continue
-        configured = Path(raw_prompts).expanduser()
-        if not configured.is_absolute():
-            configured = pddrc_path.parent / configured
-        try:
-            unit.prompt_path.resolve().relative_to(configured.resolve())
-        except ValueError:
+        if isinstance(raw_prompts, str) and raw_prompts.strip():
+            configured = Path(raw_prompts).expanduser()
+            if not configured.is_absolute():
+                configured = pddrc_path.parent / configured
+            try:
+                unit.prompt_path.resolve().relative_to(configured.resolve())
+            except ValueError:
+                continue
+        elif len(contexts) > 1 and "default" in contexts and context is not contexts["default"]:
             continue
         selected = defaults
         break
-    return {
-        key: value
-        for key, value in selected.items()
-        if key in {"generate_output_path", "example_output_path", "test_output_path"}
-        and isinstance(value, str)
-    }
+    return selected
+
+
+def _template_path(
+    outputs: Any, key: str, fallback: Path, unit: SyncUnit, base: Path
+) -> Path:
+    """Render one validated output template without filesystem side effects."""
+    if not isinstance(outputs, dict):
+        return fallback
+    spec = outputs.get(key)
+    template = spec.get("path") if isinstance(spec, dict) else None
+    if not isinstance(template, str):
+        return fallback
+    rendered = template.format(
+        name=unit.basename, basename=unit.basename, language=unit.language
+    )
+    return base / Path(rendered)
 
 
 def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
@@ -956,15 +1010,24 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
     extension = get_extension(unit.language)
     suffix = f".{extension}" if extension else ""
     code_path = _architecture_filepath(unit, base)
-    code_stem = code_path.stem if code_path is not None else Path(unit.basename).name
-    outputs = _configured_output_dirs(unit, base)
-    code_dir = outputs.get("generate_output_path", "")
-    example_dir = outputs.get("example_output_path", "examples")
-    test_dir = outputs.get("test_output_path", "tests")
+    architecture_path = code_path
+    code_stem = code_path.stem if code_path is not None else unit.basename
+    defaults = _configured_output_defaults(unit, base)
+    code_dir = defaults.get("generate_output_path", "")
+    example_dir = defaults.get("example_output_path", "examples")
+    test_dir = defaults.get("test_output_path", "tests")
+    for value in (code_dir, example_dir, test_dir):
+        if not isinstance(value, str):
+            raise ValueError("configured output directory must be a string")
     if code_path is None:
         code_path = base / code_dir / f"{code_stem}{suffix}"
     example_path = base / example_dir / f"{code_stem}_example{suffix}"
     test_path = base / test_dir / f"test_{code_stem}{suffix}"
+    outputs = defaults.get("outputs")
+    if architecture_path is None:
+        code_path = _template_path(outputs, "code", code_path, unit, base)
+    example_path = _template_path(outputs, "example", example_path, unit, base)
+    test_path = _template_path(outputs, "test", test_path, unit, base)
     return {
         "prompt": unit.prompt_path,
         "code": code_path,
@@ -983,15 +1046,21 @@ def _is_within_root(path: Path, root: Path) -> bool:
 
 
 def _artifact_path_violation(path: Path, root: Path) -> Optional[str]:
+    # pylint: disable=too-many-return-statements
     root = root.resolve()
     candidate = path if path.is_absolute() else root / path
     try:
         mode = candidate.lstat().st_mode
     except FileNotFoundError:
         mode = None
+    except (OSError, RuntimeError, ValueError):
+        return "is an invalid path"
     if mode is not None and stat.S_ISLNK(mode):
         return "is a symlink"
-    resolved = candidate.resolve(strict=False)
+    try:
+        resolved = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return "is an invalid path"
     if not _is_within_root(resolved, root):
         return "resolves outside project"
     if mode is None:

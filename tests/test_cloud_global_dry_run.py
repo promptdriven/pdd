@@ -447,6 +447,9 @@ def test_architecture_duplicate_leaves_match_relative_prompt_path(tmp_path: Path
         "example_hash": None, "test_hash": None, "test_files": None,
         "include_deps": {},
     })
+    (project / ".pdd" / "meta" / "app_settings_page_python.json").rename(
+        project / ".pdd" / "meta" / "app_settings_page_typescriptreact.json"
+    )
 
     report = classify_unit(
         SyncUnit("app/settings/page", "typescriptreact", prompt, project / "prompts"),
