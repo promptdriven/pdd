@@ -404,7 +404,7 @@ def test_live_include_hash_is_independent_of_nested_cwd(
     nested.mkdir()
     prompt = prompts / "widget_python.prompt"
     dependency = project / "shared.txt"
-    prompt.write_text('<include path="shared.txt">\nwidget\n', encoding="utf-8")
+    prompt.write_text("<include>shared.txt</include>\nwidget\n", encoding="utf-8")
     dependency.write_text("trusted\n", encoding="utf-8")
     (nested / "shared.txt").write_text("cwd-dependent\n", encoding="utf-8")
     paths = {"prompt": prompt, "code": project / "widget.py", "example": project / "examples/widget_example.py", "test": project / "tests/test_widget.py", "test_files": [project / "tests/test_widget.py"]}
@@ -441,7 +441,7 @@ def test_live_include_rejects_unsafe_target(
             pytest.skip(f"symlink creation unavailable: {exc}")
         reference = "linked.txt"
     prompt = prompts / "widget_python.prompt"
-    prompt.write_text(f'<include path="{reference}">\nwidget\n', encoding="utf-8")
+    prompt.write_text(f"<include>{reference}</include>\nwidget\n", encoding="utf-8")
     _write_fingerprint(project, "widget", {"prompt_hash": "stored", "code_hash": None, "example_hash": None, "test_hash": None, "test_files": None, "include_deps": {}})
 
     report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
