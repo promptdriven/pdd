@@ -189,13 +189,17 @@ def _reusable_result(
             root=root,
             ref=head_sha,
             config=RunnerConfig(
-                playwright_command=envelope.binding.playwright_command
+                playwright_command=envelope.binding.playwright_command,
+                playwright_toolchain_manifest=Path(
+                    envelope.binding.playwright_toolchain_manifest
+                ) if envelope.binding.playwright_toolchain_manifest else None,
             ),
         ),
         TRUSTED_RUNNER_VERSION,
         base_sha,
         envelope.binding.checked_sha,
         envelope.binding.playwright_command,
+        envelope.binding.playwright_toolchain_manifest,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(

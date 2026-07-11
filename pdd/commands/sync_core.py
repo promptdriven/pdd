@@ -194,6 +194,7 @@ def _runner_config_from_options(
     jest_command = options.get("jest_command")
     vitest_command = options.get("vitest_command")
     playwright_command = options.get("playwright_command")
+    playwright_manifest = options.get("playwright_toolchain_manifest")
     return RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
@@ -209,6 +210,8 @@ def _runner_config_from_options(
             playwright_command if isinstance(playwright_command, str) else None,
             cwd,
         ),
+        playwright_toolchain_manifest=Path(playwright_manifest).expanduser().resolve()
+        if isinstance(playwright_manifest, str) and playwright_manifest else None,
     )
 
 
@@ -458,6 +461,12 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     envvar="PDD_SYNC_PLAYWRIGHT_COMMAND",
     help="Protected absolute external Playwright command argv.",
 )
+@click.option(
+    "--playwright-toolchain-manifest",
+    envvar="PDD_SYNC_PLAYWRIGHT_TOOLCHAIN_MANIFEST",
+    type=click.Path(path_type=Path),
+    help="Protected external Playwright toolchain manifest.",
+)
 @click.pass_context
 def validate(
     ctx: click.Context,
@@ -467,6 +476,7 @@ def validate(
     jest_command: str | None,
     vitest_command: str | None,
     playwright_command: str | None,
+    playwright_toolchain_manifest: Path | None,
 ) -> None:
     """Run protected obligations and transactionally finalize trusted evidence."""
     ctx.ensure_object(dict)
@@ -482,6 +492,8 @@ def validate(
                 "jest_command": jest_command,
                 "vitest_command": vitest_command,
                 "playwright_command": playwright_command,
+                "playwright_toolchain_manifest": str(playwright_toolchain_manifest)
+                if playwright_toolchain_manifest else None,
             },
             root,
         ),

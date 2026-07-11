@@ -178,6 +178,7 @@ class AttestationBinding:
     base_sha: str
     checked_sha: str
     playwright_command: tuple[str, ...] | None = None
+    playwright_toolchain_manifest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -234,6 +235,10 @@ class AttestationEnvelope:
         if self.binding.playwright_command is not None:
             data["binding"]["playwright_command"] = list(
                 self.binding.playwright_command
+            )
+        if self.binding.playwright_toolchain_manifest is not None:
+            data["binding"]["playwright_toolchain_manifest"] = (
+                self.binding.playwright_toolchain_manifest
             )
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 

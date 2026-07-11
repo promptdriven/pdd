@@ -126,6 +126,18 @@ def _run(
     fake: Path | tuple[str, ...],
     timeout: int = 2,
 ):
+    command = fake if isinstance(fake, tuple) else (sys.executable, str(fake))
+    entrypoint = Path(command[1])
+    manifest_root = root.parent if entrypoint.is_relative_to(root) else entrypoint.parent
+    declared = entrypoint.name
+    if entrypoint.is_relative_to(root):
+        declared = "protected-playwright-tool"
+        (manifest_root / declared).write_bytes(b"protected")
+    manifest = manifest_root / "playwright-toolchain.json"
+    manifest.write_text(
+        '{"version":1,"files":[' + repr(declared).replace("'", '"') + "]}",
+        encoding="utf-8",
+    )
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     try:
         config_digest = playwright_validator_config_digest(root, base, paths)
@@ -147,9 +159,8 @@ def _run(
         ),
         config=RunnerConfig(
             timeout_seconds=timeout,
-            playwright_command=fake
-            if isinstance(fake, tuple)
-            else (sys.executable, str(fake)),
+            playwright_command=command,
+            playwright_toolchain_manifest=manifest,
         ),
     )
 
@@ -264,7 +275,7 @@ def test_playwright_config_uses_enumerated_static_syntax(
 def test_playwright_rejects_dynamic_or_aliased_module_loading(
     tmp_path: Path, source: str
 ) -> None:
-    root, commit = _repository(tmp_path)
+    root, _commit = _repository(tmp_path)
     (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "dynamic loader")
@@ -309,7 +320,7 @@ def test_playwright_rejects_all_non_literal_module_loading(
 def test_playwright_rejects_semantic_loader_variants(
     tmp_path: Path, source: str
 ) -> None:
-    root, commit = _repository(tmp_path)
+    root, _commit = _repository(tmp_path)
     (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "semantic loader")
@@ -354,7 +365,7 @@ def test_playwright_rejects_reflective_runtime_resource_access(
 def test_playwright_rejects_unbound_runtime_capabilities(
     tmp_path: Path, source: str
 ) -> None:
-    root, commit = _repository(tmp_path)
+    root, _commit = _repository(tmp_path)
     (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "runtime capability")
@@ -438,6 +449,7 @@ def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
     original_run = subprocess.run
 
     def mutate_after_playwright(*args, **kwargs):
+        kwargs.setdefault("check", False)
         result = original_run(*args, **kwargs)
         command = args[0] if args else kwargs.get("args", ())
         if isinstance(command, (list, tuple)) and str(runner) in command:
