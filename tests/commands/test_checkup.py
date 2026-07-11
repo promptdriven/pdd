@@ -390,22 +390,26 @@ def test_agentic_review_loop_conflicts_with_final_gate() -> None:
 
 def test_agentic_review_loop_forwards_knobs_and_allows_no_fix() -> None:
     runner = CliRunner()
-    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
-        run_checkup.return_value = (True, "clean", 0.0, "codex")
-        result = runner.invoke(
-            checkup,
-            [
-                "--pr",
-                "https://github.com/org/repo/pull/7",
-                "--agentic-review-loop",
-                "--no-fix",
-                "--adversarial-prompt",
-                "be maximally skeptical",
-                "--fresh-final-review",
-                "gemini",
-            ],
-            obj={"quiet": True, "verbose": False},
-        )
+    # Isolate the filesystem: a failed agentic invocation now writes a
+    # fail-closed blocking tombstone to the public path, which must not leak
+    # into the repo working tree.
+    with runner.isolated_filesystem():
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.0, "codex")
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr",
+                    "https://github.com/org/repo/pull/7",
+                    "--agentic-review-loop",
+                    "--no-fix",
+                    "--adversarial-prompt",
+                    "be maximally skeptical",
+                    "--fresh-final-review",
+                    "gemini",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
     assert result.exit_code == 1, result.output
     kwargs = run_checkup.call_args.kwargs
     assert kwargs["agentic_review_loop"] is True
@@ -543,6 +547,15 @@ def test_agentic_review_loop_rejects_stale_passing_artifact() -> None:
     assert "ghp_sensitive_runtime_token" not in json.dumps(persisted)
     assert "sensitive-provider-model" not in json.dumps(persisted)
     assert "12.34" not in json.dumps(persisted)
+    # P1/security (issue #1788): the stdout wrapper must not carry raw provider/
+    # runtime diagnostics either — hosted job logs retain stdout even when the
+    # tombstone on disk is scrubbed.
+    assert "ghp_sensitive_runtime_token" not in result.output
+    assert "sensitive-provider-model" not in result.output
+    assert "12.34" not in result.output
+    assert "message" not in payload
+    assert "cost" not in payload
+    assert "model" not in payload
 
 
 def test_agentic_review_loop_fails_before_run_when_private_path_reservation_fails() -> (
@@ -581,11 +594,25 @@ def test_agentic_review_loop_fails_before_run_when_private_path_reservation_fail
                     ],
                     obj={"quiet": False, "verbose": False},
                 )
+        # P1 (issue #1788): a reservation failure must not leave the prior
+        # public PASS consumable. Capture its post-run state inside the
+        # isolated filesystem before it is torn down.
+        stale_public = os.path.join(os.getcwd(), "pdd-checkup-agentic-7.json")
+        if os.path.exists(stale_public):
+            with open(stale_public, encoding="utf-8") as handle:
+                public_after = json.load(handle)
+        else:
+            public_after = None
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
     assert payload["status"] == "failed"
     run_checkup.assert_not_called()
+    # The prior public PASS must be gone (removed or a non-pass tombstone).
+    assert public_after is None or (
+        public_after.get("status") != "passed"
+        and public_after.get("verdict", {}).get("decision") != "pass"
+    )
 
 
 def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
@@ -618,9 +645,7 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     assert not _emit_agentic_review_loop_json(
         artifact_path=first_private,
         published_artifact_path=first_public,
-        message="first invocation wrote no verdict",
-        cost=0.0,
-        model="codex",
+        failure_category="agentic_artifact_unavailable",
     )
     first_payload = json.loads(capsys.readouterr().out)
     assert first_payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
@@ -629,24 +654,79 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     assert _emit_agentic_review_loop_json(
         artifact_path=second_private,
         published_artifact_path=second_public,
-        message="clean",
-        cost=0.0,
-        model="codex",
     )
     second_payload = json.loads(capsys.readouterr().out)
     assert second_payload["schema_version"] == "pdd.checkup.agentic.v1"
     assert second_payload["status"] == "passed"
 
 
+def test_agentic_atomic_publish_failure_clears_stale_pass(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """P1 (issue #1788): if atomic publication fails, a prior public PASS must
+    not remain. Even with a valid current-head PASS in the private file, a
+    failed ``Path.replace`` must leave the public path non-consumable."""
+    import json
+
+    monkeypatch.chdir(tmp_path)
+    private, public = _prepare_agentic_review_loop_artifact(
+        "https://github.com/org/repo/pull/7"
+    )
+    assert private is not None and public is not None
+
+    # A prior invocation left a PASSING public artifact.
+    public.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    # This invocation produced a valid PASS, but every atomic replace fails.
+    private.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "pdd.commands.checkup.Path.replace", side_effect=OSError("no rename")
+    ):
+        emitted = _emit_agentic_review_loop_json(
+            artifact_path=private,
+            published_artifact_path=public,
+            failure_category="agentic_artifact_unavailable",
+        )
+
+    assert emitted is False
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
+    assert payload["status"] == "failed"
+    # The prior public PASS must not survive a failed publication.
+    if public.exists():
+        persisted = json.loads(public.read_text(encoding="utf-8"))
+        assert persisted.get("status") != "passed"
+        assert persisted.get("verdict", {}).get("decision") != "pass"
+
+
 def test_agentic_review_loop_does_not_require_issue() -> None:
     runner = CliRunner()
-    with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
-        run_checkup.return_value = (True, "clean", 0.0, "codex")
-        result = runner.invoke(
-            checkup,
-            ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
-            obj={"quiet": True, "verbose": False},
-        )
+    with runner.isolated_filesystem():
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.0, "codex")
+            result = runner.invoke(
+                checkup,
+                ["--pr", "https://github.com/org/repo/pull/7", "--agentic-review-loop"],
+                obj={"quiet": True, "verbose": False},
+            )
     # No --issue provided, yet the command must not reject it (own-merits review).
     assert result.exit_code == 1, result.output
     assert "requires --pr and --issue" not in result.output

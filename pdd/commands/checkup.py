@@ -80,10 +80,23 @@ def _prepare_agentic_review_loop_artifact(
     The review loop writes only to the private path.  The later reader verifies
     that file and atomically publishes it to the stable per-PR destination, so
     concurrent invocations can never consume each other's verdicts.
+
+    Provenance (issue #1788): a prior invocation may have left a *passing*
+    artifact at the public path.  Claim the public path up front by removing any
+    pre-existing artifact before the review loop runs.  This establishes this
+    invocation's verdict slot before running, so if the run later crashes, or
+    reservation/publication fails, the public path is already non-consumable and
+    a stale pass can never be mistaken for the current result.
     """
     published_path = _agentic_review_loop_artifact_path(pr_url)
     if published_path is None:
         return None, None
+    # Claim the public path: a prior verdict (possibly a stale PASS) must not
+    # outlive this invocation, even if every later step fails.
+    try:
+        published_path.unlink(missing_ok=True)
+    except OSError:
+        pass
     try:
         reserved = tempfile.NamedTemporaryFile(
             mode="w",
@@ -99,13 +112,64 @@ def _prepare_agentic_review_loop_artifact(
     return Path(reserved.name), published_path
 
 
+# Static, secret-free descriptors for the agentic stdout wrapper. The wrapper
+# must NEVER carry raw provider/runtime diagnostics (message, model, cost):
+# provider exceptions and model output can embed credentials, and hosted job
+# logs retain stdout even when nothing is persisted to disk (issue #1788).
+_AGENTIC_WRAPPER_SCHEMA = "pdd.checkup.agentic.v1.wrapper"
+_AGENTIC_FAILURE_TOMBSTONE = {
+    "schema_version": _AGENTIC_WRAPPER_SCHEMA,
+    "success": False,
+    "status": "failed",
+}
+
+
+def _publish_agentic_failure_tombstone(
+    artifact_path: Optional[Path],
+    published_artifact_path: Optional[Path],
+) -> None:
+    """Guarantee a failed invocation never leaves a prior public PASS in place.
+
+    Prefer atomically replacing the public path with a static, secret-free
+    blocking tombstone via the reserved private file.  When that is impossible
+    (no reservation, or the atomic ``replace`` fails), remove the public path so
+    it is non-consumable.  Either outcome makes the stable path non-pass; a
+    prior ``status="passed"`` artifact can never survive (issue #1788).
+    """
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    published = False
+    if artifact_path is not None and published_artifact_path is not None:
+        try:
+            artifact_path.write_text(
+                _json.dumps(_AGENTIC_FAILURE_TOMBSTONE, indent=2),
+                encoding="utf-8",
+            )
+            artifact_path.replace(published_artifact_path)
+            published = True
+        except OSError:
+            published = False
+    if not published:
+        # Could not atomically publish a blocking tombstone.  Remove any private
+        # reservation, then guarantee no prior public PASS remains by removing
+        # the public path entirely.
+        if artifact_path is not None:
+            try:
+                artifact_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if published_artifact_path is not None:
+            try:
+                published_artifact_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _emit_agentic_review_loop_json(
     *,
     artifact_path: Optional[Path],
     published_artifact_path: Optional[Path],
-    message: str,
-    cost: float,
-    model: str,
+    failure_category: str = "agentic_review_loop_failed",
 ) -> bool:
     """Emit the machine-readable agentic verdict on stdout (issue #1788).
 
@@ -115,8 +179,13 @@ def _emit_agentic_review_loop_json(
     verifies and atomically publishes that file to
     ``./pdd-checkup-agentic-{pr}.json`` before printing the artifact verbatim.
     When the private artifact is missing, unparseable, or cannot be published,
-    it prints (and best-effort publishes) a stable failed wrapper. This fails
-    closed because another invocation's artifact is never consulted.
+    it prints a stable, secret-free failed wrapper and guarantees the public
+    path is left non-pass. It fails closed because another invocation's artifact
+    is never consulted.
+
+    ``failure_category`` is a static, caller-chosen literal; the wrapper never
+    carries raw provider/runtime diagnostics (message/model/cost), which can
+    contain credentials and would leak through retained stdout logs.
     """
     import json as _json  # pylint: disable=import-outside-toplevel
 
@@ -139,8 +208,11 @@ def _emit_agentic_review_loop_json(
                 artifact.get("status") == "passed" and verdict.get("decision") == "pass"
             )
 
+    # Failure path: never let a prior public PASS survive, and never print raw
+    # provider/runtime diagnostics on stdout.
+    _publish_agentic_failure_tombstone(artifact_path, published_artifact_path)
     wrapper = {
-        "schema_version": "pdd.checkup.agentic.v1.wrapper",
+        "schema_version": _AGENTIC_WRAPPER_SCHEMA,
         "artifact_path": (
             str(published_artifact_path)
             if published_artifact_path is not None
@@ -148,44 +220,8 @@ def _emit_agentic_review_loop_json(
         ),
         "success": False,
         "status": "failed",
-        "message": message,
-        "cost": cost,
-        "model": model,
+        "failure_category": failure_category,
     }
-    public_artifact_exists = False
-    if published_artifact_path is not None:
-        try:
-            public_artifact_exists = published_artifact_path.exists()
-        except OSError:
-            pass
-    if artifact_path is not None and public_artifact_exists:
-        try:
-            # The stdout wrapper may contain provider/runtime diagnostics. Do
-            # not persist those fields: provider exceptions and model output
-            # can contain credentials. The public path only needs a static,
-            # blocking tombstone to ensure a stale pass cannot survive.
-            artifact_path.write_text(
-                _json.dumps(
-                    {
-                        "schema_version": "pdd.checkup.agentic.v1.wrapper",
-                        "success": False,
-                        "status": "failed",
-                    },
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            artifact_path.replace(published_artifact_path)
-        except OSError:
-            try:
-                artifact_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-    elif artifact_path is not None:
-        try:
-            artifact_path.unlink(missing_ok=True)
-        except OSError:
-            pass
     click.echo(_json.dumps(wrapper, indent=2))
     return False
 
@@ -1448,9 +1484,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             _emit_agentic_review_loop_json(
                 artifact_path=None,
                 published_artifact_path=published_agentic_artifact_path,
-                message="Failed to reserve an invocation-specific artifact path.",
-                cost=0.0,
-                model="",
+                failure_category="private_path_reservation_failed",
             )
             raise click.exceptions.Exit(1)
 
@@ -1511,9 +1545,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             agentic_passed = _emit_agentic_review_loop_json(
                 artifact_path=agentic_artifact_path,
                 published_artifact_path=published_agentic_artifact_path,
-                message=message,
-                cost=cost,
-                model=model,
+                failure_category="agentic_artifact_unavailable",
             )
         elif not quiet:
             status = "Success" if success else "Failed"
@@ -1534,9 +1566,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             _emit_agentic_review_loop_json(
                 artifact_path=agentic_artifact_path,
                 published_artifact_path=published_agentic_artifact_path,
-                message="Agentic review loop failed before emitting a verdict.",
-                cost=0.0,
-                model="",
+                failure_category="agentic_review_loop_error",
             )
             raise click.exceptions.Exit(1) from exception
         if agentic_artifact_path is not None:
