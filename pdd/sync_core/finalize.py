@@ -225,12 +225,14 @@ def _reusable_result(
             profile, root=root, ref=head_sha,
             config=RunnerConfig(
                 adapter_identities=envelope.binding.adapter_identities,
+                playwright_command=envelope.binding.playwright_command,
             ),
         ),
         TRUSTED_RUNNER_VERSION,
         base_sha,
         envelope.binding.checked_sha,
         adapter_identities=envelope.binding.adapter_identities,
+        playwright_command=envelope.binding.playwright_command,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(

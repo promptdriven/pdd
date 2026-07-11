@@ -168,6 +168,7 @@ def _evidence(
             profile, root=context.root, ref=context.manifest.head_ref,
             config=RunnerConfig(
                 adapter_identities=binding.adapter_identities,
+                playwright_command=binding.playwright_command,
             ),
         )
         or binding.tool_version != TRUSTED_RUNNER_VERSION
