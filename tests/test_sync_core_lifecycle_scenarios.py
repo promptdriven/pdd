@@ -1,16 +1,23 @@
 """Process-level merge, wheel, and real-consumer lifecycle scenarios."""
+# pylint: disable=missing-function-docstring,protected-access,redefined-outer-name
 
 import argparse
+import hashlib
 import os
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from pdd.sync_core.certificate import LifecycleResult
-from pdd.sync_core.lifecycle import _isolated_lifecycle_environment
+from pdd.sync_core.lifecycle import (
+    _install_candidate_wheel,
+    _isolated_lifecycle_environment,
+    run_lifecycle_matrix,
+)
 from pdd.sync_core.scenario_contract import REQUIRED_SCENARIOS
 from pdd.sync_core import scenario_harness
 from pdd.sync_core import (
@@ -44,9 +51,40 @@ def _record_metric(name: str, value: int) -> None:
     if not configured:
         return
     path = Path(configured)
-    payload = json.loads(path.read_text()) if path.exists() else {}
+    payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     payload[name] = value
-    path.write_text(json.dumps(payload, sort_keys=True))
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _write_wheel(
+    wheelhouse: Path,
+    *,
+    distribution: str,
+    version: str,
+    files: dict[str, str],
+    metadata_extra: str = "",
+) -> Path:
+    dist_info = f"{distribution.replace('-', '_')}-{version}.dist-info"
+    wheel = wheelhouse / f"{distribution.replace('-', '_')}-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+        archive.writestr(
+            f"{dist_info}/METADATA",
+            (
+                "Metadata-Version: 2.1\n"
+                f"Name: {distribution}\n"
+                f"Version: {version}\n"
+                f"{metadata_extra}\n"
+            ),
+        )
+        archive.writestr(
+            f"{dist_info}/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: pdd-test\nRoot-Is-Purelib: true\n"
+            "Tag: py3-none-any\n",
+        )
+        archive.writestr(f"{dist_info}/RECORD", "")
+    return wheel
 
 
 def test_lifecycle_contract_requires_public_repair_injection_scenarios() -> None:
@@ -72,6 +110,154 @@ def test_lifecycle_predicate_requires_dependency_environment_digest() -> None:
         dependency_environment_digest="b" * 64,
     )
     assert result.dependency_environment_digest == "b" * 64
+
+
+def test_lifecycle_matrix_fails_closed_without_hash_pinned_wheelhouse(
+    tmp_path,
+) -> None:
+    wheel = tmp_path / "pdd_cli-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"candidate-wheel")
+    result = run_lifecycle_matrix(
+        tmp_path,
+        candidate_wheel=wheel,
+        cloud_root=tmp_path,
+        cloud_base_ref="a" * 40,
+        cloud_head_ref="b" * 40,
+    )
+    assert result.failed == len(REQUIRED_SCENARIOS)
+    assert result.candidate_wheel_sha256 == ""
+    assert result.dependency_environment_digest == ""
+
+
+def test_candidate_install_uses_hash_pinned_wheelhouse_no_index(
+    tmp_path, monkeypatch
+) -> None:
+    wheel = tmp_path / "pdd_cli-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"candidate-wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    lock = tmp_path / "runtime.lock"
+    lock.write_text(
+        "click==8.4.1 --hash=sha256:" + ("c" * 64) + "\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((tuple(str(item) for item in command), kwargs))
+        if "-m" in command and "venv" in command:
+            (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
+                parents=True
+            )
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr("pdd.sync_core.lifecycle.subprocess.run", fake_run)
+    installed = _install_candidate_wheel(
+        tmp_path,
+        tmp_path / "home",
+        wheel,
+        wheelhouse,
+        lock,
+    )
+    assert installed is not None
+    install_command = calls[1][0]
+    assert "--no-index" in install_command
+    assert "--require-hashes" in install_command
+    assert "--find-links" in install_command
+    assert str(wheelhouse.resolve()) in install_command
+    assert "--no-deps" not in install_command
+    combined_lock = Path(install_command[install_command.index("-r") + 1])
+    lock_text = combined_lock.read_text(encoding="utf-8")
+    assert str(wheel.resolve()) in lock_text
+    assert f"--hash=sha256:{hashlib.sha256(wheel.read_bytes()).hexdigest()}" in lock_text
+
+
+def test_candidate_install_proves_isolated_module_entrypoint(
+    tmp_path, monkeypatch
+) -> None:
+    wheel = tmp_path / "pdd_cli-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(b"candidate-wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    lock = tmp_path / "runtime.lock"
+    lock.write_text("", encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(tuple(str(item) for item in command))
+        if "-m" in command and "venv" in command:
+            (tmp_path / "candidate-venv" / ("Scripts" if os.name == "nt" else "bin")).mkdir(
+                parents=True
+            )
+        return subprocess.CompletedProcess(command, 0, "ok", "")
+
+    monkeypatch.setattr("pdd.sync_core.lifecycle.subprocess.run", fake_run)
+    assert _install_candidate_wheel(
+        tmp_path,
+        tmp_path / "home",
+        wheel,
+        wheelhouse,
+        lock,
+    )
+    assert any(
+        command[-4:] == ("-I", "-m", "pdd.cli", "--help")
+        for command in calls
+    )
+
+
+def test_candidate_install_e2e_uses_locked_runtime_wheelhouse(tmp_path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    runtime = _write_wheel(
+        wheelhouse,
+        distribution="runtime-dep",
+        version="1.0.0",
+        files={"runtime_dep.py": "VALUE = 'runtime wheel loaded'\n"},
+    )
+    candidate = _write_wheel(
+        tmp_path,
+        distribution="pdd-cli",
+        version="1.0.0",
+        files={
+            "pdd/__init__.py": "",
+            "pdd/cli.py": (
+                "import sys\n"
+                "import runtime_dep\n"
+                "if __name__ == '__main__':\n"
+                "    print(runtime_dep.VALUE)\n"
+                "    raise SystemExit(0 if '--help' in sys.argv else 2)\n"
+            ),
+        },
+        metadata_extra="Requires-Dist: runtime-dep==1.0.0\n",
+    )
+    lock = tmp_path / "runtime.lock"
+    lock.write_text(
+        "runtime-dep==1.0.0 --hash=sha256:"
+        f"{hashlib.sha256(runtime.read_bytes()).hexdigest()}\n",
+        encoding="utf-8",
+    )
+    installed = _install_candidate_wheel(
+        tmp_path,
+        tmp_path / "home",
+        candidate,
+        wheelhouse,
+        lock,
+    )
+    assert installed is not None
+    candidate_python, dependency_digest = installed
+    pyvenv = candidate_python.parents[1] / "pyvenv.cfg"
+    assert "include-system-site-packages = false" in pyvenv.read_text(encoding="utf-8")
+    probe = _run(
+        tmp_path,
+        str(candidate_python),
+        "-I",
+        "-m",
+        "pdd.cli",
+        "--help",
+    )
+    assert probe.returncode == 0
+    assert "runtime wheel loaded" in probe.stdout
+    assert len(dependency_digest) == 64
 
 
 def test_lifecycle_environment_strips_signer_capabilities(tmp_path, monkeypatch) -> None:
