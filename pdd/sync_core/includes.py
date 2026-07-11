@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import hashlib
 import json
 import posixpath
@@ -98,14 +97,61 @@ class IncludeClosure:
         return hashlib.sha256(encoded).hexdigest()
 
 
-_ATTRIBUTE_PATTERN = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']')
+def _is_attribute_name_char(character: str) -> bool:
+    """Return whether a character belongs to a Python ``\\w`` attribute name."""
+    return character == "_" or character.isalnum()
+
+
+def _has_boolean_attr(raw: str, name: str) -> bool:
+    """Find one bare boolean attribute with the legacy ASCII boundaries."""
+    cursor = 0
+    while True:
+        start = raw.find(name, cursor)
+        if start < 0:
+            return False
+        end = start + len(name)
+        before_is_word = start > 0 and (
+            raw[start - 1].isascii() and _is_attribute_name_char(raw[start - 1])
+        )
+        after_is_word = end < len(raw) and (
+            raw[end].isascii() and _is_attribute_name_char(raw[end])
+        )
+        if not before_is_word and not after_is_word:
+            return True
+        cursor = end
 
 
 def _parse_attrs(raw: str) -> dict[str, str]:
-    attrs = {match.group(1): match.group(2) for match in _ATTRIBUTE_PATTERN.finditer(raw)}
+    """Parse quoted and boolean include attributes with forward-only scans."""
+    attrs: dict[str, str] = {}
+    cursor = 0
+    while cursor < len(raw):
+        while cursor < len(raw) and not _is_attribute_name_char(raw[cursor]):
+            cursor += 1
+        name_start = cursor
+        while cursor < len(raw) and _is_attribute_name_char(raw[cursor]):
+            cursor += 1
+        if name_start == cursor:
+            break
+        name = raw[name_start:cursor]
+        while cursor < len(raw) and raw[cursor].isspace():
+            cursor += 1
+        if cursor == len(raw) or raw[cursor] != "=":
+            continue
+        cursor += 1
+        while cursor < len(raw) and raw[cursor].isspace():
+            cursor += 1
+        if cursor == len(raw) or raw[cursor] not in "\"'":
+            continue
+        quote = raw[cursor]
+        value_start = cursor + 1
+        value_end = raw.find(quote, value_start)
+        if value_end < 0:
+            break
+        attrs[name] = raw[value_start:value_end]
+        cursor = value_end + 1
     for boolean_name in ("optional", "expand"):
-        pattern = rf"(?<![A-Za-z0-9_]){boolean_name}(?![A-Za-z0-9_])"
-        if boolean_name not in attrs and re.search(pattern, raw):
+        if boolean_name not in attrs and _has_boolean_attr(raw, boolean_name):
             attrs[boolean_name] = "true"
     return attrs
 

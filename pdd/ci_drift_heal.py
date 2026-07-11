@@ -25,8 +25,6 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 from rich.table import Table
 
-from pdd.context_snapshot import redact_snapshot_text
-
 console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
@@ -58,6 +56,31 @@ _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 
 _PROTECTED_PATHS = [".pdd/meta", "project_dependencies.csv"]
 _INVARIANT_KEYS = {"include", "pdd_tags", "percent_markers", "fenced_blocks"}
+
+
+def _dry_run_json_summary(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the fixed, value-free dry-run JSON schema for CI output."""
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+
+    def count(name: str) -> int:
+        value = summary.get(name)
+        valid_count = (
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        )
+        return value if valid_count else 0
+
+    return {
+        "ok": report.get("ok") is True,
+        "consumer": "ci-heal",
+        "summary": {
+            "metadata_stale": count("metadata_stale"),
+            "conflicts": count("conflicts"),
+            "unbaselined": count("unbaselined"),
+            "failures": count("failures"),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1895,8 +1918,7 @@ def main(
 
         report = build_report(consumer="ci-heal", modules=modules)
         if as_json:
-            serialized = json.dumps(report, indent=2, sort_keys=True)
-            print(redact_snapshot_text(serialized)[0])
+            print(json.dumps(_dry_run_json_summary(report), indent=2, sort_keys=True))
         else:
             summary = report["summary"]
             console.print(
