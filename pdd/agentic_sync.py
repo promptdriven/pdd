@@ -21,11 +21,13 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
+from .agentic_change_orchestrator import _extract_marker_paths
 from .agentic_common import build_agentic_task_instruction, run_agentic_task
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
+    _basename_from_architecture_filepath,
     _find_pdd_executable,
     build_dep_graph_from_architecture_data,
 )
@@ -230,8 +232,107 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
 
 # Backticked inline-code spans (single-line, non-empty) in issue markdown.
 _ISSUE_BACKTICK_TOKEN_RE = re.compile(r"`([^`\n]+)`")
-# Prompt-file path tokens (FILES_MODIFIED lists, prose references).
-_ISSUE_PROMPT_PATH_RE = re.compile(r"[A-Za-z0-9_.\-][A-Za-z0-9_./\-]*\.prompt\b")
+# Prompt-file path tokens (FILES_MODIFIED lists, prose references). Captures
+# full non-whitespace paths so supported route-segment characters like the
+# brackets in ``app/users/[id]/page_TypeScriptReact.prompt`` survive
+# (PR #1983 round 3, P1#2); surrounding markdown punctuation is trimmed
+# afterwards by ``_prompt_path_tokens``.
+_ISSUE_PROMPT_PATH_RE = re.compile(r"\S+\.prompt\b")
+# Leading punctuation markdown wraps around a path (backticks, quotes, parens,
+# emphasis, list/link leftovers). The ``\.prompt`` anchor already excludes
+# trailing punctuation. ``[`` is handled separately: it is markdown link syntax
+# only when no matching ``]`` follows (otherwise it starts a dynamic route
+# segment such as ``[id]/page_...``).
+_PROMPT_PATH_LEAD_TRIM = "`\"'(<*,;:!]}>"
+
+
+def _prompt_path_tokens(text: str) -> List[str]:
+    """Extract prompt-file path tokens from text, trimming markdown wrapping."""
+    tokens: List[str] = []
+    for raw in _ISSUE_PROMPT_PATH_RE.findall(text):
+        token = raw.lstrip(_PROMPT_PATH_LEAD_TRIM)
+        while token.startswith("[") and "]" not in token:
+            token = token[1:]
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _strip_fenced_code_blocks(text: str) -> str:
+    """Remove fenced code blocks (``` or ~~~) from markdown text.
+
+    Fenced content is quoted logs/snippets, not a request (PR #1983 round 3,
+    P2). An unclosed fence conservatively drops the remainder of the text —
+    under-matching noise is safe, while over-matching inflates a write-mode
+    sync scope.
+    """
+    kept: List[str] = []
+    fence_marker: Optional[str] = None
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if fence_marker is None and (
+            stripped.startswith("```") or stripped.startswith("~~~")
+        ):
+            fence_marker = stripped[:3]
+            continue
+        if fence_marker is not None and stripped.startswith(fence_marker):
+            fence_marker = None
+            continue
+        if fence_marker is None:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def _architecture_identity_index(
+    architecture: Optional[List[Dict[str, Any]]],
+) -> Tuple[List[str], set, Dict[str, List[str]]]:
+    """Index REAL per-entry module identities, duplicates preserved.
+
+    ``_architecture_module_basenames`` dedupes by derived basename, which
+    collapses distinct modules that share a prompt FILENAME — the normal
+    Next.js shape: several ``page_TypeScriptReact.prompt`` entries differing
+    only by route dir / ``filepath``. Extraction and coverage must instead see
+    one identity per distinct entry so a shared tail is detectably ambiguous
+    (PR #1983 round 3, P1#1).
+
+    Returns ``(identities, known_keys, tail_to_identities)``:
+
+    * ``identities`` — one primary identity per distinct entry (filename
+      derivation with directories preserved, falling back to the
+      filepath-derived key); duplicates KEPT.
+    * ``known_keys`` — every exact-match alias (filename- and
+      filepath-derived, via ``_architecture_entry_aliases``).
+    * ``tail_to_identities`` — final path component -> per-entry identities;
+      a tail listing more than one entry is ambiguous.
+
+    Runtime ``*_LLM.prompt`` entries are excluded entirely. True duplicate
+    entries (same primary identity AND same filepath) are counted once.
+    """
+    identities: List[str] = []
+    known_keys: set = set()
+    tail_to_identities: Dict[str, List[str]] = {}
+    seen_entries: set = set()
+    for entry in architecture or []:
+        if not isinstance(entry, dict):
+            continue
+        filename = str(entry.get("filename", "") or "")
+        if _is_runtime_llm_template(filename):
+            continue
+        filepath = entry.get("filepath")
+        filepath_str = filepath if isinstance(filepath, str) else ""
+        primary = _basename_from_architecture_filename(filename)
+        if not primary and filepath_str:
+            primary = _basename_from_architecture_filepath(filepath_str)
+        if not primary:
+            continue
+        entry_key = (primary, filepath_str)
+        if entry_key in seen_entries:
+            continue
+        seen_entries.add(entry_key)
+        identities.append(primary)
+        known_keys.update(_architecture_entry_aliases(entry))
+        tail_to_identities.setdefault(primary.rsplit("/", 1)[-1], []).append(primary)
+    return identities, known_keys, tail_to_identities
 
 
 def _module_key_from_prompt_path(path_token: str) -> Optional[str]:
@@ -271,40 +372,26 @@ def _module_key_from_prompt_path(path_token: str) -> Optional[str]:
     return f"{prefix}{basename}"
 
 
-def _issue_candidate_tokens(text: str) -> List[str]:
-    """Collect high-precision explicit-module tokens from issue text.
-
-    Two token classes (see ``_extract_issue_named_modules``):
-    backticked single-word inline-code spans, and prompt-file path tokens
-    (FILES_MODIFIED-style lists). Prompt paths convert to path-qualified
-    module keys via ``_module_key_from_prompt_path``; runtime ``*_LLM.prompt``
-    templates are rejected there and again in the downstream resolver.
-    """
-    tokens: List[str] = []
-    for raw in _ISSUE_BACKTICK_TOKEN_RE.findall(text):
-        token = raw.strip()
-        if token and not any(ch.isspace() for ch in token):
-            tokens.append(token)
-    for path_token in _ISSUE_PROMPT_PATH_RE.findall(text):
-        module_key = _module_key_from_prompt_path(path_token)
-        if module_key:
-            tokens.append(module_key)
-    return tokens
-
-
 def _resolve_issue_module_token(
     token: str,
-    known_set: set,
-    tail_to_modules: Dict[str, List[str]],
+    known_keys: set,
+    tail_to_identities: Dict[str, List[str]],
 ) -> Optional[str]:
     """Resolve one candidate token to a known module key, or ``None``.
 
     Tries the token verbatim, then with ``.prompt`` / language suffixes
-    stripped. A candidate that is not an exact known key may still resolve
-    through its final path component when that tail is UNAMBIGUOUS (exactly
-    one known module) and the qualification is consistent (one side is a
-    path suffix of the other, or the candidate is bare). Runtime ``*_LLM``
-    templates never resolve (#1396 boundary).
+    stripped. Rules over the REAL identity index (duplicates preserved):
+
+    * An exact alias match resolves — but a BARE candidate whose tail lists
+      more than one distinct entry has no deterministic referent (two Next.js
+      ``page`` modules answer to the same bare name) and is skipped; a
+      path-qualified alias stays exact.
+    * A non-exact candidate resolves through its final path component only
+      when that tail lists exactly ONE entry and the qualification is
+      consistent (one side is a path suffix of the other, or the candidate is
+      bare).
+
+    Runtime ``*_LLM`` templates never resolve (#1396 boundary).
     """
     if _is_runtime_llm_template(token):
         return None
@@ -315,9 +402,11 @@ def _resolve_issue_module_token(
     if stripped:
         candidates.append(stripped)
     for cand in candidates:
-        if cand in known_set:
-            return cand
-        tail_matches = tail_to_modules.get(cand.rsplit("/", 1)[-1], [])
+        tail_matches = tail_to_identities.get(cand.rsplit("/", 1)[-1], [])
+        if cand in known_keys:
+            if "/" in cand or len(tail_matches) == 1:
+                return cand
+            continue
         if len(tail_matches) == 1 and (
             "/" not in cand
             or tail_matches[0].endswith(f"/{cand}")
@@ -327,21 +416,96 @@ def _resolve_issue_module_token(
     return None
 
 
-def _issue_scan_text(
-    title: str,
-    body: str,
-    comments: Optional[List[Dict[str, Any]]],
-) -> str:
-    """Join the issue title, body, and comment BODIES for module scanning.
+def _bare_mention_identities(
+    prose_text: str,
+    identities: List[str],
+    tail_to_identities: Dict[str, List[str]],
+) -> List[str]:
+    """Class-3 scan: bare word-boundary mentions of identifier-like names.
 
-    Only comment bodies are included (not author logins or structural
-    markers), so a username can never resolve to a module.
+    Only tails containing an underscore or hyphen qualify (they cannot be
+    ordinary prose words) and only when the tail lists exactly one real entry.
+    The lookarounds exclude adjacent word chars, ``/``, ``.``, and ``-`` so a
+    standalone mention matches but longer identifiers (``ci_validation_extra``,
+    ``double-check-run``), path segments (``a/ci_validation/b``), and filenames
+    (``ci_validation.py`` — file mentions go through class 2) do not.
     """
-    parts = [title or "", body or ""]
+    found: List[str] = []
+    for module in identities:
+        tail = module.rsplit("/", 1)[-1]
+        if module in found or len(tail_to_identities[tail]) != 1:
+            continue
+        if "_" not in tail and "-" not in tail:
+            continue
+        if re.search(rf"(?<![\w./\-]){re.escape(tail)}(?![\w./\-])", prose_text):
+            found.append(module)
+    return found
+
+
+def _trusted_comment_prompt_paths(
+    comments: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Collect prompt paths from trusted FILES_MODIFIED marker payloads only.
+
+    Issue comments are largely workflow noise (step logs, retries), so free
+    text in them must never widen a write-mode sync scope (PR #1983 round 3,
+    P2). The only trusted signal is a ``FILES_MODIFIED:`` marker payload — the
+    exact format the change orchestrator emits — parsed with the same
+    ``_extract_marker_paths`` walker that produces/consumes those markers.
+    Fenced code blocks are stripped FIRST so a marker quoted inside a log
+    fence is treated as a log, not a directive. Only ``*.prompt`` payload
+    entries are returned; code/doc paths are not module requests.
+    """
+    paths: List[str] = []
     for comment in comments or []:
-        if isinstance(comment, dict):
-            parts.append(str(comment.get("body", "") or ""))
-    return "\n".join(parts)
+        if not isinstance(comment, dict):
+            continue
+        comment_body = str(comment.get("body", "") or "")
+        payload = _extract_marker_paths(
+            "FILES_MODIFIED", _strip_fenced_code_blocks(comment_body)
+        )
+        paths.extend(p for p in payload if p.endswith(".prompt"))
+    return paths
+
+
+def _explicit_token_modules(
+    text: str,
+    comments: Optional[List[Dict[str, Any]]],
+    known_keys: set,
+    tail_to_identities: Dict[str, List[str]],
+) -> List[str]:
+    """Resolve class-1 and class-2 tokens to module keys, in mention order.
+
+    Class 1: backticked single-word tokens from the title/body, resolved via
+    ``_resolve_issue_module_token``. Class 2: prompt-file paths from the
+    title/body plus trusted FILES_MODIFIED marker payloads from the filtered
+    comments. A path-qualified derived key whose tail exists in the inventory
+    is accepted directly: the path itself is the disambiguation, and the key
+    form matches what ``_detect_modules_from_branch_diff`` schedules for the
+    same file (#1675). Bare derived keys must still resolve uniquely.
+    """
+    modules: List[str] = []
+
+    def _push(module: Optional[str]) -> None:
+        if module and module not in modules:
+            modules.append(module)
+
+    for raw in _ISSUE_BACKTICK_TOKEN_RE.findall(text):
+        token = raw.strip()
+        if token and not any(ch.isspace() for ch in token):
+            _push(_resolve_issue_module_token(token, known_keys, tail_to_identities))
+
+    for path_token in _prompt_path_tokens(text) + _trusted_comment_prompt_paths(comments):
+        module_key = _module_key_from_prompt_path(path_token)
+        if not module_key:
+            continue
+        if "/" in module_key and module_key.rsplit("/", 1)[-1] in tail_to_identities:
+            _push(module_key)
+        else:
+            _push(
+                _resolve_issue_module_token(module_key, known_keys, tail_to_identities)
+            )
+    return modules
 
 
 def _extract_issue_named_modules(
@@ -354,11 +518,10 @@ def _extract_issue_named_modules(
 
     Issue #1980: the branch-diff fast path must not silently drop modules the
     issue explicitly requests. This helper matches the issue title/body — plus
-    the FILTERED comment bodies (the same signal-bearing set the identify path
-    consumes; FILES_MODIFIED markers arrive as comments, PR #1983 review P1a)
-    — against the KNOWN module inventory (architecture basenames, runtime
-    ``*_LLM`` templates already excluded by ``_architecture_module_basenames``)
-    using three high-precision, zero-LLM token classes:
+    trusted marker payloads from the FILTERED comments (FILES_MODIFIED markers
+    arrive as comments, PR #1983 review P1a) — against the REAL module
+    identity index (runtime ``*_LLM`` templates excluded) using three
+    high-precision, zero-LLM token classes:
 
     1. Backticked inline-code tokens (e.g. ```greeter```,
        ```prompts/greeter_python.prompt```) that resolve to a known
@@ -374,48 +537,32 @@ def _extract_issue_named_modules(
        plain-prose mention of a single-word module is deliberately NOT
        treated as an explicit request; use backticks or the prompt path).
 
-    Ambiguous bare tails (mapping to more than one known module) are skipped;
-    downstream #1677 handling requires path-qualified names for those anyway.
-    Returns known-module keys in first-mention order; empty when there is no
+    Scan surfaces (PR #1983 round 3, P2): classes 1 and 2 scan the title/body;
+    class 3 scans the title/body with fenced code blocks stripped (quoted
+    logs/snippets are not requests). Comments contribute ONLY trusted
+    ``FILES_MODIFIED:`` marker payloads (class 2), never free text.
+
+    Ambiguous tails (listing more than one real entry) never resolve from
+    bare names and a path-qualified prompt-path key is accepted as a
+    scheduler key directly — the same key form the branch-diff detector emits
+    (#1675). Returns keys in first-mention order; empty when there is no
     architecture inventory to match against.
     """
-    known = _architecture_module_basenames(architecture or [])
-    if not known:
+    identities, known_keys, tail_to_identities = _architecture_identity_index(
+        architecture
+    )
+    if not identities:
         return []
-    known_set = set(known)
-    # Map each final path component to its full module keys so a bare mention
-    # of "worker_app" can resolve "extensions/foo/src/worker_app".
-    tail_to_modules: Dict[str, List[str]] = {}
-    for module in known:
-        tail_to_modules.setdefault(module.rsplit("/", 1)[-1], []).append(module)
 
-    text = _issue_scan_text(title, body, comments)
+    text = f"{title or ''}\n{body or ''}"
     named: List[str] = []
-    seen: set[str] = set()
-
-    # Classes 1 + 2: backticked tokens and prompt-file paths.
-    for token in _issue_candidate_tokens(text):
-        resolved = _resolve_issue_module_token(token, known_set, tail_to_modules)
-        if resolved and resolved not in seen:
-            named.append(resolved)
-            seen.add(resolved)
-
-    # Class 3: bare word-boundary mentions of identifier-like names.
-    for module in known:
-        tail = module.rsplit("/", 1)[-1]
-        if module in seen or len(tail_to_modules[tail]) != 1:
-            continue
-        if "_" not in tail and "-" not in tail:
-            continue
-        # No word chars, '/', '.', or '-' adjacent: matches a standalone
-        # mention but not longer identifiers (ci_validation_extra,
-        # double-check-run), path segments (a/ci_validation/b), or filenames
-        # (ci_validation.py is intentionally excluded — file mentions go
-        # through class 2).
-        if re.search(rf"(?<![\w./\-]){re.escape(tail)}(?![\w./\-])", text):
+    for module in _explicit_token_modules(
+        text, comments, known_keys, tail_to_identities
+    ) + _bare_mention_identities(
+        _strip_fenced_code_blocks(text), identities, tail_to_identities
+    ):
+        if module not in named:
             named.append(module)
-            seen.add(module)
-
     return named
 
 
@@ -431,24 +578,22 @@ def _issue_modules_missing_from_scope(
     accepts exactly two forms:
 
     * exact full-key membership in the scope; or
-    * matching final path component, but ONLY when that tail maps to exactly
-      one module in the known inventory. A globally-unique tail can only refer
-      to that one module, so key-form differences between the diff derivation
-      (repo path, #1675) and the architecture basename are safely bridged.
-      With duplicate tails (``extensions/a/src/page`` and
-      ``extensions/b/src/page``) tail matching is disabled entirely: a diff
-      touching one sibling must not mask an explicit request for the other,
-      which then requires exact-key coverage (PR #1983 review, P1b). No
-      looser path-suffix matching is attempted — it reintroduces the same
-      masking through bare or partially-qualified keys.
+    * matching final path component, but ONLY when that tail lists exactly one
+      REAL entry in the identity index (pre-dedup, PR #1983 round 3 — two
+      ``page_TypeScriptReact.prompt`` entries are two modules even though the
+      deduped basename inventory collapses them). A globally-unique tail can
+      only refer to that one module, so key-form differences between the diff
+      derivation (repo path, #1675) and the architecture basename are safely
+      bridged. With duplicate tails, tail matching is disabled entirely: a
+      diff touching one sibling must not mask an explicit request for the
+      other, which then requires exact-key coverage. No looser path-suffix
+      matching is attempted — it reintroduces the same masking through bare
+      or partially-qualified keys.
     """
     def _tail(module: str) -> str:
         return module.rsplit("/", 1)[-1]
 
-    tail_counts: Dict[str, int] = {}
-    for module in _architecture_module_basenames(architecture or []):
-        tail = _tail(module)
-        tail_counts[tail] = tail_counts.get(tail, 0) + 1
+    _, _, tail_to_identities = _architecture_identity_index(architecture)
 
     scope_full = set(scope_modules)
     scope_tails = {_tail(m) for m in scope_modules}
@@ -457,7 +602,7 @@ def _issue_modules_missing_from_scope(
         if module in scope_full:
             return True
         tail = _tail(module)
-        return tail_counts.get(tail, 0) <= 1 and tail in scope_tails
+        return len(tail_to_identities.get(tail, [])) <= 1 and tail in scope_tails
 
     return [m for m in issue_modules if not _covered(m)]
 
