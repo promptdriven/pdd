@@ -5241,7 +5241,8 @@
           ],
           "artifact_paths": [
             "tests/test_sync_core_lifecycle_scenarios.py",
-            "tests/test_sync_core_runner.py"
+            "tests/test_sync_core_runner.py",
+            "tests/test_sync_core_supervisor.py"
           ],
           "code_under_test_paths": [
             "pdd/sync_core/supervisor.py"
