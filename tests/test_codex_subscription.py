@@ -298,6 +298,17 @@ def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
     assert cands[0]["model"] == "chatgpt/gpt-5.6", [c["model"] for c in cands]
 
 
+def test_openai_api_strength_selects_gpt_5_6_platform_default():
+    """Issue #1986 sec.5: the direct OpenAI API (OPENAI_API_KEY) selection path
+    recognizes gpt-5.6 and, at high strength, picks it as the top-ranked OpenAI
+    API candidate (rank_score 17001 > gpt-5.5's 17000)."""
+    df = li._load_model_data(_packaged_csv_path())
+    fam = df[df["provider"] == "OpenAI"].copy()
+    cands = li._select_model_candidates(1.0, "gpt-5.5", fam)
+    assert cands[0]["model"] == "gpt-5.6", [c["model"] for c in cands]
+    assert cands[0]["api_key"] == "OPENAI_API_KEY"
+
+
 def test_anthropic_outranks_codex_so_default_unchanged():
     """Promise to the user: Codex is opt-in, Anthropic stays the shipped default.
     Guard it numerically so a future ELO bump to a codex row can't silently steal

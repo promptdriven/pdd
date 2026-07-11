@@ -6468,10 +6468,14 @@ def test_codex_default_model_live_smoke():
     Codex/ChatGPT login and ``PDD_CODEX_LIVE_SMOKE=1``."""
     from pdd.model_defaults import CODEX_MODEL_DEFAULT
 
+    # Mirrors the isolated argv shape the reviewer used to confirm gpt-5.6-sol
+    # is accepted while bare gpt-5.6 is rejected (Codex 0.144.1): a read-only,
+    # ephemeral, user-config-ignoring exec that only exercises model acceptance.
     cmd = [
         "codex", "--model", CODEX_MODEL_DEFAULT,
         "-c", "model_reasoning_effort=low",
-        "exec", "--sandbox", "read-only", "--ignore-user-config", "--json", "-",
+        "exec", "--sandbox", "read-only", "--ephemeral",
+        "--ignore-user-config", "--json", "-",
     ]
     proc = subprocess.run(
         cmd,
