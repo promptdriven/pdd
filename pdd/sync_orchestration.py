@@ -38,13 +38,13 @@ from .operation_log import (
     update_log_entry,
     append_log_entry,
     log_event,
-    save_fingerprint,
     save_run_report,
     clear_run_report,
     get_log_path,
     get_run_report_path,
     get_fingerprint_path,
 )
+from .json_atomic import atomic_write_json
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
@@ -454,6 +454,7 @@ class PendingStateUpdate:
     fingerprint: Optional[Dict[str, Any]] = None
     run_report_path: Optional[Path] = None
     fingerprint_path: Optional[Path] = None
+    fingerprint_operation: Optional[str] = None
 
 
 @dataclass
@@ -500,41 +501,75 @@ class AtomicStateUpdate:
         self.pending.run_report = report
         self.pending.run_report_path = path
 
-    def set_fingerprint(self, fingerprint: Dict[str, Any], path: Path):
+    def set_fingerprint(
+        self,
+        fingerprint: Dict[str, Any],
+        path: Path,
+        *,
+        operation: Optional[str] = None,
+    ):
         """Buffer a fingerprint for atomic write."""
         self.pending.fingerprint = fingerprint
         self.pending.fingerprint_path = path
+        self.pending.fingerprint_operation = operation
 
     def _atomic_write(self, data: Dict[str, Any], target_path: Path) -> None:
         """Write data to file atomically using temp file + rename pattern."""
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to temp file in same directory (required for atomic rename)
-        fd, temp_path = tempfile.mkstemp(
-            dir=target_path.parent,
-            prefix=f".{target_path.stem}_",
-            suffix=".tmp"
-        )
-        self._temp_files.append(temp_path)
-
-        try:
-            with os.fdopen(fd, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-            # Atomic rename - guaranteed atomic on POSIX systems
-            os.replace(temp_path, target_path)
-            self._temp_files.remove(temp_path)  # Successfully moved, stop tracking
-        except Exception:
-            # Leave temp file for rollback to clean up
-            raise
+        atomic_write_json(target_path, data)
 
     def _commit(self):
         """Commit all pending state updates atomically."""
-        # Write fingerprint first (checkpoint), then run_report
-        if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
-        if self.pending.run_report and self.pending.run_report_path:
-            self._atomic_write(self.pending.run_report, self.pending.run_report_path)
+        snapshots: List[FileRollbackSnapshot] = []
+        for path in (
+            self.pending.fingerprint_path,
+            self.pending.run_report_path,
+        ):
+            if path is None:
+                continue
+            if path.exists():
+                snapshots.append(
+                    FileRollbackSnapshot(path=path, existed=True, content=path.read_bytes())
+                )
+            else:
+                snapshots.append(FileRollbackSnapshot(path=path, existed=False))
+
+        try:
+            # Write fingerprint first (checkpoint), then run_report. If either
+            # leg fails, restore both destinations from the snapshots above so
+            # the outer state context cannot leave a half-committed pair.
+            if self.pending.fingerprint and self.pending.fingerprint_path:
+                self._atomic_write(
+                    self.pending.fingerprint,
+                    self.pending.fingerprint_path,
+                )
+            if self.pending.run_report and self.pending.run_report_path:
+                self._atomic_write(
+                    self.pending.run_report,
+                    self.pending.run_report_path,
+                )
+        except Exception as exc:
+            for snapshot in reversed(snapshots):
+                try:
+                    if snapshot.existed:
+                        _atomic_write_bytes(snapshot.path, snapshot.content or b"")
+                    elif snapshot.path.exists():
+                        snapshot.path.unlink()
+                except OSError as rollback_exc:
+                    logger.error(
+                        "Failed to roll back atomic metadata path %s: %s",
+                        snapshot.path,
+                        rollback_exc,
+                    )
+
+            if self.pending.fingerprint_path is not None:
+                from .fingerprint_transaction import FingerprintFinalizeError
+
+                raise FingerprintFinalizeError(
+                    self.pending.fingerprint_operation or "unknown",
+                    self.pending.fingerprint_path,
+                    f"atomic state commit failed: {exc}",
+                ) from exc
+            raise
 
     def _rollback(self):
         """Clean up any temp files without committing changes."""
@@ -682,43 +717,21 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
+    from .fingerprint_transaction import FingerprintTransaction
 
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
-        if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
-
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+    transaction = FingerprintTransaction(
+        basename=basename,
+        language=language,
+        operation=operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+        atomic_state=atomic_state,
+    )
+    if include_deps_override is not None:
+        transaction.set_include_deps_override(include_deps_override)
+    with transaction:
+        pass
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.

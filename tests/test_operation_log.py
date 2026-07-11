@@ -9,6 +9,7 @@ from click.testing import CliRunner
 
 # Import the module under test
 from pdd import operation_log
+from pdd.fingerprint_transaction import FingerprintFinalizeError
 
 # --------------------------------------------------------------------------------
 # TEST PLAN
@@ -235,7 +236,10 @@ def test_load_operation_log_compatibility(temp_pdd_env):
 def test_save_fingerprint(temp_pdd_env):
     """Test saving fingerprint state in Fingerprint dataclass format."""
     basename, lang = "state", "go"
-    paths = {"prompt": Path("prompts/state_go.prompt")}
+    prompt_path = Path(temp_pdd_env).parents[1] / "prompts" / "state_go.prompt"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("% State\n", encoding="utf-8")
+    paths = {"prompt": prompt_path}
 
     operation_log.save_fingerprint(basename, lang, "op1", paths, 0.5, "gpt-4")
 
@@ -299,7 +303,9 @@ def test_log_operation_decorator_success(temp_pdd_env):
     def my_command(prompt_file: str):
         return {"status": "ok"}, 0.15, "gpt-3.5"
 
-    prompt_path = "prompts/feat_logic_python.prompt"
+    prompt_path = Path(temp_pdd_env).parents[1] / "prompts" / "feat_logic_python.prompt"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("% Feature logic\n", encoding="utf-8")
     
     # Run
     result = my_command(prompt_file=prompt_path)
@@ -398,7 +404,9 @@ def test_log_operation_decorator_failure_preserves_run_report(temp_pdd_env):
     def failing_example(prompt_file: str):
         raise RuntimeError("generation failed")
 
-    prompt_path = f"prompts/{basename}_{lang}.prompt"
+    prompt_path = Path(temp_pdd_env).parents[1] / "prompts" / f"{basename}_{lang}.prompt"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("% Example\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="generation failed"):
         failing_example(prompt_file=prompt_path)
 
@@ -471,8 +479,10 @@ def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):
     def ok_example(prompt_file: str):
         return "ok", 0.0, "mock"
 
-    prompt_path = f"prompts/{basename}_{lang}.prompt"
-    ok_example(prompt_file=prompt_path)
+    prompt_path = Path(temp_pdd_env).parents[1] / "prompts" / f"{basename}_{lang}.prompt"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("% Example\n", encoding="utf-8")
+    ok_example(prompt_file=str(prompt_path))
 
     assert not rr_path.exists(), (
         "clears_run_report must remove the stale run report on success"
@@ -600,13 +610,16 @@ def test_fingerprint_path_extension_consistency(tmp_path):
 
     # Patch module to use temp directory
     with patch("pdd.operation_log.META_DIR", str(meta_dir)):
+        prompt_path = tmp_path / "prompts" / "test.prompt"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("% Test\n", encoding="utf-8")
 
         # Write a fingerprint using operation_log
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_operation",
-            paths={"prompt": Path("prompts/test.prompt")},
+            paths={"prompt": prompt_path},
             cost=0.123,
             model="test-model"
         )
@@ -643,11 +656,15 @@ def test_fingerprint_format_compatibility(tmp_path):
     with patch("pdd.operation_log.META_DIR", str(meta_dir)), \
          patch("pdd.sync_determine_operation.get_meta_dir", return_value=meta_dir):
 
+        prompt_path = tmp_path / "prompts" / f"{basename}_{language}.prompt"
+        prompt_path.parent.mkdir()
+        prompt_path.write_text("% Format\n", encoding="utf-8")
+
         save_fingerprint(
             basename=basename,
             language=language,
             operation="test_op",
-            paths={},
+            paths={"prompt": prompt_path},
             cost=0.1,
             model="test"
         )
@@ -848,7 +865,7 @@ def test_save_fingerprint_resolves_paths_when_none_issue_983(temp_pdd_env, tmp_p
     mock_paths = {"prompt": prompt_file, "code": code_file}
 
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths
+        "pdd.fingerprint_transaction.get_pdd_file_paths", return_value=mock_paths
     ), patch(
         "pdd.sync_determine_operation.get_meta_dir",
         return_value=Path(temp_pdd_env),
@@ -890,7 +907,7 @@ def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pd
     explicit_paths = {"prompt": prompt_file}
 
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths"
+        "pdd.fingerprint_transaction.get_pdd_file_paths"
     ) as mock_get_paths:
         operation_log.save_fingerprint(
             "mymod", "python", operation="generate", paths=explicit_paths
@@ -899,26 +916,23 @@ def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pd
         mock_get_paths.assert_not_called()
 
 
-def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_env):
+def test_save_fingerprint_fails_on_path_resolution_failure_issue_983(temp_pdd_env):
     """
-    Issue #983: If get_pdd_file_paths raises a recoverable error during
-    path resolution, save_fingerprint should warn and produce null hashes
-    (graceful degradation) rather than crashing.
+    Issue #1926: path-resolution failure must not produce a null-hash
+    fingerprint or report command success.
     """
     with patch(
-        "pdd.sync_determine_operation.get_pdd_file_paths",
+        "pdd.fingerprint_transaction.get_pdd_file_paths",
         side_effect=OSError("prompts dir not found"),
-    ), patch("pdd.operation_log.logger") as mock_logger:
-        # Should NOT raise
-        operation_log.save_fingerprint("badmod", "python", operation="generate")
+    ):
+        with pytest.raises(FingerprintFinalizeError) as raised:
+            operation_log.save_fingerprint("badmod", "python", operation="generate")
 
-        mock_logger.warning.assert_called_once()
-        warning_args = str(mock_logger.warning.call_args)
-        assert "badmod" in warning_args
-        assert "python" in warning_args
+    assert "path resolution failed" in str(raised.value)
+    assert "badmod_python.json" in str(raised.value)
 
 
-def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(temp_pdd_env):
+def test_log_operation_decorator_fails_when_clear_silently_fails(temp_pdd_env):
     """
     Regression for issue #1057: if a stale run report survives clear_run_report(),
     the decorator must not write a fresh fingerprint next to stale runtime state.
@@ -935,10 +949,15 @@ def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(tem
     def successful_command(prompt_file):
         return "ok", False, 0.0, "model"
 
+    prompt_path = Path(temp_pdd_env).parents[1] / "prompts" / "demo_python.prompt"
+    prompt_path.parent.mkdir()
+    prompt_path.write_text("% Demo\n", encoding="utf-8")
+
     with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
         "pdd.operation_log.save_fingerprint"
     ) as mock_save_fingerprint:
-        successful_command(prompt_file="prompts/demo_python.prompt")
+        with pytest.raises(FingerprintFinalizeError, match="run report not cleared"):
+            successful_command(prompt_file=str(prompt_path))
 
     assert run_report_path.exists()
     mock_save_fingerprint.assert_not_called()
@@ -1149,14 +1168,7 @@ def test_log_operation_passes_full_path_dict_to_save_fingerprint_issue_1305(tmp_
 
 
 def test_log_operation_fallback_coerces_prompt_to_path_issue_1305(tmp_path):
-    """Issue #1305 (Test 5): when get_pdd_file_paths resolution fails, the
-    decorator must fall back to {"prompt": Path(prompt_file)} — a COERCED Path,
-    never a raw string — so prompt_hash is still real and the command does not
-    crash.
-
-    On buggy code (or a naive raw-string fallback) the prompt value stays a str,
-    calculate_current_hashes skips it, and prompt_hash is null -> assertion fails.
-    """
+    """A derivative/unregistered prompt still receives a real prompt hash."""
     basename, language = "fallbackmod", "python"
     meta_dir, paths = _setup_pdd_module_files(tmp_path, basename, language)
     real_prompt_path = paths["prompt"]  # absolute path to the real prompt file on disk
@@ -1171,23 +1183,16 @@ def test_log_operation_fallback_coerces_prompt_to_path_issue_1305(tmp_path):
              "pdd.sync_determine_operation.get_pdd_file_paths",
              side_effect=OSError("prompts dir not found"),
          ):
-        # Must not raise even though path resolution failed.
         result = run_example(prompt_file=str(real_prompt_path))
 
-    assert result == ({"status": "ok"}, 0.1, "gpt-4"), "decorator must still return the result"
+    assert result == ({"status": "ok"}, 0.1, "gpt-4")
 
     fp_path = operation_log.get_fingerprint_path(basename, language, project_root=tmp_path)
-    assert fp_path.exists(), "fallback path must still write a fingerprint file"
+    assert fp_path.exists()
     with open(fp_path) as f:
         fp_data = json.load(f)
-
-    # Fallback coerces the prompt string to a Path, so prompt_hash is real.
-    assert fp_data["prompt_hash"] is not None, (
-        "fallback must pass Path(prompt_file) (not a raw str) so prompt_hash is non-null"
-    )
-    assert _is_hex_sha256(fp_data["prompt_hash"]), (
-        f"prompt_hash should be a 64-char hex SHA-256, got: {fp_data['prompt_hash']!r}"
-    )
+    assert fp_data["prompt_hash"] is not None
+    assert _is_hex_sha256(fp_data["prompt_hash"])
 
 
 def test_log_operation_example_writes_test_hash_issue_1305(tmp_path):
