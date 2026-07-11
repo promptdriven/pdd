@@ -85,6 +85,13 @@ def _obligation(payload: Mapping[str, Any]) -> VerificationObligation:
                 )
             ),
             bool(payload.get("required", True)),
+            tuple(
+                sorted(
+                    PurePosixPath(item)
+                    for item in payload.get("code_under_test_paths", [])
+                    if isinstance(item, str)
+                )
+            ),
         )
     except (KeyError, TypeError) as exc:
         raise VerificationProfileError("verification obligation is malformed") from exc

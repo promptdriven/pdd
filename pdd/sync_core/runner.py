@@ -110,23 +110,13 @@ def _declares_pytest_plugins(targets: tuple[ast.AST, ...]) -> bool:
     )
 
 
-def _is_pytest_support_path(path: PurePosixPath) -> bool:
-    """Return whether a path is pytest support rather than product code."""
-    return (
-        path.name == "conftest.py"
-        or path in PYTEST_CONFIG_PATHS
-        or "tests" in path.parts
-        or path.name.startswith("test_")
-    )
-
-
 def _local_module_paths(
     root: Path,
     ref: str,
     source_path: PurePosixPath,
     source: bytes,
     *,
-    support_only: bool = False,
+    code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
 ) -> tuple[set[PurePosixPath], bool]:
     # pylint: disable=too-many-locals
     """Resolve repository-local Python imports without executing candidate code."""
@@ -171,13 +161,16 @@ def _local_module_paths(
             path
             for path in candidates
             if read_git_blob(root, ref, path) is not None
-            and (not support_only or _is_pytest_support_path(path))
+            and path not in code_under_test_paths
         )
     return resolved, dynamic_pytest_plugins
 
 
 def _pytest_support_closure(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path,
+    ref: str,
+    test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Return config, conftest, and transitive local-import blobs for pytest."""
     config_paths = _pytest_config_paths(root, ref, test_paths)
@@ -187,6 +180,7 @@ def _pytest_support_closure(
         pending=tuple(test_paths) + tuple(config_paths),
         included=config_paths,
         test_artifacts=test_paths,
+        code_under_test_paths=frozenset(code_under_test_paths),
     )
 
 
@@ -218,6 +212,7 @@ def _transitive_support_blobs(
     pending: tuple[PurePosixPath, ...],
     included: set[PurePosixPath],
     test_artifacts: tuple[PurePosixPath, ...] = (),
+    code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Resolve local Python imports from protected runner support paths."""
     paths = set(included)
@@ -237,7 +232,9 @@ def _transitive_support_blobs(
             ref,
             path,
             source,
-            support_only=path in test_artifact_set,
+            code_under_test_paths=(
+                code_under_test_paths if path in test_artifact_set else frozenset()
+            ),
         )
         discovered -= visited
         paths.update(discovered)
@@ -269,7 +266,6 @@ def _has_dynamic_pytest_plugins(
     """Fail closed when pytest plugin declarations cannot be statically bound."""
     config_paths = _pytest_config_paths(root, ref, test_paths)
     remaining = list(tuple(test_paths) + tuple(config_paths))
-    test_artifact_set = set(test_paths)
     visited: set[PurePosixPath] = set()
     while remaining:
         path = remaining.pop()
@@ -284,11 +280,39 @@ def _has_dynamic_pytest_plugins(
             ref,
             path,
             source,
-            support_only=path in test_artifact_set,
         )
         if dynamic:
             return True
         remaining.extend(discovered - visited)
+    return False
+
+
+def _has_external_pytest_plugins(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+) -> bool:
+    """Return whether a literal plugin declaration lacks protected repo bytes."""
+    for path in tuple(test_paths) + tuple(_pytest_config_paths(root, ref, test_paths)):
+        source = read_git_blob(root, ref, path)
+        if source is None or path.suffix != ".py":
+            continue
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not _declares_pytest_plugins(_pytest_plugin_declaration_targets(node)):
+                continue
+            modules, dynamic = _pytest_plugin_modules(node.value)
+            if dynamic:
+                continue
+            for module in modules:
+                module_path = PurePosixPath(*module.split("."))
+                candidates = (
+                    module_path.with_suffix(".py"),
+                    module_path / "__init__.py",
+                )
+                if not any(read_git_blob(root, ref, item) is not None for item in candidates):
+                    return True
     return False
 
 
@@ -301,7 +325,11 @@ def _support_digest(
         if obligation.validator_id == "pytest"
         for path in obligation.artifact_paths
     )
-    closure = _pytest_support_closure(root, ref, tests)
+    product = tuple(
+        path for obligation in profile.obligations
+        for path in obligation.code_under_test_paths
+    )
+    closure = _pytest_support_closure(root, ref, tests, product)
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -772,7 +800,10 @@ def _obligation_preflight(
         support_paths = tuple(
             path
             for path, _content in _pytest_support_closure(
-                root, head_sha, obligation.artifact_paths
+                root,
+                head_sha,
+                obligation.artifact_paths,
+                obligation.code_under_test_paths,
             )
         )
         changed_support = _changed_paths(root, base_sha, head_sha, support_paths)
@@ -803,6 +834,15 @@ def _obligation_preflight(
             EvidenceOutcome.ERROR,
             obligation.validator_config_digest,
             "dynamic pytest_plugins declarations are not bound by this adapter",
+        )
+    if _has_external_pytest_plugins(root, base_sha, obligation.artifact_paths) or (
+        _has_external_pytest_plugins(root, head_sha, obligation.artifact_paths)
+    ):
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "external pytest_plugins declarations are not bound by this adapter",
         )
     if _config_loads_plugin(root, base_sha) or _config_loads_plugin(root, head_sha):
         return RunnerExecution(
@@ -848,7 +888,7 @@ def _protected_node_ids(
     return None, collection_executions, head_node_ids
 
 
-def run_obligation(
+def _run_obligation_in_tree(
     root: Path,
     obligation: VerificationObligation,
     *,
@@ -887,7 +927,62 @@ def run_obligation(
         _run_test_node(root, node_id, config.timeout_seconds)
         for node_id in head_node_ids
     )
+    mutated = _dirty_pytest_support(root)
+    if mutated:
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            obligation.validator_config_digest,
+            "protected runner closure was modified: " + ", ".join(sorted(mutated)),
+        )
     return _combine(obligation, collection_executions + executions)
+
+
+def run_obligation(
+    root: Path,
+    obligation: VerificationObligation,
+    *,
+    base_sha: str,
+    head_sha: str,
+    config: RunnerConfig,
+) -> RunnerExecution:
+    """Run an obligation in an ephemeral exact-head execution tree."""
+    dirty = _dirty_pytest_support(root)
+    if dirty:
+        return RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.QUARANTINED,
+            obligation.validator_config_digest,
+            "candidate-modified test cannot solely certify itself: "
+            + ", ".join(sorted(dirty)),
+        )
+    with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
+        clone = Path(directory) / "repository"
+        cloned = subprocess.run(
+            ["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)],
+            capture_output=True,
+            check=False,
+        )
+        checked = subprocess.run(
+            ["git", "checkout", "-q", "--detach", head_sha],
+            cwd=clone,
+            capture_output=True,
+            check=False,
+        ) if cloned.returncode == 0 else None
+        if checked is None or checked.returncode != 0:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                "cannot materialize exact-head protected runner tree",
+            )
+        return _run_obligation_in_tree(
+            clone,
+            obligation,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            config=config,
+        )
 
 
 def run_profile(

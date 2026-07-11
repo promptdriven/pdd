@@ -187,6 +187,7 @@ class VerificationObligation:
     requirement_ids: tuple[str, ...]
     artifact_paths: tuple[PurePosixPath, ...]
     required: bool = True
+    code_under_test_paths: tuple[PurePosixPath, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.obligation_id or not self.kind or not self.validator_id:
@@ -194,6 +195,8 @@ class VerificationObligation:
         if not self.validator_config_digest:
             raise ValueError("validator config digest must not be empty")
         for path in self.artifact_paths:
+            _validate_relpath(path)
+        for path in self.code_under_test_paths:
             _validate_relpath(path)
 
 
