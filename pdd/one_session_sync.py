@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from rich.console import Console
 from rich import print as rprint
 
-from .agentic_common import run_agentic_task
+from .agentic_common import provider_failure_workflow, run_agentic_task
 from .agentic_test_generate import (
     _get_file_mtimes,
     _snapshot_pre_test_contents,
@@ -543,6 +543,7 @@ def build_one_session_prompt(
     return prompt
 
 
+@provider_failure_workflow
 def run_one_session_sync(
     basename: str,
     language: str,
