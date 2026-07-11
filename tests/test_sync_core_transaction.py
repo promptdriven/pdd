@@ -390,6 +390,8 @@ def test_alias_and_canonical_transactions_share_destination_lock(tmp_path) -> No
     )
 
     class RecordingLock:
+        """Record lock paths requested by the transaction manager."""
+
         paths: list[str] = []
 
         def __init__(self, path: str) -> None:

@@ -494,6 +494,11 @@ class TransactionManager:
         if not isinstance(entries, list):
             raise TransactionError("transaction entries are malformed")
         resources.extend(str(item.get("relpath")) for item in entries if isinstance(item, dict))
+        resources.extend(
+            f"canonical:{item.get('canonical_relpath')}"
+            for item in entries
+            if isinstance(item, dict) and item.get("canonical_relpath") is not None
+        )
         stack = ExitStack()
         for resource in sorted(set(resources)):
             lock_name = hashlib.sha256(resource.encode()).hexdigest() + ".lock"

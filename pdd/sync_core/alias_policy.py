@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from itertools import combinations
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Mapping
@@ -45,8 +46,19 @@ def _parse(raw: bytes) -> Mapping[PurePosixPath, PurePosixPath]:
         if alias == canonical or alias in aliases:
             raise ValueError("protected alias entry is ambiguous")
         aliases[alias] = canonical
+    for left, right in combinations(sorted(aliases), 2):
+        if _path_contains(left, right) or _path_contains(right, left):
+            raise ValueError("protected alias entries overlap")
+    for left, right in combinations(sorted(aliases.values()), 2):
+        if _path_contains(left, right) or _path_contains(right, left):
+            raise ValueError("protected alias canonical targets overlap")
     ordered = dict(sorted(aliases.items()))
     return MappingProxyType(ordered)
+
+
+def _path_contains(parent: PurePosixPath, child: PurePosixPath) -> bool:
+    """Return whether ``child`` is equal to or below ``parent``."""
+    return child == parent or child.parts[: len(parent.parts)] == parent.parts
 
 
 def load_protected_aliases(
