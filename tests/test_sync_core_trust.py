@@ -261,3 +261,14 @@ def test_file_replay_store_rejects_symlinked_ancestor(tmp_path) -> None:
     store = FileReplayStore(protected / "linked" / "nested" / "replay.json")
     with pytest.raises(AttestationError, match="unsafe"):
         store.consume("trusted-ci", "nonce", "attestation")
+
+
+def test_file_replay_store_normalizes_filesystem_failures(tmp_path, monkeypatch) -> None:
+    store = FileReplayStore(tmp_path / "replay.json")
+
+    def fail_io(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pdd.sync_core.trust.update_json", fail_io)
+    with pytest.raises(AttestationError, match="replay ledger I/O failed"):
+        store.consume("trusted-ci", "nonce", "attestation")
