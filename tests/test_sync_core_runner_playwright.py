@@ -20,7 +20,9 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import (
+    _directory_identity,
     _local_javascript_imports,
+    _playwright_environment,
     _playwright_result,
     playwright_validator_config_digest,
 )
@@ -179,6 +181,103 @@ def test_playwright_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+@pytest.mark.parametrize("name", ["DATABASE_URL", "SSH_AUTH_SOCK", "KUBECONFIG"])
+def test_playwright_environment_drops_ambient_credentials_and_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(name, "candidate-readable")
+    assert name not in _playwright_environment(tmp_path, None)
+
+
+@pytest.mark.parametrize(
+    "payload", ["[]", "null", "1", '"value"', '{"suites":[{"specs":null}]}']
+)
+def test_playwright_malformed_json_shapes_fail_closed(
+    tmp_path: Path, payload: str
+) -> None:
+    outcome, _detail, identities = _playwright_result(
+        tmp_path, payload, 0, None
+    )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert identities == ()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "const key='grep'; export default { [key]: /widget/ };\n",
+        "const controls={ ['webServer']: {command:'./server.sh'} }; export default {...controls};\n",
+        "export default { globalSetup /*comment*/: './setup.ts' };\n",
+    ],
+)
+def test_playwright_rejects_non_declarative_config_shapes(
+    tmp_path: Path, config: str
+) -> None:
+    root, commit = _repository(tmp_path, config=config)
+    with pytest.raises(ValueError, match="configuration"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "const dependency='helper'; await import(dependency);\n",
+        "const load = require; load('helper');\n",
+    ],
+)
+def test_playwright_rejects_dynamic_or_aliased_module_loading(
+    tmp_path: Path, source: str
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "dynamic loader")
+    commit = _git(root, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="module loading"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_snapshot_oracle_is_bound_to_validator_digest(tmp_path: Path) -> None:
+    root, base = _repository(tmp_path)
+    snapshot = root / "tests/widget.spec.ts-snapshots/widget-linux.png"
+    snapshot.parent.mkdir()
+    snapshot.write_bytes(b"base")
+    spec = root / "tests/widget.spec.ts"
+    spec.write_text(
+        spec.read_text(encoding="utf-8")
+        + "test('visual', async ({page}) => expect(page).toHaveScreenshot('widget.png'));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "snapshot oracle")
+    base = _git(root, "rev-parse", "HEAD")
+    before = playwright_validator_config_digest(root, base, (PurePosixPath("tests/widget.spec.ts"),))
+    snapshot.write_bytes(b"candidate")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change oracle")
+    after = playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), (PurePosixPath("tests/widget.spec.ts"),)
+    )
+    assert after != before
+
+
+def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
+    target = tmp_path / "package-a"
+    target.mkdir()
+    (target / "index.js").write_text("module.exports = 1", encoding="utf-8")
+    dependencies = tmp_path / "node_modules"
+    dependencies.mkdir()
+    (dependencies / "helper").symlink_to(target, target_is_directory=True)
+    before = _directory_identity(dependencies)
+    (dependencies / "helper").unlink()
+    (dependencies / "helper").symlink_to(tmp_path / "missing", target_is_directory=True)
+    assert _directory_identity(dependencies) != before
 
 
 def test_playwright_candidate_node_modules_dependency_is_not_trusted(
