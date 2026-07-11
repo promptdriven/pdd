@@ -746,7 +746,7 @@ def _managed_alias_counterparts(
             concrete_owner = managed_paths.get(counterpart)
             derived_owner = counterparts.get(counterpart)
             conflicting_owner = concrete_owner or derived_owner
-            if conflicting_owner is not None and conflicting_owner != unit_id:
+            if conflicting_owner is not None:
                 invalid.append(
                     f"{counterpart.as_posix()}: canonical counterpart has multiple "
                     "managed owners"

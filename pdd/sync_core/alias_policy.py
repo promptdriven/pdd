@@ -55,6 +55,10 @@ def parse_protected_alias_policy(raw: bytes) -> Mapping[PurePosixPath, PurePosix
     for left, right in combinations(sorted(aliases.values()), 2):
         if _path_contains(left, right) or _path_contains(right, left):
             raise ValueError("protected alias canonical targets overlap")
+    for alias in aliases:
+        for canonical in aliases.values():
+            if _path_contains(alias, canonical) or _path_contains(canonical, alias):
+                raise ValueError("protected alias and canonical namespaces overlap")
     ordered = dict(sorted(aliases.items()))
     return MappingProxyType(ordered)
 
