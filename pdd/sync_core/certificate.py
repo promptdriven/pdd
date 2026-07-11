@@ -1,4 +1,5 @@
 """Cross-repository signed Global Sync Certificate aggregation."""
+# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import os
 import subprocess
 import fnmatch
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
@@ -17,6 +18,11 @@ from typing import Any, Protocol
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from .artifact_provenance import (
+    CandidateArtifactPolicy,
+    CandidateArtifactProvenance,
+    CandidateArtifactProvenanceError,
+)
 from .reporting import CanonicalReportOptions, build_canonical_report
 
 
@@ -88,6 +94,7 @@ class LifecycleResult:
     missing_scenarios: tuple[str, ...] = ()
     candidate_wheel_sha256: str = ""
     dependency_environment_digest: str = ""
+    candidate_artifact: CandidateArtifactProvenance | None = None
 
 
 @dataclass(frozen=True)
@@ -149,6 +156,7 @@ class GlobalCertificateOptions:
     required_nightly_streak: int = 7
     checker_identity: CheckerIdentity | None = None
     nightly_observation: NightlyObservation | None = None
+    candidate_artifact_policy: CandidateArtifactPolicy | None = None
 
 
 def _canonical_bytes(payload: dict[str, Any]) -> bytes:
@@ -398,6 +406,7 @@ def _complete_nightly(
         "timeouts",
         "candidate_wheel_sha256",
         "dependency_environment_digest",
+        "candidate_artifact",
     }
     return (
         required_counts <= counts.keys()
@@ -534,6 +543,7 @@ def _scan_predicate(
             character in "0123456789abcdef"
             for character in lifecycle.dependency_environment_digest
         )
+        and lifecycle.candidate_artifact is not None
         and extra["nightly_observation_complete"] == 1
     )
 
@@ -605,8 +615,8 @@ def _canonical_report_predicate(report: dict[str, Any]) -> bool:
 
 
 def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]:
-    # pylint: disable=too-many-locals,too-many-return-statements
-    if body.get("schema_version") != 2:
+    # pylint: disable=too-many-locals,too-many-return-statements,too-many-branches
+    if body.get("schema_version") != 3:
         return False, False
     checker = body.get("checker")
     try:
@@ -669,10 +679,33 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         for value in digests.values()
     ):
         return False, False
+    candidate_artifact_payload = lifecycle_payload.get("candidate_artifact")
+    try:
+        candidate_artifact = CandidateArtifactProvenance.from_payload(
+            candidate_artifact_payload
+        )
+    except (CandidateArtifactProvenanceError, ValueError):
+        return False, False
+    if candidate_artifact.wheel_sha256 != digests["candidate_wheel_sha256"]:
+        return False, False
+    pdd_report = next(
+        (
+            item
+            for item in reports
+            if isinstance(item, dict) and item.get("repository") == "pdd"
+        ),
+        None,
+    )
+    if (
+        not isinstance(pdd_report, dict)
+        or candidate_artifact.source_sha != pdd_report.get("head_sha")
+    ):
+        return False, False
     lifecycle = LifecycleResult(
         *(lifecycle_payload[name] for name in lifecycle_names),
         tuple(lifecycle_payload["missing_scenarios"]),
         *(digests[name] for name in digest_names),
+        candidate_artifact,
     )
     extra_names = {
         "pdd_cloud_vendored_sync_semantics",
@@ -727,6 +760,8 @@ def _build_global_certificate_from_targets(
         raise ValueError("global certificate requires at least one repository")
     if options.checker_identity is None:
         raise ValueError("global certificate requires released checker identity")
+    if options.candidate_artifact_policy is None:
+        raise ValueError("global certificate requires candidate artifact policy")
     reports = []
     for target in targets:
         report = build_canonical_report(
@@ -739,6 +774,17 @@ def _build_global_certificate_from_targets(
         )
         reports.append({**report, "repository": target.name})
     counts = _aggregate_counts(reports)
+    pdd_report = next(report for report in reports if report["repository"] == "pdd")
+    candidate_artifact_valid = False
+    if options.lifecycle_result.candidate_artifact is not None:
+        try:
+            options.lifecycle_result.candidate_artifact.verify(
+                options.candidate_artifact_policy,
+                expected_source_sha=str(pdd_report.get("head_sha", "")),
+            )
+            candidate_artifact_valid = True
+        except CandidateArtifactProvenanceError:
+            candidate_artifact_valid = False
     cloud = next((target for target in targets if target.name == "pdd_cloud"), None)
     extra = {
         "pdd_cloud_vendored_sync_semantics": (
@@ -761,11 +807,16 @@ def _build_global_certificate_from_targets(
             and _nightly_observation_complete(options.nightly_observation.payload())
         ),
     }
-    lifecycle = options.lifecycle_result
+    lifecycle = (
+        options.lifecycle_result
+        if candidate_artifact_valid
+        else replace(options.lifecycle_result, candidate_artifact=None)
+    )
     body: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "checker": options.checker_identity.payload(),
+        "candidate_artifact_policy": options.candidate_artifact_policy.identity(),
         "nightly_observation": (
             options.nightly_observation.payload()
             if options.nightly_observation is not None
@@ -798,6 +849,11 @@ def _build_global_certificate_from_targets(
             "missing_scenarios": list(lifecycle.missing_scenarios),
             "candidate_wheel_sha256": lifecycle.candidate_wheel_sha256,
             "dependency_environment_digest": lifecycle.dependency_environment_digest,
+            "candidate_artifact": (
+                lifecycle.candidate_artifact.payload()
+                if lifecycle.candidate_artifact is not None and candidate_artifact_valid
+                else None
+            ),
         },
     }
     body["scan_ok"] = all(report.get("ok") for report in reports) and _scan_predicate(
@@ -871,10 +927,11 @@ def verify_global_certificate(
     expected_repository_shas: dict[str, tuple[str, str]],
     expected_repository_ids: dict[str, str],
     expected_checker_identity: CheckerIdentity,
+    expected_candidate_artifact_policy: CandidateArtifactPolicy,
     now: datetime | None = None,
     maximum_age: timedelta = timedelta(minutes=15),
 ) -> bool:
-    # pylint: disable=too-many-arguments,too-many-return-statements
+    # pylint: disable=too-many-arguments,too-many-return-statements,too-many-locals
     """Accept only a fresh green certificate for exact expected repository refs."""
     if not _verify_certificate_integrity(
         certificate, public_key, expected_issuer=expected_issuer
@@ -883,6 +940,34 @@ def verify_global_certificate(
     if certificate.get("ok") is not True or certificate.get("scan_ok") is not True:
         return False
     if certificate.get("checker") != expected_checker_identity.payload():
+        return False
+    if (
+        certificate.get("candidate_artifact_policy")
+        != expected_candidate_artifact_policy.identity()
+    ):
+        return False
+    lifecycle = certificate.get("lifecycle")
+    reports = certificate.get("repositories")
+    if not isinstance(lifecycle, dict) or not isinstance(reports, list):
+        return False
+    pdd_report = next(
+        (
+            item
+            for item in reports
+            if isinstance(item, dict) and item.get("repository") == "pdd"
+        ),
+        None,
+    )
+    try:
+        artifact = CandidateArtifactProvenance.from_payload(
+            lifecycle.get("candidate_artifact")
+        )
+        artifact.verify(
+            expected_candidate_artifact_policy,
+            expected_source_sha=str(pdd_report.get("head_sha", "")),
+            consume_replay=False,
+        )
+    except (CandidateArtifactProvenanceError, AttributeError, ValueError):
         return False
     try:
         checked_at = datetime.fromisoformat(str(certificate["checked_at"]))
@@ -894,7 +979,6 @@ def verify_global_certificate(
     checked_at = checked_at.astimezone(timezone.utc)
     if checked_at > current or current - checked_at > maximum_age:
         return False
-    reports = certificate.get("repositories")
     if not isinstance(reports, list) or len(reports) != len(expected_repository_shas):
         return False
     actual = {

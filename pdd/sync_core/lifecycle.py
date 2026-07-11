@@ -11,6 +11,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .artifact_provenance import (
+    CandidateArtifactPolicy,
+    CandidateArtifactProvenanceError,
+    load_candidate_artifact_provenance,
+)
 from .certificate import LifecycleResult
 from .isolation import untrusted_child_environment
 from .scenario_contract import REQUIRED_SCENARIOS
@@ -36,6 +41,7 @@ def _failed_result(*, timeout: bool = False) -> LifecycleResult:
         tuple(sorted(REQUIRED_SCENARIOS)),
         "",
         "",
+        None,
     )
 
 
@@ -206,12 +212,14 @@ def run_lifecycle_matrix(
     candidate_wheel: Path | None = None,
     candidate_wheelhouse: Path | None = None,
     candidate_runtime_lock: Path | None = None,
+    candidate_attestation: Path | None = None,
+    candidate_artifact_policy: CandidateArtifactPolicy | None = None,
     cloud_root: Path | None = None,
     cloud_base_ref: str | None = None,
     cloud_head_ref: str | None = None,
     timeout_seconds: int = 1200,
 ) -> LifecycleResult:
-    # pylint: disable=too-many-arguments,too-many-locals
+    # pylint: disable=too-many-arguments,too-many-locals,too-many-boolean-expressions
     """Run only the scenario harness installed with the released checker."""
     del root  # Candidate repository tests are never lifecycle evidence.
     required_paths = (
@@ -221,10 +229,18 @@ def run_lifecycle_matrix(
     )
     if (
         not _required_paths_available(required_paths)
+        or candidate_attestation is None
+        or candidate_artifact_policy is None
         or cloud_root is None
         or cloud_base_ref is None
         or cloud_head_ref is None
     ):
+        return _failed_result()
+    try:
+        candidate_artifact = load_candidate_artifact_provenance(
+            candidate_attestation, Path(candidate_wheel), candidate_artifact_policy
+        )
+    except CandidateArtifactProvenanceError:
         return _failed_result()
     with tempfile.TemporaryDirectory(prefix="pdd-released-lifecycle-") as directory:
         temporary = Path(directory)
@@ -297,4 +313,5 @@ def run_lifecycle_matrix(
             missing,
             hashlib.sha256(Path(candidate_wheel).read_bytes()).hexdigest(),
             dependency_digest,
+            candidate_artifact,
         )

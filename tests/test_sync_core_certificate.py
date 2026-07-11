@@ -9,6 +9,8 @@ import pytest
 
 from pdd.sync_core import (
     AttestationSigner,
+    CandidateArtifactPolicy,
+    CandidateArtifactProvenance,
     CheckerIdentity,
     GlobalCertificateOptions,
     LifecycleResult,
@@ -31,6 +33,17 @@ CHECKER = CheckerIdentity(
 OBSERVATION = NightlyObservation(True, True, 0, True, "BLOCKED", 0)
 CANDIDATE_WHEEL_SHA256 = "d" * 64
 DEPENDENCY_ENVIRONMENT_DIGEST = "e" * 64
+CANDIDATE_BUILDER = AttestationSigner("candidate-builder", b"h" * 32)
+CANDIDATE_POLICY = CandidateArtifactPolicy(
+    CANDIDATE_BUILDER.issuer,
+    CANDIDATE_BUILDER.public_key_bytes(),
+    "promptdriven/pdd/.github/workflows/candidate-wheel.yml@refs/heads/main",
+    DEPENDENCY_ENVIRONMENT_DIGEST,
+    "CPython",
+    "3.12.3",
+    "cp312",
+    "manylinux_2_17_x86_64",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -112,11 +125,13 @@ def _nightly(path, signer, count=7, *, include_observation=True):
             "missing_scenarios": [],
             "candidate_wheel_sha256": CANDIDATE_WHEEL_SHA256,
             "dependency_environment_digest": DEPENDENCY_ENVIRONMENT_DIGEST,
+            "candidate_artifact": _candidate_artifact().payload(),
         }
         body = {
-            "schema_version": 2,
+            "schema_version": 3,
             "checked_at": (start + timedelta(days=index)).isoformat(),
             "checker": CHECKER.payload(),
+            "candidate_artifact_policy": CANDIDATE_POLICY.identity(),
             "repositories": reports,
             "counts": counts,
             "lifecycle": lifecycle,
@@ -147,6 +162,44 @@ def _expected_ids(certificate):
         report["repository"]: report["repository_id"]
         for report in certificate["repositories"]
     }
+
+
+def _candidate_artifact(source_sha="b" * 40):
+    now = datetime.now(timezone.utc)
+    artifact = CandidateArtifactProvenance(
+        CANDIDATE_BUILDER.issuer,
+        f"candidate-build-{now.timestamp()}",
+        f"candidate-build-nonce-{now.timestamp()}",
+        now.isoformat(),
+        (now + timedelta(minutes=10)).isoformat(),
+        CANDIDATE_WHEEL_SHA256,
+        source_sha,
+        DEPENDENCY_ENVIRONMENT_DIGEST,
+        {
+            "implementation": CANDIDATE_POLICY.python_implementation,
+            "version": CANDIDATE_POLICY.python_version,
+            "abi": CANDIDATE_POLICY.python_abi,
+            "platform": CANDIDATE_POLICY.python_platform,
+        },
+        CANDIDATE_POLICY.builder_workflow_identity,
+        "",
+    )
+    unsigned = {key: value for key, value in artifact.payload().items() if key != "signature"}
+    return CandidateArtifactProvenance(
+        artifact.issuer,
+        artifact.attestation_id,
+        artifact.nonce,
+        artifact.issued_at,
+        artifact.expires_at,
+        artifact.wheel_sha256,
+        artifact.source_sha,
+        artifact.dependency_lock_sha256,
+        artifact.python,
+        artifact.builder_workflow_identity,
+        CANDIDATE_BUILDER.sign_bytes(
+            json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+        ),
+    )
 
 
 def test_lifecycle_child_environment_excludes_all_signing_material(
@@ -221,6 +274,7 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         0,
         candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
         dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
+        candidate_artifact=_candidate_artifact(),
     )
     certificate = build_global_certificate(
         (
@@ -233,6 +287,7 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
         ),
         signer=signer,
     )
@@ -251,6 +306,7 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is True
     assert (
         certificate["lifecycle"]["candidate_wheel_sha256"]
@@ -268,6 +324,29 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
+    ) is False
+    certificate["lifecycle"]["candidate_wheel_sha256"] = CANDIDATE_WHEEL_SHA256
+    forged_artifact = certificate["lifecycle"]["candidate_artifact"]
+    forged_artifact["source_sha"] = "c" * 40
+    unsigned_artifact = {
+        key: value for key, value in forged_artifact.items() if key != "signature"
+    }
+    forged_artifact["signature"]["value"] = CANDIDATE_BUILDER.sign_bytes(
+        json.dumps(unsigned_artifact, sort_keys=True, separators=(",", ":")).encode()
+    )
+    body = {key: value for key, value in certificate.items() if key != "signature"}
+    certificate["signature"]["value"] = signer.sign_bytes(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    )
+    assert verify_global_certificate(
+        certificate,
+        signer.public_key_bytes(),
+        expected_issuer=signer.issuer,
+        expected_repository_shas=expected,
+        expected_repository_ids=_expected_ids(certificate),
+        expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
     certificate["counts"]["managed_units"] = 0
     assert verify_global_certificate(
@@ -277,6 +356,7 @@ def test_complete_global_predicate_is_signed_and_verifiable(tmp_path, monkeypatc
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
 
 
@@ -306,6 +386,7 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
         ("merge-group",),
         CANDIDATE_WHEEL_SHA256,
         DEPENDENCY_ENVIRONMENT_DIGEST,
+        _candidate_artifact(),
     )
     certificate = build_global_certificate(
         (
@@ -318,6 +399,7 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
         ),
         signer=signer,
     )
@@ -333,6 +415,7 @@ def test_missing_lifecycle_scenario_blocks_certificate(tmp_path, monkeypatch) ->
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
 
 
@@ -371,10 +454,12 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
+                candidate_artifact=_candidate_artifact(),
             ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
         ),
         signer=signer,
     )
@@ -388,6 +473,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         "expected_repository_shas": expected,
         "expected_repository_ids": _expected_ids(certificate),
         "expected_checker_identity": CHECKER,
+        "expected_candidate_artifact_policy": CANDIDATE_POLICY,
     }
     assert verify_global_certificate(
         certificate, signer.public_key_bytes(), **common
@@ -404,6 +490,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=other_checker,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
     wrong_ids = {**_expected_ids(certificate), "pdd_cloud": "wrong-repository"}
     assert verify_global_certificate(
@@ -413,6 +500,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         expected_repository_shas=expected,
         expected_repository_ids=wrong_ids,
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
     assert verify_global_certificate(
         certificate,
@@ -427,6 +515,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         expected_repository_shas=expected,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
     wrong_refs = {**expected, "pdd_cloud": ("a" * 40, "c" * 40)}
     assert verify_global_certificate(
@@ -436,6 +525,7 @@ def test_certificate_acceptance_binds_freshness_issuer_and_exact_refs(
         expected_repository_shas=wrong_refs,
         expected_repository_ids=_expected_ids(certificate),
         expected_checker_identity=CHECKER,
+        expected_candidate_artifact_policy=CANDIDATE_POLICY,
     ) is False
 
 
@@ -525,10 +615,12 @@ def test_unsigned_nightly_rows_cannot_fabricate_temporal_proof(
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
+                candidate_artifact=_candidate_artifact(),
             ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
         ),
         signer=AttestationSigner("certificate-ci", b"g" * 32),
     )
@@ -571,10 +663,12 @@ def test_signed_nightly_rows_without_observations_do_not_extend_streak(
                 0,
                 candidate_wheel_sha256=CANDIDATE_WHEEL_SHA256,
                 dependency_environment_digest=DEPENDENCY_ENVIRONMENT_DIGEST,
+                candidate_artifact=_candidate_artifact(),
             ),
             nightly,
             checker_identity=CHECKER,
             nightly_observation=OBSERVATION,
+            candidate_artifact_policy=CANDIDATE_POLICY,
         ),
         signer=signer,
     )
