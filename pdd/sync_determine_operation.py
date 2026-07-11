@@ -576,12 +576,19 @@ def _architecture_prompt_owner(
 def _resolve_context_name_for_basename(
     basename: str,
     context_override: Optional[str] = None,
+    pddrc_anchor: Optional[Path] = None,
 ) -> Optional[str]:
-    """Resolve the context for a basename when no explicit override is provided."""
+    """Resolve the context for a basename when no explicit override is provided.
+
+    ``pddrc_anchor`` anchors the ``.pddrc`` search at the project instead of the
+    process CWD; without it, detecting the context for a path-qualified basename from
+    a parent/sibling directory (with an absolute prompts root and no explicit
+    override) fails, and the canonical architecture target is missed.
+    """
     if context_override:
         return context_override
 
-    pddrc_path = _find_pddrc_file()
+    pddrc_path = _find_pddrc_file(pddrc_anchor)
     if not pddrc_path:
         return None
 
@@ -824,15 +831,19 @@ def _find_prompt_file(
         Actual filesystem Path with correct casing, or None if not found.
     """
     name = basename.split('/')[-1] if '/' in basename else basename
-    context_name = _resolve_context_name_for_basename(basename, context_override)
+    # Containment anchor for recursive discovery AND the CWD-independent .pddrc anchor
+    # for context detection / prefix stripping: resolution is often driven from a
+    # parent/sibling directory with an absolute (possibly custom) prompts root.
+    resolved_prompts_root = prompts_root.resolve(strict=False)
+    context_name = _resolve_context_name_for_basename(
+        basename, context_override, pddrc_anchor=resolved_prompts_root
+    )
     basename_candidates = _prompt_basename_candidates(
         basename,
         context_name=context_name,
         include_simple_name="/" not in basename,
+        pddrc_anchor=resolved_prompts_root,
     )
-    # Containment anchor for recursive discovery: every returned candidate must
-    # resolve inside this root so a same-leaf symlink cannot escape prompts_root.
-    resolved_prompts_root = prompts_root.resolve(strict=False)
 
     # Resolve context prefix from .pddrc for scoping recursive searches.
     # e.g., context 'backend-utils' with prompts_dir='prompts/backend/utils'
@@ -969,7 +980,9 @@ def _find_prompt_file(
         # since only the suffix is compared).
         if "/" in basename:
             basename_variants = {Path(basename).parts}
-            relative_basename = _relative_basename_for_context(basename, context_name)
+            relative_basename = _relative_basename_for_context(
+                basename, context_name, resolved_prompts_root
+            )
             if relative_basename != basename:
                 basename_variants.add(Path(relative_basename).parts)
             aligned = []
@@ -1372,17 +1385,11 @@ def _architecture_module_choices(
         filepath = str(module.get("filepath") or "").strip()
         if not filepath:
             continue
-        # An unsafe OUTPUT path (absolute, parent traversal, backslash, Windows drive,
-        # or symlink escape) is rejected before it can reach generation; it must not
-        # count toward ambiguity either. Otherwise a valid ``foo -> src/foo.py`` row
-        # plus a same-filename ``foo -> ../../outside/foo.py`` row read as two distinct
-        # targets and raise AmbiguousModuleError, blocking the valid module.
-        if _contained_architecture_code_path(architecture_path.parent, filepath) is None:
-            continue
         filename_value = module.get("filename")
         # An unsafe metadata filename (absolute, parent traversal, backslash, Windows
-        # drive) is likewise excluded from ambiguity counting. A null/empty filename is
-        # left to the filepath-stem branch (the module is filepath-owned).
+        # drive) is excluded from ambiguity counting. A null/empty filename is left to
+        # the filepath-stem branch (the module is filepath-owned). This is a cheap
+        # string check, done before the expensive filesystem containment resolution.
         if (
             isinstance(filename_value, str)
             and filename_value.strip()
@@ -1393,15 +1400,24 @@ def _architecture_module_choices(
         if filename.endswith("_LLM.prompt"):
             continue
         leaf = Path(filename).name
-        if leaf.lower() == target_filename:
-            distinct.add(Path(filepath).as_posix())
-        elif not extract_module_from_include(leaf):
+        matched = leaf.lower() == target_filename
+        if not matched and not extract_module_from_include(leaf):
             # Non-prompt architecture filename (e.g. `GitHubAppCTA.tsx`): the module
             # is identified by its filepath stem instead. Gate on the language
             # extension so a same-stem file in another language is not conflated.
             suffix = Path(filepath).suffix.lstrip(".").lower()
-            if Path(filepath).stem == basename and lang_ext and suffix == lang_ext:
-                distinct.add(Path(filepath).as_posix())
+            matched = bool(Path(filepath).stem == basename and lang_ext and suffix == lang_ext)
+        if not matched:
+            continue
+        # Only NOW — for the handful of filename/stem matches, not every module — pay
+        # the filesystem containment resolution. An unsafe OUTPUT path (absolute, ``..``,
+        # backslash, Windows drive, symlink escape) is rejected before generation, so it
+        # must not count toward ambiguity: otherwise a valid ``foo -> src/foo.py`` plus a
+        # same-filename ``foo -> ../../outside/foo.py`` read as two targets and raise
+        # AmbiguousModuleError, blocking the valid module.
+        if _contained_architecture_code_path(architecture_path.parent, filepath) is None:
+            continue
+        distinct.add(Path(filepath).as_posix())
 
     return sorted(distinct)
 
@@ -1789,14 +1805,22 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
         name = basename.split('/')[-1] if '/' in basename else basename
-        resolved_context_name = _resolve_context_name_for_basename(basename, context_override)
-        construct_paths_basename = _relative_basename_for_context(basename, resolved_context_name)
 
         # Anchor configuration lookups (architecture.json, .pddrc) at the resolved
         # prompts root so nested subprojects (e.g. extensions/<name>/prompts/) find
         # their own architecture.json/.pddrc rather than falling back to the
         # caller's CWD, which would honor configured output paths inconsistently.
+        # Established BEFORE context/prefix resolution so those lookups are also
+        # CWD-independent (parent-CWD runs must still detect the context and strip the
+        # basename prefix instead of duplicating it in example/test templates).
         prompts_root_anchor = prompts_root if prompts_root.is_absolute() else prompts_root.resolve()
+
+        resolved_context_name = _resolve_context_name_for_basename(
+            basename, context_override, pddrc_anchor=prompts_root_anchor
+        )
+        construct_paths_basename = _relative_basename_for_context(
+            basename, resolved_context_name, prompts_root_anchor
+        )
 
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json(prompts_root_anchor)
@@ -1849,7 +1873,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # directory segments already present at the tail of prompts_root (a deep
             # prompts_dir passed by sync_main, or a context prefix) are stripped so they
             # are not duplicated.
-            relative_basename = _relative_basename_for_context(basename, resolved_context_name)
+            relative_basename = _relative_basename_for_context(
+                basename, resolved_context_name, prompts_root_anchor
+            )
             rel_dir_parts = Path(relative_basename).parts[:-1]
             root_parts = prompts_root.parts
             overlap = 0

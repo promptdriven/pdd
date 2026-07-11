@@ -2444,6 +2444,141 @@ def test_get_pdd_file_paths_unsafe_filepath_row_does_not_block_valid_module(
     assert paths["code"].resolve(strict=False).as_posix().endswith("src/foo.py")
 
 
+def test_get_pdd_file_paths_context_inferred_from_parent_cwd_without_override(tmp_path, monkeypatch):
+    """Context must be inferable from a parent CWD even with NO explicit override.
+
+    ``_resolve_context_name_for_basename`` searched from the process CWD, so a
+    path-qualified ``backend/foo`` run from the project's parent (no override) failed to
+    detect the backend context and missed the canonical ``backend/services/foo.py``,
+    falling back to ``backend/functions/foo.py``. The lookup must anchor at the prompts
+    root.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    _write_two_context_pddrc(project)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/services/foo_Python.prompt", "filepath": "backend/services/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT; note: NO context_override below.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith("backend/services/foo.py")
+
+
+def test_get_pdd_file_paths_custom_root_finds_existing_prompt_from_parent_cwd(tmp_path, monkeypatch):
+    """Custom-root prompt discovery must strip the context prefix from a parent CWD.
+
+    `_find_prompt_file` built its basename candidates and did prefix stripping via a
+    CWD-based `.pddrc` lookup. From a parent CWD with a custom prompt root, the context
+    prefix was not stripped, so an existing ``specs/services/utils/foo_Python.prompt``
+    was missed and a duplicated ``specs/services/backend/utils/foo_Python.prompt`` was
+    returned (risking a duplicate prompt). The anchor must reach candidate building.
+    """
+    project = tmp_path / "project"
+    (project / "specs" / "services" / "utils").mkdir(parents=True)
+    existing = project / "specs" / "services" / "utils" / "foo_Python.prompt"
+    existing.write_text("% existing\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"specs/services/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/services\"\n"
+        "      generate_output_path: \"backend/functions/\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/utils/foo", "python",
+        prompts_dir=str((project / "specs" / "services").resolve()),
+        context_override="backend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == existing.resolve()
+
+
+def test_get_pdd_file_paths_example_test_templates_not_duplicated_from_parent_cwd(tmp_path, monkeypatch):
+    """Example/test artifact paths must not duplicate the context prefix from a parent CWD.
+
+    ``construct_paths_basename`` was stripped via a CWD-based `.pddrc` lookup, so from a
+    parent CWD a path-qualified ``backend/foo`` kept its ``backend/`` prefix and produced
+    ``backend/examples/backend/foo_example.py``. Anchoring the strip yields the
+    configured, non-duplicated paths.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    # Exact example/test TEMPLATES with {category}: the category is the basename's
+    # directory part, which duplicates the `backend/` prefix if the basename is not
+    # stripped to `foo` (which requires the CWD-independent .pddrc anchor).
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{category}/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/{category}/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "backend/foo_Python.prompt", "filepath": "backend/functions/foo.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert "examples/backend/" not in paths["example"].resolve(strict=False).as_posix()
+    assert "tests/backend/" not in paths["test"].resolve(strict=False).as_posix()
+
+
+def test_architecture_module_choices_defers_containment_to_matches(tmp_path, monkeypatch):
+    """Ambiguity counting must not filesystem-resolve every module's filepath.
+
+    Containment resolution is O(filesystem) and must run only for the handful of rows
+    whose filename/stem actually matches the requested basename, not for every module —
+    otherwise a large architecture makes each lookup many times slower.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    modules = [
+        {"filename": f"m{i}_Python.prompt", "filepath": f"src/m{i}.py"} for i in range(300)
+    ]
+    modules.append({"filename": "foo_Python.prompt", "filepath": "src/foo.py"})
+    (tmp_path / "architecture.json").write_text(json.dumps({"modules": modules}), encoding="utf-8")
+
+    calls = {"n": 0}
+    original = sync_determine_module._contained_architecture_code_path
+
+    def counting(project_root, filepath):
+        calls["n"] += 1
+        return original(project_root, filepath)
+
+    monkeypatch.setattr(sync_determine_module, "_contained_architecture_code_path", counting)
+
+    choices = sync_determine_module._architecture_module_choices(
+        tmp_path / "architecture.json", "foo", "python", modules=modules
+    )
+
+    assert choices == ["src/foo.py"]
+    assert calls["n"] <= 5  # only the matching row(s), not all 301 modules.
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)
