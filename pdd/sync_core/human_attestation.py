@@ -83,6 +83,17 @@ def _required_string(payload: Mapping[str, Any], name: str) -> str:
     return value
 
 
+def _string_array(payload: Mapping[str, Any], name: str) -> frozenset[str]:
+    value = payload.get(name, [])
+    if (
+        not isinstance(value, list)
+        or not all(isinstance(item, str) and item for item in value)
+        or len(value) != len(set(value))
+    ):
+        raise HumanAttestationError("protected human revocation list is invalid")
+    return frozenset(value)
+
+
 def _timestamp(value: object, name: str) -> datetime:
     if not isinstance(value, str):
         raise HumanAttestationError(f"human attestation field {name!r} is invalid")
@@ -171,13 +182,15 @@ def load_human_attestation_policy(
         signers[identity] = signer
         key_ids.add(key_id)
         public_keys.add(public_key)
-    revoked_identities = frozenset(payload.get("revoked_identities", []))
-    revoked_key_ids = frozenset(payload.get("revoked_key_ids", []))
-    if not all(isinstance(value, str) for value in revoked_identities | revoked_key_ids):
-        raise HumanAttestationError("protected human revocation list is invalid")
-    if threshold > len(signers) or not any(
-        required_role in signer.roles for signer in signers.values()
-    ):
+    revoked_identities = _string_array(payload, "revoked_identities")
+    revoked_key_ids = _string_array(payload, "revoked_key_ids")
+    active_signers = [
+        signer for identity, signer in signers.items()
+        if identity not in revoked_identities
+        and signer.key_id not in revoked_key_ids
+        and required_role in signer.roles
+    ]
+    if len(active_signers) < threshold:
         raise HumanAttestationError("protected human attestation policy is unsatisfiable")
     return HumanAttestationPolicy(
         version, hashlib.sha256(raw).hexdigest(), threshold,
@@ -307,12 +320,12 @@ class HumanAttestationVerifier:  # pylint: disable=too-few-public-methods
             for approval in self._load_approvals(self.policy.external_store)
             if _targets_request(approval, request)
         ]
-        try:
-            identities = {
-                self._verify_approval(approval, request, instant) for approval in approvals
-            }
-        except AttestationError as exc:
-            raise HumanAttestationError(str(exc)) from exc
+        identities = set()
+        for approval in approvals:
+            try:
+                identities.add(self._verify_approval(approval, request, instant))
+            except AttestationError:
+                continue
         if len(identities) < self.policy.threshold:
             raise HumanAttestationError("human approval threshold is not met")
         return EvidenceOutcome.PASS
