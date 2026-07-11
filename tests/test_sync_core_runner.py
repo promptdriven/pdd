@@ -229,6 +229,34 @@ def test_external_literal_pytest_plugin_fails_closed(tmp_path) -> None:
     assert "external pytest_plugins" in executions[0].detail
 
 
+def test_nested_external_pytest_plugin_fails_closed(tmp_path) -> None:
+    root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/plugin.py").write_text('pytest_plugins = "pytest_mock"\n')
+    (root / "conftest.py").write_text('pytest_plugins = "tests.plugin"\n')
+    _git(root, "add", "conftest.py", "tests/plugin.py")
+    _git(root, "commit", "-q", "-m", "nested external plugin")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "external pytest_plugins" in executions[0].detail
+
+
+def test_dynamic_repo_local_import_fails_closed(tmp_path) -> None:
+    root, _base = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "tests/test_widget.py").write_text(
+        "import importlib\n"
+        "helper = importlib.import_module('support.helper')\n"
+        "def test_widget(): assert helper.expected() == 1\n"
+    )
+    (root / "support").mkdir()
+    (root / "support/helper.py").write_text("def expected(): return 1\n")
+    _git(root, "add", "tests/test_widget.py", "support/helper.py")
+    _git(root, "commit", "-q", "-m", "dynamic helper")
+    head = _git(root, "rev-parse", "HEAD")
+    _envelope, executions = _run(root, head, head)
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
 def test_string_pytest_plugins_are_bound_as_protected_support(tmp_path) -> None:
     root, _initial = _repository(
         tmp_path,
