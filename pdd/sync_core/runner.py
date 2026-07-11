@@ -2503,11 +2503,10 @@ def run_obligation(
             "dirty checkout cannot receive committed-head evidence: "
             + ", ".join(dirty_all),
         )
-    dirty = (
-        _dirty_jest_support(root)
-        if obligation.validator_id == "jest"
-        else _dirty_pytest_support(root)
-    )
+    dirty = {
+        "jest": _dirty_jest_support,
+        "vitest": _dirty_vitest_support,
+    }.get(obligation.validator_id, _dirty_pytest_support)(root)
     if dirty:
         return RunnerExecution(
             obligation.obligation_id,
@@ -2525,6 +2524,25 @@ def run_obligation(
                 obligation.validator_config_digest,
                 command_error,
             )
+    if obligation.validator_id == "vitest":
+        if config.vitest_command is None and (
+            root / "node_modules" / "vitest" / "vitest.mjs"
+        ).is_file():
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                "candidate node_modules Vitest runner is not trusted",
+            )
+        if config.vitest_command is not None:
+            command_error = _protected_command_error(root, config.vitest_command)
+            if command_error is not None:
+                return RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.ERROR,
+                    obligation.validator_config_digest,
+                    command_error,
+                )
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
