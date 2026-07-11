@@ -543,6 +543,8 @@ def test_canonical_source_edit_matrix_detects_each_channel(
 
 def test_trusted_finalizer_rejects_test_time_artifact_mutation(tmp_path) -> None:
     root, _commit = _repository(tmp_path)
+    source = root / "src/widget.py"
+    original_source = source.read_bytes()
     (root / "tests/test_widget.py").write_text(
         "from pathlib import Path\n"
         "def test_widget():\n"
@@ -561,3 +563,4 @@ def test_trusted_finalizer_rejects_test_time_artifact_mutation(tmp_path) -> None
             replay_ledger_path=tmp_path / "external-trust/mutation.json",
         )
     assert not (root / ".pdd/evidence/v2").exists()
+    assert source.read_bytes() == original_source
