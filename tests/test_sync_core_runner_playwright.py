@@ -50,6 +50,24 @@ def _fake_playwright(tmp_path: Path) -> Path:
     return runner
 
 
+def _fake_node_playwright(tmp_path: Path) -> Path:
+    runner = tmp_path / "fake_node_playwright.js"
+    runner.write_text(
+        "const path = require('path');\n"
+        "try { require.resolve('@playwright/test'); }\n"
+        "catch (error) {\n"
+        "  console.log(JSON.stringify({suites: [], errors: [{message: error.message}]}));\n"
+        "  process.exit(1);\n"
+        "}\n"
+        "const file = path.resolve(process.cwd(), 'tests/widget.spec.ts');\n"
+        "const collection = process.argv.includes('--list');\n"
+        "const result = collection ? [] : [{status: 'passed'}];\n"
+        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
+        encoding="utf-8",
+    )
+    return runner
+
+
 def _repository(
     tmp_path: Path, *, mode: str = "pass", config: str = "export default {};\n"
 ) -> tuple[Path, str]:
@@ -100,6 +118,28 @@ def _run(root: Path, base: str, head: str, fake: Path, timeout: int = 2):
 def test_playwright_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_protected_base_clone_uses_pinned_local_node_modules(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(tmp_path)
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    module = root / "node_modules" / "@playwright" / "test"
+    module.mkdir(parents=True)
+    (module / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-q", "-m", "ignore local node modules")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(
+        root,
+        commit,
+        commit,
+        _fake_node_playwright(tmp_path),
+    )
+
     assert executions[0].outcome is EvidenceOutcome.PASS
 
 
