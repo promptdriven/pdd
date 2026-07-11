@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -119,6 +120,37 @@ def _dependency_environment_digest(candidate_python: Path, isolated: dict[str, s
     if probe.returncode != 0:
         return ""
     return hashlib.sha256(probe.stdout.encode()).hexdigest()
+
+
+def _candidate_interpreter_identity(
+    candidate_python: Path, isolated: dict[str, str]
+) -> dict[str, str] | None:
+    """Measure the interpreter and first compatible wheel tag actually executed."""
+    probe = subprocess.run(
+        [
+            str(candidate_python),
+            "-I",
+            "-c",
+            (
+                "import json, platform; from packaging.tags import sys_tags;"
+                "tag=next(sys_tags()); print(json.dumps({"
+                "'implementation':platform.python_implementation(),"
+                "'version':platform.python_version(),'abi':tag.abi,"
+                "'platform':tag.platform},sort_keys=True))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=isolated,
+    )
+    if probe.returncode != 0:
+        return None
+    try:
+        measured = json.loads(probe.stdout)
+    except json.JSONDecodeError:
+        return None
+    return measured if isinstance(measured, dict) else None
 
 
 def _combined_candidate_lock(temporary: Path, runtime_lock: Path, wheel: Path) -> Path | None:
@@ -237,25 +269,56 @@ def run_lifecycle_matrix(
     ):
         return _failed_result()
     try:
-        candidate_artifact = load_candidate_artifact_provenance(
-            candidate_attestation, Path(candidate_wheel), candidate_artifact_policy
-        )
+        runtime_lock_digest = hashlib.sha256(
+            Path(candidate_runtime_lock).read_bytes()
+        ).hexdigest()
+        if runtime_lock_digest != candidate_artifact_policy.dependency_lock_sha256:
+            return _failed_result()
     except CandidateArtifactProvenanceError:
+        return _failed_result()
+    except OSError:
         return _failed_result()
     with tempfile.TemporaryDirectory(prefix="pdd-released-lifecycle-") as directory:
         temporary = Path(directory)
+        protected = temporary / "protected-inputs"
+        protected.mkdir(mode=0o700)
+        protected_wheel = protected / Path(candidate_wheel).name
+        protected_attestation = protected / "candidate-attestation.json"
+        protected_lock = protected / "candidate-runtime.lock"
+        try:
+            shutil.copy2(candidate_wheel, protected_wheel)
+            shutil.copy2(candidate_attestation, protected_attestation)
+            shutil.copy2(candidate_runtime_lock, protected_lock)
+            for path in (protected_wheel, protected_attestation, protected_lock):
+                path.chmod(0o400)
+            candidate_artifact = load_candidate_artifact_provenance(
+                protected_attestation, protected_wheel, candidate_artifact_policy
+            )
+        except (OSError, CandidateArtifactProvenanceError):
+            return _failed_result()
         output = temporary / "result.json"
         (temporary / "home").mkdir(mode=0o700)
         installed_candidate = _install_candidate_wheel(
             temporary,
             temporary / "home",
-            Path(candidate_wheel),
+            protected_wheel,
             Path(candidate_wheelhouse),
-            Path(candidate_runtime_lock),
+            protected_lock,
         )
         if installed_candidate is None:
             return _failed_result()
         candidate_python, dependency_digest = installed_candidate
+        measured_python = _candidate_interpreter_identity(
+            candidate_python, _isolated_lifecycle_environment(temporary / "home")
+        )
+        expected_python = {
+            "implementation": candidate_artifact_policy.python_implementation,
+            "version": candidate_artifact_policy.python_version,
+            "abi": candidate_artifact_policy.python_abi,
+            "platform": candidate_artifact_policy.python_platform,
+        }
+        if measured_python != expected_python:
+            return _failed_result()
         command = [
             sys.executable,
             "-I",
@@ -311,7 +374,7 @@ def run_lifecycle_matrix(
             ),
             sum(int(row["post_merge_tree_changes"]) for row in results.values()),
             missing,
-            hashlib.sha256(Path(candidate_wheel).read_bytes()).hexdigest(),
+            hashlib.sha256(protected_wheel.read_bytes()).hexdigest(),
             dependency_digest,
             candidate_artifact,
         )
