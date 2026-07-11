@@ -3,6 +3,7 @@
 
 import hashlib
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -37,6 +38,12 @@ def _policy(authority: AttestationSigner) -> CandidateArtifactPolicy:
         TARGET["abi"],
         TARGET["platform"],
     )
+
+
+def _policy_with_replay_ledger(authority: AttestationSigner, replay_ledger) -> CandidateArtifactPolicy:
+    policy = _policy(authority)
+    policy.replay_ledger_path = replay_ledger
+    return policy
 
 
 def _attestation(
@@ -123,6 +130,62 @@ def test_stale_or_replayed_build_attestation_is_rejected(tmp_path) -> None:
     provenance.verify(policy, expected_source_sha=SOURCE_SHA)
     with pytest.raises(CandidateArtifactProvenanceError, match="replayed"):
         provenance.verify(policy, expected_source_sha=SOURCE_SHA)
+
+
+def test_replayed_build_attestation_is_rejected_across_policy_instances(tmp_path) -> None:
+    authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
+    replay_ledger = tmp_path / "external-candidate-replay.json"
+    provenance = _load(tmp_path, wheel, authority)
+    provenance.verify(
+        _policy_with_replay_ledger(authority, replay_ledger),
+        expected_source_sha=SOURCE_SHA,
+    )
+    with pytest.raises(CandidateArtifactProvenanceError, match="replayed"):
+        provenance.verify(
+            _policy_with_replay_ledger(authority, replay_ledger),
+            expected_source_sha=SOURCE_SHA,
+        )
+
+
+def test_concurrent_durable_replay_consumers_are_atomic(tmp_path, monkeypatch) -> None:
+    authority = AttestationSigner("candidate-builder", b"a" * 32)
+    wheel = tmp_path / "candidate.whl"
+    wheel.write_bytes(b"exact wheel")
+    replay_ledger = tmp_path / "external-candidate-replay.json"
+    provenance = _load(tmp_path, wheel, authority)
+    write_barrier = threading.Barrier(2)
+    original_write_text = type(replay_ledger).write_text
+
+    def synchronized_ledger_write(path, *args, **kwargs):
+        if path == replay_ledger:
+            write_barrier.wait(timeout=5)
+        return original_write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(replay_ledger), "write_text", synchronized_ledger_write)
+    results: list[str] = []
+    lock = threading.Lock()
+
+    def consume() -> None:
+        try:
+            provenance.verify(
+                _policy_with_replay_ledger(authority, replay_ledger),
+                expected_source_sha=SOURCE_SHA,
+            )
+            outcome = "accepted"
+        except CandidateArtifactProvenanceError as exc:
+            outcome = str(exc)
+        with lock:
+            results.append(outcome)
+
+    threads = [threading.Thread(target=consume) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(results) == ["accepted", "candidate attestation is replayed"]
 
 
 @pytest.mark.parametrize(
