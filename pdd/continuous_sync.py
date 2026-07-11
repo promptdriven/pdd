@@ -353,12 +353,18 @@ def _configured_prompt_roots(base: Path) -> List[Path]:
     pddrc_path = _find_pddrc_file(base)
     configured: List[Path] = []
     if pddrc_path is not None:
-        try:
-            contexts = _load_pddrc_config(pddrc_path).get("contexts", {})
-        except ValueError:
-            contexts = {}
+        config = _load_pddrc_config(pddrc_path)
+        if not isinstance(config, dict):
+            raise ValueError(".pddrc must contain a mapping")
+        contexts = config.get("contexts", {})
+        if not isinstance(contexts, dict):
+            raise ValueError(".pddrc contexts must contain a mapping")
         for context in contexts.values():
-            defaults = context.get("defaults", {}) if isinstance(context, dict) else {}
+            if not isinstance(context, dict):
+                raise ValueError(".pddrc context must contain a mapping")
+            defaults = context.get("defaults", {})
+            if not isinstance(defaults, dict):
+                raise ValueError(".pddrc defaults must contain a mapping")
             raw_root = defaults.get("prompts_dir")
             if not isinstance(raw_root, str) or not raw_root.strip():
                 continue
@@ -375,7 +381,17 @@ def _configured_prompt_roots(base: Path) -> List[Path]:
 def _validated_prompt_roots(base: Path) -> tuple[List[Path], List[DiscoveryFailure]]:
     roots: List[Path] = []
     failures: List[DiscoveryFailure] = []
-    for prompt_root in _configured_prompt_roots(base):
+    try:
+        configured_roots = _configured_prompt_roots(base)
+    except (OSError, ValueError) as exc:
+        return [], [
+            DiscoveryFailure(
+                prompt_root=base / ".pddrc",
+                reason=f"invalid .pddrc: {exc}",
+                failure="invalid_pddrc",
+            )
+        ]
+    for prompt_root in configured_roots:
         if _is_safe_prompt_root(base, prompt_root):
             roots.append(prompt_root)
             continue
@@ -525,18 +541,61 @@ def _unit_from_metadata_identity(
     )
 
 
-def _metadata_identities(meta_root: Path) -> List[tuple[str, str]]:
+def _path_component_violation(path: Path, root: Path, leaf_directory: bool) -> Optional[str]:
+    # pylint: disable=too-many-return-statements
+    """Return why a project-contained path is unsafe without following symlinks."""
+    root_path = root.resolve()
+    try:
+        parts = path.relative_to(root_path).parts
+    except ValueError:
+        return "outside_project"
+    cursor = root_path
+    for index, part in enumerate(parts):
+        cursor /= part
+        try:
+            mode = cursor.lstat().st_mode
+        except FileNotFoundError:
+            return "missing"
+        except OSError:
+            return "invalid"
+        if stat.S_ISLNK(mode):
+            return "symlink"
+        is_leaf = index == len(parts) - 1
+        if is_leaf:
+            expected = stat.S_ISDIR(mode) if leaf_directory else stat.S_ISREG(mode)
+        else:
+            expected = stat.S_ISDIR(mode)
+        if not expected:
+            return "nonregular"
+    try:
+        path.resolve(strict=True).relative_to(root_path)
+    except (OSError, ValueError):
+        return "outside_project"
+    return None
+
+
+def _metadata_identities(
+    meta_root: Path,
+    base: Path,
+) -> tuple[List[tuple[str, str]], Optional[DiscoveryFailure]]:
     identities: List[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     if not meta_root.exists():
-        return identities
+        return identities, None
+    violation = _path_component_violation(meta_root, base, leaf_directory=True)
+    if violation is not None:
+        return [], DiscoveryFailure(
+            prompt_root=meta_root,
+            reason=f"unsafe metadata directory: {violation}",
+            failure="unsafe_metadata",
+        )
     for path in sorted(meta_root.glob("*_*.json")):
         identity = _metadata_identity(path)
         if identity is None or identity in seen:
             continue
         seen.add(identity)
         identities.append(identity)
-    return identities
+    return identities, None
 
 
 def discover_units(
@@ -589,6 +648,8 @@ def _discover_units_and_failures(
     base = project_root(root)
     wanted = set(modules or [])
     prompt_roots, failures = _validated_prompt_roots(base)
+    if any(failure.failure == "invalid_pddrc" for failure in failures):
+        return [], failures
     prompt_units: List[SyncUnit] = []
     for prompt_root in prompt_roots:
         if not prompt_root.is_dir():
@@ -596,7 +657,12 @@ def _discover_units_and_failures(
         units, unit_failures = _prompt_units(prompt_root)
         prompt_units.extend(units)
         failures.extend(unit_failures)
-    metadata_identities = _metadata_identities(base / ".pdd" / "meta")
+    metadata_identities, metadata_failure = _metadata_identities(
+        base / ".pdd" / "meta", base
+    )
+    if metadata_failure is not None:
+        failures.append(metadata_failure)
+        return [], failures
 
     units = _metadata_units(
         metadata_identities,
@@ -644,7 +710,16 @@ def _discovery_failure_payload(failure: DiscoveryFailure, root: Path) -> Dict[st
     }
 
 
-def _load_fingerprint_json(path: Path) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+def _load_fingerprint_json(
+    path: Path,
+    root: Path,
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    # pylint: disable=too-many-return-statements
+    violation = _path_component_violation(path, root, leaf_directory=False)
+    if violation == "missing":
+        return None, "missing"
+    if violation is not None:
+        return None, "unsafe_metadata"
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
@@ -687,7 +762,7 @@ def _relative_or_raw(path: Path, root: Path) -> str:
 
 def _include_dep_violation(dep_path_value: Any, root: Path) -> Optional[Dict[str, str]]:
     # pylint: disable=too-many-return-statements
-    if not isinstance(dep_path_value, str) or not dep_path_value:
+    if not isinstance(dep_path_value, str) or not dep_path_value.strip():
         return {"path": str(dep_path_value), "reason": "invalid_path"}
 
     raw_path = Path(dep_path_value)
@@ -726,14 +801,22 @@ def _include_dep_violation(dep_path_value: Any, root: Path) -> Optional[Dict[str
 
 
 def _unsafe_include_deps(
-    include_deps: Optional[Dict[str, str]],
+    include_deps: Any,
     root: Path,
 ) -> List[Dict[str, str]]:
-    if not isinstance(include_deps, dict) or not include_deps:
+    if include_deps is None:
+        return []
+    if not isinstance(include_deps, dict):
+        return [{"path": str(include_deps), "reason": "invalid_shape"}]
+    if not include_deps:
         return []
     violations = []
-    for dep_path_value in sorted(include_deps, key=str):
+    for dep_path_value, digest in sorted(
+        include_deps.items(), key=lambda item: str(item[0])
+    ):
         violation = _include_dep_violation(dep_path_value, root)
+        if violation is None and not isinstance(digest, str):
+            violation = {"path": str(dep_path_value), "reason": "invalid_digest"}
         if violation is not None:
             violations.append(violation)
     return violations
@@ -1095,7 +1178,20 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "failure": "path_resolution",
         }
 
-    _raw_fp, raw_error = _load_fingerprint_json(fp_path)
+    _raw_fp, raw_error = _load_fingerprint_json(fp_path, base)
+    if raw_error == "unsafe_metadata":
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": "unsafe fingerprint metadata path",
+            "changed_files": [],
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": _paths_as_json(paths, base),
+            "failure": "unsafe_metadata",
+        }
     fingerprint = (
         None if raw_error is not None else _fingerprint_from_payload(_raw_fp)
     )
@@ -1206,10 +1302,25 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
             "unsafe_include_deps": unsafe_include_deps,
         }
 
-    current_hashes = calculate_current_hashes(
-        paths,
-        stored_include_deps=fingerprint.include_deps,
-    )
+    try:
+        current_hashes = calculate_current_hashes(
+            paths,
+            stored_include_deps=fingerprint.include_deps,
+            dependency_root=base,
+        )
+    except Exception as exc:  # surfaced as a unit-scoped machine-readable failure
+        return {
+            "basename": unit.basename,
+            "language": unit.language,
+            "classification": FAILURE_CLASSIFICATION,
+            "operation": "none",
+            "reason": f"fingerprint hash calculation failed: {exc}",
+            "changed_files": [],
+            "metadata_valid": False,
+            "fingerprint_path": str(fp_path),
+            "paths": _paths_as_json(paths, base),
+            "failure": "hash_calculation",
+        }
     changes = _changed_artifacts(fingerprint, paths, current_hashes)
     classification = _classification_for_changes(changes)
     return {

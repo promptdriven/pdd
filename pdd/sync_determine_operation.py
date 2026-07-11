@@ -1806,6 +1806,7 @@ def _legacy_include_references(content: str) -> list[str]:
 def calculate_prompt_hash(
     prompt_path: Path,
     stored_deps: Optional[Dict[str, str]] = None,
+    dependency_root: Optional[Path] = None,
     *,
     hash_version: int = 1,
 ) -> Optional[str]:
@@ -1819,6 +1820,7 @@ def calculate_prompt_hash(
     Args:
         prompt_path: Path to the prompt file.
         stored_deps: Previously stored dependency paths from fingerprint (issue #522).
+        dependency_root: Explicit base for stored relative dependency paths.
 
     Returns:
         SHA256 hex digest of the prompt + dependency contents, or None.
@@ -1845,14 +1847,11 @@ def calculate_prompt_hash(
         declared_dependencies = sorted(set(item.strip() for item in declared_dependencies))
     resolved_dependencies = []
     for declared in declared_dependencies:
-        if hash_version == 1 and not references:
-            candidate = Path(declared)
-            candidate = candidate if candidate.exists() else None
-        else:
-            candidate = _legacy_dependency_path(prompt_path, declared)
+        candidate = _legacy_dependency_path(
+            ((dependency_root / prompt_path.name) if dependency_root else prompt_path).resolve(),
+            declared,
+        )
         if candidate is None:
-            if hash_version == 1:
-                continue
             return None
         resolved_dependencies.append(candidate.resolve())
 
@@ -1948,13 +1947,18 @@ def read_run_report(
         return None
 
 
-def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def calculate_current_hashes(
+    paths: Dict[str, Any],
+    stored_include_deps: Optional[Dict[str, str]] = None,
+    dependency_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     """Computes the hashes for all current files on disk.
 
     Args:
         paths: Dictionary of PDD file paths.
         stored_include_deps: Previously stored include dependency paths from fingerprint.
             Used when the prompt no longer has <include> tags (issue #522).
+        dependency_root: Explicit base for stored relative dependency paths.
     """
     hashes = {}
     for file_type, file_path in paths.items():
@@ -1967,7 +1971,11 @@ def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optiona
             }
         elif file_type == 'prompt' and isinstance(file_path, Path):
             # Issue #522: Hash prompt with <include> dependencies
-            hashes['prompt_hash'] = calculate_prompt_hash(file_path, stored_deps=stored_include_deps)
+            hashes['prompt_hash'] = calculate_prompt_hash(
+                file_path,
+                stored_deps=stored_include_deps,
+                dependency_root=dependency_root,
+            )
             # Also extract current include deps for persistence
             hashes['include_deps'] = extract_include_deps(file_path, version=1)
             # If no deps found in prompt but we have stored deps, preserve them
@@ -1976,6 +1984,8 @@ def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optiona
                 updated_deps = {}
                 for dep_path_str, old_hash in stored_include_deps.items():
                     dep_path = Path(dep_path_str)
+                    if not dep_path.is_absolute():
+                        dep_path = (dependency_root or Path.cwd()) / dep_path
                     if dep_path.exists():
                         new_hash = calculate_sha256(dep_path)
                         if new_hash:
