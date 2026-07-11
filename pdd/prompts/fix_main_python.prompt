@@ -17,6 +17,7 @@
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>mock_contract_validation_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
 
@@ -42,6 +43,9 @@
 <pdd.cli>
     <include select="def:get_paths_for_shell,class:cli,def:log_cost">context/change/15/initial_cli.py</include>
 </pdd.cli>
+<pdd.mock_contract_validation>
+    <include optional mode="interface">pdd/mock_contract_validation.py</include>
+</pdd.mock_contract_validation>
 
 % Inputs
 - `ctx` (`click.Context`)
@@ -114,7 +118,13 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Do not trust `updateUnitTest` / `updateCode` alone; if either file changed, validate with `run_pytest_on_file` using temp files. If nothing changed, `success=False`.
    - Focused-repair path (large dev units): if `is_large(code_content, unit_test_content)`, call `prepare_focused_inputs` to obtain sliced failing-test and code subsets. Pass the slices as `unit_test` / `code` to the LLM call. After the call, reconstruct the full code with `reconstruct_code(code_content, fixed_code, focused_inputs.slices)`. Never use the returned sliced test content as the final test file; validate the fixed code against the full original test file with `run_pytest_on_file`. Always pass `protect_tests=True` (or equivalent `effective_protect_tests = protect_tests or bool(focused_inputs)`) to the LLM when focused slices are in use, so the model cannot return a test-only fix that would be silently discarded.
 
-7. Saving and reporting:
+7. Mock-contract success gate (Issue #1939):
+   - After candidate tests pass but before writing either output, call `validate_mock_contracts` with the prospective fixed code/test and the original code/test as baselines.
+   - The comparison MUST use repository schema/sibling evidence; never reject a field from its spelling alone.
+   - Call `enforce_mock_contracts`. A divergence raises `MockContractDivergenceError`, is re-raised unchanged by `fix_main`, prevents output persistence, and makes the Click command exit non-zero. Because `fix_error_loop` tests candidates in place, loop mode MUST restore the exact original code and test contents before re-raising a divergence.
+   - Surface an `inconclusive` report as a visible yellow warning without converting absent evidence into a false positive.
+
+8. Saving and reporting:
    - Write only non-empty outputs.
    - Never write the fixed test file when `protect_tests=True`; optionally log that skip in verbose mode.
    - In focused-repair mode, the LLM only sees a test slice, so the returned test content is always a partial subset; never write it back as the final test file — always use the original full test content for the saved test output.
@@ -123,7 +133,7 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Only print the test/code output path when that file was actually produced.
    - In verbose mode, print only a short analysis preview and escape Rich markup safely when preview text is invalid.
 
-8. Auto-submit:
+9. Auto-submit:
    - Run only when `success` is true, `auto_submit` is true, `PDD_FORCE_LOCAL` is not enabled, and `CloudConfig.is_running_in_cloud()` is False. When skipped for the cloud reason, emit a yellow `Skipping example submission: cloud executor has no interactive auth path.` (subject to `quiet`).
    - Before calling the lower-level async `get_jwt_token(...)`, call `CloudConfig.ensure_default_env()` so `PDD_CLOUD_URL` infers staging/prod/local before cached JWT audience validation. This prevents a prod cached JWT from being reused against a staging `submitExample` URL (#859 follow-up).
    - Get a JWT with `asyncio.run(asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s))` where `auth_timeout_s` is `float(os.environ.get('PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S', '300'))` parsed defensively (`try/except (TypeError, ValueError)` falls back to `300.0`). On `asyncio.TimeoutError` / `TimeoutError`, emit a yellow warning (subject to `quiet`) and skip submission; do not propagate as a fix failure.
@@ -133,11 +143,11 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Metadata should include a title/description, language from `get_language(os.path.splitext(code_file)[1])`, empty framework, tags `["auto-fix", "example"]`, `isPublic=True`, and `price=0.0`.
    - Submission failures should be reported but must not change the main fix result.
 
-8a. Compression and fallback metadata:
+9a. Compression and fallback metadata:
    - Expose whether agentic fallback was invoked or used so sync/evidence can record it.
    - Preserve `protect_tests`, focused repair, cloud-only fallback, and direct CLI behavior when no compressed context is supplied.
 
-9. Error handling:
-   - Re-raise `click.Abort` and `click.UsageError`.
+10. Error handling:
+   - Re-raise `click.Abort`, `click.UsageError`, and `MockContractDivergenceError`.
    - For all other exceptions, print Rich-safe error messages; handle `MarkupError` explicitly by escaping its message.
    - Return `(False, "", "", 0, 0.0, f"Error: {e}")` instead of exiting the process.
