@@ -3513,7 +3513,7 @@ def test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging(
     [
         "foo:bar", "foo?bar", "foo*bar", "foo|bar", 'foo"bar',
         "foo<bar", "foo>bar", "CON", "NUL", "COM1", "LPT9.txt",
-        "dir/PRN.py", "AUX",
+        "COM¹", "COM².txt", "LPT³", "dir/PRN.py", "AUX",
     ],
 )
 def test_get_pdd_file_paths_rejects_windows_device_or_ads_basename(
@@ -3560,6 +3560,8 @@ def test_directory_index_case_collision_fallback_is_deterministic(tmp_path):
         "src/foo|bar.py",
         "src/foo\u202ebar.py",
         "src/foo\u2028bar.py",
+        "src/COM¹.py",
+        "LPT³.txt",
     ],
 )
 def test_contained_architecture_code_path_rejects_nonportable_components(
@@ -3568,6 +3570,75 @@ def test_contained_architecture_code_path_rejects_nonportable_components(
 ):
     """Architecture outputs obey the same portable component rules as prompts."""
     assert _contained_architecture_code_path(tmp_path, architecture_filepath) is None
+
+
+def test_get_pdd_file_paths_unsafe_duplicate_does_not_shadow_valid_arch_row(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe first duplicate is skipped so a later valid mapping remains authoritative."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% foo\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"fallback/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "foo_Python.prompt", "filepath": "CON.py"},
+            {"filename": "foo_Python.prompt", "filepath": "src/foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "src" / "foo.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_does_not_info_log_raw_unsafe_arch_filepath(
+    tmp_path,
+    monkeypatch,
+    caplog,
+):
+    """Raw invalid architecture output is never emitted through the INFO path log."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text(
+        "% foo\n", encoding="utf-8"
+    )
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n"
+        "      generate_output_path: \"fallback/\"\n",
+        encoding="utf-8",
+    )
+    unsafe = "src/foo\u2028FORGED.py"
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo_Python.prompt", "filepath": unsafe,
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "foo\u2028FORGED.py"
+    )
+    assert all(unsafe not in record.getMessage() for record in caplog.records)
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):

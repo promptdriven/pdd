@@ -447,7 +447,7 @@ def _unsafe_portable_path_component(part: str) -> bool:
         or (
             len(windows_identity) == 4
             and windows_identity[:3] in {"COM", "LPT"}
-            and windows_identity[3] in "123456789"
+            and windows_identity[3] in "123456789¹²³"
         )
     )
 
@@ -1583,6 +1583,15 @@ def _get_filepath_from_architecture(
             if cached is not None:
                 return cached
 
+            if (
+                not isinstance(filepath, str)
+                or _contained_architecture_code_path(
+                    architecture_path.parent.resolve(strict=False), filepath
+                ) is None
+            ):
+                borrow_ownership_cache[cache_key] = False
+                return False
+
             if _filepath_owned_by_other_context(
                 filepath,
                 resolved_context_name,
@@ -2424,7 +2433,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 modules=arch_modules,
             )
             if arch_filepath:
-                logger.info(f"Found filepath in architecture.json: {arch_filepath}")
                 extension = get_extension(language)
 
                 # Resolve filepath relative to architecture.json's directory (project root)
@@ -2441,6 +2449,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     # From this point forward, use only the validated path rebuilt
                     # from the contained resolved target, never the raw metadata.
                     arch_filepath = code_path.relative_to(project_root).as_posix()
+                    logger.info(
+                        "Found filepath in architecture.json: %r", arch_filepath
+                    )
 
             if arch_filepath:
                 code_stem = code_path.stem
