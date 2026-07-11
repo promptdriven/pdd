@@ -62,6 +62,7 @@ JEST_LOCAL_SCALAR_CONFIG_KEYS = (
     "resolver",
     "runner",
     "snapshotResolver",
+    "testSequencer",
     "testEnvironment",
     "testResultsProcessor",
     "testRunner",
@@ -70,6 +71,7 @@ JEST_LOCAL_ARRAY_CONFIG_KEYS = (
     "reporters",
     "setupFiles",
     "setupFilesAfterEnv",
+    "snapshotSerializers",
     "watchPlugins",
 )
 
@@ -488,6 +490,20 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
             references.add(path)
         else:
             raise ValueError("Jest project must be a static local config")
+    module_name_mapper = config.get("moduleNameMapper", {})
+    if not isinstance(module_name_mapper, dict):
+        raise ValueError("Jest moduleNameMapper must be an object")
+    for value in module_name_mapper.values():
+        targets = value if isinstance(value, list) else [value]
+        for target in targets:
+            if not isinstance(target, str):
+                raise ValueError("Jest moduleNameMapper entry must be a static path")
+            path = _jest_local_path(target)
+            if path is None:
+                raise ValueError("Jest moduleNameMapper target is not bound by this adapter")
+            parts = tuple(part for part in path.parts if not re.search(r"\$[0-9&]", part))
+            if parts:
+                references.add(PurePosixPath(*parts))
     return references
 
 
@@ -500,7 +516,7 @@ def _local_javascript_imports(
     except UnicodeDecodeError:
         return set()
     imports = re.findall(
-        r"(?:from\s+|import\s*\(|require\s*\()['\"](\.{1,2}/[^'\"]+)['\"]",
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"](\.{1,2}/[^'\"]+)['\"]",
         text,
     )
     resolved: set[PurePosixPath] = set()
@@ -625,7 +641,8 @@ def _managed_subprocess(
 
 
 def runner_identity_digest(
-    profile: VerificationProfile, *, root: Path | None = None, ref: str = "HEAD"
+    profile: VerificationProfile, *, root: Path | None = None, ref: str = "HEAD",
+    config: RunnerConfig = RunnerConfig(),
 ) -> str:
     """Bind evidence to protected adapters, configs, and exact artifact scopes."""
     payload = {
@@ -667,6 +684,43 @@ def runner_identity_digest(
         payload["support_closure_digest"] = hashlib.sha256(
             (_support_digest(root, ref, profile)[0] + _jest_support_digest(root, ref, profile)[0]).encode()
         ).hexdigest()
+        payload["validator_command_digest"] = _validator_command_identity_digest(
+            root, config
+        )
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    """Return whether path is inside parent across supported Python versions."""
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _file_identity(path: Path) -> str:
+    """Return a stable identity digest for an executable validator file."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        data = b"<unreadable>"
+    return hashlib.sha256(str(path).encode() + b"\0" + data).hexdigest()
+
+
+def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
+    """Bind explicitly supplied validator commands to signed runner evidence."""
+    payload: dict[str, object] = {}
+    if config.jest_command is not None:
+        payload["jest"] = [
+            _file_identity(Path(part).resolve())
+            if (Path(part).is_absolute() or "/" in part)
+            and Path(part).expanduser().exists()
+            else part
+            for part in config.jest_command
+        ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -843,6 +897,19 @@ def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     return None
 
 
+def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bool:
+    """Return true when any explicit command path is inside the candidate repo."""
+    candidate_root = root.resolve()
+    for part in command:
+        path = Path(part).expanduser()
+        if not path.is_absolute() and "/" not in part:
+            continue
+        resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+        if _path_is_relative_to(resolved, candidate_root):
+            return True
+    return False
+
+
 _JEST_REPORTER = """class PddTrustedReporter {
   constructor() { this.tests = []; }
   onTestResult(test, result) {
@@ -900,6 +967,8 @@ def _run_jest(
         if (root / "node_modules" / "jest" / "bin" / "jest.js").is_file():
             return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "candidate node_modules Jest runner is not trusted"), ()
         return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-unavailable", "no local Jest binary is available"), ()
+    if _command_uses_candidate_checkout(root, command_prefix):
+        return RunnerExecution("jest", EvidenceOutcome.ERROR, "jest-untrusted", "explicit Jest command inside the candidate checkout is not trusted"), ()
     try:
         config_path, _config_data = _jest_config(root, "HEAD")
     except ValueError as exc:
@@ -1488,7 +1557,7 @@ def run_profile(
         )
         for obligation in profile.obligations
     )
-    runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha)
+    runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
     binding = AttestationBinding(
         profile.unit_id,
         binding.snapshot_digest,
