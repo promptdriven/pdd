@@ -27,6 +27,7 @@ from .construct_paths import _find_pddrc_file, _load_pddrc_config
 
 MAX_PROMPT_DISCOVERY_FILES = 10000
 MAX_PROMPT_DISCOVERY_ENTRIES = 50000
+MAX_REPAIR_DISCOVERY_ENTRIES = 50000
 SKIPPED_DISCOVERY_DIRS = {
     ".git",
     ".hg",
@@ -818,16 +819,48 @@ def _find_matching_artifact(
     root: Path,
     filename: str,
     expected_hash: str,
-) -> Optional[Path]:
+) -> tuple[Optional[Path], Optional[DiscoveryFailure]]:
     matches: List[Path] = []
-    for candidate in root.rglob(filename):
-        if any(part in {".git", ".pdd", "__pycache__"} for part in candidate.parts):
-            continue
-        if candidate.is_file() and calculate_sha256(candidate) == expected_hash:
-            matches.append(candidate)
+    visited_entries = 0
+    walk_failure: DiscoveryFailure | None = None
+
+    def on_walk_error(error: OSError) -> None:
+        nonlocal walk_failure
+        walk_failure = DiscoveryFailure(
+            prompt_root=root,
+            reason=f"repair search traversal failed: {error}",
+            failure="repair_traversal_error",
+        )
+
+    for current_root, dirnames, filenames in os.walk(root, onerror=on_walk_error):
+        if walk_failure is not None:
+            return None, walk_failure
+        current = Path(current_root)
+        dirnames[:] = [
+            dirname
+            for dirname in sorted(dirnames)
+            if not _is_hidden_or_system_dir(current / dirname)
+        ]
+        filenames = sorted(filenames)
+        visited_entries += 1 + len(dirnames) + len(filenames)
+        if visited_entries > MAX_REPAIR_DISCOVERY_ENTRIES:
+            return None, DiscoveryFailure(
+                prompt_root=root,
+                reason=(
+                    "repair search exceeded traversal budget "
+                    f"of {MAX_REPAIR_DISCOVERY_ENTRIES} directory entries"
+                ),
+                failure="repair_traversal_budget",
+            )
+        for candidate_name in filenames:
+            if candidate_name != filename:
+                continue
+            candidate = current / candidate_name
+            if candidate.is_file() and calculate_sha256(candidate) == expected_hash:
+                matches.append(candidate)
     if len(matches) == 1:
-        return matches[0]
-    return None
+        return matches[0], None
+    return None, None
 
 
 def _repair_missing_fingerprinted_paths(
@@ -835,7 +868,7 @@ def _repair_missing_fingerprinted_paths(
     fingerprint: Fingerprint,
     basename: str,
     root: Path,
-) -> Dict[str, Path]:
+) -> tuple[Dict[str, Path], Optional[DiscoveryFailure]]:
     repaired = dict(paths)
     field_by_artifact = {
         "code": "code_hash",
@@ -850,13 +883,15 @@ def _repair_missing_fingerprinted_paths(
         filename = _artifact_search_name(artifact, basename, path)
         if not filename:
             continue
-        match = _find_matching_artifact(root, filename, expected_hash)
+        match, failure = _find_matching_artifact(root, filename, expected_hash)
+        if failure is not None:
+            return repaired, failure
         if match is None:
             continue
         repaired[artifact] = match
         if artifact == "test":
             repaired["test_files"] = [match]
-    return repaired
+    return repaired, None
 
 
 def _missing_required_hashes(fingerprint: Fingerprint, paths: Dict[str, Path]) -> List[str]:
@@ -944,27 +979,20 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
         }
 
     _raw_fp, raw_error = _load_fingerprint_json(fp_path)
-    if raw_error is not None:
+    fingerprint = (
+        None if raw_error is not None else _fingerprint_from_payload(_raw_fp)
+    )
+    if raw_error is not None or fingerprint is None:
         return {
             "basename": unit.basename,
             "language": unit.language,
             "classification": UNBASELINED_CLASSIFICATION,
             "operation": "none",
-            "reason": f"fingerprint {raw_error}",
-            "changed_files": [],
-            "metadata_valid": False,
-            "fingerprint_path": str(fp_path),
-            "paths": _paths_as_json(paths, base),
-        }
-
-    fingerprint = _fingerprint_from_payload(_raw_fp)
-    if fingerprint is None:
-        return {
-            "basename": unit.basename,
-            "language": unit.language,
-            "classification": UNBASELINED_CLASSIFICATION,
-            "operation": "none",
-            "reason": "fingerprint invalid",
+            "reason": (
+                f"fingerprint {raw_error}"
+                if raw_error is not None
+                else "fingerprint invalid"
+            ),
             "changed_files": [],
             "metadata_valid": False,
             "fingerprint_path": str(fp_path),
@@ -972,12 +1000,25 @@ def classify_unit(unit: SyncUnit, root: Optional[Path] = None) -> Dict[str, Any]
         }
 
     if not unit.prompt_path.exists():
-        paths = _repair_missing_fingerprinted_paths(
+        paths, repair_failure = _repair_missing_fingerprinted_paths(
             paths,
             fingerprint,
             unit.basename,
             base,
         )
+        if repair_failure is not None:
+            return {
+                "basename": unit.basename,
+                "language": unit.language,
+                "classification": FAILURE_CLASSIFICATION,
+                "operation": "none",
+                "reason": repair_failure.reason,
+                "changed_files": [],
+                "metadata_valid": False,
+                "fingerprint_path": str(fp_path),
+                "paths": _paths_as_json(paths, base),
+                "failure": repair_failure.failure,
+            }
 
     missing_hashes = _missing_required_hashes(fingerprint, paths)
     if missing_hashes:
