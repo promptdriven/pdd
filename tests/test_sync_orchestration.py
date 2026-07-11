@@ -3098,6 +3098,27 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
 
 # --- Coverage Target Selection Regression Tests ---
 
+
+def test_protected_canonical_mode_blocks_legacy_generator_before_write(
+    orchestration_fixture,
+):
+    """Protected repositories must not run generators against production paths."""
+    orchestration_fixture["sync_determine_operation"].side_effect = [
+        SyncDecision(operation="generate", reason="prompt changed")
+    ]
+    with patch("pdd.continuous_sync.canonical_sync_enabled", return_value=True):
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            quiet=True,
+            budget=1.0,
+        )
+
+    assert result["success"] is False
+    assert "blocks legacy production mutation" in " ".join(result["errors"])
+    orchestration_fixture["code_generator_main"].assert_not_called()
+
+
 class TestCoverageTargetSelection:
     """Regression tests for selecting the correct `--cov` target."""
 

@@ -363,6 +363,44 @@ def _concurrent_sync_race(writes: tuple[PlannedWrite, ...]) -> None:
             raise AssertionError(f"concurrent sync was not serialized: {outcomes}")
 
 
+def _descriptor_swap_race(writes: tuple[PlannedWrite, ...]) -> None:
+    # pylint: disable=protected-access
+    with tempfile.TemporaryDirectory(prefix="pdd-checker-descriptor-") as directory:
+        root = Path(directory)
+        source = root / "src"
+        outside = root / "outside"
+        source.mkdir()
+        outside.mkdir()
+        (source / "widget.py").write_text("old\n")
+        outside_target = outside / "widget.py"
+        outside_target.write_text("outside\n")
+        manager = TransactionManager(root)
+        manager.prepare("descriptor-race", writes)
+        canonical_relpath = manager._canonical_relpath
+        armed = True
+
+        def swap_after_resolution(relpath: PurePosixPath) -> PurePosixPath:
+            nonlocal armed
+            canonical = canonical_relpath(relpath)
+            if armed and relpath == PurePosixPath("src/widget.py"):
+                armed = False
+                source.rename(root / "src-before-swap")
+                source.symlink_to(outside, target_is_directory=True)
+            return canonical
+
+        manager._canonical_relpath = (  # type: ignore[method-assign]
+            swap_after_resolution
+        )
+        try:
+            manager.commit("descriptor-race")
+        except TransactionConflict:
+            pass
+        else:
+            raise AssertionError("descriptor-time parent swap was not rejected")
+        if outside_target.read_text() != "outside\n":
+            raise AssertionError("descriptor-time parent swap redirected a write")
+
+
 def _transaction_crash_race(_arguments: argparse.Namespace) -> ScenarioResult:
     writes = (
         PlannedWrite(PurePosixPath("src/widget.py"), b"new\n", "100644"),
@@ -372,6 +410,7 @@ def _transaction_crash_race(_arguments: argparse.Namespace) -> ScenarioResult:
     _recover_after_crashes(writes)
     _external_write_race(writes)
     _concurrent_sync_race(writes)
+    _descriptor_swap_race(writes)
     return ScenarioResult("transaction-crash-race-recovery", "PASS")
 
 

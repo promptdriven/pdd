@@ -2673,24 +2673,15 @@ def sync_orchestration(
                     test_output_excerpt: Optional[str] = None
                     operation_rollback = None
 
-                    from .continuous_sync import canonical_sync_enabled, project_root
+                    from .continuous_sync import canonical_sync_enabled
 
-                    operation_root = project_root(pdd_files.get("prompt") or Path.cwd())
-                    if canonical_sync_enabled(operation_root):
-                        rollback_paths = []
-                        for value in pdd_files.values():
-                            if isinstance(value, Path):
-                                rollback_paths.append(value)
-                            elif isinstance(value, list):
-                                rollback_paths.extend(
-                                    item for item in value if isinstance(item, Path)
-                                )
-                        for shared in (
-                            operation_root / "architecture.json",
-                            operation_root / "project_dependencies.csv",
-                        ):
-                            rollback_paths.append(shared)
-                        operation_rollback = OperationFileRollback(rollback_paths)
+                    operation_start = pdd_files.get("prompt") or Path.cwd()
+                    if canonical_sync_enabled(Path(operation_start)):
+                        raise RuntimeError(
+                            "protected canonical sync blocks legacy production mutation; "
+                            "use read-only reporting or trusted finalization until the "
+                            "staged repair executor is enabled"
+                        )
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
