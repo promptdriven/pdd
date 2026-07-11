@@ -43,7 +43,7 @@
       {"name": "load_policy", "signature": "(path: Optional[Path]) -> RoutingPolicy", "returns": "RoutingPolicy"},
       {"name": "select_config", "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
       {"name": "escalate", "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
-      {"name": "resolve_model_for_tier", "signature": "(tier: int) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "resolve_model_for_tier", "signature": "(tier: int, provider: Optional[str] = None) -> Optional[str]", "returns": "Optional[str]"},
       {"name": "emit_routing_record", "signature": "(record: RoutingRecord, log_dir: Path) -> None", "returns": "None"}
     ]
   }
@@ -132,12 +132,18 @@ that argument are unaffected.
    current `RoutingConfig`, increment `escalation_step` in the returned record,
    and set `verifier_result` on the record.
 
-7. **`resolve_model_for_tier(tier: int) -> Optional[str]`** — load
+7. **`resolve_model_for_tier(tier: int, provider: Optional[str] = None) -> Optional[str]`** —
+   resolve a DeepSWE rank tier to a model name, keeping the Codex platform
+   default provider-scoped. For rank-1 requests scoped to Codex (`provider` is
+   `None` or one of `openai`/`codex`, case-insensitive), return the shared Codex
+   default `CODEX_MODEL_DEFAULT` (imported from `pdd.model_defaults`); every
+   other tier and provider defers to the private helper
+   `_resolve_manifest_model_for_tier(tier)`. That helper loads
    `data/deepswe_manifest.json` (relative to the package root, module-level
-   cached after first load). Return the `model` field of the entry with the
-   highest `model_rank_score` whose `model_rank_score` places it at the
-   requested DeepSWE rank (rank 1 = highest score). Return `None` when the
-   manifest is missing, malformed, or no entry matches the tier. Never raises.
+   cached after first load) and returns the `model` field of the entry with the
+   highest `model_rank_score` at the requested DeepSWE rank (rank 1 = highest
+   score). Return `None` when the tier is non-integer, or the manifest is
+   missing, malformed, or matches no entry. Never raises.
 
 8. **`emit_routing_record(record: RoutingRecord, log_dir: Path) -> None`** —
    ensure `log_dir` exists, write one JSON line to

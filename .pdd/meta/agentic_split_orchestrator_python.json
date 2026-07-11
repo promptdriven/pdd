@@ -1,16 +1,22 @@
 {
-  "pdd_version": "0.0.234",
-  "timestamp": "2026-05-12T02:53:56.081699+00:00",
-  "command": "fix",
-  "prompt_hash": "a9590c82b2b9cbbc9c39e64580662b9e1d1b779225cdbb0e798fd81d92257b6d",
-  "code_hash": "daaa0487f9e9538f2536f8e3ed061efb0068b83cda8bcae9aa993a0d1955baf4",
+  "pdd_version": "0.0.278.dev0",
+  "timestamp": "2026-07-11T06:38:15.187180+00:00",
+  "command": "test",
+  "prompt_hash": "9441108280912ad97d3845535b99c92c7ff72fcc2a30522ae9990e57f5a2949f",
+  "code_hash": "6e36d867ae932aa29f1aff078182179b6b0d3ddb86a99ddc5e3e23deaa110549",
   "example_hash": "3f521ffaf006c3ab7fad663edc7d4bcc89f4bafe81ba43e760e9fe99ef7ea46c",
   "test_hash": "be3d9b082577fc7fac8bae292c109ab2d9df7b376f775825168c69941c10bbb7",
   "test_files": {
     "test_agentic_split_orchestrator.py": "be3d9b082577fc7fac8bae292c109ab2d9df7b376f775825168c69941c10bbb7"
   },
   "include_deps": {
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/agentic_common.py": "f1520037d25fc9baa441319c31327e16d02ca6f663c733e93594ee2e5b029a30",
+    "pdd/agentic_common_worktree.py": "9d54b21c1801d1f708340917eeb265435d968698392e501c2d8d214da6f4ee3f",
+    "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
+    "pdd/split_validation.py": "e51a9512fc4cedbe362f25da3c97c23a89057901bff10c6b04eeefe77b79dafe"
   }
 }

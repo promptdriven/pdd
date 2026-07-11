@@ -1,21 +1,22 @@
 {
-  "pdd_version": "0.0.233",
-  "timestamp": "2026-05-26T00:00:00.000000+00:00",
-  "command": "fix",
-  "prompt_hash": "147aebab37557437b25ade6f4a78b72c77350aed19d5f1d6d900feeaf4eadca4",
-  "code_hash": "19d8f4174475e05699edd0de801f238b3df6edc799b1ee44c5367cbad978adce",
+  "pdd_version": "0.0.278.dev0",
+  "timestamp": "2026-07-11T06:38:15.063391+00:00",
+  "command": "test",
+  "prompt_hash": "6a706133b95576e0ee96177e3aff053b7d68372e07346761886735e51422ac64",
+  "code_hash": "0eb021e1a02844b18205300373b4f45033faffa90c2eb681754403d26b864ad0",
   "example_hash": "fceaa9e9326bc78d10c74e519d756a09235b9606aba7b6e513fd3e2ebc56b4a2",
-  "test_hash": "10833f31e7de88490aa42d807f609f8481bb567c55aea5172b91429e398a91c4",
+  "test_hash": "2143164ebab405ee47b64dc45ce6c52eb025a54340233bb749b7333aa40cfbdd",
   "test_files": {
-    "test_agentic_change_orchestrator.py": "10833f31e7de88490aa42d807f609f8481bb567c55aea5172b91429e398a91c4"
+    "test_agentic_change_orchestrator.py": "2143164ebab405ee47b64dc45ce6c52eb025a54340233bb749b7333aa40cfbdd"
   },
   "include_deps": {
-    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
     "context/get_extension_example.py": "def9c34c1416259a0a031a996b96aeff5e73a7012adff6af1cc557e74ba97cc8",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "pdd/agentic_common.py": "82e30c361de4d7b9a62928fe21d8f55df96691c461c73750b30595e3a04446f2",
-    "pdd/architecture_sync.py": "fb55dc87aed5eca7eb62918291a247f4f3cc6b67555cdc8c02e22ce90a980d70",
-    "pdd/preprocess.py": "f95eedec5bcb4ca505d8682d4a38ea5d4b3eb07ac1d52a38ebffa9f89941a92e",
-    "pdd/sync_order.py": "118e49a22b0be2ae3017fdfeb1e05715a878efb89fab7750868be2388f2eaad9"
+    "pdd/agentic_common.py": "f1520037d25fc9baa441319c31327e16d02ca6f663c733e93594ee2e5b029a30",
+    "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
+    "pdd/pre_checkup_gate.py": "9ff0bbaa18c82cf4da836126861c40936a4555b8ff972f4bceee370492f37ace",
+    "pdd/preprocess.py": "d04a6cfc261c1e88076398a34d0bf96c4285061668866c5ad305e4b605ffdf56",
+    "pdd/sync_order.py": "6cdaed3b56d9cc12f38ee5ac93b8623899372ea2d177c4f131ec258edb94d0dd"
   }
 }

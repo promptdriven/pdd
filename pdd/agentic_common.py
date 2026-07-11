@@ -2874,12 +2874,7 @@ def _apply_routing_model_env(
         return
     if env_var not in originals:
         originals[env_var] = os.environ.get(env_var)
-    try:
-        model = resolve_model_for_tier(config.model_tier, provider=provider)
-    except TypeError:
-        # Preserve compatibility with injected/test resolvers that implement
-        # the original one-argument callable contract.
-        model = resolve_model_for_tier(config.model_tier)
+    model = resolve_model_for_tier(config.model_tier, provider=provider)
     if model:
         os.environ[env_var] = model
 

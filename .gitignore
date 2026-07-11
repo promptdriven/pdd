@@ -271,6 +271,12 @@ yarn.lock
 # drift detector sees committed metadata for the modules this PR changed.
 !.pdd/meta/cli_theme_python.json
 !.pdd/meta/sync_animation_python.json
+# GPT-5.6 Codex default (#1986 / PR #1989): pin fingerprints for the modules this
+# PR touches so the auto-heal drift detector sees committed metadata and does not
+# fall into conflict / fail_and_request_manual_merge on hand-written changes.
+!.pdd/meta/agentic_common_python.json
+!.pdd/meta/routing_policy_python.json
+!.pdd/meta/setup_tool_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
@@ -289,6 +295,12 @@ yarn.lock
 !.pdd/meta/construct_paths_python_run.json
 !.pdd/meta/sync_animation_python_run.json
 !.pdd/meta/update_main_python_run.json
+# GPT-5.6 Codex default (#1986 / PR #1989): commit run-reports for the same
+# modules so the drift detector's workflow-complete gate is satisfied without a
+# paid cloud sync to regenerate them.
+!.pdd/meta/agentic_common_python_run.json
+!.pdd/meta/routing_policy_python_run.json
+!.pdd/meta/setup_tool_python_run.json
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)

@@ -2988,7 +2988,7 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
     monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     calls = []
 
@@ -3017,6 +3017,44 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     assert payload["verifier_result"] == "pass"
 
 
+def test_apply_routing_model_env_scopes_codex_default_to_openai(monkeypatch):
+    """Real (non-mocked) resolver: tier-1 gives Codex the gpt-5.6 platform
+    default via CODEX_MODEL, while a non-Codex harness keeps the manifest
+    tier-1 model (gpt-5.5) unchanged from main.
+
+    The other routing tests inject a one-arg ``resolve_model_for_tier`` stub, so
+    this is the only coverage of the production two-arg
+    ``resolve_model_for_tier(tier, provider=provider)`` call inside
+    ``_apply_routing_model_env`` and the provider-scoping invariant it enforces.
+    """
+    from pdd.agentic_common import (
+        _apply_routing_model_env,
+        _restore_routing_model_env,
+    )
+    from pdd.routing_policy import RoutingConfig
+    from pdd.model_defaults import CODEX_MODEL_DEFAULT
+
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+
+    # openai harness at tier 1 -> Codex platform default (gpt-5.6) in CODEX_MODEL.
+    originals_openai: dict = {}
+    _apply_routing_model_env(
+        "openai", RoutingConfig(harness="openai", model_tier=1), originals_openai
+    )
+    assert os.environ.get("CODEX_MODEL") == CODEX_MODEL_DEFAULT == "gpt-5.6"
+    _restore_routing_model_env(originals_openai)
+
+    # anthropic harness at tier 1 -> manifest tier-1 model, NOT the Codex default.
+    originals_anthropic: dict = {}
+    _apply_routing_model_env(
+        "anthropic", RoutingConfig(harness="anthropic", model_tier=1), originals_anthropic
+    )
+    assert os.environ.get("CLAUDE_MODEL") == "gpt-5.5"
+    assert os.environ.get("CLAUDE_MODEL") != CODEX_MODEL_DEFAULT
+    _restore_routing_model_env(originals_anthropic)
+
+
 def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
     mock_cwd,
     monkeypatch,
@@ -3028,7 +3066,7 @@ def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasi
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["google"])
     monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     calls = []
 
@@ -3109,7 +3147,7 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     providers = []
 
@@ -3149,7 +3187,7 @@ def test_run_agentic_task_routing_escalation_preserves_before_attempt(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("GEMINI_API_KEY", "key")
     monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
-    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model")
 
     before_attempts = []
 
@@ -3230,7 +3268,7 @@ def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_
         "pdd.agentic_common.get_available_agents", lambda: ["anthropic", "openai"]
     )
     monkeypatch.setattr(
-        "pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model"
+        "pdd.agentic_common.resolve_model_for_tier", lambda tier, provider=None: f"tier-{tier}-model"
     )
 
     providers = []
