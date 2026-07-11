@@ -26,8 +26,8 @@ from .runner import (
     AttestationIssue,
     RunBinding,
     RunnerConfig,
+    attested_runner_identity_error,
     run_profile,
-    runner_identity_digest,
 )
 from .snapshot import build_unit_snapshot
 from .transaction import (
@@ -213,18 +213,8 @@ def _reusable_result(
         snapshot.unit_id,
         snapshot.digest(),
         profile.profile_digest,
-        runner_identity_digest(
-            profile,
-            root=root,
-            ref=head_sha,
-            config=RunnerConfig(
-                playwright_command=envelope.binding.playwright_command,
-                playwright_toolchain_manifest=Path(
-                    envelope.binding.playwright_toolchain_manifest
-                ) if envelope.binding.playwright_toolchain_manifest else None,
-            ),
-        ),
-        TRUSTED_RUNNER_VERSION,
+        envelope.binding.runner_digest,
+        envelope.binding.tool_version,
         base_sha,
         envelope.binding.checked_sha,
         envelope.binding.playwright_command,
@@ -232,6 +222,11 @@ def _reusable_result(
         snapshot.digest(),
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
+    runner_error = attested_runner_identity_error(
+        root, head_sha, profile, envelope.binding
+    )
+    if runner_error is not None:
+        raise ValueError(runner_error)
     ancestry = subprocess.run(
         ["git", "merge-base", "--is-ancestor", binding.checked_sha, head_sha],
         cwd=root,

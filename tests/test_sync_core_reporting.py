@@ -38,6 +38,7 @@ from pdd.sync_core import (
     load_verification_profiles,
     runner_identity_digest,
 )
+from pdd.sync_core.runner import PREDECESSOR_TRUSTED_RUNNER_VERSION
 from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.types import ObligationEvidence
 from pdd.ci_drift_heal import main as ci_drift_heal_main
@@ -157,6 +158,7 @@ def _finalize_trusted_baseline(
     artifact_closure_digest: str | None = None,
     legacy_pre_closure: bool = False,
     playwright_command: tuple[str, ...] | None = None,
+    tool_version: str = TRUSTED_RUNNER_VERSION,
 ) -> None:
     manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
     profile = load_verification_profiles(root, manifest).profiles[0]
@@ -171,8 +173,9 @@ def _finalize_trusted_baseline(
             root=root,
             ref=commit,
             config=RunnerConfig(playwright_command=playwright_command),
+            tool_version=tool_version,
         ),
-        TRUSTED_RUNNER_VERSION,
+        tool_version,
         commit,
         commit,
         playwright_command,
@@ -296,6 +299,7 @@ def test_canonical_report_rejects_signed_legacy_pathless_playwright_command(
         commit,
         legacy_pre_closure=True,
         playwright_command=(sys.executable, "fake_playwright"),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
     )
 
     report = build_canonical_report(root, _options(tmp_path, commit))
@@ -305,9 +309,112 @@ def test_canonical_report_rejects_signed_legacy_pathless_playwright_command(
     assert "Playwright" in report["units"][0]["reason"]
 
 
+def test_canonical_report_migrates_safe_predecessor_playwright_command(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    external_entrypoint = tmp_path / "trusted-tools" / "playwright-cli"
+    external_entrypoint.parent.mkdir()
+    external_entrypoint.write_text("// trusted entrypoint\n", encoding="utf-8")
+
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, str(external_entrypoint)),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    report = build_canonical_report(root, _options(tmp_path, commit))
+
+    assert report["ok"] is True
+    assert report["counts"]["trusted_current_evidence"] == 1
+
+
 def test_finalizer_reuses_fresh_signed_pre_closure_envelope(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     _finalize_trusted_baseline(root, commit, legacy_pre_closure=True)
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        result = finalize_unit(
+            root,
+            PurePosixPath("prompts/widget_python.prompt"),
+            base_ref=commit,
+            head_ref=commit,
+            signer=SIGNER,
+            replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+        )
+
+    assert result.transaction.no_op is True
+    assert result.attestation_id == "attestation-widget-1"
+    run_profile_mock.assert_not_called()
+
+
+def test_finalizer_does_not_reuse_legacy_pathless_playwright_command(
+    tmp_path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, "fake_playwright"),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
+
+    with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
+        with pytest.raises(ValueError, match="attested Playwright command"):
+            finalize_unit(
+                root,
+                PurePosixPath("prompts/widget_python.prompt"),
+                base_ref=commit,
+                head_ref=commit,
+                signer=SIGNER,
+                replay_ledger_path=tmp_path / "external-trust/legacy-reuse.json",
+            )
+
+    run_profile_mock.assert_not_called()
+
+
+def test_finalizer_reuses_safe_predecessor_playwright_command(tmp_path) -> None:
+    root, _commit = _repository(tmp_path)
+    profile_path = root / ".pdd/verification-profiles.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["profiles"][0]["obligations"][0].update(
+        {"obligation_id": "playwright", "validator_id": "playwright"}
+    )
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    _git(root, "add", str(profile_path.relative_to(root)))
+    _git(root, "commit", "-q", "-m", "use Playwright verification")
+    commit = _git(root, "rev-parse", "HEAD")
+    external_entrypoint = tmp_path / "trusted-tools" / "playwright-cli"
+    external_entrypoint.parent.mkdir()
+    external_entrypoint.write_text("// trusted entrypoint\n", encoding="utf-8")
+    _finalize_trusted_baseline(
+        root,
+        commit,
+        legacy_pre_closure=True,
+        playwright_command=(sys.executable, str(external_entrypoint)),
+        tool_version=PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    )
 
     with patch("pdd.sync_core.finalize.run_profile") as run_profile_mock:
         result = finalize_unit(

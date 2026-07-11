@@ -19,7 +19,7 @@ from .fingerprint_store import CorruptFingerprintError, FingerprintStore
 from .git_io import resolve_git_commit
 from .manifest import ManifestUnit, UnitManifest, build_unit_manifest
 from .snapshot import SnapshotError, build_unit_snapshot
-from .runner import RunnerConfig, TRUSTED_RUNNER_VERSION, runner_identity_digest
+from .runner import attested_runner_identity_error
 from .transaction import TransactionError, TransactionManager
 from .trust import AttestationError, ValidationEvidence
 from .types import (
@@ -174,22 +174,13 @@ def _evidence(
     ):
         return None
     profile = context.profiles.for_unit(expectation.unit.unit_id)
-    if (
-        profile is None
-        or binding.runner_digest
-        != runner_identity_digest(
-            profile,
-            root=context.root,
-            ref=context.manifest.head_ref,
-            config=RunnerConfig(
-                playwright_command=binding.playwright_command,
-                playwright_toolchain_manifest=Path(binding.playwright_toolchain_manifest)
-                if binding.playwright_toolchain_manifest else None,
-            ),
-        )
-        or binding.tool_version != TRUSTED_RUNNER_VERSION
-    ):
+    if profile is None:
         raise AttestationError("attestation runner identity is not protected")
+    runner_error = attested_runner_identity_error(
+        context.root, context.manifest.head_ref, profile, binding
+    )
+    if runner_error is not None:
+        raise AttestationError(runner_error)
     return evidence
 
 

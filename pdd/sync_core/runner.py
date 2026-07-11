@@ -45,7 +45,8 @@ from .types import (
 from .supervisor import run_supervised
 
 
-TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+PREDECESSOR_TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
+TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v3"
 PYTEST_CONFIG_PATHS = (
     PurePosixPath("pytest.ini"),
     PurePosixPath("pyproject.toml"),
@@ -1402,10 +1403,11 @@ def _managed_subprocess(
 def runner_identity_digest(
     profile: VerificationProfile, *, root: Path | None = None, ref: str = "HEAD",
     config: RunnerConfig = RunnerConfig(),
+    tool_version: str = TRUSTED_RUNNER_VERSION,
 ) -> str:
     """Bind evidence to protected adapters, configs, and exact artifact scopes."""
     payload = {
-        "tool_version": TRUSTED_RUNNER_VERSION,
+        "tool_version": tool_version,
         "pytest_command": [
             sys.executable,
             "-m",
@@ -2154,6 +2156,49 @@ def _playwright_command_error(root: Path, command: tuple[str, ...]) -> str | Non
         return "Playwright launch executable is missing or not executable"
     if not entrypoint.is_file():
         return "Playwright launch entrypoint is missing or is not a file"
+    return None
+
+
+def attested_runner_identity_error(
+    root: Path,
+    ref: str,
+    profile: VerificationProfile,
+    binding: AttestationBinding,
+) -> str | None:
+    """Validate current or safely migratable predecessor runner identity."""
+    playwright_obligation = any(
+        obligation.validator_id == "playwright"
+        for obligation in profile.obligations
+    )
+    if binding.playwright_command is not None:
+        if not playwright_obligation:
+            return "attestation contains an unexpected Playwright command"
+        command_error = _playwright_command_error(root, binding.playwright_command)
+        if command_error is not None:
+            return f"attested Playwright command is not trusted: {command_error}"
+    elif binding.playwright_toolchain_manifest is not None:
+        return "attestation contains a Playwright manifest without a command"
+
+    allowed_versions = {
+        TRUSTED_RUNNER_VERSION,
+        PREDECESSOR_TRUSTED_RUNNER_VERSION,
+    }
+    if binding.tool_version not in allowed_versions:
+        return "attestation runner version is not protected"
+    expected_digest = runner_identity_digest(
+        profile,
+        root=root,
+        ref=ref,
+        config=RunnerConfig(
+            playwright_command=binding.playwright_command,
+            playwright_toolchain_manifest=Path(
+                binding.playwright_toolchain_manifest
+            ) if binding.playwright_toolchain_manifest else None,
+        ),
+        tool_version=binding.tool_version,
+    )
+    if binding.runner_digest != expected_digest:
+        return "attestation runner digest is not protected"
     return None
 
 
