@@ -446,3 +446,22 @@ def test_playwright_rejects_quoted_execution_control_keys(
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_playwright_rejects_identifier_executable_config_value(
+    tmp_path: Path,
+) -> None:
+    root, commit = _repository(
+        tmp_path,
+        config="const setup = './setup.ts';\nexport default { globalSetup: setup };\n",
+    )
+    (root / "setup.ts").write_text(
+        "export default async function setup() {}\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add aliased setup control")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
