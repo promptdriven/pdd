@@ -2049,17 +2049,16 @@ def test_get_pdd_file_paths_rejects_same_leaf_file_symlink_discovery_escape(
     except OSError:
         pytest.skip("file symlinks are unavailable")
 
-    paths = get_pdd_file_paths(
-        "credits",
-        "python",
-        prompts_dir="prompts/backend",
-        context_override="backend",
-    )
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths(
+            "credits",
+            "python",
+            prompts_dir="prompts/backend",
+            context_override="backend",
+        )
 
-    resolved_prompt = paths["prompt"].resolve(strict=False)
-    assert resolved_prompt != external_prompt.resolve()
-    assert resolved_prompt.is_relative_to(
-        (tmp_path / "prompts" / "backend").resolve()
+    assert external_prompt.read_text(encoding="utf-8") == (
+        "% external prompt (must not be written through)\n"
     )
 
 
@@ -2118,11 +2117,10 @@ def test_find_prompt_file_direct_fast_path_rejects_escaping_symlink(tmp_path):
     except OSError:
         pytest.skip("file symlinks are unavailable")
 
-    result = _find_prompt_file("credits", "python", prompts_root, tmp_path / "architecture.json")
-
-    if result is not None:
-        assert Path(result).resolve() != external.resolve()
-        assert Path(result).resolve().is_relative_to(prompts_root.resolve())
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        _find_prompt_file(
+            "credits", "python", prompts_root, tmp_path / "architecture.json"
+        )
 
 
 def test_find_prompt_file_preserves_in_root_symlink_alias(tmp_path):
@@ -2993,6 +2991,137 @@ def test_get_pdd_file_paths_does_not_reconstruct_escaping_direct_symlink(
         get_pdd_file_paths("credits", "python", prompts_dir="prompts")
 
     assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_missing_custom_module_keeps_context_root(
+    tmp_path,
+    monkeypatch,
+):
+    """A path-qualified new module lands under its custom context prompt root."""
+    (tmp_path / "specs").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"specs/frontend\"\n"
+        "      generate_output_path: \"frontend/\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "frontend/foo", "python", prompts_dir="specs", context_override="frontend",
+    )
+
+    assert paths["prompt"].resolve(strict=False) == (
+        tmp_path / "specs" / "frontend" / "foo_python.prompt"
+    ).resolve(strict=False)
+    code = paths["code"].resolve(strict=False).as_posix()
+    assert code.endswith("/frontend/foo.py")
+    assert "/frontend/frontend/" not in code
+
+
+def test_get_pdd_file_paths_sibling_root_output_does_not_veto_current_target(
+    tmp_path,
+    monkeypatch,
+):
+    """A sibling ``./`` output does not claim a current-context architecture path."""
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "foo_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n"
+        "      generate_output_path: \"./\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{
+            "filename": "foo_Python.prompt",
+            "filepath": "backend/special/foo.py",
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "foo", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "special" / "foo.py"
+    ).resolve(strict=False)
+
+
+def test_get_pdd_file_paths_nested_escaping_symlink_is_hard_failure(
+    tmp_path,
+    monkeypatch,
+):
+    """An unsafe recursive match cannot be downgraded to a new-module fallback."""
+    prompts_root = tmp_path / "prompts"
+    nested = prompts_root / "nested"
+    nested.mkdir(parents=True)
+    external = tmp_path / "external.prompt"
+    original = "% external (must remain unchanged)\n"
+    external.write_text(original, encoding="utf-8")
+    try:
+        (nested / "credits_Python.prompt").symlink_to(external)
+    except OSError:
+        pytest.skip("file symlinks are unavailable")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError, match="resolves outside prompts root"):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+
+    assert external.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_loads_territory_config_once_for_duplicate_rows(
+    tmp_path,
+    monkeypatch,
+):
+    """Matching architecture rows share one context-territory config snapshot."""
+    import sync_determine_operation as sync_determine_module
+
+    backend_prompts = tmp_path / "prompts" / "backend"
+    backend_prompts.mkdir(parents=True)
+    (backend_prompts / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    rows = [
+        {
+            "filename": f"stale-{index}/credits_Python.prompt",
+            "filepath": "frontend/credits.py",
+        }
+        for index in range(300)
+    ]
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": rows}), encoding="utf-8"
+    )
+    original_load = sync_determine_module._load_pddrc_config
+    loads = {"count": 0}
+
+    def counting_load(path):
+        loads["count"] += 1
+        return original_load(path)
+
+    monkeypatch.setattr(sync_determine_module, "_load_pddrc_config", counting_load)
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith(
+        "frontend/credits.py"
+    )
+    assert loads["count"] <= 10
 
 
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):

@@ -348,12 +348,14 @@ def _resolve_prompt_path_from_architecture(
         target_lower = Path(architecture_filename).name.lower()
         resolved_root = prompts_root.resolve(strict=False)
         matches = []
+        unsafe_matches = []
         for candidate in prompts_root.rglob("*.prompt"):
             if not candidate.is_file() or candidate.name.lower() != target_lower:
                 continue
             try:
                 candidate.resolve(strict=False).relative_to(resolved_root)
             except (OSError, RuntimeError, ValueError):
+                unsafe_matches.append(candidate)
                 continue
             matches.append(candidate)
         if matches:
@@ -366,6 +368,8 @@ def _resolve_prompt_path_from_architecture(
                     matches = ctx_filtered
             matches.sort(key=lambda p: (len(p.parts), str(p)))
             return matches[0]
+        if unsafe_matches:
+            raise UnsafePromptPathError(unsafe_matches[0], resolved_root)
 
     return joined
 
@@ -746,6 +750,8 @@ def _filepath_matches_context(
     normalized: str,
     context_config: Any,
     project_root: Optional[Path] = None,
+    *,
+    repo_root_output_matches: bool = True,
 ) -> Optional[bool]:
     """Whether a posix filepath lies in one context's declared territory.
 
@@ -825,17 +831,25 @@ def _filepath_matches_context(
             base = base[2:]
         if base in ("", "."):
             # A repo-root output path imposes no territory constraint.
-            return True
+            if repo_root_output_matches:
+                return True
+            continue
         if normalized == base or normalized.startswith(base + "/"):
             return True
 
     return False
 
 
+_TERRITORY_CONFIG_UNSET: Any = object()
+
+
 def _filepath_owned_by_other_context(
     architecture_filepath: Optional[str],
     context_name: Optional[str],
     pddrc_anchor: Optional[Path] = None,
+    *,
+    config_snapshot: Any = _TERRITORY_CONFIG_UNSET,
+    project_root: Optional[Path] = None,
 ) -> bool:
     """True when the filepath lies in the territory of a DIFFERENT named context.
 
@@ -850,22 +864,32 @@ def _filepath_owned_by_other_context(
         return False
     if not context_name:
         return False
-    pddrc_path = _find_pddrc_file(pddrc_anchor)
-    if not pddrc_path:
-        return False
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except (ValueError, KeyError, TypeError):
+    if config_snapshot is _TERRITORY_CONFIG_UNSET:
+        pddrc_path = _find_pddrc_file(pddrc_anchor)
+        if not pddrc_path:
+            return False
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except (ValueError, KeyError, TypeError):
+            return False
+        project_root = pddrc_path.parent
+    else:
+        config = config_snapshot
+    if not isinstance(config, dict):
         return False
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):
         return False
-    project_root = pddrc_path.parent
     normalized = PurePosixPath(architecture_filepath.strip().replace("\\", "/")).as_posix()
     for other_name, other_config in contexts.items():
         if other_name == context_name or other_name == "default":
             continue
-        if _filepath_matches_context(normalized, other_config, project_root) is True:
+        if _filepath_matches_context(
+            normalized,
+            other_config,
+            project_root,
+            repo_root_output_matches=False,
+        ) is True:
             return True
     return False
 
@@ -874,6 +898,9 @@ def _context_owned_filepath(
     architecture_filepath: Optional[str],
     context_name: Optional[str],
     pddrc_anchor: Optional[Path] = None,
+    *,
+    config_snapshot: Any = _TERRITORY_CONFIG_UNSET,
+    project_root: Optional[Path] = None,
 ) -> bool:
     """Return True when a borrowed architecture filepath is inside a context's territory.
 
@@ -899,12 +926,18 @@ def _context_owned_filepath(
         return True
     if not context_name:
         return True
-    pddrc_path = _find_pddrc_file(pddrc_anchor)
-    if not pddrc_path:
-        return True
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except (ValueError, KeyError, TypeError):
+    if config_snapshot is _TERRITORY_CONFIG_UNSET:
+        pddrc_path = _find_pddrc_file(pddrc_anchor)
+        if not pddrc_path:
+            return True
+        try:
+            config = _load_pddrc_config(pddrc_path)
+        except (ValueError, KeyError, TypeError):
+            return True
+        project_root = pddrc_path.parent
+    else:
+        config = config_snapshot
+    if not isinstance(config, dict):
         return True
     contexts = config.get("contexts", {})
     context_config = contexts.get(context_name) if isinstance(contexts, dict) else None
@@ -915,7 +948,7 @@ def _context_owned_filepath(
         architecture_filepath.strip().replace("\\", "/")
     ).as_posix()
 
-    match = _filepath_matches_context(normalized, context_config, pddrc_path.parent)
+    match = _filepath_matches_context(normalized, context_config, project_root)
     # No territory declared for this context — impose no restriction.
     return True if match is None else match
 
@@ -1091,8 +1124,10 @@ def _find_prompt_file(
     # update cannot open it with "w" and truncate the external target.
     for candidate_basename in basename_candidates:
         resolved = _case_insensitive_path_lookup(prompts_root / f"{candidate_basename}_{language}.prompt")
-        if resolved and _prompt_candidate_within_root(resolved, resolved_prompts_root):
-            return resolved
+        if resolved:
+            if _prompt_candidate_within_root(resolved, resolved_prompts_root):
+                return resolved
+            raise UnsafePromptPathError(resolved, resolved_prompts_root)
 
     # --- Step 3: Architecture.json hint → recursive search ---
     # Use the caller's immutable module snapshot when provided so prompt discovery
@@ -1142,11 +1177,15 @@ def _find_prompt_file(
             # Collect all matches and pick shallowest deterministically. Every match
             # must resolve inside prompts_root so a same-leaf symlink cannot escape.
             arch_basename_lower = Path(arch_filename).name.lower()
-            arch_matches = [
-                c for c in prompts_root.rglob("*.prompt")
-                if c.is_file() and c.name.lower() == arch_basename_lower
-                and _prompt_candidate_within_root(c, resolved_prompts_root)
-            ]
+            arch_matches = []
+            unsafe_arch_matches = []
+            for candidate in prompts_root.rglob("*.prompt"):
+                if not candidate.is_file() or candidate.name.lower() != arch_basename_lower:
+                    continue
+                if _prompt_candidate_within_root(candidate, resolved_prompts_root):
+                    arch_matches.append(candidate)
+                else:
+                    unsafe_arch_matches.append(candidate)
             if arch_matches:
                 if len(arch_matches) > 1:
                     # Prefer match within context prefix (e.g., backend/utils)
@@ -1167,6 +1206,10 @@ def _find_prompt_file(
                             arch_matches = hint_filtered
                 arch_matches.sort(key=lambda p: (len(p.parts), str(p)))
                 return arch_matches[0]
+            if unsafe_arch_matches:
+                raise UnsafePromptPathError(
+                    unsafe_arch_matches[0], resolved_prompts_root
+                )
 
     # --- Step 4: Recursive glob fallback (always works) ---
     # Case-insensitive on both basename and language suffix.
@@ -1175,11 +1218,18 @@ def _find_prompt_file(
     # basenames like "dashboard" vs on-disk "Dashboard".
     lang_lower = language.lower()
     matches = []
+    unsafe_matches = []
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
             continue
         # Skip a candidate that escapes prompts_root through a symlink.
         if not _prompt_candidate_within_root(candidate, resolved_prompts_root):
+            expected_leaves = {
+                f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
+                for candidate_basename in basename_candidates
+            }
+            if candidate.name.lower() in expected_leaves:
+                unsafe_matches.append(candidate)
             continue
         candidate_lower = candidate.name.lower()
         for candidate_basename in basename_candidates:
@@ -1226,6 +1276,8 @@ def _find_prompt_file(
             matches = aligned
         matches.sort(key=lambda p: (len(p.parts), str(p)))
         return matches[0]
+    if unsafe_matches:
+        raise UnsafePromptPathError(unsafe_matches[0], resolved_prompts_root)
 
     return None
 
@@ -1288,6 +1340,15 @@ def _get_filepath_from_architecture(
             _resolve_context_name_for_basename(basename) if basename else None
         )
         pddrc_anchor = architecture_path.parent if architecture_path is not None else None
+        territory_config: Any = None
+        territory_project_root: Optional[Path] = None
+        territory_pddrc = _find_pddrc_file(pddrc_anchor)
+        if territory_pddrc:
+            try:
+                territory_config = _load_pddrc_config(territory_pddrc)
+                territory_project_root = territory_pddrc.parent
+            except (ValueError, KeyError, TypeError):
+                territory_config = None
 
         # Issue #1677: a path-qualified basename (e.g. `foo/page`) must only match a
         # module whose filepath aligns with its directory. Otherwise an exact match on
@@ -1388,10 +1449,20 @@ def _get_filepath_from_architecture(
                 return False
             filepath = module.get("filepath")
             if _filepath_owned_by_other_context(
-                filepath, resolved_context_name, pddrc_anchor
+                filepath,
+                resolved_context_name,
+                pddrc_anchor,
+                config_snapshot=territory_config,
+                project_root=territory_project_root,
             ):
                 return False
-            if _context_owned_filepath(filepath, resolved_context_name, pddrc_anchor):
+            if _context_owned_filepath(
+                filepath,
+                resolved_context_name,
+                pddrc_anchor,
+                config_snapshot=territory_config,
+                project_root=territory_project_root,
+            ):
                 return True
             return ownership == _OWNERSHIP_PROVEN
 
@@ -2147,15 +2218,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                             prompts_root_anchor,
                         )
                         prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
-                        if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
+                        if prefix and not prompts_root_ends_with_prefix:
                             prompt_path = str(prompts_root / prefix / prompt_filename)
                 except ValueError:
                     pass
-
-        prompt_path_obj = Path(prompt_path)
-        resolved_prompts_root = prompts_root.resolve(strict=False)
-        if not _prompt_candidate_within_root(prompt_path_obj, resolved_prompts_root):
-            raise UnsafePromptPathError(prompt_path_obj, resolved_prompts_root)
 
         logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 
@@ -2410,7 +2476,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     code_dir = code_dir + '/'
 
                 # Extract directory and name parts for subdirectory basename support
-                dir_prefix, name_part = _extract_name_part(basename)
+                dir_prefix, name_part = _extract_name_part(construct_paths_basename)
 
                 # Get explicit config paths (these are the SOURCE OF TRUTH when configured)
                 # These should be used directly, NOT combined with dir_prefix
@@ -2492,7 +2558,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
-                dir_prefix, name_part = _extract_name_part(basename)
+                dir_prefix, name_part = _extract_name_part(construct_paths_basename)
                 fallback_test_path = Path(f"{dir_prefix}test_{name_part}{_dot(extension)}")
                 # Bug #156: Find matching test files even in fallback
                 if Path('.').exists():
