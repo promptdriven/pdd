@@ -134,6 +134,31 @@ def test_lifecycle_result_binds_recomputable_runtime_measurement() -> None:
     assert result.measurement_authority == "pdd-released-checker-v1"
 
 
+def test_lifecycle_measurement_rejects_synthesized_compatibility_fields() -> None:
+    from pdd.sync_core.certificate import _lifecycle_measurement_complete
+
+    assert _lifecycle_measurement_complete(
+        LifecycleResult(
+            0, 0, 0, 0, 0, 0,
+            candidate_wheel_sha256="a" * 64,
+            dependency_environment_digest="b" * 64,
+            candidate_artifact=object(),
+        )
+    ) is False
+
+
+def test_lifecycle_commands_do_not_use_unsupervised_subprocess_run(monkeypatch) -> None:
+    from pdd.sync_core import lifecycle
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("lifecycle command bypassed the shared sandbox supervisor")
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", forbidden)
+    assert lifecycle._candidate_interpreter_identity(
+        Path(sys.executable), {"PATH": os.environ.get("PATH", "")}
+    ) is not None
+
+
 def test_lifecycle_matrix_fails_closed_without_hash_pinned_wheelhouse(
     tmp_path,
 ) -> None:

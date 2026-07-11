@@ -250,3 +250,14 @@ def test_file_replay_store_rejects_symlink_lock(tmp_path) -> None:
     store = FileReplayStore(path)
     with pytest.raises(AttestationError, match="unsafe"):
         store.consume("trusted-ci", "nonce", "attestation")
+
+
+def test_file_replay_store_rejects_symlinked_ancestor(tmp_path) -> None:
+    protected = tmp_path / "protected"
+    protected.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    (protected / "linked").symlink_to(outside, target_is_directory=True)
+    store = FileReplayStore(protected / "linked" / "nested" / "replay.json")
+    with pytest.raises(AttestationError, match="unsafe"):
+        store.consume("trusted-ci", "nonce", "attestation")
