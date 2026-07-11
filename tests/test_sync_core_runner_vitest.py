@@ -96,6 +96,31 @@ def _run(root: Path, base: str, head: str, fake_vitest: Path, timeout: int = 2):
     )
 
 
+def _run_default_vitest(root: Path, base: str, head: str, timeout: int = 2):
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    obligation = VerificationObligation(
+        "vitest",
+        "test",
+        "vitest",
+        vitest_validator_config_digest(root, base, paths),
+        ("REQ-1",),
+        paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+    return run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", base, head),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "id",
+            "nonce",
+            datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        config=RunnerConfig(timeout_seconds=timeout),
+    )
+
+
 def test_vitest_passing_collected_test_is_pass(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
@@ -171,6 +196,52 @@ def test_vitest_dirty_support_cannot_influence_run(tmp_path: Path) -> None:
     (root / "setup.ts").write_text("export {};\n", encoding="utf-8")
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.QUARANTINED
+
+
+def test_vitest_imported_test_helper_mutation_cannot_pass(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.ts").write_text("export const expected = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "import { expected } from './helper';\n"
+        "test('widget works', () => expect(expected).toBe(true));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add protected Vitest helper")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "tests/helper.ts").write_text("export const expected = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate imported Vitest helper")
+
+    _envelope, executions = _run(
+        root, base, _git(root, "rev-parse", "HEAD"), _fake_vitest(tmp_path)
+    )
+
+    assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_default_candidate_node_modules_vitest_is_not_trusted(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "-q", "-m", "ignore local node modules")
+    commit = _git(root, "rev-parse", "HEAD")
+    binary = root / "node_modules" / "vitest" / "vitest.mjs"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "import fs from 'fs';\n"
+        "const output = process.argv.find((arg) => arg.startsWith('--outputFile='))"
+        "?.slice('--outputFile='.length);\n"
+        "fs.writeFileSync(output, JSON.stringify({tests:[{identity:"
+        "'tests/widget.test.ts::widget works',status:'passed'}]}));\n",
+        encoding="utf-8",
+    )
+
+    _envelope, executions = _run_default_vitest(root, commit, commit)
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "candidate node_modules" in executions[0].detail
 
 
 def test_vitest_subprocess_cannot_read_secret(
