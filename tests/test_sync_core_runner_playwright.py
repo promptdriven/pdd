@@ -401,6 +401,141 @@ def test_playwright_snapshot_oracle_is_bound_to_validator_digest(tmp_path: Path)
     assert after != before
 
 
+def test_playwright_decoded_config_keys_bind_executable_references(tmp_path: Path) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        config='export default { "global\\u0053etup": "./setup.ts" };\n',
+    )
+    (root / "setup.ts").write_text("export default async () => {};\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add decoded setup")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    (root / "setup.ts").write_text("export default async () => { throw 1 };\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change decoded setup")
+    assert playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    ) != before
+
+
+def test_playwright_rejects_decoded_unsupported_resource_key(tmp_path: Path) -> None:
+    root, commit = _repository(
+        tmp_path,
+        config='export default { "storage\\u0053tate": "./auth.json" };\n',
+    )
+    with pytest.raises(ValueError, match="unsupported"):
+        playwright_validator_config_digest(
+            root, commit, (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'export { oracle } from "./helper";\n',
+        'export * from "./helper";\n',
+        'export type { Oracle } from "./helper";\n',
+    ],
+)
+def test_playwright_reexports_are_in_the_support_closure(
+    tmp_path: Path, statement: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        'import "./barrel";\n', encoding="utf-8"
+    )
+    (root / "tests/barrel.ts").write_text(statement, encoding="utf-8")
+    (root / "tests/helper.ts").write_text("export const oracle = 1;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add reexport")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    (root / "tests/helper.ts").write_text("export const oracle = 2;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change reexport target")
+    assert playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    ) != before
+
+
+def test_playwright_text_snapshot_oracle_is_bound(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    snapshot = root / "tests/widget.spec.ts-snapshots/oracle.txt"
+    snapshot.parent.mkdir()
+    snapshot.write_text("base", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test('snapshot', () => expect('value').toMatchSnapshot('oracle.txt'));\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add text snapshot")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    before = playwright_validator_config_digest(root, base, paths)
+    snapshot.write_text("candidate", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change text snapshot")
+    assert playwright_validator_config_digest(
+        root, _git(root, "rev-parse", "HEAD"), paths
+    ) != before
+
+
+def test_playwright_ast_capability_allowlist_rejects_reflection(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        'Reflect.get(process, "getBuiltin" + "Module")'
+        '.call(process, "no" + "de:fs");\n',
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "reflective capability")
+    with pytest.raises(ValueError, match="runtime capability"):
+        playwright_validator_config_digest(
+            root,
+            _git(root, "rev-parse", "HEAD"),
+            (PurePosixPath("tests/widget.spec.ts"),),
+        )
+
+
+def test_playwright_accepts_cjs_config_and_ordinary_typescript(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "playwright.config.ts").unlink()
+    (root / "playwright.config.cjs").write_text(
+        'module.exports = { globalSetup: "./setup.ts", timeout: 1000 };\n',
+        encoding="utf-8",
+    )
+    (root / "setup.ts").write_text("export default async () => {};\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "type Values = string[]; const [first] = ['ok'];\n"
+        "test(`ordinary ${first}`, () => expect(/o[k]/.test(first)).toBeTruthy());\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "ordinary cjs and typescript")
+    playwright_validator_config_digest(
+        root,
+        _git(root, "rev-parse", "HEAD"),
+        (PurePosixPath("tests/widget.spec.ts"),),
+    )
+
+
+def test_toolchain_manifest_requires_complete_typed_external_roles(tmp_path: Path) -> None:
+    toolchain = tmp_path / "toolchain"
+    toolchain.mkdir()
+    (toolchain / "node").write_bytes(b"node")
+    manifest = toolchain / "manifest.json"
+    manifest.write_text(
+        '{"version":1,"files":["node","missing-cli.js"]}', encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="roles"):
+        _toolchain_manifest_identity(manifest)
+
+
 def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
     target = tmp_path / "package-a"
     target.mkdir()
