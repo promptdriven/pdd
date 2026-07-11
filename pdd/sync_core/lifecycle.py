@@ -252,6 +252,7 @@ def run_lifecycle_matrix(
     timeout_seconds: int = 1200,
 ) -> LifecycleResult:
     # pylint: disable=too-many-arguments,too-many-locals,too-many-boolean-expressions
+    # pylint: disable=too-many-return-statements
     """Run only the scenario harness installed with the released checker."""
     del root  # Candidate repository tests are never lifecycle evidence.
     required_paths = (
