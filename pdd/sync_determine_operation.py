@@ -876,7 +876,11 @@ def _filepath_matches_context(
         """Re-express a config path relative to the project; None if unusable."""
         v = value.replace("\\", "/")
         pure = PurePosixPath(v)
-        if not pure.is_absolute():
+        # A Windows drive-qualified value (``C:/x``) is not POSIX-absolute yet is not
+        # project-relative either; relativize it against the (equally drive-qualified)
+        # project root so sibling-territory detection still fires on Windows instead of
+        # silently treating ``C:/proj/frontend`` as a relative literal that matches nothing.
+        if not pure.is_absolute() and not PureWindowsPath(value).drive:
             return v
         if root_posix is None:
             return None
@@ -1765,7 +1769,7 @@ def _get_filepath_from_architecture(
                     ).name
                 )
                 and isinstance(module.get("filepath"), str)
-                and PurePosixPath(module["filepath"]).stem == target_leaf
+                and PurePosixPath(module["filepath"]).stem.lower() == target_leaf.lower()
                 and (
                     not expected_extension
                     or PurePosixPath(module["filepath"]).suffix.lower()

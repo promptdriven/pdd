@@ -2355,6 +2355,56 @@ def test_get_pdd_file_paths_non_string_filepath_does_not_block_valid_module(tmp_
     assert paths["code"].as_posix().endswith("src/page.py")
 
 
+def test_filepath_matches_context_handles_windows_drive_config():
+    """A Windows drive-qualified context path (``C:/proj/frontend/**``) is not
+    POSIX-absolute; it must still be relativized against the project so sibling
+    territory is detected instead of being treated as a non-matching literal."""
+    import sync_determine_operation as sync_determine_module
+
+    project_root = Path("C:/proj")
+    ctx = {"paths": ["C:/proj/frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/credits.py", ctx, project_root, repo_root_output_matches=False
+    ) is True
+    assert sync_determine_module._filepath_matches_context(
+        "backend/credits.py", ctx, project_root, repo_root_output_matches=False
+    ) is not True
+
+
+@pytest.mark.parametrize("bad_language", ["CON", "aux.txt", "lpt1", "foo bar", "foo."])
+def test_get_pdd_file_paths_rejects_nonportable_language(tmp_path, monkeypatch, bad_language):
+    """A reserved-device / whitespace / trailing-dot language component fails closed
+    rather than being interpolated into prompt or artifact paths (R9)."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", bad_language, prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_filepath_stem_match_is_case_insensitive(tmp_path, monkeypatch):
+    """A filepath-stem architecture match (non-prompt filename) must resolve for a
+    case-variant basename too, consistent with case-insensitive prompt discovery (R4)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  api:\n    paths: [\"src/**\", \"prompts/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "Foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    # Non-prompt filename -> module is identified by its filepath stem ('foo').
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "Foo.tsx", "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("Foo", "python", prompts_dir="prompts", context_override="api")
+    assert paths["code"].as_posix().endswith("src/foo.py")
+
+
 def _write_two_context_pddrc(root):
     (root / ".pdd" / "meta").mkdir(parents=True)
     (root / ".pdd" / "locks").mkdir(parents=True)
