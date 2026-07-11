@@ -144,6 +144,14 @@ def _local_module_paths(
             declared, dynamic = _pytest_plugin_modules(node.value)
             modules.update(declared)
             dynamic_pytest_plugins = dynamic_pytest_plugins or dynamic
+        elif isinstance(node, ast.Call) and (
+            isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            or isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "importlib"
+            and node.func.attr == "import_module"
+        ):
+            dynamic_pytest_plugins = True
     resolved: set[PurePosixPath] = set()
     for module in modules:
         level = len(module) - len(module.lstrip("."))
@@ -219,7 +227,7 @@ def _transitive_support_blobs(
     """Resolve local Python imports from protected runner support paths."""
     paths = set(included)
     remaining = list(pending)
-    test_artifact_set = set(test_artifacts)
+    del test_artifacts
     visited: set[PurePosixPath] = set()
     while remaining:
         path = remaining.pop()
@@ -234,9 +242,7 @@ def _transitive_support_blobs(
             ref,
             path,
             source,
-            code_under_test_paths=(
-                code_under_test_paths if path in test_artifact_set else frozenset()
-            ),
+            code_under_test_paths=code_under_test_paths,
         )
         discovered -= visited
         paths.update(discovered)
@@ -293,7 +299,13 @@ def _has_external_pytest_plugins(
     root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
 ) -> bool:
     """Return whether a literal plugin declaration lacks protected repo bytes."""
-    for path in tuple(test_paths) + tuple(_pytest_config_paths(root, ref, test_paths)):
+    remaining = list(tuple(test_paths) + tuple(_pytest_config_paths(root, ref, test_paths)))
+    visited: set[PurePosixPath] = set()
+    while remaining:
+        path = remaining.pop()
+        if path in visited:
+            continue
+        visited.add(path)
         source = read_git_blob(root, ref, path)
         if source is None or path.suffix != ".py":
             continue
@@ -315,6 +327,8 @@ def _has_external_pytest_plugins(
                 )
                 if not any(read_git_blob(root, ref, item) is not None for item in candidates):
                     return True
+        discovered, _dynamic = _local_module_paths(root, ref, path, source)
+        remaining.extend(discovered - visited)
     return False
 
 
@@ -749,6 +763,20 @@ def _dirty_pytest_support(root: Path) -> set[str]:
     return dirty
 
 
+def _dirty_tracked_closure(root: Path) -> set[str]:
+    """Return every tracked path whose exact-head bytes changed during validation."""
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD", "--"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {"<unreadable-tracked-closure>"}
+    return {line for line in result.stdout.splitlines() if line}
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -930,7 +958,7 @@ def _run_obligation_in_tree(
         _run_test_node(root, node_id, config.timeout_seconds)
         for node_id in head_node_ids
     )
-    mutated = _dirty_pytest_support(root)
+    mutated = _dirty_pytest_support(root) | _dirty_tracked_closure(root)
     if mutated:
         return RunnerExecution(
             obligation.obligation_id,

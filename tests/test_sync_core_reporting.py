@@ -553,7 +553,7 @@ def test_trusted_finalizer_rejects_test_time_artifact_mutation(tmp_path) -> None
     _git(root, "add", "tests/test_widget.py")
     _git(root, "commit", "-q", "-m", "protected mutation probe")
     head = _git(root, "rev-parse", "HEAD")
-    with pytest.raises(ValueError, match="changed during trusted validation"):
+    with pytest.raises(ValueError, match="trusted validation did not pass"):
         finalize_unit(
             root,
             PurePosixPath("prompts/widget_python.prompt"),
