@@ -2024,6 +2024,60 @@ class TestSyncOneModule:
         assert "Reduce churn below threshold 0.40; current churn is 0.82" in second_env["PDD_REPAIR_DIRECTIVE"]
 
     @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_exhaustion_never_blocks_issue_workflow(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, capsys
+    ):
+        """Issue #1903 §B.4: when an adopted co-located test's churn cannot be
+        reconciled after bounded repair, the issue-driven runner MUST NOT
+        hard-fail. It keeps the (already-restored) human test, flags it 'needs
+        review', and reports the module as synced so the PR still opens —
+        instead of handing work back to the user."""
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 5\n"
+        )
+        # Both attempts exhaust on the same churn signature (coverage-losing).
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        # Never-block: the module succeeds (no hard-failure block) so the PR opens.
+        assert success is True
+        assert error == ""
+        # The kept human test is flagged for review, named by its runner-collected path.
+        note = runner.module_states["foo"].needs_review
+        assert note is not None
+        assert "frontend/src/app/__test__/foo.test.tsx" in note
+        assert "review" in note.lower()
+        # A machine-readable marker is emitted for downstream consumers.
+        assert "PDD_TEST_CHURN_NEEDS_REVIEW: frontend/src/app/__test__/foo.test.tsx" in capsys.readouterr().out
+        # The progress comment surfaces the flag as a shipped-but-flagged module.
+        runner._record_result("foo", success, cost, error)
+        body = runner._build_comment_body(1)
+        assert "Success (needs review)" in body
+        assert "### ⚠️ Needs review" in body
+        assert "frontend/src/app/__test__/foo.test.tsx" in body
+        # The overall run summary names the needs-review module, not a clean sync.
+        assert runner.module_states["foo"].status == "success"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")

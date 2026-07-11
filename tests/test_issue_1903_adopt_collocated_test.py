@@ -35,6 +35,7 @@ from pdd.content_selector import (
     _validated_project_path,
     configured_test_output_pinned,
     find_collocated_test,
+    find_runner_collected_test_path,
     resolve_test_output_path,
 )
 from pdd.sync_determine_operation import (
@@ -160,6 +161,104 @@ class TestResolveTestOutputPath:
 
 
 # ---------------------------------------------------------------------------
+# 2b) Greenfield runner discovery — issue #1903 §A (write the FIRST test where
+#     the runner collects it, not a runner-blind tests/ shadow).
+# ---------------------------------------------------------------------------
+
+class TestGreenfieldRunnerDiscovery:
+    def test_jest_config_js_greenfield_co_locates(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = {};\n")
+        code = _write(tmp_path / "src/app/page.tsx",
+                      "export default function P(){return null;}\n")
+        got = find_runner_collected_test_path(code)
+        assert got is not None
+        assert Path(got).resolve() == (
+            tmp_path / "src/app/__test__/page.test.tsx"
+        ).resolve()
+
+    def test_package_json_devdep_jest_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^29"}}\n')
+        code = _write(tmp_path / "src/widget.ts")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (
+            tmp_path / "src/__test__/widget.test.ts"
+        ).resolve()
+
+    def test_package_json_inline_jest_block_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"jest": {"testEnvironment": "jsdom"}}\n')
+        code = _write(tmp_path / "src/button.jsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (
+            tmp_path / "src/__test__/button.test.jsx"
+        ).resolve()
+
+    def test_vitest_config_detected(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "vitest.config.ts", "export default {};\n")
+        code = _write(tmp_path / "lib/util.ts")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (
+            tmp_path / "lib/__test__/util.test.ts"
+        ).resolve()
+
+    def test_config_found_by_walking_up_to_root(self, tmp_path, monkeypatch):
+        # jest.config sits at the project root; the module is nested deep.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "frontend/jest.config.js", "module.exports = {};\n")
+        code = _write(tmp_path / "frontend/src/app/contributions/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert Path(got).resolve() == (
+            tmp_path / "frontend/src/app/contributions/__test__/page.test.tsx"
+        ).resolve()
+
+    def test_no_runner_config_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_package_json_without_runner_ignored(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"dependencies": {"react": "^18"}}\n')
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_python_module_keeps_pytest_default(self, tmp_path, monkeypatch):
+        # A JS runner nearby must NOT redirect Python (pytest tests/ is correct).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^29"}}\n')
+        code = _write(tmp_path / "src/foo.py", "def foo():\n    return 1\n")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_malformed_package_json_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", "{ this is not json\n")
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_resolve_greenfield_co_locates_over_shadow(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "frontend/package.json",
+               '{"devDependencies":{"jest":"^29"}}\n')
+        code = _write(tmp_path / "frontend/src/app/contributions/page.tsx")
+        shadow = tmp_path / "tests" / "test_page.tsx"  # runner-blind, not on disk
+        got = resolve_test_output_path(code, shadow, user_pinned=False)
+        assert Path(got).resolve() == (
+            code.parent / "__test__" / "page.test.tsx"
+        ).resolve()
+
+    def test_resolve_greenfield_honors_user_pin(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = {};\n")
+        code = _write(tmp_path / "src/page.tsx")
+        shadow = tmp_path / "tests" / "test_page.tsx"
+        got = resolve_test_output_path(code, shadow, user_pinned=True)
+        assert Path(got) == shadow
+
+
+# ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the
 #    REAL construct_paths (a mock would inject nothing and mask the round-4
 #    resolved_config-pollution blocker this fix routes around — see #1903).
@@ -218,6 +317,61 @@ def test_get_pdd_file_paths_adopts_collocated_jest_test(tmp_path, monkeypatch):
     assert [Path(p).resolve() for p in paths["test_files"]] == [real.resolve()]
     # No stray tests/ shadow is selected.
     shadow = (tmp_path / "tests" / "test_page.tsx").resolve()
+    assert all(Path(p).resolve() != shadow for p in paths["test_files"])
+
+
+def _build_greenfield_jest_project(tmp_path: Path) -> tuple[Path, Path]:
+    """Fresh Next.js/jest project with a runner config but NO test yet (#1903 §A).
+
+    Writes a single-context ``.pddrc`` (no ``test_output_path`` override), a
+    ``jest.config.js`` and a ``package.json`` declaring jest under ``frontend/``,
+    a real prompt, and the module — but deliberately NO co-located test. Returns
+    ``(code, expected_runner_path)`` where ``expected_runner_path`` is the
+    co-located ``__test__/page.test.tsx`` the jest runner collects (not on disk
+    yet). Mirrors :func:`_build_jest_project` sans the pre-existing test.
+    """
+    pddrc = (
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        '      generate_output_path: "frontend/src/app/contributions/"\n'
+        '      default_language: "typescriptreact"\n'
+        '      example_output_path: "examples/"\n'
+    )
+    _write(tmp_path / ".pddrc", pddrc)
+    _write(tmp_path / "frontend/jest.config.js", "module.exports = { rootDir: '.' };\n")
+    _write(tmp_path / "frontend/package.json", '{"devDependencies": {"jest": "^29"}}\n')
+    code = _write(
+        tmp_path / "frontend/src/app/contributions/page.tsx",
+        "export default function Page() { return null; }\n",
+    )
+    _write(tmp_path / "prompts/page_typescriptreact.prompt", "Generate a page.\n")
+    expected = tmp_path / "frontend/src/app/contributions/__test__/page.test.tsx"
+    return code, expected
+
+
+def test_get_pdd_file_paths_greenfield_writes_runner_collected_path(tmp_path, monkeypatch):
+    """Issue #1903 §A acceptance: a fresh Next.js/jest project (runner config,
+    NO existing test, NO ``.pddrc`` ``test_output_path`` override) targets the
+    FIRST test at the runner-collected co-located ``__test__/page.test.tsx`` —
+    never a root ``tests/`` orphan. Uses the REAL construct_paths."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_TEST_OUTPUT_PATH", raising=False)
+    _code, expected = _build_greenfield_jest_project(tmp_path)
+    assert not expected.exists()  # greenfield: the runner test does not exist yet
+
+    # Pre-fix behavior: the raw derivation is the runner-blind shadow, unpinned.
+    raw, raw_pinned = _get_pdd_file_paths_uncollocated("page", "typescriptreact", "prompts")
+    assert Path(raw["test"]).name == "test_page.tsx"
+    assert raw_pinned is False  # no explicit test config -> greenfield allowed
+
+    # Post-fix behavior: the public entry point targets the runner-collected path.
+    paths = get_pdd_file_paths("page", "typescriptreact", "prompts")
+    assert Path(paths["test"]).resolve() == expected.resolve()
+    # No root tests/ shadow orphan is selected.
+    shadow = (tmp_path / "tests" / "test_page.tsx").resolve()
+    assert Path(paths["test"]).resolve() != shadow
     assert all(Path(p).resolve() != shadow for p in paths["test_files"])
 
 

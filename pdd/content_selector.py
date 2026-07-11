@@ -631,6 +631,129 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
         return None
 
 
+# JS/TS test-runner config markers for greenfield discovery (issue #1903 §A).
+# A project that configures jest/vitest collects tests co-located with the
+# module: jest's default ``testMatch`` matches any ``*.test.<ext>`` /
+# ``*.spec.<ext>`` regardless of directory, so an ``__test__/{stem}.test.tsx``
+# beside the module is collected. When PDD would otherwise write the FIRST test
+# for a brand-new module to a runner-blind ``tests/`` shadow, detect that the
+# project uses such a runner and write the first test where the runner will
+# actually collect it — never a root ``tests/`` orphan.
+_JS_TS_RUNNER_CONFIG_STEMS = ("jest.config", "vitest.config")
+_JS_TS_RUNNER_CONFIG_EXTS = ("", ".js", ".ts", ".mjs", ".cjs", ".mts", ".cts", ".json")
+
+
+def _package_json_declares_js_runner(package_json: Path) -> bool:
+    """Return True when *package_json* references jest/vitest.
+
+    Checks an inline ``"jest"``/``"vitest"`` config block, a declared
+    dependency on jest/vitest, or a ``test`` script that invokes one. Total —
+    any read/parse error yields ``False``.
+    """
+    try:
+        data = json.loads(package_json.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, Mapping):
+        return False
+    # Inline runner config block (``"jest": {...}`` / ``"vitest": {...}``).
+    for key in ("jest", "vitest"):
+        if data.get(key) is not None:
+            return True
+    # Declared dependency on a runner (incl. scoped ``@scope/jest`` wrappers).
+    for dep_key in (
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ):
+        deps = data.get(dep_key)
+        if isinstance(deps, Mapping):
+            for name in deps:
+                if isinstance(name, str) and (
+                    name in ("jest", "vitest")
+                    or name.endswith("/jest")
+                    or name.endswith("/vitest")
+                ):
+                    return True
+    # A ``test`` (or ``test:*``) script that invokes a runner.
+    scripts = data.get("scripts")
+    if isinstance(scripts, Mapping):
+        for cmd in scripts.values():
+            if isinstance(cmd, str) and ("jest" in cmd or "vitest" in cmd):
+                return True
+    return False
+
+
+def _project_uses_js_test_runner(module_path: Path, root_resolved: Path) -> bool:
+    """True when a jest/vitest runner is configured at or above *module_path*.
+
+    Walks from the module's directory up to (and including) *root_resolved*,
+    looking for a jest/vitest config file or a ``package.json`` that declares
+    one. Never walks above the trusted root. Total — any error yields ``False``.
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return False
+    root_s = str(root_resolved)
+    while True:
+        for stem in _JS_TS_RUNNER_CONFIG_STEMS:
+            for ext in _JS_TS_RUNNER_CONFIG_EXTS:
+                if (current / f"{stem}{ext}").is_file():
+                    return True
+        pkg = current / "package.json"
+        if pkg.is_file() and _package_json_declares_js_runner(pkg):
+            return True
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
+
+
+def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
+    """Greenfield runner-aware first-test path for a NEW JS/TS module (#1903 §A).
+
+    When no co-located test yet exists (:func:`find_collocated_test` returns
+    ``None``) but the project configures a jest/vitest runner, return the
+    co-located path the runner will collect — ``{module_dir}/__test__/{stem}.
+    test.{ext}`` — so the FIRST generated test lands where ``npm test`` looks
+    instead of a runner-blind root ``tests/`` shadow (the primary false-green in
+    issue #1903). Python keeps its pytest-idiomatic ``tests/`` default
+    (unchanged). Any other language, or no detectable runner, yields ``None``.
+
+    The module path is caller/issue-influenced, so it flows through
+    :func:`_validated_project_path` (CWE-022) before any filesystem use and the
+    returned write-target is re-asserted in-root. Never raises: any error path
+    returns ``None`` (no greenfield adoption — safe fallback to the derived path).
+    """
+    try:
+        root_resolved = Path.cwd().resolve()
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        if module_path is None:
+            return None
+        if module_path.suffix.lower() not in _JS_TS_EXTENSIONS:
+            return None
+        if not _project_uses_js_test_runner(module_path, root_resolved):
+            return None
+        candidate = (
+            module_path.parent
+            / "__test__"
+            / f"{module_path.stem}.test{module_path.suffix}"
+        )
+        resolved = _validated_project_path(candidate, root=root_resolved)
+        if resolved is None or not _contained_in_root(resolved, root_resolved):
+            return None
+        if resolved == module_path:
+            return None
+        return resolved
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
 def resolve_test_output_path(
     code_file: str | Path,
     derived_test_path: str | Path,
@@ -643,7 +766,11 @@ def resolve_test_output_path(
     project's real test runner, so on a jest/Next.js project it maintains a
     ``tests/`` shadow while the co-located test the runner collects goes stale
     (a false-green). When a single unambiguous co-located test exists, return
-    it so generate/change/sync target the real file instead.
+    it so generate/change/sync target the real file instead. When NO co-located
+    test exists yet but the project configures a jest/vitest runner (greenfield,
+    issue #1903 §A), return the co-located path the runner will collect
+    (``{module_dir}/__test__/{stem}.test.{ext}``) so the FIRST test lands where
+    the runner looks — never a root ``tests/`` orphan.
 
     Args:
         code_file: The module under test.
@@ -662,7 +789,18 @@ def resolve_test_output_path(
     try:
         sibling = find_collocated_test(code_file)
         if sibling is None:
-            return derived
+            # Greenfield (issue #1903 §A): no existing co-located test. If the
+            # project configures a JS/TS runner, write the FIRST test where the
+            # runner actually collects it rather than the runner-blind derived
+            # ``tests/`` shadow. No runner detected (or Python) -> derived.
+            greenfield = find_runner_collected_test_path(code_file)
+            if greenfield is None:
+                return derived
+            root_resolved = Path.cwd().resolve()
+            derived_resolved = _validated_project_path(derived, root=root_resolved)
+            if derived_resolved is not None and greenfield == derived_resolved:
+                return derived
+            return greenfield
         root_resolved = Path.cwd().resolve()
         sibling_resolved = _validated_project_path(sibling, root=root_resolved)
         if sibling_resolved is None:
