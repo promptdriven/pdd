@@ -512,9 +512,15 @@ def _writer_fields(source: str, source_path: str) -> list[tuple[str, str, int]]:
 
 def _is_test_path(path: Path) -> bool:
     name = path.name.lower()
-    return name.startswith("test_") or ".test." in name or ".spec." in name or any(
-        part.lower() in {"test", "tests", "__test__", "__tests__"}
-        for part in path.parts
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or ".test." in name
+        or ".spec." in name
+        or any(
+            part.lower() in {"test", "tests", "__test__", "__tests__"}
+            for part in path.parts
+        )
     )
 
 
@@ -585,6 +591,22 @@ def _normalize_sources(sources: Mapping[str | Path, str]) -> dict[str, str]:
     return {str(path): content for path, content in sources.items()}
 
 
+def _mock_association_counts(
+    sources: Mapping[str, str],
+    resources: set[str],
+) -> Counter[tuple[str, str]]:
+    """Count mock fields only for resources named by the same test source."""
+    counts: Counter[tuple[str, str]] = Counter()
+    for path, source in sources.items():
+        source_resources = {resource for resource in resources if resource in source}
+        if not source_resources:
+            continue
+        for use in extract_mock_fields(source, path):
+            for resource in source_resources:
+                counts[(resource, use.field_name)] += 1
+    return counts
+
+
 def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-statements
     *,
     project_root: Path,
@@ -622,27 +644,21 @@ def validate_mock_contracts(  # pylint: disable=too-many-locals,too-many-stateme
         for use in extract_query_fields(source, path)
     )
     current_query_counts: Counter[tuple[str, str]] = Counter()
-    baseline_mock_counts = Counter(
-        use.field_name
-        for path, source in baseline_tests.items()
-        for use in extract_mock_fields(source, path)
-    )
-    current_mock_counts = Counter(use.field_name for use in mock_fields)
-    new_mock_names = {
-        name
-        for name, count in current_mock_counts.items()
-        if count > baseline_mock_counts[name]
+    query_resources = {use.resource for use in queries}
+    baseline_mock_counts = _mock_association_counts(baseline_tests, query_resources)
+    current_mock_counts = _mock_association_counts(tests, query_resources)
+    new_mock_pairs = {
+        pair
+        for pair, count in current_mock_counts.items()
+        if count > baseline_mock_counts[pair]
     }
-    test_text = "\n".join(tests.values())
 
     candidates: list[QueryFieldUse] = []
     for use in queries:
         pair = (use.resource, use.field_name)
         current_query_counts[pair] += 1
         new_query = current_query_counts[pair] > baseline_query_counts[pair]
-        mock_introduced = (
-            use.field_name in new_mock_names and use.resource in test_text
-        )
+        mock_introduced = pair in new_mock_pairs
         if new_query or mock_introduced:
             candidates.append(use)
 
@@ -809,20 +825,15 @@ def validate_changed_files(  # pylint: disable=too-many-branches,too-many-locals
     # uses that match a newly added mock field and are tied to a resource named
     # by the changed test.  Treat the unchanged reader as its own baseline so
     # candidate selection is driven by the new mock, not by legacy code.
-    current_mock_counts = Counter(
+    # A changed test may establish a new resource/field association even when
+    # the repository-wide count for that field is unchanged. Load matching
+    # unchanged readers here; validate_mock_contracts performs the precise
+    # resource-aware comparison once those readers are available.
+    new_mock_names = {
         use.field_name
         for source_path, source in tests.items()
+        if source != baseline_tests.get(source_path, "")
         for use in extract_mock_fields(source, source_path)
-    )
-    baseline_mock_counts = Counter(
-        use.field_name
-        for source_path, source in baseline_tests.items()
-        for use in extract_mock_fields(source, source_path)
-    )
-    new_mock_names = {
-        name
-        for name, count in current_mock_counts.items()
-        if count > baseline_mock_counts[name]
     }
     if new_mock_names and tests:
         test_text = "\n".join(tests.values())

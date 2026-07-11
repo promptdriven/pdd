@@ -1017,6 +1017,49 @@ def test_run_ci_validation_loop_retries_and_commits_fix(tmp_path: Path) -> None:
     )
 
 
+def test_run_ci_validation_loop_blocks_invalid_fix_before_commit(tmp_path: Path) -> None:
+    """A remediation-specific safety gate must run before commit and push."""
+    failing_checks = [
+        {"name": "tests", "state": "FAILURE", "bucket": "fail", "link": ""}
+    ]
+    check_calls: list[Path] = []
+
+    def reject_contract(worktree: Path) -> tuple[bool, str]:
+        check_calls.append(worktree)
+        return False, "Remediation commit blocked. MOCK_CONTRACT_DIVERGENCE"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value="pytest failed"), \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="{ci_failure_logs}",
+            run_agentic_task_fn=lambda **_: (
+                True,
+                "CI_FIX_APPLIED",
+                0.25,
+                "mock-model",
+            ),
+            timeout=120.0,
+            quiet=True,
+            pre_commit_check=reject_contract,
+        )
+
+    assert success is False
+    assert "MOCK_CONTRACT_DIVERGENCE" in message
+    assert cost == pytest.approx(0.25)
+    assert check_calls == [tmp_path]
+    mock_commit.assert_not_called()
+
+
 def test_run_ci_validation_loop_requires_ci_fix_marker(tmp_path: Path) -> None:
     """A task output without CI_FIX_APPLIED should stop before commit/push."""
     failing_checks = [

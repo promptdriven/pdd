@@ -141,6 +141,32 @@ def test_additional_occurrence_of_existing_mock_field_is_still_new(tmp_path: Pat
     assert report.status == "diverged"
 
 
+def test_reassociated_mock_field_is_new_when_global_count_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Replacing an unrelated mock cannot hide a new resource association."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    baseline_test = (
+        "RESOURCE = 'unrelated_collection'\n"
+        "mock_query.return_value = [{'userId': 'legacy'}]\n"
+    )
+    current_test = (
+        "RESOURCE = 'user_waitlist'\n"
+        "mock_query.return_value = [{'userId': 'fabricated'}]\n"
+    )
+
+    report = validate_mock_contracts(
+        project_root=tmp_path,
+        production_sources={"reader.py": _BROKEN_CODE},
+        test_sources={"tests/test_reader.py": current_test},
+        baseline_production_sources={"reader.py": _BROKEN_CODE},
+        baseline_test_sources={"tests/test_reader.py": baseline_test},
+    )
+
+    assert report.status == "diverged"
+    assert report.findings[0].resource == "user_waitlist"
+
+
 def test_missing_contract_is_inconclusive_not_a_name_heuristic(tmp_path: Path) -> None:
     report = validate_mock_contracts(
         project_root=tmp_path,
@@ -479,6 +505,45 @@ def test_changed_file_loader_checks_new_mock_for_unchanged_query(tmp_path: Path)
 
     assert report.status == "diverged"
     assert report.findings[0].code_path == "backend/reader.py"
+
+
+def test_changed_file_loader_recognizes_pytest_suffix_test(tmp_path: Path) -> None:
+    """Pytest's ``*_test.py`` convention must be routed as test input."""
+    _write_waitlist_schema(tmp_path, "email", "status")
+    code = tmp_path / "backend" / "reader.py"
+    test = tmp_path / "backend" / "reader_test.py"
+    code.parent.mkdir(parents=True)
+    code.write_text(_BROKEN_CODE, encoding="utf-8")
+    test.write_text(
+        "RESOURCE = 'user_waitlist'\ndef test_old(): pass\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "backend"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=PDD Test",
+            "-c",
+            "user.email=pdd-test@example.com",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    test.write_text("RESOURCE = 'user_waitlist'\n" + _BROKEN_TEST, encoding="utf-8")
+
+    report = validate_changed_files(
+        project_root=tmp_path,
+        changed_files=["backend/reader_test.py"],
+        baseline_ref="HEAD",
+    )
+
+    assert report.status == "diverged"
+    assert report.mock_fields[0].source_path == "backend/reader_test.py"
 
 
 def test_changed_file_loader_ignores_paths_outside_project(tmp_path: Path) -> None:

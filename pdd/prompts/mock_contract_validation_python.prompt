@@ -34,7 +34,7 @@ Write `pdd/mock_contract_validation.py`, a deterministic success gate for issue 
 R1 (MUST): The #1939 regression shape — code queries `user_waitlist.userId`, a passing test mocks `userId`, and the exact `user_waitlist` schema omits it — returns `status="diverged"` with code, mock, and schema locations.
 R2 (MUST): A field explicitly present in the exact schema, or corroborated by an independent production reader/writer, never produces a divergence.
 R3 (MUST): Missing evidence returns `inconclusive`, not a heuristic failure. Field spelling alone is never evidence.
-R4 (MUST): Baseline sources make validation diff-aware. Check newly introduced resource/field queries and newly introduced mock fields tied to an existing query; do not relitigate unchanged legacy pairs.
+R4 (MUST): Baseline sources make validation diff-aware. Check newly introduced resource/field queries and newly introduced resource/mock-field associations tied to an existing query; compare mocks by resource plus field rather than global field-name totals, so replacing an unrelated same-named mock cannot hide a new contract. Do not relitigate unchanged legacy pairs.
 R5 (MUST): Schema parsing preserves field paths: a nested object field does not authorize querying that nested name as a top-level field, while the correctly qualified dotted path remains valid.
 R6 (MUST): `MockContractDivergenceError` retains the structured report and formats an explicit `MOCK_CONTRACT_DIVERGENCE` diagnostic.
 </contract_rules>
@@ -47,11 +47,11 @@ R6 (MUST): `MockContractDivergenceError` retains the structured report and forma
 
 3. Discover bounded schema files under the project root (`context`, `docs`, `schemas`, and root schema files), skipping generated/vendor/research trees and oversized files. For Markdown, require an exact `resource/` block and derive top-level plus indentation-qualified dotted field paths below its document-id row. For JSON, require an exact resource identity/key and explicit `properties`/`fields`, including nested object/array properties as dotted paths.
 
-4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself.
+4. Scan independent Python production files for exact resource query fields and literal writer payload fields. Exclude tests, including pytest's `test_*.py` and `*_test.py` conventions plus files below test/tests directories, prospective output paths, and every original/baseline production path (resolved to collapse relative, absolute, and symlink aliases), so an iterative fix candidate already written in place cannot certify itself.
 
 5. `validate_mock_contracts` returns immutable structured evidence. Candidate selection is diff-aware using optional baseline maps. Status is `not_applicable`, `clean`, `inconclusive`, or `diverged`.
 
-6. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. For a test-only edit that adds a mock field, locate an unchanged exact production query tied to the resource named by that test and validate that pair too. Git/read failures degrade to conservative current-source validation.
+6. `validate_changed_files` loads changed Python code/tests from disk and optional baselines with `git show <ref>:<path>`, then delegates to `validate_mock_contracts`. Treat pytest-valid `*_test.py` files as tests even outside conventional test directories. For any changed test source containing mock fields, locate unchanged production queries that may match; the delegated validator then compares precise `(resource, field)` associations against the baseline, catching replacements whose global field count is unchanged without relitigating unchanged associations. Git/read failures degrade to conservative current-source validation.
 
 7. Diagnostics name the exact `resource.field`, production line, schema source, and divergent mock source. `enforce_mock_contracts` raises only for `diverged`; inconclusive evidence remains a visible workflow warning.
 

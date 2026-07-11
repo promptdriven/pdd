@@ -1345,6 +1345,7 @@ def run_ci_validation_loop(
     timeout: float,
     quiet: bool,
     expected_head_sha_override: Optional[str] = None,
+    pre_commit_check: Optional[Callable[[Path], Tuple[bool, str]]] = None,
 ) -> Tuple[bool, str, float]:
     """Poll required PR checks and iterate on CI-only failures until they pass.
 
@@ -1688,6 +1689,11 @@ def run_ci_validation_loop(
                 cwd=cwd,
             )
             return False, "CI fix task did not apply an actionable fix", total_cost
+
+        if pre_commit_check is not None:
+            check_success, check_message = pre_commit_check(cwd)
+            if not check_success:
+                return False, check_message, total_cost
 
         commit_success, commit_message = _commit_ci_fix(
             cwd=cwd,

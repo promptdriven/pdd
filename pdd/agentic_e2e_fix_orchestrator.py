@@ -11,7 +11,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Sequence, Set, NamedTuple
+from typing import Callable, List, Tuple, Dict, Any, Optional, Sequence, Set, NamedTuple
 
 from rich.console import Console
 
@@ -793,13 +793,15 @@ def _is_test_file(filename: str) -> bool:
     """Check if a filename matches test file conventions for any supported language.
 
     Recognizes:
-    - Python: test_*.py
+    - Python: test_*.py, *_test.py
     - Jest: *.test.ts, *.test.tsx (including files in __test__/ directories)
     - Playwright: *.spec.ts, *.spec.tsx
     """
     basename = Path(filename).name
     # Python convention
-    if basename.startswith("test_") and basename.endswith(".py"):
+    if (
+        basename.startswith("test_") and basename.endswith(".py")
+    ) or basename.endswith("_test.py"):
         return True
     # TypeScript/JavaScript conventions (Jest + Playwright)
     for ext in _TS_TEST_EXTENSIONS:
@@ -956,14 +958,13 @@ def _extract_test_files(
     # snapshot was taken).
     committed_files = _get_modified_and_untracked(cwd)
     for f in committed_files:
-        basename = Path(f).name
-        if basename.startswith("test_") and basename.endswith(".py"):
+        if _is_test_file(f):
             _add(f)
 
-    # Ultimate fallback: directory scan for test_*.py files on disk.
+    # Ultimate fallback: directory scan for pytest Python files on disk.
     # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
-    # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
+    # Scoped to tests/ dir (recursive) and root-level Python tests (non-recursive).
     # Capped at MAX_FALLBACK_TEST_FILES to prevent runaway verification on
     # large repos (see Issues #953, #1010, #1031, #1155).
     if not test_files:
@@ -973,14 +974,15 @@ def _extract_test_files(
             if not scan_dir.is_dir():
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
-            for test_py in glob_fn("test_*.py"):
-                try:
-                    rel = str(test_py.relative_to(cwd))
-                except ValueError:
-                    continue
-                if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
-                    continue
-                candidates.append(rel)
+            for pattern in ("test_*.py", "*_test.py"):
+                for test_py in glob_fn(pattern):
+                    try:
+                        rel = str(test_py.relative_to(cwd))
+                    except ValueError:
+                        continue
+                    if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
+                        continue
+                    candidates.append(rel)
 
         # Sort by mtime descending so the cap keeps recently-modified files
         # (more likely relevant) rather than arbitrary alphabetical order.
@@ -1134,6 +1136,28 @@ def _validate_changed_mock_contracts(
         changed_files=changed_files,
         baseline_ref=baseline_ref,
     )
+
+
+def _validate_remediation_mock_contracts(
+    *,
+    cwd: Path,
+    initial_file_hashes: Dict[str, Optional[str]],
+    baseline_ref: Optional[str],
+    quiet: bool,
+) -> Tuple[bool, str]:
+    """Fail closed before a post-verification remediation commit or push."""
+    changed_files = _detect_changed_files(cwd, initial_file_hashes)
+    report = _validate_changed_mock_contracts(
+        cwd=cwd,
+        changed_files=changed_files,
+        baseline_ref=baseline_ref,
+    )
+    message = format_mock_contract_report(report)
+    if report.diverged:
+        return False, f"Remediation commit blocked. {message}"
+    if report.status == "inconclusive" and not quiet:
+        console.print(f"[yellow]{message}[/yellow]")
+    return True, message
 
 
 def _update_dev_unit_states(output: str, current_states: Dict[str, Any], identified_units_str: str) -> Dict[str, Any]:
@@ -1849,6 +1873,7 @@ def _run_pre_checkup_gate_with_remediation(
     timeout: float,
     initial_file_hashes: Dict[str, str],
     quiet: bool,
+    pre_commit_check: Optional[Callable[[Path], Tuple[bool, str]]] = None,
 ) -> Tuple[bool, str, float, List[str]]:
     """Run the local pre-checkup gate and remediate actionable gate failures."""
     total_cost = 0.0
@@ -1931,6 +1956,11 @@ def _run_pre_checkup_gate_with_remediation(
                 total_cost,
                 latest_changed_files,
             )
+
+        if pre_commit_check is not None:
+            check_success, check_message = pre_commit_check(cwd)
+            if not check_success:
+                return False, check_message, total_cost, latest_changed_files
 
         commit_success, commit_message = _commit_ci_fix(
             cwd=cwd,
@@ -3701,6 +3731,14 @@ def run_agentic_e2e_fix_orchestrator(
             if not step10_template:
                 return False, "Could not load prompt template: agentic_e2e_fix_step10_ci_validation_LLM", total_cost, model_used, changed_files
 
+            def remediation_contract_check(check_cwd: Path) -> Tuple[bool, str]:
+                return _validate_remediation_mock_contracts(
+                    cwd=check_cwd,
+                    initial_file_hashes=initial_file_hashes,
+                    baseline_ref=initial_sha,
+                    quiet=quiet,
+                )
+
             ci_success, ci_message, ci_cost = run_ci_validation_loop(
                 cwd=cwd,
                 repo_owner=repo_owner,
@@ -3711,6 +3749,7 @@ def run_agentic_e2e_fix_orchestrator(
                 run_agentic_task_fn=run_agentic_task,
                 timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                 quiet=quiet,
+                pre_commit_check=remediation_contract_check,
             )
             total_cost += ci_cost
             changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
@@ -3795,6 +3834,7 @@ def run_agentic_e2e_fix_orchestrator(
                         timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                         initial_file_hashes=initial_file_hashes,
                         quiet=quiet,
+                        pre_commit_check=remediation_contract_check,
                     )
                 )
                 total_cost += gate_cost
@@ -3812,6 +3852,18 @@ def run_agentic_e2e_fix_orchestrator(
                 # fingerprint finalization stays with the post-merge sync, per the
                 # PR plan). It is a safe no-op (returns success) when the gate
                 # healed nothing.
+                gate_contract_ok, gate_contract_message = (
+                    remediation_contract_check(cwd)
+                )
+                if not gate_contract_ok:
+                    return (
+                        False,
+                        gate_contract_message,
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+
                 gate_sync_ok, gate_sync_message = _commit_and_push(
                     cwd=cwd,
                     issue_number=issue_number,

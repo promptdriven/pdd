@@ -6526,7 +6526,7 @@
   },
   {
     "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and code cleanup.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, repository-backed mock-contract validation, CI validation, and a deterministic pre-checkup drift-sync gate.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, repository-backed mock-contract validation before every initial or remediation commit/push, CI validation, and a deterministic pre-checkup drift-sync gate.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "ci_validation_python.prompt",
@@ -8444,11 +8444,12 @@
         "functions": [
           {
             "name": "run_ci_validation_loop",
-            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
+            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None, pre_commit_check=None)",
             "returns": "Tuple[bool, str, float]",
             "sideEffects": [
               "without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout",
               "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
+              "when supplied, pre_commit_check(cwd) must pass after every CI remediation edit and before its commit/push",
               "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
               "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
               "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive, ignoring passed checks for trigger matching",
@@ -11686,7 +11687,7 @@
   },
   {
     "reason": "Rejects green fixes whose generated mocks contradict repository-backed schema and interface evidence.",
-    "description": "Diff-aware AST and schema gate that extracts Python query fields and mock payload shapes, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
+    "description": "Diff-aware AST and schema gate that extracts Python query fields and mock payload shapes, compares resource/field associations rather than global field counts, recognizes both pytest Python filename conventions, checks exact Markdown/JSON schema sections plus independent production readers/writers, and returns clean, inconclusive, or evidence-linked divergence results for manual and agentic fix workflows.",
     "dependencies": [],
     "priority": 5,
     "filename": "mock_contract_validation_python.prompt",

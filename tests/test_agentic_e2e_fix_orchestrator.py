@@ -2571,6 +2571,19 @@ class TestIndependentTestVerification:
         assert "tests/test_foo.py" in result
         assert "src/foo.py" not in result
 
+    def test_extract_test_files_accepts_pytest_suffix_convention(self, tmp_path):
+        """Root/package ``*_test.py`` files are valid pytest test modules."""
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend" / "reader_test.py").touch()
+
+        result = _extract_test_files(
+            "No markers here",
+            ["backend/reader_test.py", "backend/reader.py"],
+            tmp_path,
+        )
+
+        assert result == ["backend/reader_test.py"]
+
     def test_extract_test_files_deduplicates(self, tmp_path):
         """Same test file from multiple sources should appear only once."""
         (tmp_path / "tests").mkdir()
@@ -10715,6 +10728,54 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+    def test_local_gate_remediation_checks_contract_before_commit(
+        self, tmp_path, monkeypatch
+    ):
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: (False, "pre_checkup_gate blocked", 0.0),
+        )
+        commit_calls = []
+        monkeypatch.setattr(
+            orch,
+            "_commit_ci_fix",
+            lambda **kwargs: commit_calls.append(kwargs) or (True, "committed"),
+        )
+
+        success, message, cost, _changed_files = (
+            orch._run_pre_checkup_gate_with_remediation(
+                cwd=tmp_path,
+                changed_files=["app/foo.py"],
+                repo_owner="owner",
+                repo_name="repo",
+                issue_url="https://github.com/owner/repo/issues/42",
+                issue_number=42,
+                step10_template="{ci_check_results}",
+                run_agentic_task_fn=lambda **_kwargs: (
+                    True,
+                    "CI_FIX_APPLIED",
+                    0.1,
+                    "model",
+                ),
+                ci_retries=1,
+                timeout=60.0,
+                initial_file_hashes={},
+                quiet=True,
+                pre_commit_check=lambda _cwd: (
+                    False,
+                    "Remediation commit blocked. MOCK_CONTRACT_DIVERGENCE",
+                ),
+            )
+        )
+
+        assert success is False
+        assert "MOCK_CONTRACT_DIVERGENCE" in message
+        assert cost == 0.1
+        assert commit_calls == []
 
 
 class TestVerifierOutputDetail:
