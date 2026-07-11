@@ -294,12 +294,20 @@ def _prompt_units(
     registry: LanguageRegistry,
     ownership_rules: tuple[OwnershipRule, ...],
     protected_owned_paths: set[PurePosixPath],
+    approved_aliases: dict[PurePosixPath, PurePosixPath],
 ) -> tuple[dict[PurePosixPath, UnitId], list[str]]:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     units: dict[PurePosixPath, UnitId] = {}
     invalid: list[str] = []
+    aliased_prompt_targets = {
+        canonical
+        for alias, canonical in approved_aliases.items()
+        if alias.suffix == ".prompt"
+    }
     for path in sorted(entries):
         if path.suffix != ".prompt" or "_" not in path.stem:
+            continue
+        if path in aliased_prompt_targets:
             continue
         rule, rule_error = (
             _ownership_for(path, ownership_rules)
@@ -675,6 +683,15 @@ def _candidate_records(
                 if item.preauthorize_absent and item.pattern == path.as_posix()
             )
             rule, rule_error = _ownership_for(path, exact_rules)
+        if (
+            path in alias_counterparts
+            and rule is not None
+            and rule.role == "excluded-project"
+        ):
+            invalid.append(
+                f"{path.as_posix()}: managed alias counterpart has an "
+                "excluded-project ownership collision"
+            )
         if path in sources.prompt_owner:
             role = "prompt"
             inventory = InventoryStatus.MANAGED
@@ -953,6 +970,7 @@ def _tree_manifest(
     registry: LanguageRegistry,
     ownership_rules: tuple[OwnershipRule, ...],
     protected_owned_paths: Optional[set[PurePosixPath]] = None,
+    approved_aliases: Optional[dict[PurePosixPath, PurePosixPath]] = None,
 ) -> _TreeManifest:
     # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Parse one immutable tree into canonical units and architecture outputs."""
@@ -964,6 +982,7 @@ def _tree_manifest(
         registry,
         ownership_rules,
         protected_owned_paths or set(entries),
+        approved_aliases or {},
     )
     outputs, architecture_invalid = _architecture_outputs(
         root,
@@ -1114,11 +1133,29 @@ def build_unit_manifest(
     repository_id = base_repository_id
     language_registry = registry or LanguageRegistry.bundled()
     ownership = _ownership_rules(repository_root, base_ref)
+    try:
+        approved_aliases, alias_invalid = _approved_aliases(
+            repository_root, base_ref, head_ref
+        )
+    except ValueError as exc:
+        raise ManifestError(str(exc)) from exc
     base = _tree_manifest(
-        repository_root, base_ref, repository_id, language_registry, ownership
+        repository_root,
+        base_ref,
+        repository_id,
+        language_registry,
+        ownership,
+        approved_aliases=approved_aliases,
     )
-    head = _tree_manifest(repository_root, head_ref, repository_id,
-                          language_registry, ownership, set(base.entries))
+    head = _tree_manifest(
+        repository_root,
+        head_ref,
+        repository_id,
+        language_registry,
+        ownership,
+        set(base.entries),
+        approved_aliases,
+    )
     try:
         tombstones = load_tombstones(repository_root, base_ref)
         head_tombstones = load_tombstones(repository_root, head_ref)
@@ -1127,9 +1164,6 @@ def build_unit_manifest(
         )
         head_expected_registry = load_expected_registry(
             repository_root, head_ref, repository_id
-        )
-        approved_aliases, alias_invalid = _approved_aliases(
-            repository_root, base_ref, head_ref
         )
         managed_paths = (
             set(base.units)
@@ -1163,9 +1197,29 @@ def build_unit_manifest(
         return transition
 
     head_ownership = _ownership_rules(repository_root, head_ref)
-    head_aliases, _ = _approved_aliases(repository_root, head_ref, head_ref)
+    head_aliases, stable_alias_invalid = _approved_aliases(
+        repository_root, head_ref, head_ref
+    )
     stable_base = _tree_manifest(repository_root, head_ref, repository_id,
-                                 language_registry, head_ownership)
+                                 language_registry, head_ownership,
+                                 approved_aliases=head_aliases)
+    stable_alias_invalid.extend(
+        _validate_managed_alias_counterparts(
+            repository_root,
+            set(stable_base.units) | set(stable_base.outputs),
+            head_aliases,
+            base_ref=head_ref,
+            head_ref=head_ref,
+        )
+    )
+    if stable_alias_invalid:
+        stable_base = _TreeManifest(
+            stable_base.ref,
+            stable_base.entries,
+            stable_base.units,
+            stable_base.outputs,
+            tuple(stable_base.invalid_reasons + tuple(stable_alias_invalid)),
+        )
     stable = _assemble_manifest(repository_id, language_registry.digest(),
                                 stable_base, stable_base, head_tombstones,
                                 head_expected_registry, head_ownership,

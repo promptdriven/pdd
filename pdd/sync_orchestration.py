@@ -11,7 +11,7 @@ import datetime
 import subprocess
 import re
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import asdict, dataclass, field
 import tempfile
@@ -690,6 +690,7 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             attestation_signer_from_environment,
             finalize_unit,
         )
+        from .sync_core.finalize import lexical_managed_module
 
         root = repository_root(start)
         protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
@@ -697,11 +698,12 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
             raise RuntimeError(
                 "canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA"
             )
-        prompt_path = Path(paths["prompt"]).resolve()
-        try:
-            module = PurePosixPath(prompt_path.relative_to(root).as_posix())
-        except ValueError as exc:
-            raise RuntimeError("canonical prompt path escapes project root") from exc
+        module = lexical_managed_module(
+            root,
+            Path(paths["prompt"]),
+            base_ref=protected_base,
+            head_ref="HEAD",
+        )
         finalize_unit(
             root,
             module,

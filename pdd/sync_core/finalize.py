@@ -21,7 +21,8 @@ from .evidence_store import (
 )
 from .fingerprint_store import FingerprintStore, encode_fingerprint
 from .git_io import resolve_git_commit
-from .manifest import build_unit_manifest
+from .manifest import build_unit_manifest, require_valid_manifest
+from .path_policy import PathPolicy
 from .runner import (
     TRUSTED_RUNNER_VERSION,
     AttestationIssue,
@@ -93,8 +94,9 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
         protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
         if not protected_base:
             raise ValueError("canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA")
-        prompt = Path(paths["prompt"]).resolve()
-        module = PurePosixPath(prompt.relative_to(root).as_posix())
+        module = lexical_managed_module(
+            root, Path(paths["prompt"]), base_ref=protected_base, head_ref="HEAD"
+        )
         finalize_unit(
             root,
             module,
@@ -107,6 +109,29 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
             f"trusted canonical finalization failed: {exc}"
         ) from exc
     return True
+
+
+def lexical_managed_module(
+    root: Path, prompt: Path, *, base_ref: str, head_ref: str
+) -> PurePosixPath:
+    """Return a policy-validated prompt's lexical repository identity."""
+    repository_root = Path(root).resolve()
+    lexical_prompt = Path(os.path.abspath(prompt))
+    try:
+        module = PurePosixPath(lexical_prompt.relative_to(repository_root).as_posix())
+    except ValueError as exc:
+        raise ValueError("canonical prompt path escapes project root") from exc
+    manifest = build_unit_manifest(
+        repository_root, base_ref=base_ref, head_ref=head_ref
+    )
+    require_valid_manifest(manifest)
+    policy = PathPolicy(
+        repository_root,
+        approved_aliases=load_protected_aliases(repository_root, manifest),
+        base_ref=manifest.base_ref,
+        head_ref=manifest.head_ref,
+    )
+    return policy.resolve(module).logical_relpath
 
 
 def attestation_signer_from_environment() -> AttestationIssuer:

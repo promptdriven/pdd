@@ -155,6 +155,19 @@ class PathPolicy:
         )
         return configured
 
+    def _live_alias_target(
+        self, component: Path, logical_component: PurePosixPath
+    ) -> PurePosixPath:
+        """Normalize one live link target without following intermediates."""
+        try:
+            return self._canonical_alias_target(
+                logical_component, os.readlink(component).encode("utf-8")
+            )
+        except (OSError, UnicodeEncodeError, PathPolicyError) as exc:
+            raise PathPolicyError(
+                f"approved alias target changed: {logical_component}"
+            ) from exc
+
     def resolve(self, relpath: PurePosixPath, *, allow_missing: bool = False) -> ResolvedPath:
         """Resolve a logical path without permitting unapproved link traversal."""
         self._validate_relpath(relpath)
@@ -178,6 +191,13 @@ class PathPolicy:
             if stat.S_ISLNK(mode):
                 if approved_target is None:
                     raise PathPolicyError(f"unapproved managed symlink: {logical_component}")
+                if (
+                    self._live_alias_target(component, logical_component)
+                    != approved_target
+                ):
+                    raise PathPolicyError(
+                        f"approved alias target changed: {logical_component}"
+                    )
                 canonical_relpath = approved_target.joinpath(*parts[index:])
                 validate_canonical_alias_path(
                     self.checkout_root,
