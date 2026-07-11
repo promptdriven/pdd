@@ -127,9 +127,16 @@ def _local_module_paths(
         return set(), False
     modules: set[str] = set()
     dynamic_pytest_plugins = False
+    importlib_names = {"importlib"}
+    loader_names = {"__import__"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
+            importlib_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "importlib"
+            )
         elif isinstance(node, ast.ImportFrom):
             prefix = "." * node.level
             module = prefix + (node.module or "")
@@ -140,15 +147,17 @@ def _local_module_paths(
                     continue
                 separator = "" if not module or module.endswith(".") else "."
                 modules.add(f"{module}{separator}{alias.name}")
+                if node.module == "importlib" and alias.name == "import_module":
+                    loader_names.add(alias.asname or alias.name)
         elif _declares_pytest_plugins(_pytest_plugin_declaration_targets(node)):
             declared, dynamic = _pytest_plugin_modules(node.value)
             modules.update(declared)
             dynamic_pytest_plugins = dynamic_pytest_plugins or dynamic
         elif isinstance(node, ast.Call) and (
-            isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            isinstance(node.func, ast.Name) and node.func.id in loader_names
             or isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "importlib"
+            and node.func.value.id in importlib_names
             and node.func.attr == "import_module"
         ):
             dynamic_pytest_plugins = True
@@ -172,6 +181,16 @@ def _local_module_paths(
             if read_git_blob(root, ref, path) is not None
             and path not in code_under_test_paths
         )
+    for path in tuple(resolved):
+        parent = path.parent
+        while parent != PurePosixPath("."):
+            initializer = parent / "__init__.py"
+            if (
+                read_git_blob(root, ref, initializer) is not None
+                and initializer not in code_under_test_paths
+            ):
+                resolved.add(initializer)
+            parent = parent.parent
     return resolved, dynamic_pytest_plugins
 
 

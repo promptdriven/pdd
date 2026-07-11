@@ -22,6 +22,25 @@ class CandidateArtifactProvenanceError(ValueError):
     """Raised when a candidate wheel lacks protected build provenance."""
 
 
+_MAXIMUM_ATTESTATION_LIFETIME = timedelta(minutes=15)
+
+
+def _reject_symlink_components(path: Path) -> Path:
+    """Return an absolute lexical path only when no existing component is a link."""
+    candidate = path.expanduser().absolute()
+    for component in (candidate, *candidate.parents):
+        try:
+            if component.is_symlink():
+                raise CandidateArtifactProvenanceError(
+                    "candidate replay ledger is unsafe"
+                )
+        except OSError as exc:
+            raise CandidateArtifactProvenanceError(
+                "candidate replay ledger is unsafe"
+            ) from exc
+    return candidate
+
+
 def _canonical_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -111,16 +130,12 @@ class CandidateArtifactPolicy:
         self._consumed.add(key)
 
     def _consume_durable(self, key: tuple[str, str, str]) -> None:
-        path = Path(self.replay_ledger_path).expanduser().resolve()
-        if path.is_symlink():
-            raise CandidateArtifactProvenanceError("candidate replay ledger is unsafe")
+        path = _reject_symlink_components(Path(self.replay_ledger_path))
         path.parent.mkdir(parents=True, exist_ok=True)
+        path = _reject_symlink_components(path)
         lock_path = path.with_name(f"{path.name}.lock")
         with FileLock(str(lock_path)):
-            if path.is_symlink():
-                raise CandidateArtifactProvenanceError(
-                    "candidate replay ledger is unsafe"
-                )
+            _reject_symlink_components(path)
             records = self._read_durable_records(path)
             if list(key) in records:
                 raise CandidateArtifactProvenanceError(
@@ -277,6 +292,10 @@ class CandidateArtifactProvenance:
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         if expires <= issued or expires <= current:
             raise CandidateArtifactProvenanceError("candidate attestation is expired")
+        if expires - issued > _MAXIMUM_ATTESTATION_LIFETIME:
+            raise CandidateArtifactProvenanceError(
+                "candidate attestation lifetime exceeds protected maximum"
+            )
         if issued > current + timedelta(minutes=5):
             raise CandidateArtifactProvenanceError("candidate attestation is not yet valid")
         if expected_source_sha is not None and self.source_sha != expected_source_sha:
