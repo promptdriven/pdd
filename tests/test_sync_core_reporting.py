@@ -567,6 +567,10 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     tmp_path,
 ) -> None:
     root, commit = _repository(tmp_path)
+    manifest = build_unit_manifest(root, base_ref=commit, head_ref=commit)
+    profile = load_verification_profiles(root, manifest).profiles[0]
+    snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
+    expected_artifact_closure = snapshot.digest()
     result = finalize_unit(
         root,
         PurePosixPath("prompts/widget_python.prompt"),
@@ -576,6 +580,13 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
         replay_ledger_path=tmp_path / "external-trust/finalizer.json",
     )
     assert result.transaction.phase.value == "COMMITTED"
+    attestation = json.loads(
+        (root / evidence_relpath(result.attestation_id)).read_text(encoding="utf-8")
+    )
+    assert (
+        attestation["binding"]["artifact_closure_digest"]
+        == expected_artifact_closure
+    )
     _git(root, "add", ".pdd/meta/v2", ".pdd/evidence/v2")
     _git(root, "commit", "-q", "-m", "commit trusted sync evidence")
     finalized_commit = _git(root, "rev-parse", "HEAD")
