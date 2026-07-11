@@ -168,6 +168,8 @@ class TestPromptFormatting:
         for i in range(1, 9):
             base_context[f"step{i}_output"] = f"Step {i} output"
         base_context["next_cycle"] = 2  # Required for "more cycles needed" section
+        base_context["mock_contract_audit_required"] = "true"
+        base_context["mock_contract_test_files"] = "- `tests/test_example.py`"
 
         template = load_prompt_template("agentic_e2e_fix_step9_verify_all_LLM")
         assert template is not None, "Template should load"
@@ -180,6 +182,8 @@ class TestPromptFormatting:
         assert "{N}" in formatted, "Escaped {{N}} should become {N} literal in output"
         assert "{M}" in formatted, "Escaped {{M}} should become {M} literal in output"
         assert "{K}" in formatted, "Escaped {{K}} should become {K} literal in output"
+        assert "tests/test_example.py" in formatted
+        assert "MOCK_CONTRACTS_VERIFIED" in formatted
 
 
 def test_run_agentic_e2e_fix_orchestrator_has_protect_tests_parameter():
