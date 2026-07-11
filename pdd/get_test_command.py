@@ -34,17 +34,39 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     For .spec.ts/.spec.tsx files, checks for playwright.config first.
     Returns (command, config_directory) tuple if a config is found, otherwise None.
     The config_directory is where the test runner config lives — callers must use it as cwd.
+
+    The walk continues up to the JS project root (the nearest ``package.json``)
+    rather than stopping after a fixed number of parents: in Next.js/monorepo
+    layouts a colocated test can live many directories below its runner config
+    (e.g. a page test under
+    ``frontend/src/app/hackathon/[eventId]/team/__tests__/`` and the config at
+    ``frontend/jest.config.js``), so a shallow cap would miss the config and fall
+    back to a non-test runner. The nearest ancestor config still wins, and the
+    search never escapes above the project root.
+
+    Jest is invoked with ``--runTestsByPath`` so the resolved absolute path is
+    matched literally. Jest otherwise treats the trailing path as a regex, and
+    Next.js dynamic-route segments such as ``[eventId]``/``[slug]`` are regex
+    character classes that never match the literal bracketed path — leaving the
+    generated suite unexecutable.
     """
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
-    for _ in range(5):  # Walk up at most 5 levels
+    # Walk up until a config is found or we reach the JS project root (the nearest
+    # ``package.json``). The runner config lives at or below that root, so we
+    # never escape into an unrelated parent project. A hard iteration cap guards
+    # against pathological paths.
+    for _ in range(40):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
             return ("npx playwright test", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')):
-            return ("npx jest --no-coverage --", search_dir)
+            return ("npx jest --no-coverage --runTestsByPath", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
             return ("npx vitest run", search_dir)
+        # Stop at the JS project root; the config would have been found by now.
+        if (search_dir / "package.json").exists():
+            break
         parent = search_dir.parent
         if parent == search_dir:
             break

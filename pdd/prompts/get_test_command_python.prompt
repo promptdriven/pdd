@@ -8,7 +8,9 @@ You are an expert software engineer implementing the `get_test_command.py` modul
    - Heuristic detection via `default_verify_cmd_for`.
    - Fallback to `None` to trigger agentic logic.
 2. **TypeScript Smart Detection**:
-   - For `.ts` and `.tsx` files, search upwards (max 5 levels) for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
+   - For `.ts` and `.tsx` files, search upwards for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
+   - Continue the walk up to the JS project root (the nearest `package.json`), not a fixed number of parents: colocated suites in Next.js/monorepo layouts can live many directories below their runner config (e.g. a page test under `frontend/src/app/hackathon/[eventId]/team/__tests__/` and the config at `frontend/jest.config.js`). Never adopt a config above the project root, and cap the walk defensively against pathological paths.
+   - Invoke Jest with `--runTestsByPath` so the resolved absolute test path is matched literally. Jest otherwise treats the trailing path as a regex, and Next.js dynamic-route segments such as `[eventId]`/`[slug]` are regex character classes that never match the literal bracketed path.
    - If found, return the command with the specific directory containing the config as the `cwd`.
    - Prioritize Playwright for files ending in `.spec.ts` or `.spec.tsx`.
 3. **Data Classes**: Define a `TestCommand` dataclass to bundle the `command` string and an optional `cwd` (Path). Use `__test__ = False` to avoid discovery by pytest.
@@ -32,9 +34,10 @@ You are an expert software engineer implementing the `get_test_command.py` modul
 
 # Instructions
 1. **Implement `_detect_ts_test_runner(test_path: Path)`**:
-   - Walk up the directory tree (limit: 5 parents).
+   - Walk up the directory tree until a config is found or the JS project root (nearest `package.json`) is reached; apply a defensive iteration cap.
    - Check for `playwright.config.[ts|js|mjs]` only if the file is a `.spec` file.
    - Check for `jest.config` and `vitest.config` variants.
+   - Use `npx jest --no-coverage --runTestsByPath` for Jest so the absolute test path is matched literally.
    - Return a tuple of `(command_prefix, config_directory)` if found.
 2. **Implement `_load_language_format()`**:
    - Attempt to locate `language_format.csv` in `pdd/data/` or `../data/`.

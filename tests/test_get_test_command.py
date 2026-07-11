@@ -287,6 +287,86 @@ class TestTypeScriptTestRunnerDetection:
 
         assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
+    def test_jest_config_found_more_than_five_parents_up(self, tmp_path):
+        """A colocated suite deep in a Next.js app tree must still find Jest.
+
+        Regression: the runner detector previously walked up only 5 parents, so a
+        page test at frontend/src/app/<route>/<sub>/__tests__/ never reached
+        frontend/jest.config.js and fell back to a non-test runner. The walk now
+        continues up to the JS project root (package.json).
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "package.json").write_text("{}")
+        # 7 directories below the config (well past the old 5-parent cap).
+        test_dir = (
+            config_dir / "src" / "app" / "admin" / "hackathon" / "events"
+            / "eventId" / "__tests__"
+        )
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "test_page.tsx"
+        test_file.write_text("describe('page', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == config_dir
+
+    def test_jest_command_targets_path_literally_with_run_tests_by_path(self, tmp_path):
+        """Jest must be invoked with --runTestsByPath so absolute paths match.
+
+        Jest otherwise treats the trailing path as a regex; Next.js dynamic-route
+        segments like [eventId]/[slug] are character classes that never match the
+        literal bracketed path.
+        """
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / "package.json").write_text("{}")
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('c', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert "--runTestsByPath" in result.command, result.command
+
+    def test_dynamic_route_bracket_path_is_targeted_literally(self, tmp_path):
+        """A bracketed dynamic-route suite path is passed to Jest verbatim."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "package.json").write_text("{}")
+        test_dir = config_dir / "src" / "app" / "events" / "[slug]" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "test_page.tsx"
+        test_file.write_text("describe('page', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescriptreact")
+
+        assert "--runTestsByPath" in result.command
+        # The resolved absolute path (brackets intact) must appear literally.
+        assert str(test_file.resolve()) in result.command, result.command
+
+    def test_walk_stops_at_package_json_project_root(self, tmp_path):
+        """The detector must not escape above the JS project root.
+
+        A jest.config.js in an unrelated ancestor above the nearest package.json
+        must not be adopted; without an in-project config we fall back to CSV.
+        """
+        # Stray config above the project root — must be ignored.
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        project = tmp_path / "some_project"
+        project.mkdir()
+        (project / "package.json").write_text("{}")  # project root, no jest config
+        test_file = project / "src" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("console.log('x')")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        # Falls back to the CSV runner (npx tsx), never the out-of-project Jest.
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
 
 class TestPlaywrightDetection:
     """Tests for Playwright detection for .spec.ts files."""
