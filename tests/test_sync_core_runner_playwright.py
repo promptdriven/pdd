@@ -524,6 +524,53 @@ def test_explicit_candidate_local_playwright_command_is_not_trusted(tmp_path: Pa
     assert "candidate checkout" in executions[0].detail
 
 
+def test_pathless_playwright_script_operand_is_not_resolved_from_candidate(
+    tmp_path: Path,
+) -> None:
+    root, base = _repository(tmp_path)
+    (root / "fake_playwright.py").write_text(
+        _fake_playwright(tmp_path).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add pathless candidate Playwright command")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "fake_playwright.py").write_text(
+        _fake_playwright(tmp_path).read_text(encoding="utf-8") + "\n# changed\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate pathless Playwright command")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    obligation = VerificationObligation(
+        "playwright",
+        "test",
+        "playwright",
+        playwright_validator_config_digest(root, base, paths),
+        ("REQ-1",),
+        paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+
+    _envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", base, _git(root, "rev-parse", "HEAD")),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "id",
+            "nonce",
+            datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+        config=RunnerConfig(
+            timeout_seconds=2,
+            playwright_command=(sys.executable, "fake_playwright.py"),
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "pathless" in executions[0].detail
+
+
 @pytest.mark.parametrize(
     "config",
     [
