@@ -2455,8 +2455,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 # Resolve filepath relative to architecture.json's directory (project root)
                 project_root = arch_path.parent.resolve(strict=False)
-                code_path = _contained_architecture_code_path(project_root, arch_filepath)
-                if code_path is None:
+                contained_code_path = _contained_architecture_code_path(project_root, arch_filepath)
+                if contained_code_path is None:
                     logger.warning(
                         "Ignoring unsafe architecture.json filepath for %s: %r",
                         basename,
@@ -2464,12 +2464,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     )
                     arch_filepath = None
                 else:
-                    # From this point forward, use only the validated path rebuilt
-                    # from the contained resolved target, never the raw metadata.
-                    arch_filepath = code_path.relative_to(project_root).as_posix()
+                    # Containment (and territory ownership) is validated against the
+                    # RESOLVED target, but the returned code path preserves
+                    # architecture.json's authoritative validated filepath: an
+                    # in-project symlink in the metadata is not silently rewritten to
+                    # its physical target (which would lose filepath authority and
+                    # re-point if the alias later moved).
+                    arch_filepath = PurePosixPath(arch_filepath).as_posix()
                     logger.info(
                         "Found filepath in architecture.json: %r", arch_filepath
                     )
+                    code_path = project_root / arch_filepath
 
             if arch_filepath:
                 code_stem = code_path.stem

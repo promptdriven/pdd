@@ -2240,6 +2240,60 @@ def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
     )
 
 
+def test_get_pdd_file_paths_no_torn_pair_on_concurrent_architecture_rewrite(tmp_path, monkeypatch):
+    """A single resolution must draw prompt AND code from ONE architecture.json
+    version, even if the registry is atomically rewritten part-way through.
+
+    This is the observable R12 guarantee, expressed behaviorally rather than as a
+    parse count: the reader is made to return a DIFFERENT registry on any read after
+    the first. If the resolver re-read architecture.json mid-resolution it would pair
+    the version-A prompt with a version-B code target (a torn pair), so the returned
+    code path must still match version A — proving one consistent snapshot.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    pdir = tmp_path / "prompts" / "backend" / "deep"
+    pdir.mkdir(parents=True)
+    (pdir / "credits_Python.prompt").write_text("% nested credits\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+
+    version_a = [{"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}]
+    version_b = [{"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits_v2.py"}]
+    reads = {"n": 0}
+
+    def rewriting(arch):
+        reads["n"] += 1
+        # First read sees version A; any later read sees the "rewritten" version B.
+        source = version_a if reads["n"] == 1 else version_b
+        return [dict(m) for m in source]
+
+    monkeypatch.setattr(sync_determine_module, "extract_modules", rewriting)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir="prompts/backend", context_override="backend",
+    )
+
+    assert paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/functions/credits.py"
+    ), f"torn pair: code path came from a re-read architecture version: {paths['code']!r}"
+    assert not paths["code"].as_posix().endswith("credits_v2.py")
+
+
 def _write_two_context_pddrc(root):
     (root / ".pdd" / "meta").mkdir(parents=True)
     (root / ".pdd" / "locks").mkdir(parents=True)
