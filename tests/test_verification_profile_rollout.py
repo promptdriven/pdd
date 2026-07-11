@@ -12,6 +12,7 @@ from pdd.sync_core import build_unit_manifest, load_verification_profiles
 from pdd.sync_core.git_io import read_git_blob
 from pdd.sync_core.manifest import ManifestRefs
 from pdd.sync_core.runner import pytest_validator_config_digest
+from pdd.sync_core.types import InventoryStatus
 from pdd.sync_core.verification import PROFILE_PATH
 import pdd.sync_core.verification as verification
 
@@ -19,6 +20,7 @@ import pdd.sync_core.verification as verification
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_FILE = ROOT / PROFILE_PATH
 EXPECTED_PROFILE_COUNT = 466
+ROLLOUT_TEST_PATH = PurePosixPath("tests/test_verification_profile_rollout.py")
 REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
 
 
@@ -44,10 +46,20 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
     payload = json.loads(PROFILE_FILE.read_text(encoding="utf-8"))
     rows = payload["profiles"]
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    assert manifest.invalid_reasons == ()
+    assert manifest.unaccounted_tracked_paths == ()
     expected = {
         (unit.prompt_relpath.as_posix(), unit.language_id)
         for unit in manifest.expected_managed
     }
+    rollout_records = [
+        candidate
+        for candidate in manifest.candidates
+        if candidate.candidate_id.artifact_relpath == ROLLOUT_TEST_PATH
+    ]
+    assert len(rollout_records) == 1
+    assert rollout_records[0].inventory == InventoryStatus.HUMAN_OWNED
+    assert "protected-ownership" in rollout_records[0].ownership_provenance
     actual = {(row["prompt_path"], row["language_id"]) for row in rows}
 
     assert len(expected) == EXPECTED_PROFILE_COUNT

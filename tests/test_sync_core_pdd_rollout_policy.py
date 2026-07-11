@@ -12,6 +12,7 @@ from pdd.sync_core.manifest import build_unit_manifest
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_PATH = ROOT / ".pdd" / "expected-managed.json"
 OWNERSHIP_PATH = ROOT / ".pdd" / "sync-ownership.json"
+PROFILE_PATH = ROOT / ".pdd" / "verification-profiles.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 FOUNDATION_PROFILE_PATHS = {
@@ -67,7 +68,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
     )
 
     assert not (ROOT / ".pdd" / "sync-waivers.json").exists()
-    assert not (ROOT / ".pdd" / "verification-profiles.json").exists()
+    assert PROFILE_PATH.is_file()
     assert not (ROOT / ".pdd" / "attestation-trust.json").exists()
 
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
