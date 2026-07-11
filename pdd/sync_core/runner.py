@@ -961,6 +961,9 @@ def _playwright_support_closure(
     # pylint: disable=too-many-locals
     """Bind config, local support, and test imports without executing them."""
     config_path, config_source = _playwright_config(root, ref)
+    config_mode = read_git_mode(root, ref, config_path)
+    if config_mode not in {"100644", "100755"}:
+        raise ValueError("Playwright config must be a regular non-symlink file")
     paths = {config_path}
     product_paths = frozenset(code_under_test_paths)
     all_owners = frozenset(test_paths)
@@ -979,8 +982,11 @@ def _playwright_support_closure(
         path, source = _read_javascript_support_blob(root, ref, path)
         if source is None:
             raise ValueError(f"Playwright local support path is missing: {path.as_posix()}")
-        if read_git_mode(root, ref, path) == "120000":
-            raise ValueError(f"Playwright closure member must not be a symlink: {path}")
+        mode = read_git_mode(root, ref, path)
+        if mode not in {"100644", "100755"}:
+            raise ValueError(
+                f"Playwright closure member must be a regular non-symlink file: {path}"
+            )
         paths.add(path)
         if path.suffix in _JAVASCRIPT_SUFFIXES:
             imports, bare_imports, has_snapshot, resources = _playwright_source_syntax(
@@ -1082,7 +1088,80 @@ def _playwright_source_syntax(
     resource_calls = {"addInitScript", "addScriptTag", "addStyleTag", "routeFromHAR"}
     reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
     local_callables: set[str] = set()
+    receiver_bindings: dict[str, str] = {"page": "page", "frame": "frame"}
+
+    def inferred_receiver(node: Node | None) -> str | None:
+        """Infer a browser receiver kind from a structured expression."""
+        if node is None:
+            return None
+        if node.type == "identifier":
+            return receiver_bindings.get(_node_text(source, node))
+        if node.type in {"parenthesized_expression", "await_expression"}:
+            return next(
+                (kind for child in node.named_children
+                 if (kind := inferred_receiver(child)) is not None),
+                None,
+            )
+        if node.type != "call_expression":
+            return None
+        function = node.child_by_field_name("function")
+        if function is None or function.type != "member_expression":
+            return None
+        obj = function.child_by_field_name("object")
+        prop = function.child_by_field_name("property")
+        method = _node_text(source, prop) if prop is not None else ""
+        owner = inferred_receiver(obj)
+        if method == "mainFrame" and owner == "page":
+            return "frame"
+        if method in {"locator", "getByRole", "getByText", "getByTestId"} and owner in {
+            "page", "frame", "locator",
+        }:
+            return "locator"
+        if method in {"filter", "first", "last", "nth"} and owner == "locator":
+            return "locator"
+        return None
+
+    def bind_pattern(pattern: Node | None, value: Node | None = None) -> bool:
+        """Propagate receiver kinds through identifiers and object patterns."""
+        if pattern is None:
+            return False
+        if pattern.type == "identifier":
+            kind = inferred_receiver(value)
+            name = _node_text(source, pattern)
+            if kind is not None and receiver_bindings.get(name) != kind:
+                receiver_bindings[name] = kind
+                return True
+            return False
+        changed = False
+        if pattern.type in {"object_pattern", "object"}:
+            values = {}
+            if value is not None and value.type == "object":
+                for pair in value.named_children:
+                    key = pair.child_by_field_name("key")
+                    item = pair.child_by_field_name("value")
+                    if key is not None:
+                        values[_node_text(source, key)] = item
+            for pair in pattern.named_children:
+                key = pair.child_by_field_name("key")
+                target = pair.child_by_field_name("value")
+                if key is None:
+                    key = pair
+                    target = pair
+                key_text = _node_text(source, key)
+                seed = values.get(key_text)
+                if seed is None and key_text in {"page", "frame"}:
+                    receiver_bindings.setdefault(key_text, key_text)
+                    if target is not None and target.type == "identifier":
+                        alias = _node_text(source, target)
+                        if receiver_bindings.get(alias) != key_text:
+                            receiver_bindings[alias] = key_text
+                            changed = True
+                else:
+                    changed |= bind_pattern(target, seed)
+        return changed
+
     discovery = [tree.root_node]
+    declarations: list[Node] = []
     while discovery:
         candidate = discovery.pop()
         discovery.extend(candidate.named_children)
@@ -1096,6 +1175,19 @@ def _playwright_source_syntax(
             name_node = candidate.child_by_field_name("name")
             if name_node is not None and name_node.type == "identifier":
                 local_callables.add(_node_text(source, name_node))
+            if candidate.type == "variable_declarator":
+                declarations.append(candidate)
+        if candidate.type == "object_pattern":
+            bind_pattern(candidate)
+    for _unused in range(len(declarations) + 1):
+        changed = False
+        for declaration in declarations:
+            changed |= bind_pattern(
+                declaration.child_by_field_name("name"),
+                declaration.child_by_field_name("value"),
+            )
+        if not changed:
+            break
     stack = [tree.root_node]
     while stack:
         node = stack.pop()
@@ -1167,6 +1259,20 @@ def _playwright_source_syntax(
                     raise ValueError(
                         "Playwright test capability is not valid for this receiver"
                     )
+                if name == "configure":
+                    values = arguments.named_children if arguments is not None else []
+                    if len(values) != 1 or values[0].type != "object":
+                        raise ValueError("Playwright suite configuration must be literal")
+                    for pair in values[0].named_children:
+                        key = pair.child_by_field_name("key")
+                        value = pair.child_by_field_name("value")
+                        label = _node_text(source, key).strip("'\"") if key else ""
+                        if label == "retries":
+                            raise ValueError("Playwright suite retries are unsupported")
+                        if label != "mode" or value is None or value.type != "string":
+                            raise ValueError(
+                                "Playwright suite configuration only supports literal mode"
+                            )
                 if name in assertion_calls and "expect(" not in receiver:
                     raise ValueError(
                         "Playwright assertion capability is not valid for this receiver"
@@ -1176,7 +1282,7 @@ def _playwright_source_syntax(
                     "frame": frame_calls,
                     "page": page_calls,
                 }
-                receiver_kind = next(
+                receiver_kind = inferred_receiver(obj) or next(
                     (kind for kind, methods in receiver_methods.items()
                      if kind in receiver.lower()
                      or (kind == "locator" and any(
@@ -2209,12 +2315,25 @@ def _playwright_result(
                         if not isinstance(item, dict):
                             raise ValueError("malformed Playwright test")
                         results = item.get("results") or [{}]
-                        if not isinstance(results, list) or not results or not isinstance(results[-1], dict):
+                        if (
+                            not isinstance(results, list)
+                            or not results
+                            or not all(isinstance(result, dict) for result in results)
+                        ):
                             raise ValueError("malformed Playwright results")
-                        result = results[-1]
+                        attempts = {
+                            result.get("status", "passed" if collection else "skipped")
+                            for result in results
+                        }
+                        status = next(
+                            (candidate for candidate in (
+                                "timedOut", "failed", "interrupted", "skipped", "passed"
+                            ) if candidate in attempts),
+                            "skipped",
+                        )
                         tests.append({
                             "identity": f"{item['projectName']}::{filename}::{title_path}",
-                            "status": result.get("status", "passed" if collection else "skipped"),
+                            "status": status,
                         })
                 for child in suite.get("suites", []):
                     visit(child, next_parents)
@@ -2268,23 +2387,28 @@ def _playwright_execution_tree_identity(root: Path) -> str:
 
 
 def _playwright_protected_worktree_identity(
-    root: Path, ref: str, paths: tuple[PurePosixPath, ...]
+    root: Path, ref: str, paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> str:
     """Bind blob bytes and Git modes for the complete protected closure."""
-    closure = _playwright_support_closure(root, ref, paths, ())
+    closure = _playwright_support_closure(
+        root, ref, paths, code_under_test_paths
+    )
     config_path, config_source = _playwright_config(root, ref)
     members = tuple(closure) + ((config_path, config_source),)
     digest = hashlib.sha256()
     for path, expected in sorted(members):
         actual = root / path
         if actual.is_symlink() or not actual.is_file():
-            return "invalid"
+            raise ValueError(
+                f"Playwright closure member must be a regular non-symlink file: {path}"
+            )
         digest.update(path.as_posix().encode() + b"\0")
         digest.update(read_git_mode(root, ref, path).encode() + b"\0")
         digest.update(expected + b"\0" + actual.read_bytes() + b"\0")
         executable = bool(actual.stat().st_mode & 0o111)
         if executable != (read_git_mode(root, ref, path) == "100755"):
-            return "invalid"
+            raise ValueError(f"Playwright closure member mode changed: {path}")
     return digest.hexdigest()
 
 
@@ -2293,6 +2417,7 @@ def _run_playwright_in_tree(
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
     command_root: Path | None = None, collection: bool = False,
     expected_commit: str | None = None,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute exact paths through Playwright's JSON reporter without filters."""
     tool_root = command_root or root
@@ -2336,7 +2461,14 @@ def _run_playwright_in_tree(
             text=True, check=True,
         ).stdout.strip()
         tree_identity = _playwright_execution_tree_identity(root)
-        closure_identity = _playwright_protected_worktree_identity(root, commit, paths)
+        try:
+            closure_identity = _playwright_protected_worktree_identity(
+                root, commit, paths, code_under_test_paths
+            )
+        except ValueError as exc:
+            return RunnerExecution(
+                "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
+            ), ()
         command = [
             *prefix, "test", *(path.as_posix() for path in paths),
             f"--config={root / config_path}", "--reporter=json",
@@ -2376,11 +2508,16 @@ def _run_playwright_in_tree(
             ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
             text=True, check=False,
         )
+        try:
+            current_closure_identity = _playwright_protected_worktree_identity(
+                root, commit, paths, code_under_test_paths
+            )
+        except ValueError:
+            current_closure_identity = "invalid"
         modified = (
             current_commit.returncode != 0
             or current_commit.stdout.strip() != commit
-            or _playwright_protected_worktree_identity(root, commit, paths)
-            != closure_identity
+            or current_closure_identity != closure_identity
             or _playwright_execution_tree_identity(root) != tree_identity
         )
         if modified or denied_write:
@@ -2410,6 +2547,7 @@ def _run_playwright(
     root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
     command_root: Path | None = None, collection: bool = False,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run one protocol phase from a fresh exact-commit materialization."""
     source_root = root
@@ -2446,6 +2584,7 @@ def _run_playwright(
             phase_root, paths, timeout_seconds, config, expected,
             command_root=tool_root, collection=collection,
             expected_commit=commit,
+            code_under_test_paths=code_under_test_paths,
         )
 
 
@@ -2913,7 +3052,8 @@ def _collect_vitest_at_base(
 
 
 def _collect_playwright_at_base(
-    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute the protected base to derive Playwright project/file/title IDs."""
     with tempfile.TemporaryDirectory(prefix="pdd-playwright-protected-base-") as directory:
@@ -2924,7 +3064,7 @@ def _collect_playwright_at_base(
             return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Playwright clone"), ()
         return _run_playwright(
             clone, paths, config.timeout_seconds, config, command_root=root,
-            collection=True,
+            collection=True, code_under_test_paths=code_under_test_paths,
         )
 
 
@@ -3053,17 +3193,22 @@ def _run_obligation_in_tree(
             return RunnerExecution(obligation.obligation_id, EvidenceOutcome.QUARANTINED,
                 obligation.validator_config_digest,
                 "candidate-modified Playwright support cannot solely certify itself: " + ", ".join(sorted(changed)))
-        base_execution, base_ids = _collect_playwright_at_base(root, base_sha, obligation.artifact_paths, config)
+        base_execution, base_ids = _collect_playwright_at_base(
+            root, base_sha, obligation.artifact_paths, config,
+            obligation.code_under_test_paths,
+        )
         if base_execution.outcome is not EvidenceOutcome.PASS:
             return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
         head_collection, _head_ids = _run_playwright(
             root, obligation.artifact_paths, config.timeout_seconds, config,
             base_ids, collection=True,
+            code_under_test_paths=obligation.code_under_test_paths,
         )
         if head_collection.outcome is not EvidenceOutcome.PASS:
             return RunnerExecution(obligation.obligation_id, head_collection.outcome, head_collection.command_digest, head_collection.detail)
         head_execution, _head_ids = _run_playwright(
-            root, obligation.artifact_paths, config.timeout_seconds, config, base_ids
+            root, obligation.artifact_paths, config.timeout_seconds, config, base_ids,
+            code_under_test_paths=obligation.code_under_test_paths,
         )
         return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
     profile = VerificationProfile(

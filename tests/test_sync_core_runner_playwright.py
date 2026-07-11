@@ -1665,7 +1665,7 @@ def test_playwright_reporter_preserves_failure_across_retry_attempts(
     root, _commit = _repository(tmp_path)
     payload = {
         "suites": [{
-            "title": "tests/widget.spec.ts",
+            "title": "",
             "specs": [{
                 "title": "widget works",
                 "file": str(root / "tests/widget.spec.ts"),
