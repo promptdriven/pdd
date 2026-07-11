@@ -38,12 +38,15 @@ from .operation_log import (
     update_log_entry,
     append_log_entry,
     log_event,
-    save_fingerprint,
     save_run_report,
     clear_run_report,
     get_log_path,
     get_run_report_path,
     get_fingerprint_path,
+)
+from .fingerprint_transaction import (
+    FingerprintFinalizeError,
+    FingerprintTransaction,
 )
 from .sync_determine_operation import (
     sync_determine_operation,
@@ -520,6 +523,8 @@ class AtomicStateUpdate:
         try:
             with os.fdopen(fd, 'w') as f:
                 json.dump(data, f, indent=2, default=str)
+                f.flush()
+                os.fsync(f.fileno())
 
             # Atomic rename - guaranteed atomic on POSIX systems
             os.replace(temp_path, target_path)
@@ -532,7 +537,14 @@ class AtomicStateUpdate:
         """Commit all pending state updates atomically."""
         # Write fingerprint first (checkpoint), then run_report
         if self.pending.fingerprint and self.pending.fingerprint_path:
-            self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+            try:
+                self._atomic_write(self.pending.fingerprint, self.pending.fingerprint_path)
+            except Exception as exc:
+                operation = self.pending.fingerprint.get("command", "sync")
+                raise FingerprintFinalizeError(
+                    f"[{operation}] fingerprint finalization failed for "
+                    f"{self.pending.fingerprint_path}: {exc}"
+                ) from exc
         if self.pending.run_report and self.pending.run_report_path:
             self._atomic_write(self.pending.run_report, self.pending.run_report_path)
 
@@ -682,77 +694,24 @@ def _save_fingerprint_atomic(basename: str, language: str, operation: str,
         include_deps_override: Pre-captured include deps (Issue #522). Used when
             auto-deps may have stripped <include> tags before fingerprint save.
     """
-    from .sync_core.finalize import canonical_root_for_paths
-
-    root = canonical_root_for_paths(paths)
-    if root is not None:
-        from .sync_core import (
-            attestation_signer_from_environment,
-            finalize_unit,
-        )
-        from .sync_core.finalize import lexical_managed_module
-
-        protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
-        if not protected_base:
-            raise RuntimeError(
-                "canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA"
-            )
-        try:
-            module = lexical_managed_module(
-                root,
-                Path(paths["prompt"]),
-                base_ref=protected_base,
-                head_ref="HEAD",
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise RuntimeError(
-                f"trusted canonical finalization failed: {exc}"
-            ) from exc
-        finalize_unit(
-            root,
-            module,
-            base_ref=protected_base,
-            head_ref="HEAD",
-            signer=attestation_signer_from_environment(),
-        )
-        return
-    if atomic_state:
-        # Buffer for atomic write
-        from datetime import datetime, timezone
-        from .sync_determine_operation import calculate_current_hashes, Fingerprint, read_fingerprint
-        from . import __version__
-
-        # Issue #522: Use override deps if provided (captured before auto-deps),
-        # otherwise fall back to stored deps from previous fingerprint
+    with FingerprintTransaction(
+        basename,
+        language,
+        operation,
+        paths=paths,
+        cost=cost,
+        model=model,
+    ) as transaction:
         if include_deps_override is not None:
-            stored_deps = include_deps_override
-        else:
-            prev_fp = read_fingerprint(basename, language, paths=paths)
-            stored_deps = prev_fp.include_deps if prev_fp else None
-        current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-        # If override provided and current extraction found nothing, use the override
-        if include_deps_override and not current_hashes.get('include_deps'):
-            current_hashes['include_deps'] = include_deps_override
-        fingerprint = Fingerprint(
-            pdd_version=__version__,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            command=operation,
-            prompt_hash=current_hashes.get('prompt_hash'),
-            code_hash=current_hashes.get('code_hash'),
-            example_hash=current_hashes.get('example_hash'),
-            test_hash=current_hashes.get('test_hash'),
-            test_files=current_hashes.get('test_files'),  # Bug #156
-            include_deps=current_hashes.get('include_deps'),  # Issue #522
-        )
-
-        # Issue #1211: route the atomic fingerprint file through the
-        # paths-aware helper so subprojects whose .pddrc is below run CWD
-        # get the file under <subproject>/.pdd/meta, not parent CWD.
-        fingerprint_file = get_fingerprint_path(basename, language, paths=paths)
-        atomic_state.set_fingerprint(asdict(fingerprint), fingerprint_file)
-    else:
-        # Direct write using operation_log
-        save_fingerprint(basename, language, operation, paths, cost, model)
+            transaction.set_include_deps_override(include_deps_override)
+        if atomic_state is not None:
+            # The shared transaction owns path resolution, hash calculation,
+            # null validation and serialization. AtomicStateUpdate only
+            # delays the already-validated payload so its run report and
+            # fingerprint can commit together.
+            payload = transaction.prepare()
+            atomic_state.set_fingerprint(payload, transaction.fingerprint_path)
+            transaction.skip("deferred to AtomicStateUpdate")
 
 def _python_cov_target_for_code_file(code_file: Path) -> str:
     """Return a `pytest-cov` `--cov` target for a Python code file.
@@ -2037,22 +1996,12 @@ def sync_orchestration(
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
     compress: bool = False,
-    fresh: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
     compressed_context: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
-
-    ``fresh`` (issue #1938 Pillar A): when False (the default), the generate
-    operation regenerates mature modules surgically (edit-shaped) by driving
-    ``code_generator_main`` with ``force_incremental_flag=True`` so declared
-    public symbols are preserved instead of being dropped by a full "rebirth"
-    regeneration. Pass ``fresh=True`` (``pdd sync --fresh``) to restore full
-    regeneration. ``code_generator_main`` still falls back to full generation
-    for new/empty modules or when the original prompt cannot be determined, and
-    conformance repair retries still force full regeneration.
     """
     # Handle None values from CLI (Issue #194) - defense in depth
     if target_coverage is None:
@@ -2139,17 +2088,6 @@ def sync_orchestration(
             "error": f"Failed to construct paths: {str(e)}",
             "operations_completed": [],
             "errors": [f"Path construction failed: {str(e)}"]
-        }
-
-    try:
-        from .sync_core.finalize import preflight_legacy_mutation
-        preflight_legacy_mutation(pdd_files)
-    except RuntimeError as exc:
-        return {
-            "success": False,
-            "error": str(exc),
-            "operations_completed": [],
-            "errors": [str(exc)],
         }
     
     # Shared state for animation (passed to App)
@@ -2700,16 +2638,6 @@ def sync_orchestration(
                     test_output_excerpt: Optional[str] = None
                     operation_rollback = None
 
-                    from .continuous_sync import canonical_sync_enabled
-
-                    operation_start = pdd_files.get("prompt") or Path.cwd()
-                    if canonical_sync_enabled(Path(operation_start)):
-                        raise RuntimeError(
-                            "protected canonical sync blocks legacy production mutation; "
-                            "use read-only reporting or trusted finalization until the "
-                            "staged repair executor is enabled"
-                        )
-
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
                     # Drop any stale LLM trace for this operation key so failure paths only
@@ -2721,11 +2649,10 @@ def sync_orchestration(
                         try:
                             if operation == 'auto-deps':
                                 temp_output = Path(str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt'))
-                                if operation_rollback is None:
-                                    operation_rollback = _build_auto_deps_rollback(
-                                        pdd_files['prompt'],
-                                        temp_output,
-                                    )
+                                operation_rollback = _build_auto_deps_rollback(
+                                    pdd_files['prompt'],
+                                    temp_output,
+                                )
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                                 # Issue #522: Capture include deps BEFORE auto-deps may strip tags
                                 from .sync_determine_operation import extract_include_deps
@@ -2757,12 +2684,17 @@ def sync_orchestration(
                                         # ``_run.json`` because the prompt
                                         # content just changed. Mirrors the
                                         # clear after generate (line 2272).
-                                        try:
-                                            clear_run_report(basename, language, paths=pdd_files)
-                                        except Exception:
-                                            # Never mask a successful auto-deps
-                                            # result on metadata cleanup errors.
-                                            pass
+                                        from .operation_log import _clear_run_report_before_fingerprint
+
+                                        if not _clear_run_report_before_fingerprint(
+                                            basename,
+                                            language,
+                                            paths=pdd_files,
+                                        ):
+                                            raise FingerprintFinalizeError(
+                                                "[auto-deps] fingerprint finalization failed: "
+                                                "stale run report could not be cleared"
+                                            )
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
@@ -2812,7 +2744,7 @@ def sync_orchestration(
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=not fresh, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
                                             last_conform_exc = None
                                             break
                                         except (
@@ -3596,7 +3528,17 @@ def sync_orchestration(
                                 and actual_cost == 0.0
                                 and _model_name_lower_check in ['', 'none', 'unknown', 'n/a']
                             )
-                            if not _is_noop_fix:
+                            if _is_noop_fix:
+                                with FingerprintTransaction(
+                                    basename,
+                                    language,
+                                    operation,
+                                    paths=pdd_files,
+                                    cost=actual_cost,
+                                    model=str(model_name),
+                                ) as transaction:
+                                    transaction.skip("no-op fix — no LLM invocation")
+                            else:
                                 _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
                             if operation_rollback is not None:
                                 operation_rollback.commit()

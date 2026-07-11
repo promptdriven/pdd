@@ -36,7 +36,7 @@
     - `no_dedup` (`bool`): Flag to disable redundant inline content removal. Default False.
     - `concurrency` (`int`): Number of parallel workers for file summarization. Default 1.
     - `compress` (`bool`): Flag to use AST-based compression for Python includes. Default False.
-    - `_skip_finalization` (`bool`): Internal flag — when True, return immediately after the success console output without writing a fingerprint or clearing any run report. Default False. `pdd sync` sets this to True because sync owns canonical metadata bookkeeping itself (see the sync NOTE in the Behavior section). Leading underscore signals this is not part of the public CLI surface.
+    - `_skip_finalization` (`bool`): Internal flag — when True, still enter `FingerprintTransaction` but call `transaction.skip(reason="_skip_finalization set by sync")` without writing a fingerprint or clearing any run report. Default False. `pdd sync` sets this to True because sync owns canonical metadata bookkeeping itself (see the sync NOTE in the Behavior section). Leading underscore signals this is not part of the public CLI surface.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -90,8 +90,8 @@
         • Use the existing helpers from `pdd.operation_log` (`infer_module_identity`, `clear_run_report`, `get_run_report_path`) and `FingerprintTransaction` from `pdd.fingerprint_transaction`. Behavior must be language-agnostic (hash-based).
         • Derive identity from the *output* path, not the input prompt:
             - Resolve `(basename, language)` via `infer_module_identity(Path(output_path))`. The output path is the file whose hash and dependency state the fingerprint records; tying the identity to that file keeps `.pdd/meta` self-consistent even when the canonical prompt is untouched (default mode) or when the file is the canonical prompt itself (in-place mode). `infer_module_identity` returns `(None, None)` for unrecognized prompt names — check `basename is None or language is None` explicitly and skip finalization (logged as a yellow warning) rather than guessing.
-            - Clear any stale per-module run report via `clear_run_report(basename, language, paths={"prompt": Path(output_path)})` because the prompt content changed. If `clear_run_report` raises, log a warning and continue — it must not abort the subsequent fingerprint transaction.
-            - After invoking `clear_run_report`, verify the report path is actually gone via `get_run_report_path(basename, language, paths={"prompt": Path(output_path)})`; if it still exists, log a yellow warning (unless `quiet`). This is defensive because the helper silently swallows unlink failures.
+            - Clear any stale per-module run report via `clear_run_report(basename, language, paths={"prompt": Path(output_path)})` because the prompt content changed. If cleanup raises, raise `FingerprintFinalizeError` with the fingerprint path and underlying cause; metadata cleanup is part of required finalization.
+            - After invoking `clear_run_report`, verify the report path is actually gone via `get_run_report_path(basename, language, paths={"prompt": Path(output_path)})`; if it still exists, raise `FingerprintFinalizeError`. A successful artifact mutation may not coexist with stale runtime state or report success without its fingerprint (#1926).
             - Write/update the fingerprint via `FingerprintTransaction(basename, language, operation="auto-deps", paths={"prompt": Path(output_path)}, cost=total_cost, model=model_name)` used as a context manager. When a pre-captured include graph is available, call `transaction.set_include_deps_override(include_deps)` before exiting the context. `FingerprintFinalizeError` propagates — a finalization failure exits non-zero. When `_skip_finalization=True`, call `transaction.skip(reason="_skip_finalization set by sync")` instead of omitting the transaction entirely.
         • Architecture file updates (architecture.json) are merged by `merge_auto_deps_includes_from_cwd` and are not finalized here — that file is not a `(basename, language)`-keyed module and has its own atomicity guarantees inside the merge helper.
         • Surface non-exception failures from the architecture merge (return shape `{"updated": bool, "messages": list[str], …}`): if the helper returned `updated=False`, emit each `messages` entry as a yellow `Warning: architecture.json not updated: …` line so the success message does not mask a silent no-op.
@@ -99,7 +99,7 @@
         • NOTE: `pdd sync` invokes `auto_deps_main` with a temp `<basename>_<language>_with_deps.prompt` output and then `shutil.move`s it onto the canonical prompt. To avoid leaving an orphan `.pdd/meta/*_with_deps.json` for that temp identity after the move (and to avoid clearing the wrong run report), sync passes the internal flag `_skip_finalization=True`; the `FingerprintTransaction` for that identity calls `transaction.skip(reason="_skip_finalization set by sync")` and sync owns canonical metadata itself via `FingerprintTransaction` (routed through `_save_fingerprint_atomic`) and clears the canonical `_run.json` via `clear_run_report` immediately after the move. When `_skip_finalization=True`, this finalizer must enter the `FingerprintTransaction` context but call `transaction.skip(...)` before returning.
 
 <operation_log_interface>
-<include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
+<include select="def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
 </operation_log_interface>
 
 <auto_deps_architecture_interface>
