@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -39,6 +40,7 @@ def _failed_result(*, timeout: bool = False) -> LifecycleResult:
         1,
         1,
         tuple(sorted(REQUIRED_SCENARIOS)),
+        "",
     )
 
 
@@ -81,7 +83,7 @@ def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path |
     environment = temporary / "candidate-venv"
     isolated = _isolated_lifecycle_environment(home)
     created = subprocess.run(
-        [sys.executable, "-m", "venv", "--system-site-packages", str(environment)],
+        [sys.executable, "-m", "venv", str(environment)],
         capture_output=True,
         text=True,
         check=False,
@@ -98,7 +100,8 @@ def _install_candidate_wheel(temporary: Path, home: Path, wheel: Path) -> Path |
             "-m",
             "pip",
             "install",
-            "--no-deps",
+            "--only-binary=:all:",
+            "--disable-pip-version-check",
             "--force-reinstall",
             str(wheel.resolve()),
         ],
@@ -194,4 +197,5 @@ def run_lifecycle_matrix(
             ),
             sum(int(row["post_merge_tree_changes"]) for row in results.values()),
             missing,
+            hashlib.sha256(Path(candidate_wheel).read_bytes()).hexdigest(),
         )

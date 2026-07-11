@@ -76,6 +76,7 @@ class RepositoryTarget:
 
 @dataclass(frozen=True)
 class LifecycleResult:
+    # pylint: disable=too-many-instance-attributes
     """Externally produced required-scenario and test-outcome totals."""
 
     failed: int
@@ -85,6 +86,7 @@ class LifecycleResult:
     post_repair_second_run_writes: int
     post_merge_tree_changes: int
     missing_scenarios: tuple[str, ...] = ()
+    candidate_wheel_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -393,6 +395,7 @@ def _complete_nightly(
         "required_tests_skipped_or_xfailed",
         "collection_errors",
         "timeouts",
+        "candidate_wheel_sha256",
     }
     return (
         required_counts <= counts.keys()
@@ -519,6 +522,11 @@ def _scan_predicate(
         and extra["pdd_cloud_vendored_sync_semantics"] == 0
         and lifecycle.post_repair_second_run_writes == 0
         and lifecycle.post_merge_tree_changes == 0
+        and len(lifecycle.candidate_wheel_sha256) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in lifecycle.candidate_wheel_sha256
+        )
         and extra["nightly_observation_complete"] == 1
     )
 
@@ -590,7 +598,7 @@ def _canonical_report_predicate(report: dict[str, Any]) -> bool:
 
 
 def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]:
-    # pylint: disable=too-many-return-statements
+    # pylint: disable=too-many-locals,too-many-return-statements
     if body.get("schema_version") != 2:
         return False, False
     checker = body.get("checker")
@@ -645,9 +653,20 @@ def _recompute_certificate_predicates(body: dict[str, Any]) -> tuple[bool, bool]
         for name in lifecycle_names
     ) or not isinstance(lifecycle_payload.get("missing_scenarios"), list):
         return False, False
+    candidate_wheel_sha256 = lifecycle_payload.get("candidate_wheel_sha256")
+    if (
+        not isinstance(candidate_wheel_sha256, str)
+        or len(candidate_wheel_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in candidate_wheel_sha256
+        )
+    ):
+        return False, False
     lifecycle = LifecycleResult(
         *(lifecycle_payload[name] for name in lifecycle_names),
         tuple(lifecycle_payload["missing_scenarios"]),
+        candidate_wheel_sha256,
     )
     extra_names = {
         "pdd_cloud_vendored_sync_semantics",
@@ -771,6 +790,7 @@ def _build_global_certificate_from_targets(
             "post_repair_second_run_writes": lifecycle.post_repair_second_run_writes,
             "post_merge_tree_changes": lifecycle.post_merge_tree_changes,
             "missing_scenarios": list(lifecycle.missing_scenarios),
+            "candidate_wheel_sha256": lifecycle.candidate_wheel_sha256,
         },
     }
     body["scan_ok"] = all(report.get("ok") for report in reports) and _scan_predicate(
