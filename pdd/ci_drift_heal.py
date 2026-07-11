@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 from rich.table import Table
 
+from pdd.context_snapshot import redact_snapshot_text
+
 console = Console()
 
 _HEAL_SUBPROCESS_TIMEOUT_DEFAULT = 2400
@@ -1890,11 +1892,11 @@ def main(
         return 0
     if dry_run:
         from pdd.continuous_sync import build_report
-        import json as _json
 
         report = build_report(consumer="ci-heal", modules=modules)
         if as_json:
-            print(_json.dumps(report, indent=2, sort_keys=True))
+            serialized = json.dumps(report, indent=2, sort_keys=True)
+            print(redact_snapshot_text(serialized)[0])
         else:
             summary = report["summary"]
             console.print(

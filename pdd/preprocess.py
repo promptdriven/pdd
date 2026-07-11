@@ -14,7 +14,6 @@ from rich.traceback import install
 from .firecrawl_cache import get_firecrawl_cache
 from pdd.path_resolution import get_default_resolver
 from pdd.sync_core.includes import include_paths
-from pdd.sync_core.path_policy import PathPolicy
 
 install()
 console = Console()
@@ -432,15 +431,12 @@ def preprocess(
 
 def get_file_path(file_name: str) -> str:
     resolver = get_default_resolver()
-    project_root = resolver.resolve_project_root()
     relpath = Path(file_name)
     if relpath.is_absolute():
         raise ValueError(f"absolute include path is not allowed: {file_name}")
     normalized = PurePosixPath(os.path.normpath(file_name).replace(os.sep, "/"))
-    resolved = PathPolicy(project_root).resolve(
-        normalized, allow_missing=True
-    ).canonical_path
-    if project_root.resolve() == Path.cwd().resolve():
+    resolved = resolver.resolve_include(normalized.as_posix())
+    if resolved == resolver.cwd / normalized:
         return os.path.join("./", normalized.as_posix())
     return str(resolved)
 
