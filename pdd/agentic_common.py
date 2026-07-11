@@ -2840,14 +2840,16 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
 def _get_provider_model(provider: str) -> Optional[str]:
     """Return the requested model for *provider* from its env var.
 
-    Returns ``None`` when the env var is unset, empty, or the provider is
-    unknown, signalling "provider default" in the audit log.
+    Codex falls back to PDD's shared platform default when its override is
+    unset; other providers return ``None`` to signal provider-owned defaults.
     """
     env_var = _PROVIDER_MODEL_ENV.get(provider)
     if not env_var:
         return None
     value = os.environ.get(env_var) or ""
-    return value.strip() or None
+    if value.strip():
+        return value.strip()
+    return CODEX_MODEL_DEFAULT if provider == "openai" else None
 
 
 def _routing_effort_to_reasoning_time(effort: str) -> float:
@@ -2872,7 +2874,12 @@ def _apply_routing_model_env(
         return
     if env_var not in originals:
         originals[env_var] = os.environ.get(env_var)
-    model = resolve_model_for_tier(config.model_tier)
+    try:
+        model = resolve_model_for_tier(config.model_tier, provider=provider)
+    except TypeError:
+        # Preserve compatibility with injected/test resolvers that implement
+        # the original one-argument callable contract.
+        model = resolve_model_for_tier(config.model_tier)
     if model:
         os.environ[env_var] = model
 

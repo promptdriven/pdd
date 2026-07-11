@@ -1344,6 +1344,21 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
+        # GPT-5.6 is the PDD platform Codex default. Keep a deterministic
+        # platform-default row until a reviewed benchmark score is available;
+        # this is intentionally not presented as Arena/DeepSWE evidence.
+        "provider": "OpenAI",
+        "model": "gpt-5.6",
+        "input": 5.0,
+        "output": 30.0,
+        "base_url": "",
+        "api_key": "OPENAI_API_KEY",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
         # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
         # (pdd-opus) but is absent from litellm.model_cost until litellm
         # ships it, so the litellm-driven build loop would drop it. Seed it

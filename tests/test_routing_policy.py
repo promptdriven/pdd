@@ -109,6 +109,7 @@ def test_escalate_exhausts_without_wrapping():
 
 def test_resolve_model_for_tier_uses_deepswe_manifest():
     assert resolve_model_for_tier(1) == "gpt-5.6"
+    assert resolve_model_for_tier(1, provider="anthropic") == "gpt-5.5"
     assert resolve_model_for_tier(3) == "claude-opus-4-7"
     assert resolve_model_for_tier(999) is None
 

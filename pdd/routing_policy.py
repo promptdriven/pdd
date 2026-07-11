@@ -323,8 +323,8 @@ def escalate(
     return (config, updated)
 
 
-def resolve_model_for_tier(tier: int) -> Optional[str]:
-    """Resolve a DeepSWE rank tier to the manifest's canonical model name."""
+def _resolve_manifest_model_for_tier(tier: int) -> Optional[str]:
+    """Resolve a DeepSWE rank tier without applying a platform default."""
     global _MANIFEST_CACHE
     if _MANIFEST_CACHE is None:
         manifest_path = Path(__file__).resolve().parent / "data" / "deepswe_manifest.json"
@@ -340,9 +340,6 @@ def resolve_model_for_tier(tier: int) -> Optional[str]:
         requested_tier = int(tier)
     except (TypeError, ValueError):
         return None
-
-    if requested_tier == 1:
-        return CODEX_MODEL_DEFAULT
 
     ranked: list[dict[str, Any]] = []
     for item in _MANIFEST_CACHE:
@@ -373,6 +370,17 @@ def resolve_model_for_tier(tier: int) -> Optional[str]:
     if 1 <= requested_tier <= len(by_score):
         return str(by_score[requested_tier - 1]["model"])
     return None
+
+
+def resolve_model_for_tier(tier: int, provider: Optional[str] = None) -> Optional[str]:
+    """Resolve a tier while keeping the Codex default provider-scoped."""
+    try:
+        requested_tier = int(tier)
+    except (TypeError, ValueError):
+        return None
+    if requested_tier == 1 and (provider is None or provider.lower() in {"openai", "codex"}):
+        return CODEX_MODEL_DEFAULT
+    return _resolve_manifest_model_for_tier(requested_tier)
 
 
 def emit_routing_record(record: RoutingRecord, log_dir: Path) -> None:
