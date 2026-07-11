@@ -7,6 +7,7 @@ Implements fingerprint-based state analysis and deterministic operation selectio
 """
 
 import os
+import re
 import sys
 import glob
 import json
@@ -1791,6 +1792,13 @@ def _legacy_dependency_path(prompt_path: Path, declared: str) -> Optional[Path]:
     return None
 
 
+def _legacy_include_references(content: str) -> list[str]:
+    """Freeze the exact pre-versioned include grammar for v1 fingerprints."""
+    xml = re.findall(r"<include\b[^>]*>(.*?)</include>", content)
+    backtick = re.findall(r"```<([^>]*?)>```", content)
+    return xml + backtick
+
+
 def calculate_prompt_hash(
     prompt_path: Path,
     stored_deps: Optional[Dict[str, str]] = None,
@@ -1820,9 +1828,13 @@ def calculate_prompt_hash(
         return None
     from pdd.sync_core.includes import parse_include_references
 
-    references = parse_include_references(prompt_content)
+    references = (
+        _legacy_include_references(prompt_content)
+        if hash_version == 1 else
+        [reference.path for reference in parse_include_references(prompt_content)]
+    )
     declared_dependencies = (
-        [reference.path for reference in references]
+        references
         if references else list((stored_deps or {}).keys())
     )
     if hash_version == 1:
@@ -1831,6 +1843,8 @@ def calculate_prompt_hash(
     for declared in declared_dependencies:
         candidate = _legacy_dependency_path(prompt_path.resolve(), declared)
         if candidate is None:
+            if hash_version == 1:
+                continue
             return None
         resolved_dependencies.append(candidate.resolve())
 

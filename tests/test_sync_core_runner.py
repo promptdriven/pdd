@@ -19,7 +19,11 @@ from pdd.sync_core import (
     VerificationProfile,
     run_profile,
 )
-from pdd.sync_core.runner import pytest_validator_config_digest
+from pdd.sync_core.runner import (
+    _has_dynamic_pytest_plugins,
+    _local_module_paths,
+    pytest_validator_config_digest,
+)
 
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_python.prompt"), "python")
@@ -68,6 +72,8 @@ def _run(
     head: str,
     code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ):
+    if sys.platform == "darwin":
+        pytest.skip("protected validators fail closed without Linux namespaces")
     return run_profile(
         root,
         _profile(root, base, code_under_test_paths),
@@ -395,6 +401,8 @@ def test_dynamic_pytest_plugins_fail_closed(tmp_path) -> None:
         "pytest_plugins = set()\npytest_plugins.update({'tests.plugin'})\n",
         "pytest_plugins = []\nglobals()['pytest_plugins'] = ['tests.plugin']\n",
         "pytest_plugins = []\nsetattr(sys.modules[__name__], 'pytest_plugins', ['tests.plugin'])\n",
+        "pytest_plugins = []\nalias = pytest_plugins\nalias.append('tests.plugin')\n",
+        "setattr(sys.modules[__name__], 'pytest_plugins', ['tests.plugin'])\n",
     ],
 )
 def test_mutated_pytest_plugins_fail_closed(tmp_path, declaration) -> None:
@@ -405,9 +413,9 @@ def test_mutated_pytest_plugins_fail_closed(tmp_path, declaration) -> None:
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "mutated plugin declaration")
     head = _git(root, "rev-parse", "HEAD")
-    _envelope, executions = _run(root, head, head)
-    assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "dynamic pytest_plugins" in executions[0].detail
+    assert _has_dynamic_pytest_plugins(
+        root, head, (PurePosixPath("tests/test_widget.py"),)
+    )
 
 
 def test_unrelated_getattr_in_protected_conftest_is_allowed(tmp_path) -> None:
@@ -420,8 +428,21 @@ def test_unrelated_getattr_in_protected_conftest_is_allowed(tmp_path) -> None:
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "ordinary reflection")
     head = _git(root, "rev-parse", "HEAD")
-    _envelope, executions = _run(root, head, head)
-    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert not _has_dynamic_pytest_plugins(
+        root, head, (PurePosixPath("tests/test_widget.py"),)
+    )
+
+
+def test_repository_conftest_ordinary_getattr_passes_plugin_preflight(
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "tests/conftest.py").read_bytes()
+    monkeypatch.setattr("pdd.sync_core.runner.read_git_blob", lambda *_args: None)
+    _paths, dynamic = _local_module_paths(
+        root, "HEAD", PurePosixPath("tests/conftest.py"), source
+    )
+    assert not dynamic
 
 
 def test_candidate_modified_importfrom_alias_helper_cannot_self_certify(tmp_path) -> None:

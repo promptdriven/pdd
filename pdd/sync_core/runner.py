@@ -1,5 +1,6 @@
 """Trusted validator adapters and pass-only normalized evidence outcomes."""
 # pylint: disable=too-many-lines,too-many-boolean-expressions,too-many-locals
+# pylint: disable=too-many-arguments
 
 from __future__ import annotations
 
@@ -122,7 +123,7 @@ def _local_module_paths(
     *,
     code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
 ) -> tuple[set[PurePosixPath], bool]:
-    # pylint: disable=too-many-locals,too-many-branches
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Resolve repository-local Python imports without executing candidate code."""
     try:
         tree = ast.parse(source)
@@ -132,6 +133,18 @@ def _local_module_paths(
     dynamic_pytest_plugins = False
     importlib_names = {"importlib"}
     loader_names = {"__import__"}
+    plugin_aliases = {"pytest_plugins"}
+    for candidate in ast.walk(tree):
+        if (
+            isinstance(candidate, (ast.Assign, ast.AnnAssign))
+            and isinstance(candidate.value, ast.Name)
+            and candidate.value.id in plugin_aliases
+        ):
+            plugin_aliases.update(
+                target.id for target in _pytest_plugin_declaration_targets(candidate)
+                if isinstance(target, ast.Name)
+            )
+    pytest_plugins_declared = False
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
@@ -153,6 +166,7 @@ def _local_module_paths(
                 if node.module == "importlib" and alias.name == "import_module":
                     loader_names.add(alias.asname or alias.name)
         elif _declares_pytest_plugins(_pytest_plugin_declaration_targets(node)):
+            pytest_plugins_declared = True
             declared, dynamic = _pytest_plugin_modules(node.value)
             modules.update(declared)
             dynamic_pytest_plugins = dynamic_pytest_plugins or dynamic
@@ -166,12 +180,47 @@ def _local_module_paths(
             dynamic_pytest_plugins = True
         elif isinstance(node, ast.Call) and (
             isinstance(node.func, ast.Name)
-            and node.func.id in {"getattr", "exec", "eval", "compile", "run_path", "run_module"}
+            and node.func.id in {"exec", "eval", "compile", "run_path", "run_module"}
             or isinstance(node.func, ast.Attribute)
             and node.func.attr in {
                 "spec_from_file_location", "load_module", "exec_module",
                 "run_path", "run_module",
             }
+            or isinstance(node.func, ast.Name) and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in importlib_names
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "import_module"
+        ):
+            dynamic_pytest_plugins = True
+        elif isinstance(node, ast.Call) and (
+            pytest_plugins_declared
+            or isinstance(node.func, ast.Name) and node.func.id == "setattr"
+        ):
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in plugin_aliases
+            ) or (
+                isinstance(node.func, ast.Name)
+                and node.func.id in {"globals", "locals", "exec", "eval"}
+            ) or (
+                isinstance(node.func, ast.Name) and node.func.id == "setattr"
+                and any(
+                    isinstance(arg, ast.Constant) and arg.value == "pytest_plugins"
+                    for arg in node.args
+                )
+            ):
+                dynamic_pytest_plugins = True
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Call)
+            and isinstance(target.value.func, ast.Name)
+            and target.value.func.id in {"globals", "locals"}
+            and isinstance(target.slice, ast.Constant)
+            and target.slice.value == "pytest_plugins"
+            for target in _pytest_plugin_declaration_targets(node)
         ):
             dynamic_pytest_plugins = True
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -418,11 +467,11 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
 
 def _managed_subprocess(
     command: list[str], *, cwd: Path, timeout: int, env: dict[str, str],
-    writable_roots: tuple[Path, ...],
+    writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run an untrusted command in a networkless sandbox and reap its group."""
     return run_supervised(command, cwd=cwd, timeout=timeout, env=env,
-                          writable_roots=writable_roots)
+                          writable_roots=writable_roots, writable_files=writable_files)
 
 
 def runner_identity_digest(
@@ -637,13 +686,14 @@ def _run_test_node(
     ).hexdigest()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-runner-") as directory:
         temporary = Path(directory)
-        home = temporary / "home"
-        home.mkdir(mode=0o700)
+        home = temporary / "scratch" / "home"
+        home.mkdir(mode=0o700, parents=True)
         junit = temporary / "junit.xml"
+        junit.touch(mode=0o600)
         result, surviving = _managed_subprocess(
             [*command, f"--junitxml={junit}"], cwd=root,
             timeout=timeout_seconds, env=_pytest_environment(home),
-            writable_roots=(temporary,),
+            writable_roots=(home.parent,), writable_files=(junit,),
         )
         if result.returncode == 124:
             return RunnerExecution(
@@ -675,9 +725,10 @@ def _collect_node_ids(
     """Collect exact pytest node IDs through the protected adapter."""
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-collection-") as directory:
         temporary = Path(directory)
-        home = temporary / "home"
-        home.mkdir(mode=0o700)
+        home = temporary / "scratch" / "home"
+        home.mkdir(mode=0o700, parents=True)
         collection_output = temporary / "node-ids.json"
+        collection_output.touch(mode=0o600)
         pytest_args = [
             "--collect-only",
             "-q",
@@ -705,7 +756,7 @@ def _collect_node_ids(
             command, cwd=temporary, timeout=timeout_seconds,
             env=_pytest_environment(home) | {
                 "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
-            }, writable_roots=(temporary,),
+            }, writable_roots=(home.parent,), writable_files=(collection_output,),
         )
         if result.returncode == 124:
             return (

@@ -52,16 +52,42 @@ jobs:
           git config --global user.name "PDD CI"
           git config --global init.defaultBranch main
 
+      - name: Install dependencies
+        run: pip install -e ".[dev]" pytest-timeout
+
       - name: Provision and verify protected Linux sandbox
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
-          sudo -n -E bwrap --unshare-all --die-with-parent --new-session \
-            --uid "$(id -u)" --gid "$(id -g)" --ro-bind / / \
-            --dev /dev --proc /proc -- /bin/true
+          private_root="$(mktemp -d)"
+          chmod 700 "$private_root"
+          mkdir -m 700 "$private_root/scratch"
+          PRIVATE_ROOT="$private_root" python - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          from pdd.sync_core.supervisor import run_supervised
 
-      - name: Install dependencies
-        run: pip install -e ".[dev]" pytest-timeout
+          root = Path(os.environ["PRIVATE_ROOT"])
+          script = """from pathlib import Path
+Path('ok').write_text('ok')
+try:
+    Path('../outside').write_text('forbidden')
+except OSError:
+    pass
+else:
+    raise SystemExit('write escaped private scratch root')
+"""
+          result, surviving = run_supervised(
+              [sys.executable, "-c", script],
+              cwd=root / "scratch", timeout=10, env=dict(os.environ),
+              writable_roots=(root / "scratch",),
+          )
+          assert result.returncode == 0, result.stderr
+          assert not surviving
+          assert (root / "scratch" / "ok").read_text() == "ok"
+          assert not (root / "outside").exists()
+          PY
 
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
