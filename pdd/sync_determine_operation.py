@@ -1781,13 +1781,12 @@ def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
 
 
 def _legacy_dependency_path(prompt_path: Path, declared: str) -> Optional[Path]:
-    """Resolve a legacy include from prompt ancestry, never the process CWD."""
+    """Resolve a legacy include exactly as the unversioned base implementation."""
     candidate = Path(declared)
-    if candidate.is_absolute():
-        return candidate if candidate.is_file() else None
-    for parent in (prompt_path.parent, *prompt_path.parent.parents):
-        resolved = parent / candidate
-        if resolved.is_file():
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+    for resolved in (prompt_path.parent / declared, Path.cwd() / declared):
+        if resolved.exists():
             return resolved
     return None
 
@@ -1823,8 +1822,8 @@ def calculate_prompt_hash(
         return None
 
     try:
-        prompt_content = prompt_path.read_text(encoding="utf-8")
-    except (IOError, OSError, UnicodeDecodeError):
+        prompt_content = prompt_path.read_text(encoding="utf-8", errors="ignore")
+    except (IOError, OSError):
         return None
     from pdd.sync_core.includes import parse_include_references
 
@@ -1838,10 +1837,14 @@ def calculate_prompt_hash(
         if references else list((stored_deps or {}).keys())
     )
     if hash_version == 1:
-        declared_dependencies = sorted(set(declared_dependencies))
+        declared_dependencies = sorted(set(item.strip() for item in declared_dependencies))
     resolved_dependencies = []
     for declared in declared_dependencies:
-        candidate = _legacy_dependency_path(prompt_path.resolve(), declared)
+        if hash_version == 1 and not references:
+            candidate = Path(declared)
+            candidate = candidate if candidate.exists() else None
+        else:
+            candidate = _legacy_dependency_path(prompt_path, declared)
         if candidate is None:
             if hash_version == 1:
                 continue

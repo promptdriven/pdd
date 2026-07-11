@@ -4187,7 +4187,7 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
-    def test_legacy_include_hash_matches_pre_versioned_bytes_across_cwds(
+    def test_legacy_include_hash_uses_prompt_dir_then_process_cwd(
         self, pdd_test_environment, monkeypatch
     ):
         prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
@@ -4199,7 +4199,7 @@ class TestFingerprintIncludeDependencies:
         for cwd in (pdd_test_environment, pdd_test_environment.parent):
             monkeypatch.chdir(cwd)
             hashes.append(calculate_prompt_hash(prompt))
-        assert hashes == [expected, expected]
+        assert hashes == [expected, hashlib.sha256(prompt.read_bytes()).hexdigest()]
 
     def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
         self, pdd_test_environment

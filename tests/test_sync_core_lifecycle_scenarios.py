@@ -321,6 +321,9 @@ def test_candidate_install_proves_isolated_module_entrypoint(
     )
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="protected lifecycle requires Linux"
+)
 def test_candidate_install_e2e_uses_locked_runtime_wheelhouse(tmp_path) -> None:
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()

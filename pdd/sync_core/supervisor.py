@@ -54,7 +54,7 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
     )
     return [sys.executable, "-c", script, str(limits.max_memory_bytes),
             str(limits.max_cpu_seconds), str(limits.max_processes),
-            str(limits.max_writable_bytes), "256", *command]
+            str(limits.max_output_bytes), "256", *command]
 
 
 def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
@@ -133,16 +133,48 @@ def _process_descendants(root_pid: int) -> set[int]:
     return found
 
 
-def _live_processes(pids: set[int]) -> set[int]:
-    """Filter historical observations to processes that still exist."""
+def _process_identity(pid: int) -> str | None:
+    """Return a stable Linux process identity, including kernel start time."""
+    if sys.platform.startswith("linux"):
+        try:
+            stat_fields = Path(f"/proc/{pid}/stat").read_text(
+                encoding="utf-8"
+            ).rsplit(")", 1)[1].split()
+            return stat_fields[19]
+        except (OSError, IndexError):
+            return None
+    return None
+
+
+def _live_processes(pids: dict[int, str | None]) -> set[int]:
+    """Return only observations whose stable process identity still matches."""
     live = set()
-    for pid in pids:
+    for pid, identity in pids.items():
+        if identity is None or _process_identity(pid) != identity:
+            continue
         try:
             os.kill(pid, 0)
         except (ProcessLookupError, PermissionError):
             continue
         live.add(pid)
     return live
+
+
+def _writable_size(roots: tuple[Path, ...]) -> int:
+    """Measure a concurrently mutable tree without allowing races to escape."""
+    total = 0
+    for root in roots:
+        try:
+            paths = root.rglob("*")
+            for path in paths:
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    return total
 
 
 def _sandbox_command(
@@ -216,10 +248,10 @@ def run_supervised(
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
     token = uuid.uuid4().hex
-    stdout_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
-    stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    stdout_file = tempfile.TemporaryFile(mode="w+b")
+    stderr_file = tempfile.TemporaryFile(mode="w+b")
     process = subprocess.Popen(
-        argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file, text=True,
+        argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
         env=env | {"PYTHONDONTWRITEBYTECODE": "1",
                    "PDD_SUPERVISION_TOKEN": token,
                    "TMPDIR": str(writable_roots[0].resolve()),
@@ -229,89 +261,64 @@ def run_supervised(
     )
     timed_out = False
     surviving = False
-    tracked: set[int] = set()
+    tracked: dict[int, str | None] = {}
     tracking_done = threading.Event()
 
     def track_process_tree() -> None:
         while not tracking_done.wait(0.005):
-            tracked.update(_process_descendants(process.pid))
+            for pid in _process_descendants(process.pid):
+                tracked.setdefault(pid, _process_identity(pid))
 
     tracker = threading.Thread(target=track_process_tree, daemon=True)
     tracker.start()
     deadline = time.monotonic() + timeout
     output_limited = False
-    while True:
-        try:
-            process.communicate(
-                timeout=max(0.01, min(0.1, deadline - time.monotonic()))
-            )
-            break
-        except subprocess.TimeoutExpired:
-            writable_size = sum(
-                path.stat().st_size for root in writable_roots
-                for path in root.rglob("*") if path.is_file()
-            )
-            if writable_size > limits.max_writable_bytes:
-                output_limited = True
-                os.killpg(process.pid, signal.SIGKILL)
-                process.communicate()
-                break
-            descendants = _supervised_descendants(token) - {process.pid}
-            if process.poll() is not None and descendants:
-                surviving = True
-                for pid in descendants:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+    try:
+        while process.poll() is None:
             if time.monotonic() >= deadline:
                 timed_out = True
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                for pid in _supervised_descendants(token) - {process.pid}:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                process.communicate()
                 break
-    tracking_done.set()
-    tracker.join(timeout=1)
-    if not timed_out and os.name != "nt":
-        try:
-            os.killpg(process.pid, 0)
-            surviving = True
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    descendants = _live_processes(
-        (_supervised_descendants(token) | tracked) - {process.pid}
-    )
-    if descendants:
-        surviving = True
-        for pid in descendants:
+            if _writable_size(writable_roots) > limits.max_writable_bytes:
+                output_limited = True
+                break
+            if stdout_file.tell() + stderr_file.tell() > limits.max_output_bytes:
+                output_limited = True
+                break
+            time.sleep(0.01)
+    finally:
+        tracking_done.set()
+        tracker.join(timeout=1)
+        if process.poll() is None:
             try:
-                os.kill(pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-    if profile is not None:
-        profile.unlink(missing_ok=True)
+        process.wait()
+        observed = _supervised_descendants(token) - {process.pid}
+        for pid in observed:
+            tracked.setdefault(pid, _process_identity(pid))
+        descendants = _live_processes(tracked)
+        if descendants:
+            surviving = True
+            for pid in descendants:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        if profile is not None:
+            profile.unlink(missing_ok=True)
     stdout_file.seek(0)
     stderr_file.seek(0)
-    stdout = stdout_file.read(limits.max_output_bytes + 1)
-    stderr = stderr_file.read(limits.max_output_bytes + 1)
+    remaining = limits.max_output_bytes
+    stdout_bytes = stdout_file.read(remaining)
+    remaining -= len(stdout_bytes)
+    stderr_bytes = stderr_file.read(remaining)
+    if stdout_file.read(1) or stderr_file.read(1):
+        output_limited = True
     stdout_file.close()
     stderr_file.close()
-    encoded = stdout.encode()
-    if len(encoded) > limits.max_output_bytes:
-        stdout = encoded[:limits.max_output_bytes].decode("utf-8", errors="replace")
-        output_limited = True
-    encoded = stderr.encode()
-    if len(encoded) > limits.max_output_bytes:
-        stderr = encoded[:limits.max_output_bytes].decode("utf-8", errors="replace")
-        output_limited = True
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
     return subprocess.CompletedProcess(
         command, 125 if output_limited else (124 if timed_out else process.returncode),
         stdout, stderr,

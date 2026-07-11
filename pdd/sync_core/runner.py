@@ -104,6 +104,10 @@ def _pytest_plugin_declaration_targets(node: ast.AST) -> tuple[ast.AST, ...]:
         return tuple(node.targets)
     if isinstance(node, ast.AnnAssign):
         return (node.target,)
+    if isinstance(node, (ast.AugAssign, ast.NamedExpr)):
+        return (node.target,)
+    if isinstance(node, ast.Delete):
+        return tuple(node.targets)
     return ()
 
 
@@ -136,7 +140,7 @@ def _local_module_paths(
     plugin_aliases = {"pytest_plugins"}
     for candidate in ast.walk(tree):
         if (
-            isinstance(candidate, (ast.Assign, ast.AnnAssign))
+            isinstance(candidate, (ast.Assign, ast.AnnAssign, ast.NamedExpr))
             and isinstance(candidate.value, ast.Name)
             and candidate.value.id in plugin_aliases
         ):
@@ -146,6 +150,20 @@ def _local_module_paths(
             )
     pytest_plugins_declared = False
     for node in ast.walk(tree):
+        targets = _pytest_plugin_declaration_targets(node)
+        def rooted_in_plugin(target: ast.AST) -> bool:
+            while isinstance(target, (ast.Subscript, ast.Attribute)):
+                target = target.value
+            return isinstance(target, ast.Name) and target.id in plugin_aliases
+        if isinstance(node, (ast.AugAssign, ast.NamedExpr, ast.Delete)) and any(
+            rooted_in_plugin(target) for target in targets
+        ):
+            dynamic_pytest_plugins = True
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and any(
+            isinstance(target, (ast.Subscript, ast.Attribute))
+            and rooted_in_plugin(target) for target in targets
+        ):
+            dynamic_pytest_plugins = True
         if isinstance(node, ast.Import):
             modules.update(alias.name for alias in node.names)
             importlib_names.update(
@@ -511,6 +529,9 @@ def runner_identity_digest(
                 "validator": item.validator_id,
                 "config": item.validator_config_digest,
                 "paths": [path.as_posix() for path in item.artifact_paths],
+                "code_under_test_paths": [
+                    path.as_posix() for path in sorted(item.code_under_test_paths)
+                ],
             }
             for item in profile.obligations
         ],
@@ -634,6 +655,7 @@ def _trusted_collection_runner(
     directory: Path,
     root: Path,
     pytest_args: list[str],
+    collection_output: Path,
 ) -> Path:
     """Create a checker-owned pytest entrypoint that imports the probe by path."""
     runner = directory / "run_collection.py"
@@ -657,6 +679,7 @@ def _trusted_collection_runner(
                 "_MODULE = importlib.util.module_from_spec(_SPEC)",
                 "sys.modules['_pdd_checker_pytest_probe_abs'] = _MODULE",
                 "_SPEC.loader.exec_module(_MODULE)",
+                f"_MODULE._OUTPUT_PATH = {json.dumps(str(collection_output))}",
                 "",
                 "import pytest",
                 "if _ROOT not in sys.path:",
@@ -666,6 +689,23 @@ def _trusted_collection_runner(
             )
         ),
         encoding="utf-8",
+    )
+    return runner
+
+
+def _trusted_execution_runner(
+    directory: Path, root: Path, pytest_args: list[str], junit: Path
+) -> Path:
+    """Create a controller entrypoint that owns the hidden result destination."""
+    runner = directory / "run_execution.py"
+    runner.write_text(
+        "\n".join((
+            "import os, sys", "import pytest",
+            f"os.chdir({json.dumps(str(root))})",
+            f"_ARGS = {json.dumps(pytest_args + [f'--junitxml={junit}'])}",
+            f"sys.path.insert(0, {json.dumps(str(root))})",
+            "raise SystemExit(pytest.main(_ARGS))", "",
+        )), encoding="utf-8",
     )
     return runner
 
@@ -692,8 +732,9 @@ def _run_test_node(
         home.mkdir(mode=0o700, parents=True)
         junit = temporary / "junit.xml"
         junit.touch(mode=0o600)
+        controller = _trusted_execution_runner(temporary, root, command[3:], junit)
         result, surviving = _managed_subprocess(
-            [*command, f"--junitxml={junit}"], cwd=root,
+            [sys.executable, str(controller)], cwd=temporary,
             timeout=timeout_seconds, env=_pytest_environment(home),
             writable_roots=(home.parent,), writable_files=(junit,),
             readable_roots=(root,),
@@ -741,7 +782,9 @@ def _collect_node_ids(
             "no:cacheprovider",
             path.as_posix(),
         ]
-        runner = _trusted_collection_runner(temporary, root, pytest_args)
+        runner = _trusted_collection_runner(
+            temporary, root, pytest_args, collection_output
+        )
         command = [sys.executable, str(runner)]
         digest = hashlib.sha256(
             json.dumps(
@@ -757,9 +800,8 @@ def _collect_node_ids(
         ).hexdigest()
         result, surviving = _managed_subprocess(
             command, cwd=temporary, timeout=timeout_seconds,
-            env=_pytest_environment(home) | {
-                "PDD_TRUSTED_COLLECTION_OUTPUT": str(collection_output),
-            }, writable_roots=(home.parent,), writable_files=(collection_output,),
+            env=_pytest_environment(home), writable_roots=(home.parent,),
+            writable_files=(collection_output,),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:

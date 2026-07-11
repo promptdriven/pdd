@@ -217,8 +217,8 @@ def _reusable_result(
 def _checkout_is_clean_for_finalization(root: Path) -> bool:
     """Allow only checker-owned durable state from an earlier finalization."""
     status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all"],
-        cwd=root, capture_output=True, text=True, check=False,
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root, capture_output=True, check=False,
     )
     if status.returncode != 0:
         return False
@@ -226,10 +226,23 @@ def _checkout_is_clean_for_finalization(root: Path) -> bool:
         ".pdd/meta/v2/", ".pdd/evidence/v2/", ".pdd/locks/transactions/",
         ".pdd/transactions/",
     )
-    return all(
-        len(line) >= 4 and line[3:].replace('"', "").startswith(allowed)
-        for line in status.stdout.splitlines()
-    )
+    fields = status.stdout.split(b"\0")
+    index = 0
+    while index < len(fields) and fields[index]:
+        record = fields[index]
+        if len(record) < 4:
+            return False
+        code = record[:2]
+        paths = [record[3:].decode("utf-8", errors="surrogateescape")]
+        if b"R" in code or b"C" in code:
+            index += 1
+            if index >= len(fields) or not fields[index]:
+                return False
+            paths.append(fields[index].decode("utf-8", errors="surrogateescape"))
+        if any(not path.startswith(allowed) for path in paths):
+            return False
+        index += 1
+    return True
 
 
 def finalize_unit(

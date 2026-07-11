@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 
 
-_OUTPUT_ENV = "PDD_TRUSTED_COLLECTION_OUTPUT"
+_OUTPUT_PATH: str | None = None
 
 
 @pytest.hookimpl(wrapper=True, tryfirst=True)
@@ -19,7 +18,7 @@ def pytest_collection_modifyitems(items):
     try:
         return (yield)
     finally:
-        output = os.environ.get(_OUTPUT_ENV)
+        output = _OUTPUT_PATH
         if output:
             Path(output).write_text(
                 json.dumps(protected_node_ids, separators=(",", ":")),

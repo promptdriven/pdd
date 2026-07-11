@@ -147,11 +147,17 @@ def _candidate_interpreter_identity(
 
 
 def _lifecycle_command(command: list[str], temporary: Path, home: Path,
-                       timeout: int = 1200) -> subprocess.CompletedProcess[str]:
+                       timeout: int = 1200, *,
+                       readable_roots: tuple[Path, ...] = (),
+                       writable_roots: tuple[Path, ...] | None = None,
+                       cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # pylint: disable=too-many-arguments
     """Route every lifecycle command through the shared fail-closed supervisor."""
     result, surviving = run_supervised(
-        command, cwd=temporary, timeout=timeout,
-        env=_isolated_lifecycle_environment(home), writable_roots=(temporary,)
+        command, cwd=cwd or temporary, timeout=timeout,
+        env=_isolated_lifecycle_environment(home),
+        writable_roots=writable_roots or (temporary,),
+        readable_roots=readable_roots,
     )
     if surviving:
         return subprocess.CompletedProcess(command, 125, result.stdout,
@@ -218,14 +224,20 @@ def _install_candidate_wheel(
             "-r",
             str(combined_lock),
         ],
-        temporary, home,
+        temporary, home, readable_roots=(wheelhouse, wheel, runtime_lock),
     )
     if installed.returncode != 0:
         return None
+    closure = _installed_file_closure(candidate_python)
+    proof_scratch = temporary / "proof-scratch"
+    proof_scratch.mkdir(mode=0o700)
     proved = _lifecycle_command(
-        [str(candidate_python), "-I", "-m", "pdd.cli", "--help"], temporary, home
+        [str(candidate_python), "-I", "-m", "pdd.cli", "--help"], temporary, home,
+        readable_roots=(environment,), writable_roots=(proof_scratch,), cwd=proof_scratch,
     )
     if proved.returncode != 0:
+        return None
+    if _installed_file_closure(candidate_python) != closure:
         return None
     dependency_digest = _dependency_environment_digest(candidate_python, isolated)
     if len(dependency_digest) != 64:
@@ -305,6 +317,7 @@ def run_lifecycle_matrix(
         if installed_candidate is None:
             return _failed_result()
         candidate_python, dependency_digest = installed_candidate
+        installed_files = _installed_file_closure(candidate_python)
         measured_python = _candidate_interpreter_identity(
             candidate_python, _isolated_lifecycle_environment(temporary / "home")
         )
@@ -332,9 +345,15 @@ def run_lifecycle_matrix(
             "--candidate-python",
             str(candidate_python),
         ]
+        scenario_scratch = temporary / "scenario-scratch"
+        scenario_scratch.mkdir(mode=0o700)
         completed = _lifecycle_command(
-            command, temporary, temporary / "home", timeout_seconds
+            command, temporary, temporary / "home", timeout_seconds,
+            readable_roots=(candidate_python.parents[1], Path(cloud_root).resolve()),
+            writable_roots=(scenario_scratch,), cwd=scenario_scratch,
         )
+        if _installed_file_closure(candidate_python) != installed_files:
+            return _failed_result()
         if completed.returncode == 124:
             return _failed_result(timeout=True)
         try:
@@ -371,6 +390,6 @@ def run_lifecycle_matrix(
             candidate_artifact,
             protected_lock_digest,
             measured_python,
-            _installed_file_closure(candidate_python),
+            installed_files,
             "pdd-released-checker-v1",
         )

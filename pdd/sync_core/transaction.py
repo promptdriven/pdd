@@ -391,16 +391,23 @@ class TransactionManager:
         transaction_dir = self._transaction_dir(transaction_id)
         if transaction_dir.exists():
             raise TransactionError(f"transaction already exists: {transaction_id}")
-        transaction_dir.mkdir(mode=0o700)
-        entries = [self._entry(transaction_dir, index, write) for index, write in enumerate(writes)]
-        payload: dict[str, object] = {
-            "schema_version": 1,
-            "transaction_id": transaction_id,
-            "phase": TransactionPhase.PREPARED.value,
-            "shared_resources": [path.as_posix() for path in sorted(shared_resources)],
-            "entries": entries,
-        }
-        self._write_journal(transaction_dir, payload)
+        temporary = Path(tempfile.mkdtemp(prefix=".prepare-", dir=self.state_root))
+        temporary.chmod(0o700)
+        try:
+            entries = [self._entry(temporary, index, write) for index, write in enumerate(writes)]
+            payload: dict[str, object] = {
+                "schema_version": 1,
+                "transaction_id": transaction_id,
+                "phase": TransactionPhase.PREPARED.value,
+                "shared_resources": [path.as_posix() for path in sorted(shared_resources)],
+                "entries": entries,
+            }
+            self._write_journal(temporary, payload)
+            fsync_directory(temporary)
+            os.replace(temporary, transaction_dir)
+        except BaseException:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise
         fsync_directory(self.state_root)
         return TransactionResult(
             transaction_id,
@@ -569,6 +576,8 @@ class TransactionManager:
         pending: list[str] = []
         for transaction_dir in sorted(self.state_root.iterdir()):
             if not transaction_dir.is_dir() or transaction_dir.is_symlink():
+                continue
+            if transaction_dir.name.startswith(".prepare-"):
                 continue
             phase = TransactionPhase(str(self._read_journal(transaction_dir)["phase"]))
             if phase not in {TransactionPhase.COMMITTED, TransactionPhase.ROLLED_BACK}:

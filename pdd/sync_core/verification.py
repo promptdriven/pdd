@@ -182,6 +182,9 @@ def _profile_digest(
                 "validator_config_digest": item.validator_config_digest,
                 "requirement_ids": item.requirement_ids,
                 "artifact_paths": [path.as_posix() for path in item.artifact_paths],
+                "code_under_test_paths": [
+                    path.as_posix() for path in sorted(item.code_under_test_paths)
+                ],
                 "required": item.required,
             }
             for item in obligations
