@@ -4346,7 +4346,7 @@ class TestIssue1021CommitAndPushNoBlanketAdd:
 
 class TestMainDryRunJson:
     def test_dry_run_json_outputs_report(self, capsys):
-        """--dry-run with --json prints the report as JSON and exits based on ok."""
+        """--dry-run with --json emits only its stable summary schema."""
         report = {
             "ok": True,
             "summary": {
@@ -4361,7 +4361,11 @@ class TestMainDryRunJson:
         assert result == 0
         out = capsys.readouterr().out
         parsed = json.loads(out)
-        assert parsed == report
+        assert parsed == {
+            "ok": True,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+        }
 
     def test_dry_run_json_returns_one_when_not_ok(self, capsys):
         report = {
@@ -4377,9 +4381,9 @@ class TestMainDryRunJson:
             result = main(dry_run=True, as_json=True)
         assert result == 1
 
-    def test_dry_run_json_redacts_secret_bearing_failure_data(self, capsys):
-        """The machine-readable dry-run report must not emit embedded secrets."""
-        token = "ghp_" + "a" * 36
+    def test_dry_run_json_excludes_exception_bearing_failure_data(self, capsys):
+        """The output sink cannot receive candidate-controlled failure values."""
+        secret = "candidate exception text: ssh-private-key"
         report = {
             "ok": False,
             "summary": {
@@ -4388,15 +4392,19 @@ class TestMainDryRunJson:
                 "unbaselined": 0,
                 "failures": 1,
             },
-            "failures": [f"remote command failed: Authorization: Bearer {token}"],
+            "failures": [secret],
         }
         with patch("pdd.continuous_sync.build_report", return_value=report):
             result = main(dry_run=True, as_json=True)
 
         assert result == 1
         output = capsys.readouterr().out
-        assert token not in output
-        assert "[REDACTED]" in output
+        assert secret not in output
+        assert json.loads(output) == {
+            "ok": False,
+            "consumer": "ci-heal",
+            "summary": report["summary"],
+        }
 
 
 class TestHealModuleConflict:
