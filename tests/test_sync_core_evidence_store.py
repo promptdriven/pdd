@@ -7,10 +7,14 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+import pytest
+
 from pdd.sync_core import (
     AttestationBinding,
     AttestationRequest,
     AttestationSigner,
+    AttestationTrustPolicy,
+    EvidenceStoreError,
     EvidenceOutcome,
     decode_attestation,
     encode_attestation,
@@ -64,6 +68,36 @@ def test_attestation_json_round_trip_preserves_playwright_command() -> None:
     decoded = decode_attestation(json.loads(encode_attestation(envelope)))
     assert decoded == envelope
     assert decoded.payload() == envelope.payload()
+
+
+def test_pre_closure_signed_envelope_uses_explicit_legacy_payload_shape() -> None:
+    envelope = _envelope()
+    payload = json.loads(encode_attestation(envelope))
+    payload.pop("payload_version", None)
+    payload["binding"].pop("artifact_closure_digest")
+    payload.pop("signature")
+    legacy_bytes = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()
+    payload["signature"] = SIGNER.sign_bytes(legacy_bytes)
+
+    decoded = decode_attestation(payload)
+
+    assert decoded.payload_version == 1
+    assert decoded.payload() == legacy_bytes
+    AttestationTrustPolicy({SIGNER.issuer: SIGNER.public_key_bytes()}).verify(
+        decoded,
+        decoded.binding,
+        now=datetime(2026, 7, 10, 12, 1, tzinfo=timezone.utc),
+    )
+
+
+def test_unknown_attestation_payload_version_is_rejected() -> None:
+    payload = json.loads(encode_attestation(_envelope()))
+    payload["payload_version"] = 99
+
+    with pytest.raises(EvidenceStoreError, match="payload version"):
+        decode_attestation(payload)
 
 
 def test_candidate_cannot_replace_protected_base_public_key(tmp_path) -> None:
