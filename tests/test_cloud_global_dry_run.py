@@ -393,6 +393,148 @@ def test_configured_outputs_without_architecture_remain_in_sync(
     assert report["paths"]["test"] == "checks/test_widget.py"
 
 
+def test_default_context_templates_preserve_nested_basename(tmp_path: Path) -> None:
+    """Read-only reports use the same default/template semantics as sync."""
+    project = tmp_path / "project"
+    prompts = project / "prompts" / "core"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "cloud_python.prompt"
+    code = project / "src" / "core" / "cloud.py"
+    example = project / "usage" / "core" / "cloud_demo.py"
+    test_file = project / "spec" / "core" / "cloud_spec.py"
+    for path, content in ((prompt, "cloud\n"), (code, "VALUE = 1\n"),
+                          (example, "print('cloud')\n"),
+                          (test_file, "def test_cloud(): pass\n")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      outputs:\n"
+        "        code: {path: 'src/{name}.py'}\n"
+        "        example: {path: 'usage/{name}_demo.py'}\n"
+        "        test: {path: 'spec/{name}_spec.py'}\n",
+        encoding="utf-8",
+    )
+    paths = {"prompt": prompt, "code": code, "example": example,
+             "test": test_file, "test_files": [test_file]}
+    _write_fingerprint(project, "core_cloud", calculate_current_hashes(paths))
+
+    report = classify_unit(SyncUnit("core/cloud", "python", prompt, prompts), project)
+
+    assert report["classification"] == "IN_SYNC"
+    assert report["paths"]["code"] == "src/core/cloud.py"
+    assert report["paths"]["example"] == "usage/core/cloud_demo.py"
+    assert report["paths"]["test"] == "spec/core/cloud_spec.py"
+
+
+def test_architecture_duplicate_leaves_match_relative_prompt_path(tmp_path: Path) -> None:
+    """Architecture selection distinguishes path-qualified duplicate leaves."""
+    project = tmp_path / "project"
+    prompts = project / "prompts" / "app" / "settings"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "page_typescriptreact.prompt"
+    prompt.write_text("page\n", encoding="utf-8")
+    code = project / "src" / "app" / "settings" / "page.tsx"
+    code.parent.mkdir(parents=True)
+    code.write_text("export default 1\n", encoding="utf-8")
+    (project / "architecture.json").write_text(json.dumps([
+        {"filename": "app/login/page_typescriptreact.prompt", "filepath": "src/app/login/page.tsx"},
+        {"filename": "app/settings/page_typescriptreact.prompt", "filepath": "src/app/settings/page.tsx"},
+    ]), encoding="utf-8")
+    _write_fingerprint(project, "app_settings_page", {
+        "prompt_hash": hashlib.sha256(prompt.read_bytes()).hexdigest(),
+        "code_hash": hashlib.sha256(code.read_bytes()).hexdigest(),
+        "example_hash": None, "test_hash": None, "test_files": None,
+        "include_deps": {},
+    })
+
+    report = classify_unit(
+        SyncUnit("app/settings/page", "typescriptreact", prompt, project / "prompts"),
+        project,
+    )
+
+    assert report["classification"] == "IN_SYNC"
+    assert report["paths"]["code"] == "src/app/settings/page.tsx"
+
+
+def test_global_dry_run_json_rejects_symlinked_pddrc_before_read(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Candidate config links are rejected before their targets are opened."""
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.yml"
+    outside.write_text("contexts: {}\n", encoding="utf-8")
+    try:
+        (project / ".pddrc").symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    report = json.loads(result.output)
+    assert report["failures"][0]["failure"] == "unsafe_config"
+
+
+def test_global_discovery_budget_is_shared_across_nested_roots(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Nested configured roots cannot multiply the traversal allowance."""
+    project = tmp_path / "project"
+    nested = project / "prompts" / "nested"
+    nested.mkdir(parents=True)
+    (nested / "unit_python.prompt").write_text("unit\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  outer: {defaults: {prompts_dir: prompts}}\n"
+        "  inner: {defaults: {prompts_dir: prompts/nested}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_PROMPT_DISCOVERY_ENTRIES", 4)
+
+    result = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    report = json.loads(result.output)
+    assert report["summary"]["total"] == 1
+    assert report["failures"] == []
+
+
+def test_malformed_architecture_output_is_unit_scoped_json_failure(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Malformed artifact paths cannot abort the machine-readable report."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    (project / "architecture.json").write_text(json.dumps([
+        {"filename": prompt.name, "filepath": "bad\u0000path.py"},
+    ]), encoding="utf-8")
+    _write_fingerprint(project, "widget", {
+        "prompt_hash": "stored", "code_hash": "stored", "example_hash": None,
+        "test_hash": None, "test_files": None, "include_deps": {},
+    })
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(
+        cli.cli, ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    report = json.loads(result.output)
+    assert report["units"][0]["classification"] == "FAILURE"
+    assert report["units"][0]["failure"] in {"path_resolution", "unsafe_artifacts"}
+
+
 def test_live_include_hash_is_independent_of_nested_cwd(
     tmp_path: Path,
     monkeypatch,
