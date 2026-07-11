@@ -2692,6 +2692,112 @@ def test_get_pdd_file_paths_proven_owner_still_rejects_sibling_context_target(tm
     assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
 
 
+def test_get_pdd_file_paths_existing_prompt_template_anchored_from_parent_cwd(tmp_path, monkeypatch):
+    """An EXISTING prompt's template outputs must anchor at the subproject too.
+
+    Round 7 anchored only the missing-prompt template branch; the existing-prompt
+    branch still returned project-relative paths, so from a parent CWD an existing
+    prompt's example/test resolved under the parent.
+    """
+    project = tmp_path / "project"
+    (project / "prompts" / "backend").mkdir(parents=True)
+    (project / "prompts" / "backend" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n"
+        "        example:\n          path: \"backend/examples/{name}_example.py\"\n"
+        "        test:\n          path: \"backend/tests/test_{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT.
+
+    paths = get_pdd_file_paths(
+        "backend/foo", "python", prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert str(paths["example"].resolve(strict=False)).startswith(str(project.resolve()))
+    assert str(paths["test"].resolve(strict=False)).startswith(str(project.resolve()))
+
+
+def test_get_pdd_file_paths_absolute_sibling_output_path_still_isolates(tmp_path, monkeypatch):
+    """A sibling context with an ABSOLUTE output path must still own its code.
+
+    `_filepath_matches_context` compared raw config prefixes against the project-relative
+    architecture value, so an absolute `generate_output_path` never matched and the
+    sibling context stopped owning its code — a stale flat row targeting `frontend/`
+    was then accepted by a backend resolution. Absolute config paths are now
+    re-expressed relative to the project before comparison.
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    abs_frontend = (tmp_path / "frontend").resolve().as_posix()
+    # Frontend's relative paths do NOT cover frontend/credits.py; only its ABSOLUTE
+    # generate_output_path does.
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/src/**\"]\n"
+        f"    defaults:\n      prompts_dir: \"prompts/frontend\"\n      generate_output_path: \"{abs_frontend}/\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_flat_hint_selects_requested_context_prompt(tmp_path, monkeypatch):
+    """A legacy FLAT architecture hint must resolve the prompt in the REQUESTED context.
+
+    When a flat architecture filename matches the same leaf in two context subdirs,
+    `_resolve_prompt_path_from_architecture` sorted the recursive matches without
+    context and returned the shallowest/lexicographic first — so a `frontend` request
+    got the `backend` prompt while code resolved under `frontend` (a torn pair). The
+    recursive search now prefers the resolving context's prefix.
+    """
+    for ctx in ("backend", "frontend"):
+        d = tmp_path / "prompts" / ctx
+        d.mkdir(parents=True)
+        (d / "credits_Python.prompt").write_text(f"% {ctx}\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "frontend/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+        context_override="frontend",
+    )
+
+    resolved = paths["prompt"].resolve(strict=False).as_posix()
+    assert "/prompts/frontend/" in resolved
+    assert "/prompts/backend/" not in resolved
+
+
 def test_get_pdd_file_paths_rejects_symlink_architecture_escape(tmp_path, monkeypatch):
     """A relative architecture path cannot escape through an existing symlink."""
     monkeypatch.chdir(tmp_path)

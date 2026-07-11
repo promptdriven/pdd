@@ -291,6 +291,7 @@ def _join_prompt_path_from_architecture(
 def _resolve_prompt_path_from_architecture(
     prompts_root: Path,
     architecture_filename: str,
+    context_prefix: Optional[str] = None,
 ) -> Optional[Path]:
     """Build a prompt path from architecture.json without duplicating subdirectories.
 
@@ -299,6 +300,12 @@ def _resolve_prompt_path_from_architecture(
     Handles the common case where architecture.json stores just the filename
     (e.g. "firestore_client_Python.prompt") while the file lives in a nested
     subdirectory (e.g. prompts/src/clients/).
+
+    When a legacy FLAT architecture filename matches the same leaf in more than one
+    context subdirectory, ``context_prefix`` (from the resolving ``.pddrc`` context)
+    selects the correct context's prompt instead of the shallowest/lexicographic
+    first — otherwise the hint returns the wrong context's prompt while code resolves
+    under the requested one (a torn cross-context pair).
     """
     safe_filename = _safe_architecture_prompt_filename(architecture_filename)
     if safe_filename is None:
@@ -332,6 +339,13 @@ def _resolve_prompt_path_from_architecture(
                 continue
             matches.append(candidate)
         if matches:
+            if len(matches) > 1 and context_prefix:
+                ctx_filtered = [
+                    m for m in matches
+                    if context_prefix in str(m.relative_to(prompts_root))
+                ]
+                if ctx_filtered:
+                    matches = ctx_filtered
             matches.sort(key=lambda p: (len(p.parts), str(p)))
             return matches[0]
 
@@ -658,16 +672,44 @@ def _module_filepath_matches_basename(
     return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
 
 
-def _filepath_matches_context(normalized: str, context_config: Any) -> Optional[bool]:
+def _filepath_matches_context(
+    normalized: str,
+    context_config: Any,
+    project_root: Optional[Path] = None,
+) -> Optional[bool]:
     """Whether a posix filepath lies in one context's declared territory.
 
     Returns True/False when the context declares a territory (``paths`` globs or
     configured output locations), or ``None`` when it declares none (no constraint).
     Shared by :func:`_context_owned_filepath` (the resolving context) and
     :func:`_filepath_owned_by_other_context` (sibling contexts).
+
+    ``normalized`` is a project-relative architecture filepath. A context may declare
+    ABSOLUTE ``paths`` globs or output paths; those are re-expressed relative to
+    ``project_root`` before comparison (an absolute config value outside the project
+    can never own a project-relative target). Without this, an absolute
+    ``generate_output_path`` never matches and a sibling context stops owning its
+    code — re-opening the cross-context borrow this guard blocks.
     """
     if not isinstance(context_config, dict):
         return None
+
+    root_posix = None
+    if project_root is not None:
+        root_posix = PurePosixPath(str(project_root).replace("\\", "/"))
+
+    def _project_relative(value: str) -> Optional[str]:
+        """Re-express a config path relative to the project; None if unusable."""
+        v = value.replace("\\", "/")
+        pure = PurePosixPath(v)
+        if not pure.is_absolute():
+            return v
+        if root_posix is None:
+            return None
+        try:
+            return pure.relative_to(root_posix).as_posix()
+        except ValueError:
+            return None  # absolute path outside the project — cannot own it
 
     globs = [p for p in context_config.get("paths", []) if isinstance(p, str) and p]
     prefixes: List[str] = []
@@ -688,7 +730,9 @@ def _filepath_matches_context(normalized: str, context_config: Any) -> Optional[
         return None
 
     for pattern in globs:
-        pattern_norm = pattern.replace("\\", "/")
+        pattern_norm = _project_relative(pattern)
+        if pattern_norm is None:
+            continue
         base = pattern_norm.rstrip("*").rstrip("/")
         if (
             fnmatch.fnmatch(normalized, pattern_norm)
@@ -698,11 +742,14 @@ def _filepath_matches_context(normalized: str, context_config: Any) -> Optional[
             return True
 
     for prefix in prefixes:
-        prefix_norm = prefix.replace("\\", "/")
         # Output templates such as "backend/functions/{name}.py" contribute only
         # the directory before the first placeholder.
-        if "{" in prefix_norm:
-            prefix_norm = prefix_norm.split("{", 1)[0]
+        prefix_head = prefix.replace("\\", "/")
+        if "{" in prefix_head:
+            prefix_head = prefix_head.split("{", 1)[0]
+        prefix_norm = _project_relative(prefix_head)
+        if prefix_norm is None:
+            continue
         base = prefix_norm.strip().rstrip("/")
         if base.startswith("./"):
             base = base[2:]
@@ -743,11 +790,12 @@ def _filepath_owned_by_other_context(
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):
         return False
+    project_root = pddrc_path.parent
     normalized = PurePosixPath(architecture_filepath.strip().replace("\\", "/")).as_posix()
     for other_name, other_config in contexts.items():
         if other_name == context_name or other_name == "default":
             continue
-        if _filepath_matches_context(normalized, other_config) is True:
+        if _filepath_matches_context(normalized, other_config, project_root) is True:
             return True
     return False
 
@@ -797,7 +845,7 @@ def _context_owned_filepath(
         architecture_filepath.strip().replace("\\", "/")
     ).as_posix()
 
-    match = _filepath_matches_context(normalized, context_config)
+    match = _filepath_matches_context(normalized, context_config, pddrc_path.parent)
     # No territory declared for this context — impose no restriction.
     return True if match is None else match
 
@@ -805,10 +853,19 @@ def _context_owned_filepath(
 def _anchor_output_paths_at_project(result: Dict[str, Any], project_root: Path) -> Dict[str, Any]:
     """Resolve relative output artifact paths against the project root, not the CWD.
 
-    Template-generated code/example/test paths are project-relative; a new module
-    resolved from a parent/sibling working directory must still write under the
-    project. Absolute paths and the already-resolved ``prompt`` key are unchanged.
+    Template-generated code/example/test paths are project-relative; a resolution
+    run from a parent/sibling working directory must still write under the project.
+    When the project root IS the CWD the relative paths already resolve correctly, so
+    they are left as-is to preserve the established (relative) return contract; only a
+    differing CWD triggers re-anchoring. Absolute paths and the already-resolved
+    ``prompt`` key are unchanged.
     """
+    try:
+        if project_root.resolve(strict=False) == Path.cwd().resolve():
+            return result
+    except (OSError, RuntimeError):
+        pass
+
     def _anchor(value: Any) -> Any:
         if isinstance(value, Path) and not value.is_absolute():
             return project_root / value
@@ -987,7 +1044,9 @@ def _find_prompt_file(
         )
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
-            joined = _resolve_prompt_path_from_architecture(prompts_root, arch_filename)
+            joined = _resolve_prompt_path_from_architecture(
+                prompts_root, arch_filename, context_prefix=context_prefix
+            )
             if joined is None:
                 arch_filename = None
         if arch_filename and joined is not None:
@@ -2396,6 +2455,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 context_name=context_name,
                 pddrc_anchor=prompts_root_anchor,
             )
+            # Anchor project-relative template outputs at the subproject (as the
+            # missing-prompt branch does) so an existing prompt resolved from a
+            # parent/sibling CWD still writes code/example/test under the project.
+            _existing_pddrc = _find_pddrc_file(prompts_root_anchor)
+            if _existing_pddrc is not None:
+                result = _anchor_output_paths_at_project(result, _existing_pddrc.parent)
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
             return result
 
