@@ -23,8 +23,6 @@ from .construct_paths import (
     _find_pddrc_file,
     _get_relative_basename,
     _load_pddrc_config,
-    _detect_context,
-    _get_context_config,
     get_extension
 )
 from .sync_determine_operation import get_pdd_file_paths, AmbiguousModuleError
@@ -933,6 +931,15 @@ def sync_main(
                     str(prompt_file_path.parent),
                     context_override=context_override,
                 )
+
+                from .continuous_sync import canonical_sync_enabled
+
+                if canonical_sync_enabled(Path(pdd_files.get("prompt") or Path.cwd())):
+                    raise RuntimeError(
+                        "protected canonical sync blocks legacy production mutation; "
+                        "use read-only reporting or trusted finalization until the "
+                        "staged repair executor is enabled"
+                    )
 
                 # Check fingerprint — skip if module is already fully synced
                 _one_session_skipped = False

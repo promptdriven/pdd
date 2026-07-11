@@ -1658,21 +1658,23 @@ class TestOneSessionSyncOutputFromConfig:
             "pdd.one_session_sync.run_one_session_sync",
         ) as mock_one_session:
             ctx = create_mock_context({"local": True})
-            with pytest.raises(RuntimeError, match="protected canonical sync blocks"):
-                sync_main(
-                    ctx,
-                    "tinymod",
-                    max_attempts=1,
-                    budget=1.0,
-                    skip_verify=False,
-                    skip_tests=False,
-                    target_coverage=90.0,
-                    dry_run=False,
-                    one_session=True,
-                )
+            results, _cost, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
 
         mock_codegen.assert_not_called()
         mock_one_session.assert_not_called()
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is False
+        assert "protected canonical sync blocks" in lang_result["error"]
         assert not fake_pdd_files["code"].parent.exists()
         assert not fake_pdd_files["code"].exists()
 
