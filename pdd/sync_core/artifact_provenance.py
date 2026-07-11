@@ -15,7 +15,7 @@ from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from filelock import FileLock
+from .descriptor_store import DescriptorStoreError, update_json
 
 
 class CandidateArtifactProvenanceError(ValueError):
@@ -130,19 +130,28 @@ class CandidateArtifactPolicy:
         self._consumed.add(key)
 
     def _consume_durable(self, key: tuple[str, str, str]) -> None:
-        path = _reject_symlink_components(Path(self.replay_ledger_path))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path = _reject_symlink_components(path)
-        lock_path = path.with_name(f"{path.name}.lock")
-        with FileLock(str(lock_path)):
-            _reject_symlink_components(path)
-            records = self._read_durable_records(path)
+        path = Path(self.replay_ledger_path).absolute()
+        def consume_record(records):
+            if not isinstance(records, list) or any(
+                not isinstance(item, list) or len(item) != 3
+                or any(not isinstance(value, str) for value in item)
+                for item in records
+            ):
+                raise CandidateArtifactProvenanceError(
+                    "candidate replay ledger is corrupt"
+                )
             if list(key) in records:
                 raise CandidateArtifactProvenanceError(
                     "candidate attestation is replayed"
                 )
             records.append(list(key))
-            self._write_durable_records(path, records)
+            return records
+        try:
+            update_json(path, [], consume_record)
+        except DescriptorStoreError as exc:
+            raise CandidateArtifactProvenanceError(
+                f"candidate replay ledger is unsafe: {exc}"
+            ) from exc
 
     def _read_durable_records(self, path: Path) -> list[list[str]]:
         if path.exists():

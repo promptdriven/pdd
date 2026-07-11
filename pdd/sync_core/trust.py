@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, replace
@@ -19,8 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
-from filelock import FileLock
-
+from .descriptor_store import DescriptorStoreError, update_json
 from .durability import fsync_directory
 from .types import EvidenceOutcome, ObligationEvidence, UnitId
 
@@ -78,8 +76,7 @@ class FileReplayStore(ReplayStore):
     """Locked durable nonce ledger located outside candidate-controlled state."""
 
     def __init__(self, path: Path) -> None:
-        self.path = Path(path).resolve()
-        self.lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        self.path = Path(path).absolute()
 
     def _ensure_parent(self) -> None:
         parent = self.path.parent
@@ -124,18 +121,23 @@ class FileReplayStore(ReplayStore):
 
     def consume(self, issuer: str, nonce: str, attestation_id: str) -> None:
         """Atomically reject and record every repeated issuer/nonce pair."""
-        self._ensure_parent()
-        with FileLock(str(self.lock_path)):
-            records = self._load()
+        def consume_record(records):
+            if not isinstance(records, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in records.items()
+            ):
+                raise AttestationError("replay ledger has invalid records")
             key = base64.b64encode(f"{issuer}\0{nonce}".encode()).decode("ascii")
             previous = records.get(key)
             if previous is not None and previous != attestation_id:
                 raise AttestationError("attestation nonce was replayed")
             if previous is None:
                 records[key] = attestation_id
-                self._write(records)
-        if stat.S_IMODE(self.path.stat().st_mode) != 0o600:
-            raise AttestationError("replay ledger permissions are unsafe")
+            return records
+        try:
+            update_json(self.path, {}, consume_record)
+        except DescriptorStoreError as exc:
+            raise AttestationError(str(exc)) from exc
 
     def is_durable(self) -> bool:
         """Return true for the fsynced external ledger."""

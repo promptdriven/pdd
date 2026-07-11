@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -44,6 +44,41 @@ def _failed_result(*, timeout: bool = False) -> LifecycleResult:
         "",
         None,
     )
+
+
+def _copy_protected(source: Path, destination: Path) -> str:
+    """Copy a regular input without following its final component and hash the copy."""
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("protected input is not regular")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as reader, destination.open("wb") as writer:
+            while chunk := reader.read(1024 * 1024):
+                digest.update(chunk)
+                writer.write(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        destination.chmod(0o400)
+        if hashlib.sha256(destination.read_bytes()).hexdigest() != digest.hexdigest():
+            raise OSError("protected copy changed")
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _installed_file_closure(candidate_python: Path) -> tuple[tuple[str, str, str, str], ...]:
+    """Measure installed regular files from checker-owned filesystem traversal."""
+    environment = candidate_python.parents[1]
+    rows = []
+    for path in sorted(environment.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        relative = path.relative_to(environment).as_posix()
+        rows.append(("candidate-environment", "1", relative,
+                     hashlib.sha256(path.read_bytes()).hexdigest()))
+    return tuple(rows)
 
 
 def _required_paths_available(
@@ -287,11 +322,13 @@ def run_lifecycle_matrix(
         protected_attestation = protected / "candidate-attestation.json"
         protected_lock = protected / "candidate-runtime.lock"
         try:
-            shutil.copy2(candidate_wheel, protected_wheel)
-            shutil.copy2(candidate_attestation, protected_attestation)
-            shutil.copy2(candidate_runtime_lock, protected_lock)
-            for path in (protected_wheel, protected_attestation, protected_lock):
-                path.chmod(0o400)
+            _copy_protected(Path(candidate_wheel), protected_wheel)
+            _copy_protected(Path(candidate_attestation), protected_attestation)
+            protected_lock_digest = _copy_protected(
+                Path(candidate_runtime_lock), protected_lock
+            )
+            if protected_lock_digest != candidate_artifact_policy.dependency_lock_sha256:
+                return _failed_result()
             candidate_artifact = load_candidate_artifact_provenance(
                 protected_attestation, protected_wheel, candidate_artifact_policy
             )
@@ -378,4 +415,8 @@ def run_lifecycle_matrix(
             hashlib.sha256(protected_wheel.read_bytes()).hexdigest(),
             dependency_digest,
             candidate_artifact,
+            protected_lock_digest,
+            measured_python,
+            _installed_file_closure(candidate_python),
+            "pdd-released-checker-v1",
         )
