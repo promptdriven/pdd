@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -289,3 +290,45 @@ def test_classify_unit_does_not_remove_concurrent_empty_directories(
 
     assert report["failure"] == "path_resolution"
     assert (project / "concurrent-empty").is_dir()
+
+
+def test_missing_prompt_repair_uses_bounded_pruned_traversal(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Stale fingerprints cannot trigger unbounded whole-project artifact search."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    meta = project / ".pdd" / "meta"
+    prompts.mkdir(parents=True)
+    meta.mkdir(parents=True)
+    code = project / "node_modules" / "deep" / "widget.py"
+    code.parent.mkdir(parents=True)
+    code.write_text("value = 1\n", encoding="utf-8")
+    for index in range(8):
+        (project / f"entry-{index}.txt").write_text("noise\n", encoding="utf-8")
+    (meta / "widget_python.json").write_text(
+        json.dumps(
+            {
+                "pdd_version": "0.0-test",
+                "timestamp": "2026-07-11T00:00:00+00:00",
+                "command": "pdd sync widget",
+                "prompt_hash": None,
+                "code_hash": hashlib.sha256(code.read_bytes()).hexdigest(),
+                "example_hash": None,
+                "test_hash": None,
+                "test_files": None,
+                "include_deps": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    unit = SyncUnit("widget", "python", prompts / "widget_python.prompt", prompts)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_REPAIR_DISCOVERY_ENTRIES", 3)
+
+    report = classify_unit(unit, project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "repair_traversal_budget"
+    assert "repair search exceeded traversal budget" in report["reason"]
+    assert "node_modules" not in json.dumps(report["paths"])
