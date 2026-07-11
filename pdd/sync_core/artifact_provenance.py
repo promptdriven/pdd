@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from filelock import FileLock
 
 
 class CandidateArtifactProvenanceError(ValueError):
@@ -113,6 +115,21 @@ class CandidateArtifactPolicy:
         if path.is_symlink():
             raise CandidateArtifactProvenanceError("candidate replay ledger is unsafe")
         path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(f"{path.name}.lock")
+        with FileLock(str(lock_path)):
+            if path.is_symlink():
+                raise CandidateArtifactProvenanceError(
+                    "candidate replay ledger is unsafe"
+                )
+            records = self._read_durable_records(path)
+            if list(key) in records:
+                raise CandidateArtifactProvenanceError(
+                    "candidate attestation is replayed"
+                )
+            records.append(list(key))
+            self._write_durable_records(path, records)
+
+    def _read_durable_records(self, path: Path) -> list[list[str]]:
         if path.exists():
             try:
                 records = json.loads(path.read_text(encoding="utf-8"))
@@ -129,12 +146,28 @@ class CandidateArtifactPolicy:
                 raise CandidateArtifactProvenanceError(
                     "candidate replay ledger is corrupt"
                 )
-        else:
-            records = []
-        if list(key) in records:
-            raise CandidateArtifactProvenanceError("candidate attestation is replayed")
-        records.append(list(key))
-        path.write_text(json.dumps(records, sort_keys=True) + "\n", encoding="utf-8")
+            return records
+        return []
+
+    def _write_durable_records(self, path: Path, records: list[list[str]]) -> None:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(records, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
 
 @dataclass(frozen=True)
