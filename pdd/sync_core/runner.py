@@ -52,7 +52,9 @@ PYTEST_PROTECTED_FLAGS = (
     "--strict-config", "--strict-markers", "-ra", "-p", "no:cacheprovider"
 )
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
-_RUNTIME_DIGEST_CACHE: tuple[tuple[tuple[str, str, int, int], ...], str] | None = None
+_runtime_digest_cache: dict[
+    str, tuple[tuple[tuple[str, Path], ...], tuple[tuple[str, str, int, int], ...], str]
+] = {}
 
 
 @dataclass(frozen=True)
@@ -633,16 +635,29 @@ def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     return tuple(sorted(paths, key=lambda item: item[0]))
 
 
-def _released_runtime_closure_digest() -> str:
-    """Hash the released runtime by logical name, never installation prefix."""
-    global _RUNTIME_DIGEST_CACHE
-    entries = _released_runtime_closure_paths()
-    manifest = tuple(
+_default_runtime_closure_paths = _released_runtime_closure_paths
+
+
+def _runtime_manifest(
+    entries: tuple[tuple[str, Path], ...]
+) -> tuple[tuple[str, str, int, int], ...]:
+    """Return byte-change-sensitive metadata without rereading runtime bytes."""
+    return tuple(
         (name, str(path), path.stat().st_mtime_ns, path.stat().st_size)
         for name, path in entries
     )
-    if _RUNTIME_DIGEST_CACHE is not None and _RUNTIME_DIGEST_CACHE[0] == manifest:
-        return _RUNTIME_DIGEST_CACHE[1]
+
+
+def _released_runtime_closure_digest() -> str:
+    """Hash the released runtime by logical name, never installation prefix."""
+    default_paths = _released_runtime_closure_paths is _default_runtime_closure_paths
+    cached = _runtime_digest_cache.get("default")
+    if default_paths and cached is not None:
+        entries, cached_manifest, cached_digest = cached
+        if _runtime_manifest(entries) == cached_manifest:
+            return cached_digest
+    entries = _released_runtime_closure_paths()
+    manifest = _runtime_manifest(entries)
     digest = hashlib.sha256()
     for name, path in entries:
         if not path.is_file():
@@ -657,7 +672,8 @@ def _released_runtime_closure_digest() -> str:
             continue
         digest.update(name.encode("utf-8") + b"\0" + content + b"\0")
     result = digest.hexdigest()
-    _RUNTIME_DIGEST_CACHE = manifest, result
+    if default_paths:
+        _runtime_digest_cache["default"] = entries, manifest, result
     return result
 
 

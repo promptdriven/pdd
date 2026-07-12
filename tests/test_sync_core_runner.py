@@ -1057,6 +1057,21 @@ def test_released_runtime_digest_binds_installed_native_dependency(
     assert runner_module._released_runtime_closure_digest() != first
 
 
+def test_default_runtime_digest_cache_invalidates_changed_native_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = tmp_path / "runtime" / "native_extension.so"
+    native.parent.mkdir()
+    native.write_bytes(b"native-v1")
+    provider = lambda: (("python-runtime/native_extension.so", native),)
+    monkeypatch.setattr(runner_module, "_released_runtime_closure_paths", provider)
+    monkeypatch.setattr(runner_module, "_default_runtime_closure_paths", provider)
+    monkeypatch.setattr(runner_module, "_runtime_digest_cache", {})
+    first = runner_module._released_runtime_closure_digest()
+    native.write_bytes(b"native-v2")
+    assert runner_module._released_runtime_closure_digest() != first
+
+
 def test_released_runtime_digest_binds_runtime_and_sandbox_bytes_prefix_portably(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
