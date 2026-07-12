@@ -770,10 +770,10 @@ class TestRunAgenticCheckup:
             "gemini": "/review",
             "claude": "/review",
         }
-        # Authority is finalized only after the complete final-gate verdict is
-        # known; Layer 2 must not be pre-labeled as canonical pass.
+        # The ordinary path has a known Layer 1 pass. Complete-gate authority
+        # is still finalized only after Layer 2 produces the ship verdict.
         loop_context = mock_review_loop.call_args.kwargs["context"]
-        assert loop_context.final_gate_canonical_status == ""
+        assert loop_context.final_gate_canonical_status == "pass"
 
     def test_prepare_hosted_artifact_replaces_stale_pass(self, tmp_path):
         path = tmp_path / "agentic.json"

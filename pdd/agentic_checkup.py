@@ -1934,6 +1934,9 @@ def run_agentic_checkup(
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content,
             layer1_step5_evidence=layer1_step5_evidence_for_review,
+            # This is the known Layer 1 result, not the complete two-layer ship
+            # verdict. The outer finalizer publishes complete-gate authority.
+            final_gate_canonical_status="pass",
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),

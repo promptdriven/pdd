@@ -2296,18 +2296,23 @@ def _maybe_write_agentic_artifact(
                     #   * an explicit ``final_gate_canonical_status`` from the
                     #     final-gate caller always wins — it is the authoritative
                     #     verdict entering/leaving Layer 2;
-                    #   * otherwise, once Layer 2 has resolved (``fixed``) the
-                    #     seeded finding, the handoff gate has passed: record
+                    #   * otherwise, once Layer 2 has positively seeded AND
+                    #     resolved (``fixed``) the finding, the handoff gate has passed: record
                     #     ``pass`` with no blockers in the private artifact so
                     #     the outer finalizer can preserve the actual Layer 1
                     #     result instead of publishing an ambiguous ``unknown``;
-                    #   * only while the seeded finding is still OPEN does the raw
-                    #     Step 5 failure remain the reported layer1 status/blocker.
-                    step5_still_open = any(
-                        getattr(f, "reviewer", "") == "layer1:step5"
-                        and str(getattr(f, "status", "open") or "open").strip().lower()
-                        != "fixed"
+                    #   * missing evidence that the synthetic finding was ever
+                    #     seeded fails closed. Early role/setup failures can
+                    #     exit before seeding; absence is not proof of repair.
+                    step5_findings = [
+                        f
                         for f in getattr(state, "findings", [])
+                        if getattr(f, "reviewer", "") == "layer1:step5"
+                    ]
+                    step5_seeded_and_fixed = bool(step5_findings) and all(
+                        str(getattr(f, "status", "open") or "open").strip().lower()
+                        == "fixed"
+                        for f in step5_findings
                     )
                     if explicit_canonical:
                         keep = explicit_canonical.strip().lower() in (
@@ -2322,7 +2327,7 @@ def _maybe_write_agentic_artifact(
                         }
                     elif (
                         handoff_status in _LAYER1_STEP5_ACTIONABLE_STATUSES
-                        and not step5_still_open
+                        and step5_seeded_and_fixed
                     ):
                         # Handed-off Step 5 failure was resolved by Layer 2.
                         final_gate_report = {
@@ -2367,7 +2372,9 @@ def _maybe_write_agentic_artifact(
         out_path.write_text(
             json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
         )
-        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
+        # Configured paths can contain credentials or private workspace names.
+        # Keep the success marker static just like the failure diagnostic.
+        print("Wrote agentic checkup artifact.", file=sys.stderr)
         return str(out_path)
     except Exception:  # pragma: no cover - defensive: never break the loop
         # Exception strings from artifact libraries or paths can contain
@@ -2436,7 +2443,8 @@ def write_final_gate_fallback_artifact(
         out_path.write_text(
             json.dumps(artifact.model_dump(), indent=2), encoding="utf-8"
         )
-        print(f"Wrote agentic checkup artifact: {out_path}", file=sys.stderr)
+        # Configured paths can contain credentials or private workspace names.
+        print("Wrote agentic checkup artifact.", file=sys.stderr)
         return str(out_path)
     except Exception:  # pragma: no cover - defensive: never break the gate
         # This path is commonly reached from hosted configuration. Never send

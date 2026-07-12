@@ -278,6 +278,62 @@ class TestFinalGateLibrary:
         # Cost is composed across both layers.
         assert cost == 3.0
 
+    def test_layer1_success_hosted_artifact_records_pass(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Ordinary Layer-1 success must not publish an unknown Layer-1 row."""
+        artifact_path = tmp_path / "hosted-agentic-artifact.json"
+        monkeypatch.setenv("PDD_CHECKUP_FALLBACK_MIRROR", "1")
+        monkeypatch.setenv(
+            "PDD_AGENTIC_CHECKUP_ARTIFACT_PATH", str(artifact_path)
+        )
+
+        def loop(*_a, **kwargs):
+            context = kwargs["context"]
+            config = kwargs["config"]
+            assert context.layer1_step5_evidence == ""
+            assert context.final_gate_canonical_status == "pass"
+
+            from pdd.checkup_review_loop import (
+                ReviewLoopState,
+                _maybe_write_agentic_artifact,
+            )
+
+            state = ReviewLoopState(
+                reviewer_status={"codex": "clean"},
+                active_reviewer="codex",
+                original_reviewer="codex",
+                fresh_final_status="clean",
+                issue_aligned=True,
+                stop_reason="Primary reviewer is clean.",
+            )
+            assert _maybe_write_agentic_artifact(context, config, state) == str(
+                config.agentic_artifact_path
+            )
+            _write_final_state(
+                tmp_path,
+                issue_number=2,
+                pr_number=1,
+                payload=_clean_final_state(),
+            )
+            return (True, "review ok", 1.5, "codex")
+
+        result, _orch_mock, loop_mock = _run_final_gate(
+            tmp_path,
+            orch_return=(True, "layer 1 passed", 0.5, "model"),
+            loop_side_effect=loop,
+        )
+
+        success, _msg, _cost, _model = result
+        assert success is True
+        loop_mock.assert_called_once()
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact["layer1"]["status"] == "pass"
+        assert artifact["layer1"]["blockers"] == []
+        assert artifact["authority"] == "canonical_pass_agentic_mirror_clean"
+        assert artifact["status"] == "passed"
+        assert artifact["verdict"]["decision"] == "pass"
+
     def test_layer1_failure_skips_layer2(self, tmp_path: Path) -> None:
         (result, orch_mock, loop_mock) = _run_final_gate(
             tmp_path,

@@ -14489,6 +14489,58 @@ def test_final_gate_fallback_writer_exceptions_scrub_secrets(tmp_path, capsys):
     assert "exception details omitted from stderr" in captured.err
 
 
+def test_agentic_artifact_success_marker_omits_configured_path(
+    tmp_path, monkeypatch, capsys
+):
+    """A successful write must not leak its configured path on stderr."""
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    configured = tmp_path / secret / "agentic.json"
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    cfg = crl.ReviewLoopConfig(
+        agentic_mode=True,
+        review_only=True,
+        agentic_artifact_path=str(configured),
+    )
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "clean"},
+        active_reviewer="codex",
+        fresh_final_status="clean",
+        issue_aligned=True,
+        stop_reason="Primary reviewer is clean.",
+    )
+
+    assert crl._maybe_write_agentic_artifact(ctx, cfg, state) == str(configured)
+    captured = capsys.readouterr()
+
+    assert configured.exists()
+    assert secret not in captured.err
+    assert str(configured) not in captured.err
+    assert captured.err.strip() == "Wrote agentic checkup artifact."
+
+
+def test_final_gate_fallback_success_marker_omits_configured_path(tmp_path, capsys):
+    """The short-circuit writer applies the same static stderr contract."""
+    import pdd.checkup_review_loop as crl
+
+    secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+    configured = tmp_path / secret / "fallback.json"
+
+    assert crl.write_final_gate_fallback_artifact(
+        artifact_path=str(configured),
+        canonical_status="fail",
+        blockers=["canonical failure"],
+    ) == str(configured)
+    captured = capsys.readouterr()
+
+    assert configured.exists()
+    assert secret not in captured.err
+    assert str(configured) not in captured.err
+    assert captured.err.strip() == "Wrote agentic checkup artifact."
+
+
 def _step5_failed_evidence():
     import json as _json
 
@@ -14584,6 +14636,30 @@ def test_step5_failure_unresolved_still_blocks(tmp_path, monkeypatch):
     assert data["verdict"]["decision"] == "block"
 
 
+def test_step5_failure_without_seeded_finding_fails_closed(tmp_path, monkeypatch):
+    """Pre-recording exits must not treat missing Step-5 state as fixed."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    monkeypatch.chdir(tmp_path)
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(agentic_mode=True)
+    state = crl.ReviewLoopState(
+        reviewer_status={"codex": "failed"},
+        active_reviewer="codex",
+        stop_reason="Role resolution failed before findings were recorded.",
+    )
+
+    out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
+    data = _json.loads(Path(out).read_text())
+
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["status"] != "passed"
+    assert data["verdict"]["decision"] == "block"
+
+
 def test_agentic_mode_writes_artifact_to_disk(tmp_path, monkeypatch):
     import json as _json
     import pdd.checkup_review_loop as crl
@@ -14659,6 +14735,62 @@ def test_agentic_mode_role_resolution_failure_writes_blocking_artifact(tmp_path)
     assert data["status"] == "needs_human"
     assert data["verdict"]["decision"] == "block"
     assert data["reviewers"][0]["status"] == "failed"
+
+
+def test_agentic_role_failure_with_step5_evidence_keeps_layer1_failed(tmp_path):
+    """Role resolution exits before the Step-5 finding is seeded."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "agentic.json"
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(
+        reviewer="codex",
+        fixer="codex",
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
+
+    success, _report, _cost, _model = crl.run_checkup_review_loop(
+        context=ctx, config=cfg, cwd=tmp_path, quiet=True, use_github_state=False
+    )
+    data = _json.loads(configured.read_text())
+
+    assert success is True
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["verdict"]["decision"] == "block"
+
+
+def test_agentic_setup_failure_with_step5_evidence_keeps_layer1_failed(tmp_path):
+    """Worktree setup also exits before the Step-5 finding is seeded."""
+    import json as _json
+    import pdd.checkup_review_loop as crl
+
+    configured = tmp_path / "agentic.json"
+    ctx = _fresh_final_ctx(tmp_path)
+    ctx.layer1_step5_evidence = _step5_failed_evidence()
+    cfg = crl.ReviewLoopConfig(
+        review_only=True,
+        agentic_mode=True,
+        agentic_artifact_path=str(configured),
+    )
+
+    with patch.object(crl, "_setup_pr_worktree", return_value=(None, "boom")):
+        success, _report, _cost, _model = crl.run_checkup_review_loop(
+            context=ctx,
+            config=cfg,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+    data = _json.loads(configured.read_text())
+
+    assert success is True
+    assert data["layer1"]["status"] == "fail"
+    assert data["layer1"]["blockers"]
+    assert data["verdict"]["decision"] == "block"
 
 
 def test_agentic_mode_writes_artifact_to_configured_path(tmp_path, monkeypatch):
