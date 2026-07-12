@@ -2465,6 +2465,67 @@ def test_get_pdd_file_paths_trailing_space_output_does_not_block_valid_row(tmp_p
     assert paths["code"].as_posix().endswith("src/bar.py")
 
 
+def test_get_pdd_file_paths_exact_missing_prompt_row_shared_target_honored(tmp_path, monkeypatch):
+    """An exact architecture row that names the requested module (prompt not created yet)
+    with a SAFE shared/unowned target is honored, not rejected into a fallback path just
+    because eligibility would otherwise require context ownership or a physical prompt."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)  # prompt MISSING (new module)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits_Python.prompt", "filepath": "shared/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()), context_override="backend",
+    )
+    assert paths["code"].as_posix().endswith("shared/credits.py")
+
+
+def test_get_pdd_file_paths_auxiliary_root_symlink_escape_does_not_invalidate_active_owner(tmp_path, monkeypatch):
+    """An escaping same-leaf symlink in an UNRELATED auxiliary prompt root must not
+    invalidate the unique contained owner in the ACTIVE prompt root, whose authoritative
+    architecture mapping is retained."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "frontend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    external = tmp_path / "external.prompt"
+    external.write_text("% external\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "frontend" / "credits_Python.prompt").symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unsupported")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "  frontend:\n    paths: [\"frontend/**\", \"prompts/frontend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits_Python.prompt", "filepath": "backend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()), context_override="backend",
+    )
+    assert paths["code"].as_posix().endswith("backend/credits.py")
+
+
 def test_get_pdd_file_paths_no_override_none_context_denies_foreign_sibling_borrow(tmp_path, monkeypatch):
     """With no context_override and a basename that does not encode the context (resolved
     context None), a FOREIGN heuristic row (filepath-stem match, not naming this module)

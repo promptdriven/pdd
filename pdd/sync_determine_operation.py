@@ -764,15 +764,36 @@ def _architecture_prompt_roots(
 def _architecture_prompt_owner(
     architecture_filename: PurePosixPath,
     prompt_roots: Tuple[Path, ...],
+    active_root: Optional[Path] = None,
 ) -> Tuple[List[Path], bool]:
-    """Return distinct physical prompts and whether every walked path was contained."""
+    """Return distinct physical prompts and a containment verdict.
+
+    With ``active_root`` the verdict reflects only whether the ACTIVE prompt root's walk
+    stayed contained; an escaping same-leaf symlink in an UNRELATED auxiliary root must
+    not invalidate a unique contained owner in the active root (only the active context's
+    own expected prompt escaping is a hard failure). Without ``active_root`` the verdict is
+    the legacy "every walked path was contained".
+    """
     owners: Dict[str, Path] = {}
     all_contained = True
+    active_contained = True
+    active_key: Optional[str] = None
+    if active_root is not None:
+        try:
+            active_key = os.path.normcase(str(Path(active_root).resolve(strict=False)))
+        except (OSError, RuntimeError):
+            active_key = None
     for root in prompt_roots:
         relative_parts = _prompt_relative_parts_for_root(root, architecture_filename)
         owner, contained = _walk_prompt_relative_path(root, relative_parts)
         if not contained:
             all_contained = False
+            if active_key is not None:
+                try:
+                    if os.path.normcase(str(Path(root).resolve(strict=False))) == active_key:
+                        active_contained = False
+                except (OSError, RuntimeError):
+                    pass
             continue
         if owner is None:
             continue
@@ -781,7 +802,7 @@ def _architecture_prompt_owner(
         except (OSError, RuntimeError):
             continue
         owners.setdefault(key, owner)
-    return list(owners.values()), all_contained
+    return list(owners.values()), (active_contained if active_root is not None else all_contained)
 
 
 def _resolve_context_name_for_basename(
@@ -1653,6 +1674,7 @@ def _get_filepath_from_architecture(
             owners, all_contained = _architecture_prompt_owner(
                 normalized_filename,
                 roots,
+                active_root=prompts_root,
             )
             if not all_contained:
                 return _OWNERSHIP_INELIGIBLE
@@ -1792,9 +1814,11 @@ def _get_filepath_from_architecture(
             # a sibling context's code. Deny it (fail closed). A row that names this module
             # (even with no physical prompt yet), a proven mapping, and a genuinely
             # unowned/shared target are still allowed.
+            # A row whose architecture filename EXACTLY names the requested module is that
+            # module's own explicit mapping, even if no physical prompt exists yet (new
+            # module) — distinct from a foreign leaf/stem collision.
             row_names_this_module = (
-                PurePosixPath(str(module.get("filename") or "").replace("\\", "/")).name.lower()
-                == PurePosixPath(prompt_filename.replace("\\", "/")).name.lower()
+                str(module.get("filename") or "").strip().lower() == prompt_filename.strip().lower()
             )
             if (
                 resolved_context_name is None
@@ -1808,7 +1832,14 @@ def _get_filepath_from_architecture(
             ):
                 borrow_ownership_cache[cache_key] = False
                 return False
-            allowed = context_owned or ownership == _OWNERSHIP_PROVEN
+            # The exact current-module row is honored even when its (safe, non-sibling)
+            # target is shared/unowned and no physical prompt exists yet: sibling-owned and
+            # unsafe targets were already rejected above, so this cannot cross contexts.
+            allowed = (
+                context_owned
+                or ownership == _OWNERSHIP_PROVEN
+                or row_names_this_module
+            )
             borrow_ownership_cache[cache_key] = allowed
             return allowed
 
