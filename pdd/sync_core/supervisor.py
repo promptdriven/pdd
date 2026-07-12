@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 import sysconfig
@@ -73,6 +74,7 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
     return tuple(result)
 
 
+@lru_cache(maxsize=1)
 def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     """Return every regular file exposed by the sandbox with logical names."""
     entries: dict[str, Path] = {}
