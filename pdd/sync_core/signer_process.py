@@ -122,8 +122,9 @@ def _linux_contained_command(
     return (*prefix,
         bwrap, "--unshare-pid", "--die-with-parent", "--new-session",
         "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+        "--tmpfs", "/tmp",
         "--bind", str(writable_root), str(writable_root),
-        "--tmpfs", "/tmp", "--", sys.executable, "-c", _LINUX_CONTAINMENT,
+        "--", sys.executable, "-c", _LINUX_CONTAINMENT,
         *command,
     )
 
