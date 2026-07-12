@@ -617,6 +617,36 @@ class TestGreenfieldRunnerDiscovery:
                "const k = ['test','Match'].join(''); module.exports = {[k]: ['**/qa/**/*.test.ts']}\n")
         assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
 
+    def test_quoted_discovery_key_config_refuses(self, tmp_path, monkeypatch):
+        # A QUOTED discovery property key (``"testMatch"``) must refuse just like
+        # an unquoted one — string-stripping must not erase it (round 8).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js",
+               'module.exports = { "testMatch": ["<rootDir>/qa/**/*.test.ts"] }\n')
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_two_js_config_files_are_ambiguous(self, tmp_path, monkeypatch):
+        # Two distinct runner config FILES at the same level (round 8): the loop
+        # must count both, not keep only the first -> ambiguous -> refuse.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = {}\n")
+        _write(tmp_path / "vitest.config.ts",
+               "export default { test: { include: ['x/**/*.spec.ts'] } }\n")
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_oversized_raw_pattern_is_bounded(self, tmp_path, monkeypatch):
+        # A multi-megabyte raw testMatch glob must be rejected BEFORE translation
+        # (round 8) — it must not hang and must not certify a co-located path.
+        import time
+        monkeypatch.chdir(tmp_path)
+        huge = "a" * 200_000
+        _write(tmp_path / "package.json", json.dumps(
+            {"jest": {"testMatch": [f"<rootDir>/{huge}/**/*.test.ts"]}}))
+        code = _write(tmp_path / "src/p.tsx")
+        start = time.time()
+        find_runner_collected_test_path(code)  # must not hang on the giant glob
+        assert time.time() - start < 3.0
+
     def test_jest29_with_vitest_dep_is_ambiguous_mjs_refused(self, tmp_path, monkeypatch):
         # jest<=29 AND a vitest dependency is ambiguous for .mjs (a jest run would
         # not collect it) -> fail closed.

@@ -2362,6 +2362,12 @@ class TestSyncOneModule:
             "src/__tests__/widget.spec.ts",
             "lib/button.test.tsx",
             "packages/ui/src/card.spec.jsx",
+            # Python co-located siblings outside the top-level tests/ shadow
+            # (round 8): a supported #1903 Python adoption must reach the
+            # never-block, not hard-fail.
+            "src/test_foo.py",
+            "pkg/mod/bar_test.py",
+            "app/services/test_handler.py",
         ]:
             assert ok(good) is True, good
 

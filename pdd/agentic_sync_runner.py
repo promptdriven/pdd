@@ -409,9 +409,12 @@ def _is_adopted_collocated_test_path(
     absolute path with no root to validate against, an out-of-root path, or any
     ``..`` traversal (CWE-022) is rejected. PDD's derived shadow root (a
     top-level ``tests/`` directory — ``tests/test_foo.py`` OR ``tests/foo.test.ts``)
-    is never "adopted". Accepts only a runner co-location convention: a file
-    under a ``__test__``/``__tests__`` directory, or a basename containing
-    ``.test.``/``.spec.``. Never raises.
+    is never "adopted". Accepts a runner co-location convention: a file under a
+    ``__test__``/``__tests__`` directory, a basename containing ``.test.``/
+    ``.spec.`` (JS/TS), or a Python sibling basename ``test_<stem>.py`` /
+    ``<stem>_test.py`` OUTSIDE that top-level ``tests/`` shadow (issue #1903
+    supports adopting an existing co-located Python sibling, whose churn must
+    reach the same never-block — review round 8). Never raises.
     """
     if not test_path:
         return False
@@ -448,7 +451,15 @@ def _is_adopted_collocated_test_path(
     if "__test__" in segments or "__tests__" in segments:
         return True
     name = segments[-1].lower()
-    return ".test." in name or ".spec." in name
+    if ".test." in name or ".spec." in name:
+        return True
+    # Python co-located sibling conventions (round 8): ``test_<stem>.py`` or
+    # ``<stem>_test.py`` outside the top-level ``tests/`` shadow (already
+    # excluded above). #1903 adopts an existing Python sibling test, whose churn
+    # must reach the same never-block as JS ``.test.``/``.spec.`` siblings.
+    if name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py")):
+        return True
+    return False
 
 
 def _parse_prose_output_failure(

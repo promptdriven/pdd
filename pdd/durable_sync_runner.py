@@ -8,6 +8,8 @@ durable branch before marking the module complete.
 # pylint: disable=too-few-public-methods
 from __future__ import annotations
 
+import base64
+import binascii
 import os
 import re
 import shutil
@@ -140,6 +142,11 @@ class DurableSyncRunner(AsyncSyncRunner):
             for basename in self.basenames:
                 if basename in completed:
                     self.module_states[basename].status = "success"
+                    # Restore the adopted-test "needs review" note (round 8) so a
+                    # resumed run still surfaces it in the PR comment and summary.
+                    review = completed[basename]
+                    if review:
+                        self.module_states[basename].needs_review = review
                     self._resumed_modules.append(basename)
 
         self._prepared = True
@@ -629,23 +636,38 @@ class DurableSyncRunner(AsyncSyncRunner):
             return False, message
         return True, ""
 
-    def _read_checkpointed_modules(self) -> Set[str]:
+    def _read_checkpointed_modules(self) -> Dict[str, Optional[str]]:
+        """Map each checkpointed module (for this issue) to its ``needs_review``
+        note (or ``None``). The newest trailer per module wins so a re-checkpoint
+        that cleared/added the flag is honored on resume (round 8)."""
         log = self._git(["log", "--format=%B"], cwd=self.durable_worktree_path)
         if log.returncode != 0:
-            return set()
+            return {}
 
-        completed: Set[str] = set()
-        for line in log.stdout.splitlines():
+        completed: Dict[str, Optional[str]] = {}
+        for line in log.stdout.splitlines():  # git log is newest-first
             parsed = _parse_checkpoint_trailer(line)
             if not parsed:
                 continue
-            issue, module = parsed
-            if issue == self.issue_number:
-                completed.add(module)
+            issue, module, review = parsed
+            if issue == self.issue_number and module not in completed:
+                completed[module] = review
         return completed
 
     def _checkpoint_trailer(self, basename: str) -> str:
-        return f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        trailer = f"{CHECKPOINT_TRAILER}: issue={self.issue_number} module={basename}"
+        # Carry an issue #1903 §B.4 "needs review" note into the durable
+        # checkpoint (round 8): durable resume rebuilds module state from these
+        # trailers only, so without this a resumed module loses its adopted-test
+        # review warning and coverage loss would be silently swallowed. The note
+        # is prose with spaces; trailer values are whitespace-free, so base64url
+        # encode it (no padding — restored on parse).
+        state = self.module_states.get(basename)
+        review = getattr(state, "needs_review", None) if state is not None else None
+        if review:
+            enc = base64.urlsafe_b64encode(review.encode("utf-8")).decode("ascii").rstrip("=")
+            trailer += f" review={enc}"
+        return trailer
 
     def _ensure_clean_durable_worktree(self) -> Tuple[bool, str]:
         status = self._git(["status", "--porcelain"], cwd=self.durable_worktree_path)
@@ -787,7 +809,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         )
 
 
-def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
+def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str, Optional[str]]]:
     prefix = f"{CHECKPOINT_TRAILER}:"
     stripped = line.strip()
     if not stripped.startswith(prefix):
@@ -801,7 +823,15 @@ def _parse_checkpoint_trailer(line: str) -> Optional[Tuple[int, str]]:
     module = fields.get("module")
     if not module:
         return None
-    return issue, module
+    review: Optional[str] = None
+    enc = fields.get("review")
+    if enc:
+        try:
+            pad = "=" * (-len(enc) % 4)
+            review = base64.urlsafe_b64decode(enc + pad).decode("utf-8")
+        except (binascii.Error, ValueError, UnicodeDecodeError):
+            review = None
+    return issue, module, review
 
 
 def _slugify_basename(basename: str) -> str:
