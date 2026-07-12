@@ -270,7 +270,7 @@ def test_manifest_output_alias_resolves_generated_code_relative_include(tmp_path
 
 
 def test_parent_prefixed_repository_path_is_rejected_even_with_same_tail(tmp_path) -> None:
-    prompt = tmp_path / "prompts/frontend/components/widget.prompt"
+    prompt = tmp_path / "prompts/widget.prompt"
     dependency = tmp_path / "frontend/src/context/AuthContext.tsx"
     prompt.parent.mkdir(parents=True)
     dependency.parent.mkdir(parents=True)
@@ -278,7 +278,7 @@ def test_parent_prefixed_repository_path_is_rejected_even_with_same_tail(tmp_pat
     dependency.write_text("export const AuthContext = {};\n")
     with pytest.raises(IncludeGraphError, match="escapes repository"):
         build_include_closure(
-            PurePosixPath("prompts/frontend/components/widget.prompt"),
+            PurePosixPath("prompts/widget.prompt"),
             PathPolicy(tmp_path),
         )
 

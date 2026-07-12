@@ -932,14 +932,10 @@ def sync_main(
                     context_override=context_override,
                 )
 
-                from .continuous_sync import canonical_sync_enabled
-
-                if canonical_sync_enabled(Path(pdd_files.get("prompt") or Path.cwd())):
-                    raise RuntimeError(
-                        "protected canonical sync blocks legacy production mutation; "
-                        "use read-only reporting or trusted finalization until the "
-                        "staged repair executor is enabled"
-                    )
+                from .sync_core.finalize import preflight_legacy_mutation
+                preflight_legacy_mutation(
+                    {"prompt": Path(pdd_files.get("prompt") or Path.cwd())}
+                )
 
                 # Check fingerprint — skip if module is already fully synced
                 _one_session_skipped = False

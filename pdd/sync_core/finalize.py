@@ -60,6 +60,16 @@ class CanonicalFinalizationError(RuntimeError):
     """Raised when an opted-in mutation cannot commit trusted final state."""
 
 
+def preflight_legacy_mutation(paths: dict[str, Path] | None = None) -> None:
+    """Reject legacy production mutation before any model call or write."""
+    if canonical_root_for_paths(paths) is not None:
+        raise CanonicalFinalizationError(
+            "protected canonical sync blocks legacy production mutation; "
+            "use read-only reporting or trusted finalization until the staged "
+            "repair executor is enabled"
+        )
+
+
 def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     """Return the opted-in Git root for legacy path-based callers."""
     # pylint: disable=import-outside-toplevel

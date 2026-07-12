@@ -334,17 +334,10 @@ def _candidate_paths(
     declared = PurePosixPath(raw_path)
     if declared.is_absolute():
         raise IncludeGraphError(f"absolute include path is not allowed: {raw_path}")
+    if declared.parts and declared.parts[0] == "..":
+        _normalized(source.parent / declared, raw_path)
     candidates = [source.parent / declared]
     candidates.extend(alias.parent / declared for alias in aliases)
-    leading_parents = 0
-    for part in declared.parts:
-        if part != "..":
-            break
-        leading_parents += 1
-    if leading_parents:
-        repository_tail = PurePosixPath(*declared.parts[leading_parents:])
-        if repository_tail.parts:
-            candidates.append(repository_tail)
     prompt_index = (
         max(index for index, part in enumerate(source.parts) if part == "prompts")
         if "prompts" in source.parts

@@ -48,6 +48,8 @@ def auto_deps_main(
         ("", 0.0, f"Error: {exc}") on non-Abort failures so orchestrators can
         continue gracefully.
     """
+    from .sync_core.finalize import preflight_legacy_mutation
+    preflight_legacy_mutation({"prompt": Path(prompt_file)})
     console = Console()
     quiet = ctx.obj.get("quiet", False) if ctx.obj else False
 

@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import hashlib
 import ast
+import configparser
 import json
 import shlex
 import subprocess
 import sys
 import tempfile
+import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
@@ -469,17 +471,32 @@ def _config_loads_plugin(root: Path, ref: str) -> bool:
             continue
         try:
             text = content.decode("utf-8")
-        except UnicodeDecodeError:
+            if path.name == "pyproject.toml":
+                pytest_options = tomllib.loads(text).get("tool", {}).get("pytest", {}).get(
+                    "ini_options", {}
+                )
+                values = [pytest_options.get("addopts", "")]
+            else:
+                parser = configparser.ConfigParser(interpolation=None)
+                parser.read_string(text)
+                section = "pytest" if path.name in {"pytest.ini", ".pytest.ini"} else "tool:pytest"
+                values = [parser.get(section, "addopts", fallback="")]
+        except (UnicodeDecodeError, ValueError, configparser.Error, AttributeError):
             return True
-        try:
-            tokens = shlex.split(text.replace("=", " = "), comments=True)
-        except ValueError:
-            return True
-        for index, token in enumerate(tokens):
-            if token == "-p" and index + 1 < len(tokens):
+        for value in values:
+            if isinstance(value, list):
+                value = " ".join(str(item) for item in value)
+            if not isinstance(value, str):
                 return True
-            if token.startswith("-p=") or (token.startswith("-p") and len(token) > 2):
+            try:
+                tokens = shlex.split(value, comments=True)
+            except ValueError:
                 return True
+            for index, token in enumerate(tokens):
+                if token == "-p" and index + 1 < len(tokens):
+                    return True
+                if token.startswith("-p=") or (token.startswith("-p") and len(token) > 2):
+                    return True
     return False
 
 
@@ -656,10 +673,11 @@ def _trusted_collection_runner(
     root: Path,
     pytest_args: list[str],
     collection_output: Path,
-) -> Path:
-    """Create a checker-owned pytest entrypoint that imports the probe by path."""
-    runner = directory / "run_collection.py"
-    runner.write_text(
+) -> tuple[Path, Path]:
+    """Create a process-separated checker and candidate collection worker."""
+    worker = directory / "collection_worker.py"
+    worker_output = directory / "candidate-node-ids.json"
+    worker.write_text(
         "\n".join(
             (
                 "import importlib.util",
@@ -668,7 +686,6 @@ def _trusted_collection_runner(
                 "",
                 f"_ROOT = {json.dumps(str(root))}",
                 f"_PROBE = {json.dumps(str(_CHECKER_PYTEST_PROBE))}",
-                f"_ARGS = {json.dumps(pytest_args)}",
                 "",
                 "os.chdir(_ROOT)",
                 "_SPEC = importlib.util.spec_from_file_location(",
@@ -677,37 +694,57 @@ def _trusted_collection_runner(
                 "if _SPEC is None or _SPEC.loader is None:",
                 "    raise ImportError('checker pytest probe is unavailable')",
                 "_MODULE = importlib.util.module_from_spec(_SPEC)",
-                "sys.modules['_pdd_checker_pytest_probe_abs'] = _MODULE",
                 "_SPEC.loader.exec_module(_MODULE)",
-                f"_MODULE._OUTPUT_PATH = {json.dumps(str(collection_output))}",
+                f"_MODULE._OUTPUT_PATH = {json.dumps(str(worker_output))}",
                 "",
                 "import pytest",
                 "if _ROOT not in sys.path:",
                 "    sys.path.insert(0, _ROOT)",
-                "raise SystemExit(pytest.main(_ARGS, plugins=[_MODULE]))",
+                "raise SystemExit(pytest.main(" + json.dumps(pytest_args) + ", plugins=[_MODULE]))",
                 "",
             )
         ),
         encoding="utf-8",
     )
-    return runner
+    checker = directory / "run_collection.py"
+    checker.write_text(
+        "\n".join((
+            "import pathlib, subprocess, sys",
+            f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
+            f"source = pathlib.Path({json.dumps(str(worker_output))})",
+            "if result.returncode != 0 or not source.is_file(): raise SystemExit(1)",
+            f"pathlib.Path({json.dumps(str(collection_output))}).write_bytes(source.read_bytes())",
+            "",)), encoding="utf-8",
+    )
+    return checker, worker_output
 
 
 def _trusted_execution_runner(
     directory: Path, root: Path, pytest_args: list[str], junit: Path
-) -> Path:
-    """Create a controller entrypoint that owns the hidden result destination."""
-    runner = directory / "run_execution.py"
-    runner.write_text(
+) -> tuple[Path, Path]:
+    """Create a checker that never imports candidate code or pytest."""
+    worker = directory / "execution_worker.py"
+    worker_junit = directory / "candidate-junit.xml"
+    worker.write_text(
         "\n".join((
             "import os, sys", "import pytest",
             f"os.chdir({json.dumps(str(root))})",
-            f"_ARGS = {json.dumps(pytest_args + [f'--junitxml={junit}'])}",
             f"sys.path.insert(0, {json.dumps(str(root))})",
-            "raise SystemExit(pytest.main(_ARGS))", "",
+            "raise SystemExit(pytest.main(" +
+            json.dumps(pytest_args + [f"--junitxml={worker_junit}"]) + "))", "",
         )), encoding="utf-8",
     )
-    return runner
+    checker = directory / "run_execution.py"
+    checker.write_text(
+        "\n".join((
+            "import pathlib, subprocess, sys",
+            f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
+            f"source = pathlib.Path({json.dumps(str(worker_junit))})",
+            "if result.returncode != 0 or not source.is_file(): raise SystemExit(1)",
+            f"pathlib.Path({json.dumps(str(junit))}).write_bytes(source.read_bytes())",
+            "",)), encoding="utf-8",
+    )
+    return checker, worker_junit
 
 
 def _run_test_node(
@@ -732,11 +769,13 @@ def _run_test_node(
         home.mkdir(mode=0o700, parents=True)
         junit = temporary / "junit.xml"
         junit.touch(mode=0o600)
-        controller = _trusted_execution_runner(temporary, root, command[3:], junit)
+        controller, worker_junit = _trusted_execution_runner(
+            temporary, root, command[3:], junit
+        )
         result, surviving = _managed_subprocess(
             [sys.executable, str(controller)], cwd=temporary,
             timeout=timeout_seconds, env=_pytest_environment(home),
-            writable_roots=(home.parent,), writable_files=(junit,),
+            writable_roots=(home.parent,), writable_files=(junit, worker_junit),
             readable_roots=(root,),
         )
         if result.returncode == 124:
@@ -782,7 +821,7 @@ def _collect_node_ids(
             "no:cacheprovider",
             path.as_posix(),
         ]
-        runner = _trusted_collection_runner(
+        runner, worker_output = _trusted_collection_runner(
             temporary, root, pytest_args, collection_output
         )
         command = [sys.executable, str(runner)]
@@ -801,7 +840,7 @@ def _collect_node_ids(
         result, surviving = _managed_subprocess(
             command, cwd=temporary, timeout=timeout_seconds,
             env=_pytest_environment(home), writable_roots=(home.parent,),
-            writable_files=(collection_output,),
+            writable_files=(collection_output, worker_output),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:

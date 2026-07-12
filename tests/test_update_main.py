@@ -53,7 +53,7 @@ def test_protected_update_cli_exits_nonzero_without_model_calls_or_writes(
 
     with patch("pdd.update_main.update_prompt") as model_call:
         result = CliRunner().invoke(
-            cli, ["--quiet", "update", str(prompt), str(modified), str(original)]
+            cli, ["update", str(prompt), str(modified), str(original)]
         )
 
     assert result.exit_code != 0

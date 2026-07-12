@@ -1727,7 +1727,7 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
+def extract_include_deps(prompt_path: Path, *, version: int = 2) -> Dict[str, str]:
     """Extract include dependency paths and their hashes from a prompt file.
 
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
@@ -1749,8 +1749,13 @@ def extract_include_deps(prompt_path: Path) -> Dict[str, str]:
         except OSError:
             return {}
         dependencies: Dict[str, str] = {}
-        for reference in parse_include_references(content):
-            declared = Path(reference.path)
+        declared_paths = (
+            _legacy_include_references(content)
+            if version == 1
+            else [reference.path for reference in parse_include_references(content)]
+        )
+        for declared_text in declared_paths:
+            declared = Path(declared_text.strip())
             candidates = (
                 (declared,)
                 if declared.is_absolute()
@@ -1964,7 +1969,7 @@ def calculate_current_hashes(paths: Dict[str, Any], stored_include_deps: Optiona
             # Issue #522: Hash prompt with <include> dependencies
             hashes['prompt_hash'] = calculate_prompt_hash(file_path, stored_deps=stored_include_deps)
             # Also extract current include deps for persistence
-            hashes['include_deps'] = extract_include_deps(file_path)
+            hashes['include_deps'] = extract_include_deps(file_path, version=1)
             # If no deps found in prompt but we have stored deps, preserve them
             if not hashes['include_deps'] and stored_include_deps:
                 # Re-hash stored deps to check for changes
