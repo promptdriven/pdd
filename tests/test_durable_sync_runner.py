@@ -293,6 +293,36 @@ def test_module_metadata_is_force_added_even_when_pdd_dir_is_ignored(tmp_path: P
     assert readme == "updated\n"
 
 
+class OwnershipManifestRunner(DurableSyncRunner):
+    """Writes module metadata AND the shared greenfield-ownership manifest,
+    mirroring a child that greenfield-creates a co-located test (round 10)."""
+
+    def _run_child_sync(self, basename: str):
+        cwd = self.module_cwds[basename]
+        (cwd / "README.md").write_text("updated\n", encoding="utf-8")
+        meta_dir = cwd / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        (meta_dir / "foo_python.json").write_text(
+            json.dumps({"module": basename}), encoding="utf-8")
+        (meta_dir / "pdd_created_tests.json").write_text(
+            json.dumps(["src/__test__/foo.test.tsx"]), encoding="utf-8")
+        return True, 0.0, ""
+
+
+def test_ownership_manifest_is_checkpointed_even_when_pdd_dir_is_ignored(tmp_path: Path):
+    # Round 10: the shared, non-module-prefixed ownership manifest must be
+    # force-added to the checkpoint (not rejected as unsafe), so a fresh-worktree
+    # resume keeps PDD's greenfield ownership provenance.
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, runner_cls=OwnershipManifestRunner)
+    success, message, _ = runner.run()
+    assert success is True, message
+    manifest = _git(
+        repo, "show", "sync/issue-1328:.pdd/meta/pdd_created_tests.json"
+    ).stdout
+    assert json.loads(manifest) == ["src/__test__/foo.test.tsx"]
+
+
 def test_nested_module_metadata_is_force_added_for_module_cwd(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     module_dir = repo / "packages" / "app"

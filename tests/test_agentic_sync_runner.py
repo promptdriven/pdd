@@ -2347,6 +2347,29 @@ class TestSyncOneModule:
         # (defense-in-depth: no nonce -> nothing authenticates).
         assert _extract_test_churn_adopted("", genuine, expected_nonce="") is False
 
+    def test_trusted_block_missing_field_fails_closed(self):
+        """Round 10: with two nonce-authenticated blocks, one COMPLETE and one
+        MISSING output/adopted, the extractors must fail closed (per-block
+        validation) rather than let the complete block cover for the incomplete
+        one — honoring 'ANY conflict OR absence fails closed'."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_adopted,
+            _extract_test_churn_output_path,
+        )
+        nonce = "cafebabecafebabecafebabecafebabe"
+        complete = ("Test churn threshold exceeded for a:\n"
+                    "output: src/__test__/x.test.tsx\nadopted: true\n"
+                    f"nonce: {nonce}\n")
+        # A second authenticated block that omits both provenance fields.
+        bare = f"Test churn threshold exceeded for b:\nratio: 0.9\nnonce: {nonce}\n"
+        assert _extract_test_churn_adopted("", complete + bare, expected_nonce=nonce) is False
+        assert _extract_test_churn_output_path("", complete + bare, expected_nonce=nonce) is None
+        # A block carrying BOTH adopted values is self-conflicting -> fail closed.
+        conflict = ("Test churn threshold exceeded for c:\n"
+                    "output: src/__test__/x.test.tsx\nadopted: true\nadopted: false\n"
+                    f"nonce: {nonce}\n")
+        assert _extract_test_churn_adopted("", conflict, expected_nonce=nonce) is False
+
     def test_relative_symlink_escape_rejected(self, tmp_path):
         """Issue #1903 §B.4 (round 6): a RELATIVE churn path whose segment is a
         symlink escaping the worktree must be rejected (canonical containment,
