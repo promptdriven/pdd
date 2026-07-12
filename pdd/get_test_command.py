@@ -94,13 +94,85 @@ def _workspace_globs_for(ancestor: Path) -> list:
     if pnpm_path.exists():
         try:
             import yaml  # optional dependency
-            data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8")) or {}
-            pkgs = data.get("packages")
-            if isinstance(pkgs, list):
-                globs.extend(str(p) for p in pkgs)
-        except Exception:
-            pass  # conservative: unparseable pnpm workspace → no membership claim
+        except ImportError:
+            yaml = None
+        if yaml is not None:
+            try:
+                data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
+            except (yaml.YAMLError, OSError):
+                data = None  # conservative: unparseable pnpm workspace
+            if isinstance(data, dict):
+                pkgs = data.get("packages")
+                if isinstance(pkgs, list):
+                    globs.extend(str(p) for p in pkgs)
     return globs
+
+
+def _split_top_level_commas(body: str) -> list:
+    """Split a brace body on commas that are not inside a nested brace group."""
+    parts, depth, current = [], 0, []
+    for char in body:
+        if char == "{":
+            depth += 1
+            current.append(char)
+        elif char == "}":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
+def _expand_braces(pattern: str) -> list:
+    """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
+    concrete patterns. Unbalanced or single-option braces are left literal."""
+    start = pattern.find("{")
+    if start == -1:
+        return [pattern]
+    depth, end = 0, -1
+    for i in range(start, len(pattern)):
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return [pattern]  # unbalanced → treat literally
+    options = _split_top_level_commas(pattern[start + 1:end])
+    if len(options) < 2:
+        return [pattern]  # not a real alternation → literal
+    prefix, suffix = pattern[:start], pattern[end + 1:]
+    expanded: list = []
+    for option in options:
+        expanded.extend(_expand_braces(prefix + option + suffix))
+    return expanded
+
+
+def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
+    """Return True when ``rel_parts`` matches the workspace globs' include/exclude
+    semantics: at least one positive pattern matches and no ``!`` exclusion does.
+
+    Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
+    brace alternations are expanded before matching.
+    """
+    positives, negatives = [], []
+    for raw in globs:
+        raw = str(raw).strip()
+        if not raw:
+            continue
+        if raw.startswith("!"):
+            negatives.extend(_expand_braces(raw[1:]))
+        else:
+            positives.extend(_expand_braces(raw))
+    if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
+        return False
+    return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
 
 
 def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
@@ -110,10 +182,11 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
 
     Membership is proven, not assumed: an ancestor's declared workspace globs
     (npm/yarn ``workspaces``, ``lerna.json`` ``packages``, ``pnpm-workspace.yaml``
-    ``packages``) must actually match ``package_dir`` relative to that ancestor.
-    An unrelated package (e.g. a vendored ``vendor/tool``) beneath a workspace
-    root is therefore not treated as a member. The search never looks above the
-    repository root (``.git``).
+    ``packages``) must actually match ``package_dir`` relative to that ancestor,
+    honoring ``!`` exclusions and brace expansion. An unrelated package (e.g. a
+    vendored ``vendor/tool``) or an explicitly excluded one (e.g. under a pnpm
+    ``!**/test/**``) beneath a workspace root is therefore not treated as a
+    member. The search never looks above the repository root (``.git``).
     """
     ancestor = package_dir.parent
     for _ in range(80):
@@ -123,7 +196,7 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
                 rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
             except ValueError:
                 rel_parts = ()
-            if rel_parts and any(_relative_matches_workspace_glob(rel_parts, g) for g in globs):
+            if rel_parts and _package_matches_workspace(rel_parts, globs):
                 return True
         if (ancestor / ".git").exists():
             break
