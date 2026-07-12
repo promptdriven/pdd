@@ -1,6 +1,8 @@
 # pdd/agentic_langtest.py
 from __future__ import annotations
+import json
 import os
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -59,38 +61,49 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
         A shell command string to execute the tests, or None if the language
         is not supported or a build system cannot be detected.
     """
-    test_rel = unit_test_file
+    # Every path spliced into a returned command MUST be shell-quoted: these
+    # commands are executed with ``bash -lc`` / ``shell=True``, so an unquoted
+    # path with spaces or shell metacharacters (``$()``, ``;``, …) would be
+    # re-split or run as a command-injection vector. Bare double quotes are NOT
+    # enough — ``"$(...)"`` is still expanded inside double quotes — so use
+    # ``shlex.quote``.
     lang = lang.lower()
     if lang == "python":
-        return f'{sys.executable} -m pytest "{test_rel}" -q'
+        return f'{sys.executable} -m pytest {shlex.quote(unit_test_file)} -q'
 
     if lang == "javascript" or lang == "typescript":
         example_dir = str(_find_project_root(unit_test_file))
         rel_test_path = os.path.relpath(unit_test_file, example_dir)
+        # The JS require target is a JavaScript string literal, so JSON-encode it
+        # (safe JS quoting) and then shell-quote the whole ``node -e`` program.
+        node_program = (
+            "try { require(" + json.dumps("./" + rel_test_path)
+            + "); } catch (e) { console.error(e); process.exit(1); }"
+        )
         return (
             "set -e\n"
-            f'cd "{example_dir}" && '
+            f"cd {shlex.quote(example_dir)} && "
             "command -v npm >/dev/null 2>&1 || { echo 'npm missing'; exit 127; } && "
             "if [ -f package.json ]; then "
             "  npm install && npm test; "
             "else "
-            f'  echo "No package.json in {example_dir}; running test file directly"; '
-            f'  node -e "try {{ require(\'./{rel_test_path}\'); }} catch (e) {{ console.error(e); process.exit(1); }}"; '
+            f"  echo {shlex.quote('No package.json in ' + example_dir + '; running test file directly')}; "
+            f"  node -e {shlex.quote(node_program)}; "
             "fi"
         )
 
     if lang == "java":
         root_dir = str(_find_project_root(unit_test_file))
+        q_root = shlex.quote(root_dir)
         # Prefer Maven if pom.xml is present
         if "pom.xml" in os.listdir(root_dir):
-            return f"cd '{root_dir}' && mvn test"
+            return f"cd {q_root} && mvn test"
         # Gradle builds
         elif "build.gradle" in os.listdir(root_dir) or "build.gradle.kts" in os.listdir(root_dir):
             if "gradlew" in os.listdir(root_dir):
-                return f"cd '{root_dir}' && ./gradlew test"
+                return f"cd {q_root} && ./gradlew test"
             else:
-                # Fixed incorrect quoting/backtick usage: use cd and run gradle
-                return f"cd '{root_dir}' && gradle test"
+                return f"cd {q_root} && gradle test"
         else:
             return None
 

@@ -948,6 +948,59 @@ class TestWorkspaceMembershipHardening:
             _relative_matches_workspace_glob(("a",), "/".join(["x"] * 1000))
         assert _package_matches_workspace(("a",), ["/".join(["x"] * 1000)]) is False
 
+    def test_aggregate_match_work_is_bounded(self):
+        """Many long `**` globs against a deep path must fail closed (aggregate
+        DP-cell budget), not spend seconds of CPU per membership check."""
+        import time
+        rel = tuple(["a"] * 128)
+        glob = "/".join(["**"] * 255 + ["z"])  # 256 segments, at the per-glob cap
+        globs = [glob] * 1024  # up to the brace-expansion count budget
+        start = time.monotonic()
+        assert _package_matches_workspace(rel, globs) is False
+        assert time.monotonic() - start < 2.0  # must not grind for seconds
+
+    def test_discovery_wide_match_budget_bounds_deep_chain(self, tmp_path):
+        """The matching budget is shared across the whole discovery walk, so a heavy
+        manifest re-evaluated at each of many nested package boundaries cannot stall
+        for seconds. A legit deep chain with a normal manifest still resolves."""
+        import time
+        import json as _json
+        # Hostile: root manifest with 1000 long globstar globs, deep member chain.
+        repo = tmp_path / "hostile"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        heavy = "/".join(["**"] * 255 + ["nomatch"])
+        (repo / "package.json").write_text(_json.dumps({"workspaces": [heavy] * 1000 + ["**"]}))
+        deep = repo
+        for i in range(70):
+            deep = deep / f"p{i}"
+            deep.mkdir()
+            (deep / "package.json").write_text("{}")
+        test_file = deep / "s" / "w.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        start = time.monotonic()
+        _detect_ts_test_runner(test_file)  # must not hang
+        assert time.monotonic() - start < 3.0
+
+        # Legit: same depth, a normal manifest still finds the root Jest config.
+        good = tmp_path / "good"
+        good.mkdir()
+        (good / ".git").mkdir()
+        (good / "jest.config.js").write_text("module.exports = {};")
+        (good / "package.json").write_text('{"workspaces": ["**"]}')
+        d = good
+        for i in range(70):
+            d = d / f"p{i}"
+            d.mkdir()
+            (d / "package.json").write_text("{}")
+        tf = d / "s" / "w.test.ts"
+        tf.parent.mkdir(parents=True)
+        tf.write_text("describe('w', () => {})")
+        cmd, _ = _detect_ts_test_runner(tf)
+        assert "npx jest" in cmd
+
     def test_dotdot_through_symlink_is_refused(self, tmp_path):
         """A `..` component that traverses a symlink must fail closed.
 
