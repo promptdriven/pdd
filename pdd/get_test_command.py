@@ -13,11 +13,24 @@ from typing import Optional, Tuple
 import csv
 import fnmatch
 import json
+import os
 import re
 import shlex
 
 from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
+
+
+# Upper bound on how many concrete patterns a single workspace glob may expand
+# to via ``{a,b}`` brace alternation. Real workspace configs use a handful of
+# alternatives; a manifest that expands past this bound is treated as
+# pathological (untrusted brace-bomb) and membership is failed closed rather
+# than materializing an exponential list. See ``_expand_braces``.
+_MAX_BRACE_EXPANSION = 1024
+
+
+class _BraceBudgetError(Exception):
+    """Raised when a brace pattern would expand past ``_MAX_BRACE_EXPANSION``."""
 
 
 @dataclass
@@ -63,10 +76,35 @@ def _workspace_globs_for(ancestor: Path) -> list:
     """Return the workspace package globs declared by ``ancestor`` (empty if none).
 
     Reads npm/yarn ``workspaces`` (list or ``{"packages": [...]}``), ``lerna.json``
-    ``packages``, and ``pnpm-workspace.yaml`` ``packages``. pnpm requires a YAML
-    parser; if unavailable we conservatively return no globs so membership stays
+    ``packages``, and ``pnpm-workspace.yaml`` ``packages``.
+
+    ``pnpm-workspace.yaml``, when present, is *authoritative*: pnpm ignores the
+    ``workspaces`` field in ``package.json``, so a stale or attacker-controlled
+    ``workspaces`` list must not union in and broaden membership beyond what pnpm
+    itself would honor. pnpm requires a YAML parser; if it is unavailable or the
+    file cannot be parsed we conservatively return no globs so membership stays
     unproven rather than falsely asserted.
+
+    Every source is validated to be the expected JSON/YAML shape (a mapping);
+    a manifest whose top level is a non-object (e.g. ``[]``) contributes no
+    globs instead of raising.
     """
+    pnpm_path = ancestor / "pnpm-workspace.yaml"
+    if pnpm_path.exists():
+        try:
+            import yaml  # optional dependency
+        except ImportError:
+            return []  # cannot parse pnpm config → membership unproven (fail closed)
+        try:
+            data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, OSError):
+            return []  # conservative: unparseable pnpm workspace
+        if isinstance(data, dict):
+            pkgs = data.get("packages")
+            if isinstance(pkgs, list):
+                return [str(p) for p in pkgs]
+        return []
+
     globs: list = []
     manifest_path = ancestor / "package.json"
     if manifest_path.exists():
@@ -74,37 +112,24 @@ def _workspace_globs_for(ancestor: Path) -> list:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             manifest = {}
-        ws = manifest.get("workspaces")
-        if isinstance(ws, dict):
-            ws = ws.get("packages")
-        if isinstance(ws, list):
-            globs.extend(str(p) for p in ws)
+        if isinstance(manifest, dict):
+            ws = manifest.get("workspaces")
+            if isinstance(ws, dict):
+                ws = ws.get("packages")
+            if isinstance(ws, list):
+                globs.extend(str(p) for p in ws)
     lerna_path = ancestor / "lerna.json"
     if lerna_path.exists():
         try:
             lerna = json.loads(lerna_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            lerna = {}
+        if isinstance(lerna, dict):
             pkgs = lerna.get("packages")
             if isinstance(pkgs, list):
                 globs.extend(str(p) for p in pkgs)
             elif pkgs is None:
                 globs.append("packages/*")  # lerna default
-        except (ValueError, OSError):
-            pass
-    pnpm_path = ancestor / "pnpm-workspace.yaml"
-    if pnpm_path.exists():
-        try:
-            import yaml  # optional dependency
-        except ImportError:
-            yaml = None
-        if yaml is not None:
-            try:
-                data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError):
-                data = None  # conservative: unparseable pnpm workspace
-            if isinstance(data, dict):
-                pkgs = data.get("packages")
-                if isinstance(pkgs, list):
-                    globs.extend(str(p) for p in pkgs)
     return globs
 
 
@@ -127,12 +152,29 @@ def _split_top_level_commas(body: str) -> list:
     return parts
 
 
-def _expand_braces(pattern: str) -> list:
+def _expand_braces(pattern: str, _count: Optional[list] = None) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
-    concrete patterns. Unbalanced or single-option braces are left literal."""
+    concrete patterns. Unbalanced or single-option braces are left literal.
+
+    Expansion is bounded: if the pattern would produce more than
+    ``_MAX_BRACE_EXPANSION`` concrete patterns, ``_BraceBudgetError`` is raised so
+    the caller can fail membership closed instead of materializing an exponential
+    list from an untrusted manifest (a ``{a,b}`` brace bomb). The depth-first walk
+    increments the shared counter at each terminal pattern, so it stops early
+    rather than after building the full Cartesian product.
+    """
+    if _count is None:
+        _count = [0]
+
+    def _emit(value: str) -> list:
+        _count[0] += 1
+        if _count[0] > _MAX_BRACE_EXPANSION:
+            raise _BraceBudgetError
+        return [value]
+
     start = pattern.find("{")
     if start == -1:
-        return [pattern]
+        return _emit(pattern)
     depth, end = 0, -1
     for i in range(start, len(pattern)):
         if pattern[i] == "{":
@@ -143,14 +185,14 @@ def _expand_braces(pattern: str) -> list:
                 end = i
                 break
     if end == -1:
-        return [pattern]  # unbalanced → treat literally
+        return _emit(pattern)  # unbalanced → treat literally
     options = _split_top_level_commas(pattern[start + 1:end])
     if len(options) < 2:
-        return [pattern]  # not a real alternation → literal
+        return _emit(pattern)  # not a real alternation → literal
     prefix, suffix = pattern[:start], pattern[end + 1:]
     expanded: list = []
     for option in options:
-        expanded.extend(_expand_braces(prefix + option + suffix))
+        expanded.extend(_expand_braces(prefix + option + suffix, _count))
     return expanded
 
 
@@ -162,23 +204,27 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
     brace alternations are expanded before matching.
     """
     positives, negatives = [], []
-    for raw in globs:
-        raw = str(raw).strip()
-        if not raw:
-            continue
-        if raw.startswith("!"):
-            negatives.extend(_expand_braces(raw[1:]))
-        else:
-            positives.extend(_expand_braces(raw))
+    try:
+        for raw in globs:
+            raw = str(raw).strip()
+            if not raw:
+                continue
+            if raw.startswith("!"):
+                negatives.extend(_expand_braces(raw[1:]))
+            else:
+                positives.extend(_expand_braces(raw))
+    except _BraceBudgetError:
+        # Pathological brace pattern from an untrusted manifest → cannot be
+        # evaluated safely, so membership is unproven (fail closed).
+        return False
     if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
         return False
     return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
 
 
-def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
-    """Return True if ``package_dir`` (which holds a ``package.json``) is a member
-    of an ancestor JS workspace, so its runner config may live at the workspace
-    root rather than in the leaf package.
+def _workspace_root_for(package_dir: Path) -> Optional[Path]:
+    """Return the ancestor workspace *root* that ``package_dir`` is a proven member
+    of, or ``None`` when it is not a member of any ancestor workspace.
 
     Membership is proven, not assumed: an ancestor's declared workspace globs
     (npm/yarn ``workspaces``, ``lerna.json`` ``packages``, ``pnpm-workspace.yaml``
@@ -187,6 +233,13 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
     vendored ``vendor/tool``) or an explicitly excluded one (e.g. under a pnpm
     ``!**/test/**``) beneath a workspace root is therefore not treated as a
     member. The search never looks above the repository root (``.git``).
+
+    Returning the *declaring root* (not just a boolean) lets the runner walk use
+    it as a traversal ceiling, so intermediate independent ``package.json``
+    manifests sitting between the leaf and its workspace root do not prematurely
+    stop the walk (e.g. a member ``vendor/container/packages/app`` under a root
+    glob ``vendor/container/packages/*`` with an unrelated ``vendor/container``
+    manifest in between).
     """
     ancestor = package_dir.parent
     for _ in range(80):
@@ -197,14 +250,57 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
             except ValueError:
                 rel_parts = ()
             if rel_parts and _package_matches_workspace(rel_parts, globs):
-                return True
+                return ancestor
         if (ancestor / ".git").exists():
             break
         parent = ancestor.parent
         if parent == ancestor:
             break
         ancestor = parent
-    return False
+    return None
+
+
+def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
+    """Return True if ``package_dir`` is a proven member of an ancestor JS
+    workspace (see :func:`_workspace_root_for`)."""
+    return _workspace_root_for(package_dir) is not None
+
+
+def _is_within(child: Path, parent: Path) -> bool:
+    """True if ``child`` is ``parent`` or a descendant of it (after resolving)."""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _is_strict_ancestor(ancestor: Path, descendant: Path) -> bool:
+    """True if ``ancestor`` is a strict (proper) ancestor of ``descendant``."""
+    try:
+        rel = descendant.resolve().relative_to(ancestor.resolve())
+    except ValueError:
+        return False
+    return len(rel.parts) > 0
+
+
+def _lexical_repo_root(test_path: Path) -> Optional[Path]:
+    """Find the nearest ``.git`` ancestor of ``test_path`` *without* following
+    symlinks (lexical path), or ``None`` if there is no ``.git`` above it.
+
+    This anchors repository containment before ``resolve()`` is applied, so a
+    symlinked test directory that points outside the repository cannot smuggle
+    the walk into an out-of-repo runner config.
+    """
+    directory = Path(os.path.abspath(str(test_path))).parent
+    for _ in range(200):
+        if (directory / ".git").exists():
+            return directory
+        parent = directory.parent
+        if parent == directory:
+            break
+        directory = parent
+    return None
 
 
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
@@ -229,6 +325,13 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
       the walk stops at its ``package.json`` and never crosses the repository root
       (``.git``). A hard iteration cap guards against pathological paths.
 
+    When the leaf is a proven workspace member, the declaring workspace *root*
+    becomes a traversal ceiling: intermediate independent ``package.json``
+    manifests between the leaf and that root do not stop the walk, so the
+    root-level runner config is still reached. A symlinked test directory that
+    resolves outside the repository is refused (repository containment) so the
+    walk cannot be smuggled into an out-of-repo config.
+
     Jest is invoked with ``--runTestsByPath`` so the resolved absolute path is
     matched literally (see ``get_test_command_for_file`` for how the path is
     escaped/quoted per runner). Jest otherwise treats the trailing path as a
@@ -238,7 +341,17 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
+    # Repository containment: anchor the repo root lexically (before symlinks are
+    # resolved). If the resolved test path escapes that root, refuse to adopt any
+    # out-of-repo runner config.
+    contain = _lexical_repo_root(test_path)
+    # Deepest ancestor-workspace root the original leaf must still reach; walk
+    # *through* intermediate independent package.json manifests until then.
+    ceiling: Optional[Path] = None
     for _ in range(80):
+        # Never step outside the repository (e.g. via a symlink that resolves out).
+        if contain is not None and not _is_within(search_dir, contain):
+            break
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
             return ("npx playwright test", search_dir)
@@ -248,9 +361,17 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
             return ("npx vitest run", search_dir)
         # Stop at the JS project boundary (nearest package.json), but cross it when
         # this package is a member of an ancestor workspace whose config lives at
-        # the workspace root.
-        if (search_dir / "package.json").exists() and not _belongs_to_ancestor_workspace(search_dir):
-            break
+        # the workspace root — and keep crossing intermediate independent manifests
+        # until that workspace root is reached.
+        if (search_dir / "package.json").exists():
+            root = _workspace_root_for(search_dir)
+            if root is not None and (ceiling is None or _is_strict_ancestor(root, ceiling)):
+                # Extend the ceiling to the shallowest (highest) workspace root,
+                # so nested workspaces chain correctly.
+                ceiling = root
+            below_ceiling = ceiling is not None and _is_strict_ancestor(ceiling, search_dir)
+            if root is None and not below_ceiling:
+                break
         # Never escape the repository, even absent an in-project config.
         if (search_dir / ".git").exists():
             break
