@@ -89,6 +89,9 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     loader_destination = tmp_path / "loader" / "libc.so.6"
     loader_destination.parent.mkdir()
     loader_destination.symlink_to(loader_source)
+    candidate = tmp_path / "candidate" / "bin" / "python"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("python", encoding="utf-8")
     workdir = tmp_path / "work"
     workdir.mkdir()
 
@@ -118,7 +121,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     )
 
     argv, _profile = _sandbox_command(
-        [str(executable_destination), "-c", "pass"], (workdir,), cwd=workdir
+        [str(candidate), "-c", "pass"], (workdir,), cwd=workdir
     )
     bwrap = json.loads(argv[-2])
     sources = json.loads(argv[-1])
