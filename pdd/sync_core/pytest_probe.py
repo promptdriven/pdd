@@ -24,3 +24,5 @@ def pytest_collection_modifyitems(items):
                 json.dumps(protected_node_ids, separators=(",", ":")),
                 encoding="utf-8",
             )
+        else:
+            print("PDD_PROTECTED_NODE_IDS=" + json.dumps(protected_node_ids))

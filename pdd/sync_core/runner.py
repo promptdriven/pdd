@@ -767,7 +767,7 @@ def _pytest_environment(home: Path) -> dict[str, str]:
     )
 
 
-def _trusted_probe_plugin(directory: Path, output: Path) -> tuple[str, Path]:
+def _trusted_probe_plugin(directory: Path) -> tuple[str, Path]:
     """Create a unique plugin shim that loads the checker-owned probe by path."""
     plugin_name = "pdd_checker_pytest_probe"
     plugin = directory / f"{plugin_name}.py"
@@ -782,7 +782,6 @@ def _trusted_probe_plugin(directory: Path, output: Path) -> tuple[str, Path]:
                 "    raise ImportError('checker pytest probe is unavailable')",
                 "_MODULE = importlib.util.module_from_spec(_SPEC)",
                 "_SPEC.loader.exec_module(_MODULE)",
-                f"_MODULE._OUTPUT_PATH = {json.dumps(str(output))}",
                 "pytest_collection_modifyitems = _MODULE.pytest_collection_modifyitems",
                 "",
             )
@@ -918,7 +917,6 @@ def _collect_node_ids(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        probe_output = controllers / f"nodes-{os.urandom(16).hex()}.json"
         pytest_args = [
             "--collect-only",
             "-q",
@@ -928,7 +926,7 @@ def _collect_node_ids(
             "no:cacheprovider",
             path.as_posix(),
         ]
-        plugin_name, _plugin_directory = _trusted_probe_plugin(controllers, probe_output)
+        plugin_name, _plugin_directory = _trusted_probe_plugin(controllers)
         pytest_args.extend(("-p", plugin_name))
         worker = _trusted_collection_runner(controllers, root, pytest_args)
         command = [sys.executable, str(worker)]
@@ -947,7 +945,6 @@ def _collect_node_ids(
         result, surviving = _managed_subprocess(
             command, cwd=controllers, timeout=timeout_seconds,
             env=_pytest_environment(home), writable_roots=(home.parent,),
-            writable_files=(probe_output,),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:
@@ -967,11 +964,14 @@ def _collect_node_ids(
                     "collection left a surviving process-group descendant",
                 ), (),
             )
-        try:
-            values = json.loads(probe_output.read_text(encoding="utf-8"))
-            node_ids = tuple(sorted(item for item in values if isinstance(item, str)))
-        except (OSError, json.JSONDecodeError):
-            node_ids = ()
+        node_ids = ()
+        for line in result.stdout.splitlines():
+            if line.startswith("PDD_PROTECTED_NODE_IDS="):
+                try:
+                    values = json.loads(line.partition("=")[2])
+                    node_ids = tuple(sorted(item for item in values if isinstance(item, str)))
+                except json.JSONDecodeError:
+                    pass
         if not node_ids and result.returncode == 0:
             return (
                 RunnerExecution(
