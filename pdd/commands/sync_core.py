@@ -152,7 +152,7 @@ def _load_nightly_observation(path: Path | None) -> NightlyObservation | None:
 @click.option("--merge-group", help="Exact protected PDD merge-group commit SHA.")
 @click.option("--full-inventory", is_flag=True)
 @click.option("--run-lifecycle-matrix", "run_matrix", is_flag=True)
-@click.option("--require-nightly-streak", type=click.IntRange(min=1))
+@click.option("--require-nightly-streak", type=click.IntRange(min=7))
 @click.option(
     "--nightly-ledger",
     type=click.Path(path_type=Path, dir_okay=False),

@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import combinations
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 
 from .operation_log import (
@@ -96,11 +96,6 @@ def canonical_sync_enabled(root: Path) -> bool:
     candidate = Path(root).resolve()
     if not candidate.is_dir():
         candidate = candidate.parent
-    if protected_ref is None and not any(
-        (parent / ".pdd/sync-policy.json").is_file()
-        for parent in (candidate, *candidate.parents)
-    ):
-        return False
     root = repository_root(candidate)
     protected_ref = protected_ref or "HEAD"
     identity = subprocess.run(
@@ -824,7 +819,9 @@ def _canonical_compatibility_report(
             classification = FAILURE_CLASSIFICATION
         projected.append(
             {
-                "basename": Path(unit["subject"]).stem.rsplit("_", 1)[0],
+                "basename": PurePosixPath(unit["subject"]).relative_to(
+                    "prompts"
+                ).with_suffix("").as_posix().rsplit("_", 1)[0],
                 "language": Path(unit["subject"]).stem.rsplit("_", 1)[-1],
                 "classification": classification,
                 "operation": "none",
@@ -835,17 +832,26 @@ def _canonical_compatibility_report(
             }
         )
     summary = _build_summary(projected)
-    counts = canonical["counts"]
-    summary["metadata_stale"] = counts["drifted"]
-    summary["conflicts"] = counts["conflict"]
-    summary["unbaselined"] = counts["unbaselined"]
-    summary["failures"] = (
-        counts["corrupt"] + counts["unknown"] + counts["failed"] + counts["invalid"]
-    )
-    summary["synced"] = counts["trusted_in_sync"]
-    summary["total"] = counts["managed_units"]
+    summary["metadata_stale"] = len([
+        item for item in projected if item["classification"] in DRIFT_CLASSIFICATIONS
+    ])
+    summary["conflicts"] = len([
+        item for item in projected if item["classification"] == CONFLICT_CLASSIFICATION
+    ])
+    summary["unbaselined"] = len([
+        item for item in projected if item["classification"] == UNBASELINED_CLASSIFICATION
+    ])
+    summary["failures"] = len([
+        item for item in projected if item["classification"] == FAILURE_CLASSIFICATION
+    ])
+    summary["synced"] = len([
+        item for item in projected if item["classification"] == "IN_SYNC"
+    ])
+    summary["total"] = len(projected)
     return {
-        "ok": canonical["ok"],
+        "ok": bool(projected) and all(
+            item["classification"] == "IN_SYNC" for item in projected
+        ),
         "consumer": consumer,
         "project_root": str(root),
         "summary": summary,

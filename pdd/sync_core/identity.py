@@ -82,14 +82,21 @@ def initialize_repository_identity(
     if state_dir.exists() and (state_dir.is_symlink() or not state_dir.is_dir()):
         raise RepositoryIdentityError(".pdd must be a real directory")
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    temporary = state_dir / f".{identity_path.name}.{os.getpid()}.tmp"
+    temporary = state_dir / (
+        f".{identity_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="ascii") as handle:
             handle.write(value + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, identity_path)
+        try:
+            os.link(temporary, identity_path)
+        except FileExistsError:
+            temporary.unlink(missing_ok=True)
+            return read_repository_identity(repository_root, require_persistent=True)
+        temporary.unlink()
         fsync_directory(state_dir)
     except BaseException:
         temporary.unlink(missing_ok=True)

@@ -74,7 +74,7 @@ def test_external_edit_after_first_install_prevents_commit(tmp_path) -> None:
         if event == "after_install:0":
             target.write_text("external = True\n")
 
-    with pytest.raises(TransactionConflict, match="destination changed"):
+    with pytest.raises(TransactionConflict, match="rollback conflict"):
         manager.commit("tx-post-install-race", crash_hook=race)
     assert target.read_text() == "external = True\n"
 

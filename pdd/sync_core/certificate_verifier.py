@@ -23,6 +23,7 @@ class CertificateExpectations:
     candidate_artifact_policy: CandidateArtifactPolicy
     repository_shas: dict[str, tuple[str, str]]
     repository_ids: dict[str, str]
+    minimum_nightly_streak: int = 7
 
 
 def _sha(value: Any) -> str:
@@ -57,6 +58,9 @@ def load_expectations(path: Path) -> CertificateExpectations:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("schema_version") != 1:
             raise ValueError("expectations schema is invalid")
+        minimum_nightly_streak = int(payload.get("minimum_nightly_streak", 7))
+        if minimum_nightly_streak < 7:
+            raise ValueError("protected expectations require seven nightly observations")
         checker_payload = payload["checker"]
         candidate_policy_payload = payload["candidate_artifact_policy"]
         repositories = payload["repositories"]
@@ -92,6 +96,7 @@ def load_expectations(path: Path) -> CertificateExpectations:
         candidate_policy,
         repository_shas,
         repository_ids,
+        minimum_nightly_streak,
     )
 
 
@@ -114,6 +119,7 @@ def main() -> None:
             expected_repository_ids=expected.repository_ids,
             expected_checker_identity=expected.checker,
             expected_candidate_artifact_policy=expected.candidate_artifact_policy,
+            expected_minimum_nightly_streak=expected.minimum_nightly_streak,
         )
     except (OSError, ValueError, json.JSONDecodeError):
         verified = False

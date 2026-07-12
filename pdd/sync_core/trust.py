@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
 )
+from .signer_process import run_signer
 from .descriptor_store import DescriptorStoreError, update_json
 from .durability import fsync_directory
 from .types import EvidenceOutcome, ObligationEvidence, UnitId
@@ -361,12 +362,10 @@ class RemoteAttestationSigner:
     def issue(self, request: AttestationRequest) -> AttestationEnvelope:
         """Send canonical claims to the remote authority and verify its signature."""
         envelope = _unsigned_envelope(self.issuer, request)
-        result = subprocess.run(
-            self._command,
-            input=envelope.payload(),
-            capture_output=True,
-            check=False,
-        )
+        try:
+            result = run_signer(self._command, envelope.payload(), timeout=60)
+        except subprocess.TimeoutExpired as exc:
+            raise AttestationError("remote attestation signer timed out") from exc
         if result.returncode != 0:
             raise AttestationError("remote attestation signer rejected the request")
         try:

@@ -25,6 +25,11 @@ from .artifact_provenance import (
     CandidateArtifactProvenanceError,
 )
 from .reporting import CanonicalReportOptions, build_canonical_report
+from .signer_process import run_signer
+
+
+MINIMUM_NIGHTLY_STREAK = 7
+SIGNER_TIMEOUT_SECONDS = 60
 
 
 class CertificateSigner(Protocol):
@@ -55,12 +60,12 @@ class RemoteCertificateSigner:
 
     def sign_bytes(self, payload: bytes) -> str:
         """Sign canonical bytes remotely and verify the response locally."""
-        result = subprocess.run(
-            self._command,
-            input=payload,
-            capture_output=True,
-            check=False,
-        )
+        try:
+            result = run_signer(
+                self._command, payload, timeout=SIGNER_TIMEOUT_SECONDS
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError("remote certificate signer timed out") from exc
         if result.returncode != 0:
             raise ValueError("remote certificate signer rejected the request")
         try:
@@ -684,7 +689,8 @@ def _predicate(
 ) -> bool:
     return _scan_predicate(counts, lifecycle, extra,
                            require_measurement=require_measurement) and (
-        extra["nightly_streak"] >= extra["required_nightly_streak"]
+        extra["nightly_streak"] >= MINIMUM_NIGHTLY_STREAK
+        and extra["required_nightly_streak"] >= MINIMUM_NIGHTLY_STREAK
     )
 
 
@@ -944,6 +950,8 @@ def _build_global_certificate_from_targets(
     """Build and sign the complete cross-repository machine predicate."""
     if not targets:
         raise ValueError("global certificate requires at least one repository")
+    if options.required_nightly_streak < MINIMUM_NIGHTLY_STREAK:
+        raise ValueError("global certificate requires at least seven nightly observations")
     if options.checker_identity is None:
         raise ValueError("global certificate requires released checker identity")
     if options.candidate_artifact_policy is None:
@@ -1123,6 +1131,7 @@ def verify_global_certificate(
     expected_repository_ids: dict[str, str],
     expected_checker_identity: CheckerIdentity,
     expected_candidate_artifact_policy: CandidateArtifactPolicy,
+    expected_minimum_nightly_streak: int = MINIMUM_NIGHTLY_STREAK,
     now: datetime | None = None,
     maximum_age: timedelta = timedelta(minutes=15),
 ) -> bool:
@@ -1134,6 +1143,14 @@ def verify_global_certificate(
     ):
         return False
     if certificate.get("ok") is not True or certificate.get("scan_ok") is not True:
+        return False
+    counts = certificate.get("counts")
+    if (
+        expected_minimum_nightly_streak < MINIMUM_NIGHTLY_STREAK
+        or not isinstance(counts, dict)
+        or counts.get("nightly_streak", 0) < expected_minimum_nightly_streak
+        or counts.get("required_nightly_streak", 0) < expected_minimum_nightly_streak
+    ):
         return False
     if certificate.get("checker") != expected_checker_identity.payload():
         return False

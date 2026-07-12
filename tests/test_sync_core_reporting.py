@@ -357,6 +357,7 @@ def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names
     monkeypatch.setattr(
         "pdd.continuous_sync.build_canonical_report", lambda *_args, **_kwargs: canonical
     )
+    monkeypatch.setattr("pdd.continuous_sync.canonical_sync_enabled", lambda _root: True)
     report = build_compatibility_report(
         consumer="reconcile", root=tmp_path, modules=("commands/foo",)
     )

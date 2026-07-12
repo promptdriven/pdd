@@ -499,6 +499,11 @@ class TransactionManager:
             if not isinstance(precondition, dict):
                 raise TransactionError("transaction rollback precondition is malformed")
             before = _parse_state(precondition)
+            desired = FileState(
+                True, str(item["desired_digest"]), str(item["desired_mode"]), "regular"
+            )
+            if self._destination_state(relpath) != desired:
+                raise TransactionConflict(f"rollback conflict: {relpath}")
             rollback_name = item.get("rollback_blob")
             if not before.exists:
                 self._unlink_destination(relpath)
@@ -522,6 +527,7 @@ class TransactionManager:
         *,
         crash_hook: Optional[Callable[[str], None]] = None,
     ) -> TransactionResult:
+        # pylint: disable=too-many-locals,too-many-branches
         """Install all prepared writes after a durable COMMITTING marker."""
         transaction_dir = self._transaction_dir(transaction_id)
         payload = self._read_journal(transaction_dir)
@@ -557,11 +563,25 @@ class TransactionManager:
                     changed.append(PurePosixPath(str(item["relpath"])))
                     self._write_journal(transaction_dir, payload)
                     hook(f"after_install:{index}")
-            except TransactionError:
-                self._restore_entries(transaction_dir, entries)
+                for item in entries:
+                    if not isinstance(item, dict):
+                        raise TransactionError("transaction entry is malformed")
+                    relpath = PurePosixPath(str(item["relpath"]))
+                    desired = FileState(
+                        True, str(item["desired_digest"]),
+                        str(item["desired_mode"]), "regular",
+                    )
+                    if self._destination_state(relpath) != desired:
+                        raise TransactionConflict(f"destination changed: {relpath}")
+            except TransactionError as exc:
+                try:
+                    self._restore_entries(transaction_dir, entries)
+                except TransactionConflict:
+                    self._write_journal(transaction_dir, payload)
+                    raise
                 payload["phase"] = TransactionPhase.ROLLED_BACK.value
                 self._write_journal(transaction_dir, payload)
-                raise
+                raise exc
             payload["phase"] = TransactionPhase.COMMITTED.value
             self._write_journal(transaction_dir, payload)
             hook("after_commit")

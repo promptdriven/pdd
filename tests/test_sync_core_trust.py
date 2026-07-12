@@ -79,9 +79,9 @@ def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None
         NOW,
     )
 
-    def remote_sign(command, *, input, capture_output, check):
+    def remote_sign(command, input, *, timeout):
         assert command == ("protected-attestation-sign",)
-        assert capture_output is True and check is False
+        assert timeout > 0
         return subprocess.CompletedProcess(
             command,
             0,
@@ -89,7 +89,7 @@ def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None
             stderr=b"",
         )
 
-    monkeypatch.setattr("pdd.sync_core.trust.subprocess.run", remote_sign)
+    monkeypatch.setattr("pdd.sync_core.trust.run_signer", remote_sign)
     signer = RemoteAttestationSigner(
         SIGNER.issuer, SIGNER.public_key_bytes(), ("protected-attestation-sign",)
     )
@@ -101,11 +101,11 @@ def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None
 
 
 def test_remote_attestation_signer_has_protected_timeout(monkeypatch) -> None:
-    def stalled(_command, **kwargs):
+    def stalled(_command, _payload, **kwargs):
         assert kwargs["timeout"] > 0
         raise subprocess.TimeoutExpired("protected-attestation-sign", kwargs["timeout"])
 
-    monkeypatch.setattr("pdd.sync_core.trust.subprocess.run", stalled)
+    monkeypatch.setattr("pdd.sync_core.trust.run_signer", stalled)
     signer = RemoteAttestationSigner(
         SIGNER.issuer, SIGNER.public_key_bytes(), ("protected-attestation-sign",)
     )

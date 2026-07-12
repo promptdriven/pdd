@@ -41,11 +41,11 @@ def test_global_predicate_cannot_downgrade_seven_night_minimum(monkeypatch) -> N
 
 
 def test_remote_certificate_signer_has_protected_timeout(monkeypatch) -> None:
-    def stalled(_command, **kwargs):
+    def stalled(_command, _payload, **kwargs):
         assert kwargs["timeout"] > 0
         raise subprocess.TimeoutExpired("protected-certificate-sign", kwargs["timeout"])
 
-    monkeypatch.setattr("pdd.sync_core.certificate.subprocess.run", stalled)
+    monkeypatch.setattr("pdd.sync_core.certificate.run_signer", stalled)
     signer = RemoteCertificateSigner(
         "trusted-ci", AttestationSigner("trusted-ci", b"r" * 32).public_key_bytes(),
         ("protected-certificate-sign",),
@@ -293,13 +293,13 @@ def test_certificate_signing_uses_remote_verified_authority(
         "PDD_CERTIFICATE_SIGNER_COMMAND", json.dumps(["protected-kms-sign"])
     )
 
-    def remote_sign(command, *, input, capture_output, check):
+    def remote_sign(command, input, *, timeout):
         assert command == ("protected-kms-sign",)
-        assert capture_output is True and check is False
+        assert timeout > 0
         signature = authority.sign_bytes(input).encode("ascii")
         return subprocess.CompletedProcess(command, 0, stdout=signature, stderr=b"")
 
-    monkeypatch.setattr("pdd.sync_core.certificate.subprocess.run", remote_sign)
+    monkeypatch.setattr("pdd.sync_core.certificate.run_signer", remote_sign)
     signer = signer_from_environment()
     assert signer.sign_bytes(b"canonical certificate") == authority.sign_bytes(
         b"canonical certificate"

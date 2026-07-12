@@ -457,6 +457,10 @@ def _support_digest(
         for path in obligation.code_under_test_paths
     )
     closure = _pytest_support_closure(root, ref, tests, product)
+    product_closure = _transitive_support_blobs(
+        root, ref, pending=product, included=set(product)
+    )
+    closure = tuple(sorted(set(closure + product_closure)))
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -518,7 +522,7 @@ def runner_identity_digest(
     payload = {
         "tool_version": TRUSTED_RUNNER_VERSION,
         "pytest_command": [
-            sys.executable,
+            "<measured-python-runtime>",
             "-m",
             "pytest",
             "-q",
@@ -527,7 +531,7 @@ def runner_identity_digest(
             "--junitxml=<trusted-temp-path>",
         ],
         "pytest_collection_command": [
-            sys.executable,
+            "<measured-python-runtime>",
             "-m",
             "pytest",
             "--collect-only",
