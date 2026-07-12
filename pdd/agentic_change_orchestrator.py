@@ -1907,12 +1907,21 @@ def _preflight_drift_heal(
         # is issue-influenced in the agentic flow, so this is a trust boundary
         # (CWE-022; Codex review, PR #1998).
         from pdd.content_selector import _validated_project_path
-        if (
-            _validated_project_path(prompt_path, root=worktree_path) is None
-            or _validated_project_path(code_path, root=worktree_path) is None
-        ):
+        safe_prompt_path = _validated_project_path(prompt_path, root=worktree_path)
+        safe_code_path = _validated_project_path(code_path, root=worktree_path)
+        if safe_prompt_path is None or safe_code_path is None:
             failed.append(drift.basename)
             continue
+        # Pass the CANONICAL paths (symlinks already collapsed by
+        # _validated_project_path) to the subprocess, NOT the original spellings,
+        # so the child opens the resolved target directly and a symlink component
+        # cannot be re-pointed out of the worktree between validation and use
+        # (CWE-022 / CWE-367 check/use gap; Codex review, PR #1998). Expressed
+        # relative to the worktree root the child runs in, which equals the
+        # original spelling for ordinary (non-symlinked) paths.
+        worktree_root_resolved = worktree_path.resolve()
+        heal_prompt_arg = str(safe_prompt_path.relative_to(worktree_root_resolved))
+        heal_code_arg = str(safe_code_path.relative_to(worktree_root_resolved))
         try:
             # Use sys.executable + -m pdd so the heal subprocess uses the
             # same Python venv as the orchestrator. A bare ["pdd", ...]
@@ -1934,8 +1943,8 @@ def _preflight_drift_heal(
                     "update",
                     "--sync-metadata",
                     "--git",
-                    str(prompt_path),
-                    str(code_path),
+                    heal_prompt_arg,
+                    heal_code_arg,
                 ],
                 cwd=str(worktree_path),
                 capture_output=True,
