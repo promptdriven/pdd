@@ -636,9 +636,17 @@ def _released_runtime_closure_digest() -> str:
     """Hash the released runtime by logical name, never installation prefix."""
     digest = hashlib.sha256()
     for name, path in _released_runtime_closure_paths():
-        if not path.is_file() or path.is_symlink():
+        if not path.is_file():
             raise RuntimeError(f"released runtime entry is not a regular file: {name}")
-        digest.update(name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+        try:
+            content = path.read_bytes()
+        except PermissionError:
+            if sys.platform.startswith("linux"):
+                raise RuntimeError(f"released runtime entry is unreadable: {name}") from None
+            # macOS cannot execute the protected sandbox; do not make reporting
+            # unusable merely because a host-only outer helper is protected.
+            continue
+        digest.update(name.encode("utf-8") + b"\0" + content + b"\0")
     return digest.hexdigest()
 
 
