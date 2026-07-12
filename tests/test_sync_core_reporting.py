@@ -342,6 +342,16 @@ def test_committed_policy_stays_active_when_worktree_policy_is_deleted(tmp_path)
     assert canonical_sync_enabled(root) is True
 
 
+def test_policy_free_linked_worktree_avoids_git_subprocess(tmp_path, monkeypatch) -> None:
+    (tmp_path / ".git").write_text("gitdir: /protected/main/.git/worktrees/unit\n")
+
+    def unexpected_subprocess(*_args, **_kwargs):
+        raise AssertionError("legacy worktree must not enter protected Git lookup")
+
+    monkeypatch.setattr("pdd.continuous_sync.subprocess.run", unexpected_subprocess)
+    assert canonical_sync_enabled(tmp_path) is False
+
+
 def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names(
     tmp_path, monkeypatch
 ) -> None:
