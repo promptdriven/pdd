@@ -371,3 +371,29 @@ def test_fingerprint_payload_has_one_authoritative_constructor() -> None:
         "sync_determine_operation.py",
     ]
     assert serialized_write_owners == []
+
+
+def test_transaction_public_api_has_no_prepare_handshake() -> None:
+    """The atomic-state deferral is constructor-driven, not a manual handshake.
+
+    Regression for a prompt/code divergence (Codex review, PR #1998): the
+    ``pin_example_hack`` prompt once instructed generated code to call a
+    non-existent ``transaction.prepare()`` and a manual
+    ``skip("deferred to AtomicStateUpdate")`` dance. The real contract passes
+    ``atomic_state`` to the constructor and finalizes on clean context exit.
+    Green hand-written unit tests do not catch a stale prompt; regeneration
+    from it would materialize an ``AttributeError``.
+    """
+    # The class exposes skip() (suppress) but never a prepare() handshake.
+    assert hasattr(FingerprintTransaction, "skip")
+    assert not hasattr(FingerprintTransaction, "prepare")
+
+    # No source-of-truth prompt may instruct the fabricated prepare() protocol.
+    prompts_dir = Path(__file__).parents[1] / "pdd" / "prompts"
+    offenders = [
+        p.relative_to(prompts_dir).as_posix()
+        for p in prompts_dir.rglob("*.prompt")
+        if "transaction.prepare(" in p.read_text(encoding="utf-8")
+        or "FingerprintTransaction.prepare" in p.read_text(encoding="utf-8")
+    ]
+    assert offenders == [], f"prompts reference non-existent prepare(): {offenders}"
