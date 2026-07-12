@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import pytest
+import pdd.sync_core.runner as runner_module
 
 from pdd.sync_core import (
     AttestationSigner,
@@ -893,6 +894,31 @@ def test_candidate_cannot_forge_worker_outputs_discovered_from_script_path(
     not sys.platform.startswith("linux") or not shutil.which("bwrap"),
     reason="requires Linux protected runner",
 )
+def test_candidate_reading_worker_source_cannot_forge_collection_or_execution(
+    tmp_path: Path,
+) -> None:
+    """A worker script is candidate-readable, so it cannot name an authority."""
+    content = (
+        "import os, re, sys\nfrom pathlib import Path\n"
+        "source = Path(sys.argv[0]).read_text(encoding='utf-8')\n"
+        "for name in re.findall(r'/[^\\\" ]*/results-[0-9a-f]+/"
+        "(?:collection|execution)-[0-9a-f]+\\.(?:json|xml)', source):\n"
+        "    payload = ('[\\\"tests/test_widget.py::test_widget\\\"]' if name.endswith('.json') "
+        "else '<testsuite tests=\\\"1\\\" failures=\\\"0\\\" errors=\\\"0\\\" skipped=\\\"0\\\"/>')\n"
+        "    Path(name).write_text(payload, encoding='utf-8')\n"
+        "if Path(sys.argv[0]).name in {'collection_worker.py', 'execution_worker.py'}:\n"
+        "    os._exit(80)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux protected runner",
+)
 def test_candidate_cannot_recursively_forge_any_result_channel(tmp_path: Path) -> None:
     content = (
         "import os, sys\nfrom pathlib import Path\n"
@@ -989,6 +1015,75 @@ def test_runner_identity_binds_transitive_product_dependency(tmp_path: Path) -> 
     _git(root, "commit", "-q", "-m", "change indirect helper")
     after = _git(root, "rev-parse", "HEAD")
     assert runner_identity_digest(profile, root=root, ref=after) != before_digest
+
+
+def test_runner_identity_binds_product_readable_repository_data(tmp_path: Path) -> None:
+    root, _commit = _repository(
+        tmp_path,
+        "import product\ndef test_widget(): assert product.value == 1\n",
+    )
+    (root / "product.py").write_text(
+        "import json\nvalue = json.loads(open('helper.json').read())['value']\n",
+        encoding="utf-8",
+    )
+    (root / "helper.json").write_text('{"value": 1}\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "product data closure")
+    before = _git(root, "rev-parse", "HEAD")
+    profile = _profile(root, before, (PurePosixPath("product.py"),))
+    first = runner_identity_digest(profile, root=root, ref=before)
+    (root / "helper.json").write_text('{"value": 2}\n', encoding="utf-8")
+    _git(root, "add", "helper.json")
+    _git(root, "commit", "-q", "-m", "change product data")
+    after = _git(root, "rev-parse", "HEAD")
+    assert runner_identity_digest(profile, root=root, ref=after) != first
+
+
+def test_released_runtime_digest_binds_installed_native_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native = tmp_path / "site-packages" / "native_extension.so"
+    native.parent.mkdir()
+    native.write_bytes(b"native-v1")
+    monkeypatch.setattr(
+        runner_module,
+        "_released_runtime_closure_paths",
+        lambda: (("python-runtime/site-packages/native_extension.so", native),),
+        raising=False,
+    )
+    first = runner_module._released_runtime_closure_digest()
+    native.write_bytes(b"native-v2")
+    assert runner_module._released_runtime_closure_digest() != first
+
+
+def test_released_runtime_digest_binds_runtime_and_sandbox_bytes_prefix_portably(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_prefix = tmp_path / "prefix-a"
+    second_prefix = tmp_path / "prefix-b"
+    first_python = first_prefix / "bin/python"
+    second_python = second_prefix / "bin/python"
+    first_bwrap = first_prefix / "bin/bwrap"
+    second_bwrap = second_prefix / "bin/bwrap"
+    for path in (first_python, second_python, first_bwrap, second_bwrap):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    first_python.write_bytes(b"python-runtime")
+    second_python.write_bytes(b"python-runtime")
+    first_bwrap.write_bytes(b"sandbox-runtime")
+    second_bwrap.write_bytes(b"sandbox-runtime")
+    paths = (("interpreter/python", first_python), ("sandbox/bwrap", first_bwrap))
+    monkeypatch.setattr(
+        runner_module, "_released_runtime_closure_paths", lambda: paths, raising=False
+    )
+    first = runner_module._released_runtime_closure_digest()
+    monkeypatch.setattr(
+        runner_module,
+        "_released_runtime_closure_paths",
+        lambda: (("interpreter/python", second_python), ("sandbox/bwrap", second_bwrap)),
+    )
+    assert runner_module._released_runtime_closure_digest() == first
+    second_bwrap.write_bytes(b"changed sandbox runtime")
+    assert runner_module._released_runtime_closure_digest() != first
 
 
 def test_runner_identity_is_stable_across_interpreter_prefixes(

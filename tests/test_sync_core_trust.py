@@ -194,6 +194,86 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
     assert not marker.exists()
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux PID namespace containment",
+)
+@pytest.mark.parametrize("adapter", ["attestation", "certificate"])
+def test_remote_signer_normal_return_reaps_detached_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
+) -> None:
+    marker = tmp_path / f"{adapter}.normal-return-leak"
+    child = (
+        "import os,sys,time; os.setsid(); time.sleep(.5); "
+        "open(sys.argv[1], 'w').write('leaked')"
+    )
+    parent = (
+        "import os,subprocess,sys; env=dict(os.environ); "
+        "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+        "env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "sys.stdout.buffer.write(b'not-a-signature')"
+    )
+    command = (sys.executable, "-c", parent, child, str(marker))
+    if adapter == "attestation":
+        signer = RemoteAttestationSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(AttestationError):
+            signer.issue(AttestationRequest("remote", _binding(), (), "nonce", NOW))
+    else:
+        signer = RemoteCertificateSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(ValueError):
+            signer.sign_bytes(b"payload")
+    time.sleep(.6)
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux PID namespace containment",
+)
+@pytest.mark.parametrize("adapter", ["attestation", "certificate"])
+@pytest.mark.parametrize("leader_signal", ["SIGSTOP", "SIGKILL"])
+def test_remote_signer_leader_loss_reaps_detached_descendant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    adapter: str,
+    leader_signal: str,
+) -> None:
+    marker = tmp_path / f"{adapter}-{leader_signal}.leader-leak"
+    child = (
+        "import os,sys,time; os.setsid(); time.sleep(.5); "
+        "open(sys.argv[1], 'w').write('leaked')"
+    )
+    parent = (
+        "import os,signal,subprocess,sys,time; env=dict(os.environ); "
+        "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
+        "env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); "
+        "os.kill(os.getppid(), getattr(signal, sys.argv[3])); time.sleep(30)"
+    )
+    command = (sys.executable, "-c", parent, child, str(marker), leader_signal)
+    actual_run_signer = run_signer
+
+    def short_run(command_value, payload, *, timeout):
+        del timeout
+        return actual_run_signer(command_value, payload, timeout=0.1)
+
+    started = time.monotonic()
+    if adapter == "attestation":
+        monkeypatch.setattr(trust_module, "run_signer", short_run)
+        signer = RemoteAttestationSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(AttestationError):
+            signer.issue(AttestationRequest("remote", _binding(), (), "nonce", NOW))
+    else:
+        monkeypatch.setattr(certificate_module, "run_signer", short_run)
+        signer = RemoteCertificateSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(ValueError):
+            signer.sign_bytes(b"payload")
+    assert time.monotonic() - started < 1.5
+    time.sleep(.6)
+    assert not marker.exists()
+
+
 def test_attestation_environment_forbids_local_private_key(monkeypatch) -> None:
     monkeypatch.setenv("PDD_ATTESTATION_SIGNING_KEY", "candidate-secret")
     with pytest.raises(ValueError, match="local attestation signing keys are forbidden"):
