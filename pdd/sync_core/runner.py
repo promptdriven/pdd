@@ -833,6 +833,7 @@ def _trusted_collection_runner(
                 "os.chdir(_ROOT)",
                 "sys.path.insert(0, _CONTROLLER)",
                 "import pytest",
+                "import pdd_checker_pytest_probe",
                 "sys.path.insert(0, _ROOT)",
                 "_STATUS = pytest.main(" + json.dumps(pytest_args) + ")",
                 "sys.stdout.flush(); sys.stderr.flush()",

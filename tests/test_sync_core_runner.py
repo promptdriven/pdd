@@ -628,7 +628,9 @@ def test_collection_worker_uses_trusted_plugin_path(tmp_path: Path) -> None:
     assert "_CONTROLLER =" in source
     assert str(controller) in source
     assert "PYTHONPATH" not in source
-    assert source.index("import pytest") < source.index("sys.path.insert(0, _ROOT)")
+    assert source.index("import pytest") < source.index(
+        "import pdd_checker_pytest_probe"
+    ) < source.index("sys.path.insert(0, _ROOT)")
     assert "_STATUS = pytest.main" in source
 
 
@@ -699,6 +701,12 @@ def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path)
         "if __name__ == '__main__': raise SystemExit(forge(sys.argv[1:]))\n",
         encoding="utf-8",
     )
+    (root / "pdd_checker_pytest_probe.py").write_text(
+        "from pathlib import Path\n"
+        "Path('candidate-fixed-probe-loaded').write_text('loaded')\n"
+        "def pytest_collection_modifyitems(items): items[:] = []\n",
+        encoding="utf-8",
+    )
     plugin_name, _plugin_directory = runner_module._trusted_probe_plugin(controller)
     collection = runner_module._trusted_collection_runner(
         controller,
@@ -735,6 +743,7 @@ def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path)
     assert executed.returncode == 1, executed.stderr
     assert 'failures="1"' in junit.read_text(encoding="utf-8")
     assert not (root / "candidate-pytest-loaded").exists()
+    assert not (root / "candidate-fixed-probe-loaded").exists()
 
 
 def test_execution_precreates_private_junit_channel(
