@@ -225,6 +225,41 @@ class TestVerifyAndLog:
         )
         assert result is True
 
+    def test_verify_and_log_env_template_shell_quotes_path(self, tmp_path, monkeypatch):
+        """A PDD_AGENTIC_VERIFY_CMD template's {test}/{cwd} substitution is shell-
+        quoted, so a maliciously named test path cannot inject under `bash -lc`."""
+        import shlex
+        monkeypatch.setenv("PDD_AGENTIC_VERIFY_CMD", "pytest {test}")
+        evil = tmp_path / "{test}';touch PWN;echo '"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        captured = {}
+        with patch("pdd.agentic_fix._run_testcmd",
+                   side_effect=lambda cmd, cwd: captured.update(cmd=cmd) or True):
+            _verify_and_log(str(test_file), tmp_path, verify_cmd="pytest {test}", enabled=True)
+        argv = shlex.split(captured["cmd"])
+        assert str(test_file.resolve()) in argv, (captured["cmd"], argv)
+        assert "touch" not in argv, argv
+
+    def test_verify_and_log_finalized_command_is_not_resubstituted(self, tmp_path, monkeypatch):
+        """Without the env template, a finalized command (e.g. from
+        default_verify_cmd_for) is executed as-is — no {test}/{cwd} re-substitution
+        that could corrupt its quoting when the path contains a literal {test}."""
+        import shlex
+        monkeypatch.delenv("PDD_AGENTIC_VERIFY_CMD", raising=False)
+        evil = tmp_path / "{test}';touch PWN;echo '"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        final = "pytest " + shlex.quote(str(test_file.resolve())) + " -q"
+        captured = {}
+        with patch("pdd.agentic_fix._run_testcmd",
+                   side_effect=lambda cmd, cwd: captured.update(cmd=cmd) or True):
+            _verify_and_log(str(test_file), tmp_path, verify_cmd=final, enabled=True)
+        assert captured["cmd"] == final  # unchanged
+        assert "touch" not in shlex.split(captured["cmd"])
+
     def test_verify_and_log_uses_run_command_for_python(self, tmp_path, monkeypatch):
         """Should use python run command from CSV for .py files."""
         # Set up PDD_PATH to point to actual data directory

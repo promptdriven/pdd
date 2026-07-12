@@ -58,6 +58,15 @@ _MAX_MANIFEST_BYTES = 5 * 1024 * 1024
 # both count and size.
 _MAX_GLOB_LENGTH = 4096
 
+# Upper bound on the *aggregate* dynamic-program cells the glob matcher may fill
+# across one membership check. Each glob costs ``(path_depth+1) * (segments+1)``
+# cells; the per-glob and per-declaration caps bound each factor, but their
+# product across many globs (up to the brace budget) times a deep path could
+# still be tens of millions of cells (seconds of CPU). This aggregate budget
+# fails membership closed on such a crafted manifest. Real declarations use a
+# handful of short globs against a shallow path — far under this bound.
+_MAX_MATCH_CELLS = 2_000_000
+
 
 def _read_manifest_text(path: Path) -> Optional[str]:
     """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
@@ -103,7 +112,8 @@ class TestCommand:
     cwd: Optional[Path] = None
 
 
-def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -> bool:
+def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
+                                     cell_budget: Optional[list] = None) -> bool:
     """Match a package's path segments against a single workspace glob pattern.
 
     Supports the segment semantics workspace tools use: ``*`` matches exactly one
@@ -133,6 +143,12 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
         raise _PatternBudgetError
     rel = list(rel_parts)
     n, m = len(rel), len(pat_parts)
+    # Charge this match's DP-table size against a shared aggregate budget so that
+    # many long globs against a deep path cannot sum to tens of millions of cells.
+    if cell_budget is not None:
+        cell_budget[0] -= (n + 1) * (m + 1)
+        if cell_budget[0] < 0:
+            raise _PatternBudgetError
     # dp[i][j] is True when rel[i:] matches pat_parts[j:].
     dp = [[False] * (m + 1) for _ in range(n + 1)]
     dp[n][m] = True
@@ -354,7 +370,8 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
     return out
 
 
-def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
+def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
+                               cell_budget: Optional[list] = None) -> bool:
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
     semantics: at least one positive pattern matches and no ``!`` exclusion does.
 
@@ -367,6 +384,11 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
         return False  # hostile declaration size → membership unproven (fail closed)
     try:
         budget = [_MAX_BRACE_EXPANSION]  # shared across every glob below
+        # Aggregate DP-cell budget for matching. When the caller supplies one it is
+        # shared across the *entire* discovery walk (so re-evaluating the same glob
+        # set at each package boundary cannot sum to tens of millions of cells);
+        # otherwise a fresh per-call budget is used (direct/standalone callers).
+        cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
         positives, negatives = [], []
         for raw in globs:
             raw = str(raw).strip()
@@ -380,9 +402,9 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
                 negatives.extend(_expand_braces(raw[1:], budget))
             else:
                 positives.extend(_expand_braces(raw, budget))
-        if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
+        if not any(_relative_matches_workspace_glob(rel_parts, p, cells) for p in positives):
             return False
-        return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
+        return not any(_relative_matches_workspace_glob(rel_parts, n, cells) for n in negatives)
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
@@ -390,7 +412,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
         return False
 
 
-def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None) -> Optional[Path]:
+def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
+                        cell_budget: Optional[list] = None) -> Optional[Path]:
     """Return the ancestor workspace *root* that ``package_dir`` is a proven member
     of, or ``None`` when it is not a member of any ancestor workspace.
 
@@ -417,7 +440,7 @@ def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None) -> Opti
                 rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
             except (ValueError, OSError, RuntimeError):
                 rel_parts = ()
-            if rel_parts and _package_matches_workspace(rel_parts, globs):
+            if rel_parts and _package_matches_workspace(rel_parts, globs, cell_budget):
                 return ancestor
         if (ancestor / ".git").exists():
             break
@@ -639,6 +662,9 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     # Per-discovery cache so each ancestor manifest is parsed at most once even as
     # the walk revisits ancestors through _workspace_root_for (bounds O(n^2) reads).
     ws_cache: dict = {}
+    # Per-discovery aggregate DP-cell budget shared across every membership check
+    # in this walk, so repeated matching at each package boundary is bounded.
+    match_cells: list = [_MAX_MATCH_CELLS]
     # Deepest ancestor-workspace root the original leaf must still reach; walk
     # *through* intermediate independent package.json manifests until then.
     ceiling: Optional[Path] = None
@@ -659,7 +685,7 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # its own package.json can still chain outward.
         member_root: Optional[Path] = None
         if pkg_here or (ceiling is not None and search_dir == ceiling):
-            member_root = _workspace_root_for(search_dir, ws_cache)
+            member_root = _workspace_root_for(search_dir, ws_cache, match_cells)
             if member_root is not None and (ceiling is None or _is_strict_ancestor(member_root, ceiling)):
                 ceiling = member_root
         # Stop at the declaring workspace root, even when it has no package.json of

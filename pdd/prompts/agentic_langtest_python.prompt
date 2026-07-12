@@ -5,12 +5,18 @@ Write the pdd/agentic_langtest.py module.
 
 % Role & Scope
 A minimal utility module that provides language-specific test command utilities.
-For Python, it returns a pytest command. For all non-Python languages, it returns
-None to signal that agentic mode should handle test discovery and execution.
+`default_verify_cmd_for` resolves a test command by first consulting
+`language_format.csv`'s `run_test_command` for the language, then falling back to a
+pytest command for Python, and otherwise returning None so agentic mode handles
+test discovery and execution. Every returned command is executed with
+`bash -lc` / `shell=True`, so any path spliced into it MUST be shell-quoted
+(`shlex.quote`) — bare double quotes are insufficient because `"$(...)"` is still
+expanded inside them.
 
-This module is intentionally simple because non-Python languages use agentic mode
-for test running, where agents can explore the project structure and determine the
-appropriate test framework (Jest, JUnit, Go test, Cargo test, etc.) dynamically.
+This module is intentionally simple because languages without a known
+`run_test_command` use agentic mode for test running, where agents can explore the
+project structure and determine the appropriate test framework (Jest, JUnit, Go
+test, Cargo test, etc.) dynamically.
 
 % Requirements
 1. All functions must be fully type-hinted.
@@ -23,8 +29,18 @@ appropriate test framework (Jest, JUnit, Go test, Cargo test, etc.) dynamically.
 
 Returns a test command for the given language and test file.
 
-- **Python**: Returns a pytest command: `{sys.executable} -m pytest "{unit_test_file}" -q`
-- **All other languages**: Returns `None` to trigger agentic fallback mode
+- Resolution: (1) look the language up in `language_format.csv` and, if it has a
+  `run_test_command`, substitute the test-file path for its `{file}` placeholder;
+  (2) otherwise, for **Python**, return a pytest command of the form
+  `{sys.executable} -m pytest <test-file> -q`; (3) otherwise return `None` to
+  trigger agentic fallback mode.
+- **Shell safety (MUST):** the returned command is executed by pdd callers with
+  `subprocess.run(..., shell=True)`, so the substituted test-file path MUST be
+  shell-quoted (e.g. `shlex.quote`) — for BOTH the CSV substitution and the Python
+  fallback. Bare double quotes are insufficient: `"$(...)"` is still evaluated by
+  the shell inside double quotes, so an unquoted/naively-quoted path containing
+  spaces or shell metacharacters (`$()`, `;`, …) would be re-split or executed as
+  a command-injection vector.
 
 The function normalizes language to lowercase before comparison.
 

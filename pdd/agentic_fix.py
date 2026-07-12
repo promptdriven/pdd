@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,7 +128,18 @@ def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str]
     if not enabled:
         return True
     if verify_cmd:
-        cmd = verify_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(cwd))
+        # A user template (PDD_AGENTIC_VERIFY_CMD) has intended `{test}`/`{cwd}`
+        # placeholders → substitute them with SHELL-QUOTED values (executed via
+        # `bash -lc`). A command from `default_verify_cmd_for` is already finalized
+        # and shell-safe → run it as-is; re-substituting would splice into its
+        # existing quoting and inject when the resolved path contains a literal
+        # `{test}`/`{cwd}` plus shell metacharacters.
+        if os.getenv("PDD_AGENTIC_VERIFY_CMD"):
+            cmd = verify_cmd.replace(
+                "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
+            ).replace("{cwd}", shlex.quote(str(cwd)))
+        else:
+            cmd = verify_cmd
         return _run_testcmd(cmd, cwd)
     # Get language-appropriate run command from language_format.csv
     run_cmd = get_run_command_for_file(str(Path(unit_test_file).resolve()))
@@ -290,9 +302,16 @@ def run_agentic_fix(
         if _is_useless_error_content(error_content):
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
-                pre_cmd = os.getenv("PDD_AGENTIC_VERIFY_CMD") or default_verify_cmd_for(lang, unit_test_file)
+                env_tpl = os.getenv("PDD_AGENTIC_VERIFY_CMD")
+                pre_cmd = env_tpl or default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
-                    pre_cmd = pre_cmd.replace("{test}", str(Path(unit_test_file).resolve())).replace("{cwd}", str(working_dir))
+                    # Only a user template's `{test}`/`{cwd}` placeholders are
+                    # substituted (shell-quoted); a finalized default command runs
+                    # as-is so its quoting is not corrupted (injection).
+                    if env_tpl:
+                        pre_cmd = env_tpl.replace(
+                            "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
+                        ).replace("{cwd}", shlex.quote(str(working_dir)))
                     pre = subprocess.run(
                         ["bash", "-lc", pre_cmd],
                         capture_output=True, text=True, check=False,
