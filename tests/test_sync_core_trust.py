@@ -2,6 +2,8 @@
 
 import base64
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -25,6 +27,9 @@ from pdd.sync_core import (
 from pdd.sync_core.trust import ValidationEvidence
 from pdd.sync_core.finalize import attestation_signer_from_environment
 from pdd.sync_core.signer_process import run_signer
+from pdd.sync_core.certificate import RemoteCertificateSigner
+import pdd.sync_core.certificate as certificate_module
+import pdd.sync_core.trust as trust_module
 from pdd.sync_core.types import ObligationEvidence
 
 
@@ -132,6 +137,61 @@ def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
     with pytest.raises(subprocess.TimeoutExpired):
         run_signer((sys.executable, "-c", script), b"", timeout=0.1)
     assert time.monotonic() - started < 1.5
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="requires Linux stable process identity"
+)
+@pytest.mark.parametrize("adapter", ["attestation", "certificate"])
+def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
+) -> None:
+    pid_file = tmp_path / f"{adapter}.pid"
+    marker = tmp_path / f"{adapter}.survived"
+    detached = (
+        "import os,sys,time; "
+        "open(sys.argv[1], 'w').write(str(os.getpid())); "
+        "time.sleep(1); open(sys.argv[2], 'w').write('survived'); time.sleep(30)"
+    )
+    parent = (
+        "import os,subprocess,sys,time; env=dict(os.environ); "
+        "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]], "
+        "env=env, start_new_session=True, stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL); time.sleep(30)"
+    )
+    command = (sys.executable, "-c", parent, detached, str(pid_file), str(marker))
+    actual_run_signer = run_signer
+
+    def short_run(command_value, payload, *, timeout):
+        del timeout
+        return actual_run_signer(command_value, payload, timeout=0.1)
+
+    if adapter == "attestation":
+        monkeypatch.setattr(trust_module, "run_signer", short_run)
+        signer = RemoteAttestationSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(AttestationError, match="timed out"):
+            signer.issue(
+                AttestationRequest(
+                    "remote-attestation", _binding(),
+                    (ObligationEvidence("test", EvidenceOutcome.PASS),),
+                    "remote-nonce", NOW,
+                )
+            )
+    else:
+        monkeypatch.setattr(certificate_module, "run_signer", short_run)
+        signer = RemoteCertificateSigner(SIGNER.issuer, PUBLIC_KEY, command)
+        with pytest.raises(ValueError, match="timed out"):
+            signer.sign_bytes(b"payload")
+
+    deadline = time.monotonic() + 1
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    time.sleep(1.1)
+    assert not marker.exists()
 
 
 def test_attestation_environment_forbids_local_private_key(monkeypatch) -> None:

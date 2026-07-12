@@ -1,6 +1,7 @@
 """Tests for pass-only trusted runner normalization and self-certification guards."""
 
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -888,6 +889,33 @@ def test_candidate_cannot_forge_worker_outputs_discovered_from_script_path(
     assert executions[0].outcome is not EvidenceOutcome.PASS
 
 
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux protected runner",
+)
+def test_candidate_cannot_recursively_forge_any_result_channel(tmp_path: Path) -> None:
+    content = (
+        "import os, sys\nfrom pathlib import Path\n"
+        "trusted = Path(sys.argv[0]).resolve().parent\n"
+        "for path in trusted.rglob('*'):\n"
+        "    if path.is_file() and (path.suffix in {'.json', '.xml'} or "
+        "path.name in {'node-ids.json', 'junit.xml'}):\n"
+        "        try:\n"
+        "            payload = ('[\"tests/test_widget.py::test_widget\"]' if "
+        "path.suffix == '.json' else "
+        "'<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>')\n"
+        "            path.write_text(payload)\n"
+        "        except OSError:\n"
+        "            pass\n"
+        "if Path(sys.argv[0]).name in {'collection_worker.py', 'execution_worker.py'}:\n"
+        "    os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
 def test_runner_identity_fails_closed_for_dynamic_product_loader(tmp_path: Path) -> None:
     root, _commit = _repository(
         tmp_path, "import product\ndef test_widget(): assert product.value == 1\n"
@@ -902,6 +930,36 @@ def test_runner_identity_fails_closed_for_dynamic_product_loader(tmp_path: Path)
     profile = _profile(root, commit, (PurePosixPath("product.py"),))
     with pytest.raises(ValueError, match="dynamic product dependency"):
         runner_identity_digest(profile, root=root, ref=commit)
+
+
+@pytest.mark.parametrize(
+    "product",
+    [
+        "loader = __builtins__['__import__']\nvalue = loader('helper').value\n",
+        "loader = getattr(__builtins__, '__getitem__')('__import__')\n"
+        "value = loader('helper').value\n",
+    ],
+)
+def test_runner_identity_fails_closed_for_aliased_reflective_loader(
+    tmp_path: Path, product: str
+) -> None:
+    root, _commit = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.value == 1\n"
+    )
+    (root / "product.py").write_text(product)
+    (root / "helper.py").write_text("value = 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "aliased product loader")
+    before = _git(root, "rev-parse", "HEAD")
+    profile = _profile(root, before, (PurePosixPath("product.py"),))
+    before_digest = runner_identity_digest(profile, root=root, ref=before)
+    (root / "helper.py").write_text("value = 2\n")
+    _git(root, "add", "helper.py")
+    _git(root, "commit", "-q", "-m", "change hidden helper")
+    after = _git(root, "rev-parse", "HEAD")
+    with pytest.raises(ValueError, match="dynamic product dependency"):
+        runner_identity_digest(profile, root=root, ref=after)
+    assert before_digest
 
 
 def test_runner_identity_binds_measured_runtime_and_checker(
@@ -944,6 +1002,40 @@ def test_runner_identity_is_stable_across_interpreter_prefixes(
     first = runner_identity_digest(profile, root=root, ref=commit)
     monkeypatch.setattr("pdd.sync_core.runner.sys.executable", "/venv-b/bin/python")
     assert runner_identity_digest(profile, root=root, ref=commit) == first
+
+
+def test_runner_identity_binds_actual_supervisor_bytes(tmp_path: Path, monkeypatch) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    first = runner_identity_digest(profile, root=root, ref=commit)
+    source = Path(__file__).parents[1] / "pdd/sync_core/supervisor.py"
+    changed = tmp_path / "supervisor.py"
+    changed.write_bytes(source.read_bytes() + b"\n# changed checker semantics\n")
+    monkeypatch.setattr("pdd.sync_core.supervisor.__file__", str(changed))
+    assert runner_identity_digest(profile, root=root, ref=commit) != first
+
+
+def test_runner_identity_binds_actual_pytest_bytes_and_ignores_prefix(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    pytest_source = Path(pytest.__file__).resolve()
+    first_prefix = tmp_path / "venv-a"
+    second_prefix = tmp_path / "venv-b"
+    relative = Path("lib/python/site-packages/pytest/__init__.py")
+    first_file = first_prefix / relative
+    second_file = second_prefix / relative
+    first_file.parent.mkdir(parents=True)
+    second_file.parent.mkdir(parents=True)
+    first_file.write_bytes(pytest_source.read_bytes())
+    second_file.write_bytes(pytest_source.read_bytes())
+    monkeypatch.setattr(pytest, "__file__", str(first_file))
+    first = runner_identity_digest(profile, root=root, ref=commit)
+    monkeypatch.setattr(pytest, "__file__", str(second_file))
+    assert runner_identity_digest(profile, root=root, ref=commit) == first
+    second_file.write_bytes(second_file.read_bytes() + b"\n# changed pytest semantics\n")
+    assert runner_identity_digest(profile, root=root, ref=commit) != first
 
 
 def test_pytest_plugin_guard_ignores_non_pytest_preview_prose(tmp_path: Path) -> None:
