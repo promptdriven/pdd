@@ -178,10 +178,7 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
         "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
         "child=subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
         "env=env, start_new_session=True, stdout=subprocess.DEVNULL, "
-        "stderr=subprocess.DEVNULL); "
-        "status=open(f'/proc/{child.pid}/status').read().splitlines(); "
-        "nspid=next(line for line in status if line.startswith('NSpid:')); "
-        "print(nspid.split()[1], flush=True); time.sleep(30)"
+        "stderr=subprocess.DEVNULL); print('started', flush=True); time.sleep(30)"
     )
     command = (sys.executable, "-c", parent, detached, str(marker))
     actual_run_signer = run_signer
@@ -215,9 +212,19 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
     assert timed_out and timed_out[0].output, (
         timed_out[0].stderr if timed_out else "signer did not time out"
     )
-    pid = int(timed_out[0].output.strip())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert timed_out[0].output.strip() == b"started"
+    marker_bytes = str(marker).encode()
+    escaped = []
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit():
+            continue
+        try:
+            command_line = (process / "cmdline").read_bytes()
+        except (OSError, PermissionError):
+            continue
+        if marker_bytes in command_line:
+            escaped.append(process.name)
+    assert not escaped
     time.sleep(1.1)
     assert not marker.exists()
 
