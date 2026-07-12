@@ -175,6 +175,14 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
             # callers run the command string with ``shell=True`` — an unquoted path
             # with spaces or shell metacharacters would otherwise be re-split or
             # (for bracket globs / ``$()``) reinterpreted by the shell.
+            #
+            # ``command`` is a POSIX-shell command string, matching how every pdd
+            # caller executes verify commands (``subprocess.run(..., shell=True)``
+            # or ``shlex.split``). ``shlex.quote`` is therefore the correct quoting
+            # here. Making runner execution safe under Windows ``cmd.exe`` would
+            # require moving all callers to an argv list + ``shell=False`` — a
+            # pre-existing, cross-cutting change to pdd's command-as-string
+            # convention that is out of scope for runner detection.
             if runner_cmd.startswith("npx playwright"):
                 target = shlex.quote(re.escape(resolved))
             else:
