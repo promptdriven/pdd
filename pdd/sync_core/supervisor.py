@@ -115,9 +115,11 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
     directories = tuple(directory for _label, directory in _runtime_directories())
     roots.update(directories)
     executable = Path(shutil.which(command[0]) or command[0])
+    resolved_executable = executable.resolve()
     if not executable.is_relative_to(cwd):
         roots.add(executable)
-        roots.add(executable.resolve())
+    if not resolved_executable.is_relative_to(cwd):
+        roots.add(resolved_executable)
     for _label, path in released_runtime_closure_paths():
         if path.name in {"bwrap", "setpriv", "sudo", "mount", "umount"} or any(
             path.is_relative_to(directory) for directory in directories
