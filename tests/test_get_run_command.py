@@ -96,8 +96,20 @@ class TestGetRunCommandForFile:
         assert get_run_command_for_file('/path/to/main.go') == 'go run /path/to/main.go'
 
     def test_get_run_command_for_file_with_spaces(self, mock_environment, mock_csv_file):
-        """Tests get_run_command_for_file for files with spaces in path."""
-        assert get_run_command_for_file('/path/to/my script.py') == 'python /path/to/my script.py'
+        """A path with spaces must be shell-quoted (callers run it via bash -lc)."""
+        import shlex
+        result = get_run_command_for_file('/path/to/my script.py')
+        assert result == "python '/path/to/my script.py'"
+        assert shlex.split(result) == ['python', '/path/to/my script.py']
+
+    def test_get_run_command_for_file_shell_metacharacters_not_injected(self, mock_environment, mock_csv_file):
+        """A path with $()/;/spaces must not inject under bash -lc / shell=True."""
+        import shlex
+        evil = '/repo/$(touch PWN)/a; b.py'
+        result = get_run_command_for_file(evil)
+        argv = shlex.split(result)
+        assert argv == ['python', evil], (result, argv)
+        assert '$(touch' not in argv, argv
 
     def test_get_run_command_for_non_executable(self, mock_environment, mock_csv_file):
         """Tests get_run_command_for_file for non-executable files."""

@@ -225,11 +225,11 @@ class TestVerifyAndLog:
         )
         assert result is True
 
-    def test_verify_and_log_env_template_shell_quotes_path(self, tmp_path, monkeypatch):
-        """A PDD_AGENTIC_VERIFY_CMD template's {test}/{cwd} substitution is shell-
-        quoted, so a maliciously named test path cannot inject under `bash -lc`."""
+    def test_verify_and_log_template_shell_quotes_path(self, tmp_path):
+        """A template command's {test}/{cwd} substitution is shell-quoted, so a
+        maliciously named test path cannot inject under `bash -lc`. Provenance is
+        explicit (verify_cmd_is_template), not inferred from the environment."""
         import shlex
-        monkeypatch.setenv("PDD_AGENTIC_VERIFY_CMD", "pytest {test}")
         evil = tmp_path / "{test}';touch PWN;echo '"
         evil.mkdir()
         test_file = evil / "a.py"
@@ -237,17 +237,17 @@ class TestVerifyAndLog:
         captured = {}
         with patch("pdd.agentic_fix._run_testcmd",
                    side_effect=lambda cmd, cwd: captured.update(cmd=cmd) or True):
-            _verify_and_log(str(test_file), tmp_path, verify_cmd="pytest {test}", enabled=True)
+            _verify_and_log(str(test_file), tmp_path, verify_cmd="pytest {test}",
+                            enabled=True, verify_cmd_is_template=True)
         argv = shlex.split(captured["cmd"])
         assert str(test_file.resolve()) in argv, (captured["cmd"], argv)
         assert "touch" not in argv, argv
 
-    def test_verify_and_log_finalized_command_is_not_resubstituted(self, tmp_path, monkeypatch):
-        """Without the env template, a finalized command (e.g. from
-        default_verify_cmd_for) is executed as-is — no {test}/{cwd} re-substitution
-        that could corrupt its quoting when the path contains a literal {test}."""
+    def test_verify_and_log_finalized_command_is_not_resubstituted(self, tmp_path):
+        """A finalized command (verify_cmd_is_template=False, the default) is
+        executed as-is — no {test}/{cwd} re-substitution that could corrupt its
+        quoting when the resolved path contains a literal {test}."""
         import shlex
-        monkeypatch.delenv("PDD_AGENTIC_VERIFY_CMD", raising=False)
         evil = tmp_path / "{test}';touch PWN;echo '"
         evil.mkdir()
         test_file = evil / "a.py"

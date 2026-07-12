@@ -2,6 +2,7 @@
 
 import os
 import csv
+import shlex
 from pdd.path_resolution import get_default_resolver
 
 
@@ -72,4 +73,8 @@ def get_run_command_for_file(file_path: str) -> str:
     if not run_command_template:
         return ''
 
-    return run_command_template.replace('{file}', file_path)
+    # Shell-quote the substituted path: callers run this command with `bash -lc`
+    # / `shell=True`, so an unquoted path with spaces or shell metacharacters
+    # (e.g. `/repo/$(touch PWN)/x.py`) would be re-split or executed via command
+    # substitution — a command-injection vector.
+    return run_command_template.replace('{file}', shlex.quote(file_path))
