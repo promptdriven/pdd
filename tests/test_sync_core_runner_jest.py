@@ -1,5 +1,6 @@
 """Contract tests for the fail-closed trusted Jest adapter."""
 
+import json
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from pdd.sync_core import (
     UnitId,
     VerificationObligation,
     VerificationProfile,
+    runner_identity_digest,
     run_profile,
 )
 from pdd.sync_core.runner import jest_validator_config_digest
@@ -24,6 +26,27 @@ from pdd.sync_core.runner import _local_javascript_imports
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_js.prompt"), "javascript")
 IDENTITY = "tests/widget.test.js::widget works"
+
+
+@pytest.fixture(autouse=True)
+def _local_managed_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Execute adapter unit tests without requiring a host namespace sandbox."""
+    def execute(command, *, cwd, timeout, env, **_limits):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess(command, 124, "", "timeout")
+        return result, False
+
+    monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", execute)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -64,21 +87,36 @@ def _repository(tmp_path: Path, *, mode: str = "pass", config: str = '{"testMatc
     return root, _git(root, "rev-parse", "HEAD")
 
 
-def _run(root: Path, base: str, head: str, fake_jest: Path, timeout: int = 2):
+def _run(
+    root: Path,
+    base: str,
+    head: str,
+    fake_jest: Path,
+    timeout: int = 2,
+    *,
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+    command: tuple[str, ...] | None = None,
+):
     paths = (PurePosixPath("tests/widget.test.js"),)
     try:
-        config_digest = jest_validator_config_digest(root, base, paths)
+        config_digest = jest_validator_config_digest(
+            root, base, paths, code_under_test_paths
+        )
     except ValueError:
         config_digest = "invalid-jest-config"
     obligation = VerificationObligation(
         "jest", "test", "jest", config_digest,
         ("REQ-1",), paths,
+        code_under_test_paths=code_under_test_paths,
     )
     profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
     return run_profile(
         root, profile, RunBinding("snapshot-v1", base, head),
         AttestationIssue(AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce", datetime(2026, 7, 10, tzinfo=timezone.utc)),
-        config=RunnerConfig(timeout_seconds=timeout, jest_command=(sys.executable, str(fake_jest))),
+        config=RunnerConfig(
+            timeout_seconds=timeout,
+            jest_command=command or (sys.executable, str(fake_jest)),
+        ),
     )
 
 
@@ -123,6 +161,39 @@ def test_jest_removed_protected_test_cannot_pass(tmp_path: Path) -> None:
     _git(root, "commit", "-q", "-m", "remove protected test")
     _envelope, executions = _run(root, base, _git(root, "rev-parse", "HEAD"), _fake_jest(tmp_path))
     assert executions[0].outcome in {EvidenceOutcome.ERROR, EvidenceOutcome.QUARANTINED}
+
+
+def test_jest_application_import_is_excluded_from_support_closure(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    application = PurePosixPath("src/widget.js")
+    (root / "src").mkdir()
+    (root / application).write_text("module.exports = { value: 1 };\n")
+    (root / "tests/widget.test.js").write_text(
+        "const widget = require('../src/widget');\n"
+        "test('widget works', () => expect(widget.value).toBe(1));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "test real application import")
+    base = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    base_digest = jest_validator_config_digest(root, base, paths, (application,))
+
+    (root / application).write_text("module.exports = { value: 2 };\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change application implementation")
+    head = _git(root, "rev-parse", "HEAD")
+
+    assert jest_validator_config_digest(root, head, paths, (application,)) == base_digest
+    _envelope, executions = _run(
+        root,
+        base,
+        head,
+        _fake_jest(tmp_path),
+        code_under_test_paths=(application,),
+    )
+    assert executions[0].outcome is EvidenceOutcome.PASS
 
 
 @pytest.mark.parametrize("path", ["jest.config.json", "setup.js", "transform.js"])
@@ -269,6 +340,50 @@ def test_jest_parent_directory_imports_change_validator_digest(tmp_path: Path) -
     head_digest = jest_validator_config_digest(root, _git(root, "rev-parse", "HEAD"), paths)
 
     assert head_digest != base_digest
+
+
+@pytest.mark.parametrize("transitive", [False, True])
+def test_jest_rejects_unresolved_dynamic_local_loads(
+    tmp_path: Path, transitive: bool
+) -> None:
+    root, _commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    dynamic_source = "const target = './dynamic'; require(target);\n"
+    if transitive:
+        (root / "tests/widget.test.js").write_text(
+            "require('./helper');\n"
+            "test('widget works', () => expect(true).toBe(true));\n"
+        )
+        (root / "tests/helper.js").write_text(dynamic_source)
+    else:
+        (root / "tests/widget.test.js").write_text(dynamic_source)
+    (root / "tests/dynamic.js").write_text("module.exports = true;\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add dynamic local load")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    with pytest.raises(ValueError, match="dynamic local require/import"):
+        jest_validator_config_digest(root, commit, paths)
+
+
+def test_jest_dynamic_load_detection_ignores_comments_and_strings(
+    tmp_path: Path,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    (root / "tests/helper.js").write_text("module.exports = true;\n")
+    (root / "tests/widget.test.js").write_text(
+        "const note = 'require(dynamic)';\n"
+        "// import(dynamic)\n"
+        "/* require(otherDynamic) */\n"
+        "const helper = require('./helper');\n"
+        "test('widget works', () => expect(helper).toBe(true));\n"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "retain static Jest imports")
+    commit = _git(root, "rev-parse", "HEAD")
+
+    assert jest_validator_config_digest(root, commit, paths)
 
 
 def test_jest_config_reference_index_candidate_changes_validator_digest(tmp_path: Path) -> None:
@@ -447,6 +562,137 @@ def test_pathless_jest_script_operand_is_not_resolved_from_candidate(
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "pathless" in executions[0].detail
+
+
+def test_jest_rejects_package_launcher_indirection(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    launcher = tmp_path / "npx"
+    launcher.write_text("#!/bin/sh\nexit 0\n")
+    launcher.chmod(0o755)
+
+    _envelope, executions = _run(
+        root,
+        commit,
+        commit,
+        _fake_jest(tmp_path),
+        command=(str(launcher), "jest"),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "launcher indirection" in executions[0].detail
+
+
+def test_jest_runner_identity_binds_external_toolchain(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    obligation = VerificationObligation(
+        "jest",
+        "test",
+        "jest",
+        jest_validator_config_digest(root, commit, paths),
+        ("REQ-1",),
+        paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+    package = tmp_path / "external" / "node_modules" / "jest"
+    entrypoint = package / "bin/jest.js"
+    dependency = package / "build/index.js"
+    entrypoint.parent.mkdir(parents=True)
+    dependency.parent.mkdir(parents=True)
+    entrypoint.write_text("require('../build');\n")
+    dependency.write_text("module.exports = 1;\n")
+    config = RunnerConfig(jest_command=(sys.executable, str(entrypoint)))
+    before = runner_identity_digest(profile, root=root, ref=commit, config=config)
+
+    dependency.write_text("module.exports = 2;\n")
+
+    assert runner_identity_digest(profile, root=root, ref=commit, config=config) != before
+
+
+@pytest.mark.parametrize("failure", ["missing", "non-executable", "os-error"])
+def test_jest_normalizes_launch_failures_as_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    root, commit = _repository(tmp_path)
+    command = tmp_path / "external-jest"
+    if failure != "missing":
+        command.write_text("#!/bin/sh\nexit 0\n")
+        command.chmod(0o755 if failure == "os-error" else 0o644)
+    if failure == "os-error":
+        def fail_launch(*_args, **_kwargs):
+            raise OSError("simulated spawn failure")
+
+        monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", fail_launch)
+
+    _envelope, executions = _run(
+        root,
+        commit,
+        commit,
+        _fake_jest(tmp_path),
+        command=(str(command),),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+def test_jest_uses_managed_containment_and_cleans_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setenv("PDD_ATTESTATION_SIGNER_COMMAND", "must-not-leak")
+    monkeypatch.setenv("PDD_CERTIFICATE_ISSUER", "must-not-leak")
+    monkeypatch.setenv("PDD_RELEASED_CHECKER_COMMAND", "must-not-leak")
+
+    def inspect_managed(command, **kwargs):
+        environment = kwargs["env"]
+        output = Path(environment["PDD_TRUSTED_JEST_OUTPUT"])
+        output.write_text(
+            json.dumps(
+                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+            )
+        )
+        calls.append({"command": command, **kwargs})
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", inspect_managed)
+    _envelope, executions = _run(root, commit, commit, _fake_jest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert len(calls) == 2
+    for call in calls:
+        environment = call["env"]
+        assert not {
+            "PDD_ATTESTATION_SIGNER_COMMAND",
+            "PDD_CERTIFICATE_ISSUER",
+            "PDD_RELEASED_CHECKER_COMMAND",
+        } & environment.keys()
+        assert call["cwd"] in call["readable_roots"]
+        assert call["cwd"] not in call["writable_roots"]
+        assert Path(environment["PDD_TRUSTED_JEST_OUTPUT"]) in call["writable_files"]
+        assert not Path(environment["HOME"]).exists()
+
+
+def test_jest_surviving_descendant_is_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+
+    def surviving(command, **kwargs):
+        Path(kwargs["env"]["PDD_TRUSTED_JEST_OUTPUT"]).write_text(
+            json.dumps(
+                {"tests": [{"identity": IDENTITY, "status": "passed"}]}
+            )
+        )
+        return subprocess.CompletedProcess(command, 0, "", ""), True
+
+    monkeypatch.setattr("pdd.sync_core.runner._managed_subprocess", surviving)
+    _envelope, executions = _run(root, commit, commit, _fake_jest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "surviving process-group descendant" in executions[0].detail
 
 
 def test_jest_subprocess_cannot_read_secret(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

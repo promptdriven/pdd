@@ -31,7 +31,7 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
+from .isolation import untrusted_child_environment
 from .git_io import read_git_blob
 from .types import (
     EvidenceOutcome,
@@ -603,18 +603,71 @@ def _jest_config_references(config: object) -> set[PurePosixPath]:
     return references
 
 
+def _javascript_syntax_mask(text: str) -> str:
+    """Blank JS comments and string bodies while preserving quote boundaries."""
+    masked = list(text)
+    index = 0
+    while index < len(text):
+        if text.startswith("//", index):
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = len(text) if end < 0 else end + 2
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        if text[index] in {'"', "'", "`"}:
+            quote = text[index]
+            index += 1
+            while index < len(text):
+                if text[index] == "\\":
+                    masked[index] = " "
+                    if index + 1 < len(text):
+                        masked[index + 1] = " "
+                    index += 2
+                    continue
+                if text[index] == quote:
+                    break
+                masked[index] = " "
+                index += 1
+            index += 1
+            continue
+        index += 1
+    return "".join(masked)
+
+
 def _local_javascript_imports(
     root: Path, ref: str, source_path: PurePosixPath, source: bytes
 ) -> set[PurePosixPath]:
-    """Resolve literal relative JS imports without executing candidate modules."""
+    """Resolve literal local JS imports and reject unresolved dynamic loads."""
     try:
         text = source.decode("utf-8")
-    except UnicodeDecodeError:
-        return set()
-    imports = re.findall(
-        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"](\.{1,2}/[^'\"]+)['\"]",
-        text,
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"Jest support module is not UTF-8: {source_path.as_posix()}"
+        ) from exc
+    mask = _javascript_syntax_mask(text)
+    dynamic_load = re.search(
+        r"(?<![.\w$])(?:require|import)\s*\(\s*(?!['\"])", mask
     )
+    if dynamic_load is not None:
+        raise ValueError(
+            "dynamic local require/import is not bound by the Jest adapter: "
+            + source_path.as_posix()
+        )
+    import_pattern = re.compile(
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]"
+        r"(\.{1,2}/[^'\"]+)['\"]"
+    )
+    imports = [
+        match.group(1)
+        for match in import_pattern.finditer(text)
+        if not mask[match.start()].isspace()
+    ]
     resolved: set[PurePosixPath] = set()
     for item in imports:
         candidate = _normalize_repo_relative_path(
@@ -668,12 +721,16 @@ def _read_javascript_support_blob(
 
 
 def _jest_support_closure(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path,
+    ref: str,
+    test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     """Return static config and transitive local Jest support modules."""
     config_path, config = _jest_config(root, ref)
     paths = {config_path}
     pending = list(test_paths) + list(_jest_config_references(config))
+    product_paths = set(code_under_test_paths)
     visited: set[PurePosixPath] = set()
     while pending:
         path = pending.pop()
@@ -692,7 +749,8 @@ def _jest_support_closure(
             if path.name == "package.json" and isinstance(nested_config, dict):
                 nested_config = nested_config.get("jest", {})
             pending.extend(_jest_config_references(nested_config) - visited)
-        pending.extend(_local_javascript_imports(root, ref, path, source) - visited)
+        imports = _local_javascript_imports(root, ref, path, source)
+        pending.extend(imports - visited - product_paths)
     return tuple(
         (path, read_git_blob(root, ref, path))
         for path in sorted(paths)
@@ -701,11 +759,16 @@ def _jest_support_closure(
 
 
 def jest_validator_config_digest(
-    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...]
+    root: Path,
+    ref: str,
+    test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
 ) -> str:
     """Hash static Jest config and executable local support closure."""
     digest = hashlib.sha256()
-    for path, content in _jest_support_closure(root, ref, test_paths):
+    for path, content in _jest_support_closure(
+        root, ref, test_paths, code_under_test_paths
+    ):
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
     return digest.hexdigest()
 
@@ -755,8 +818,14 @@ def _jest_support_digest(
         if obligation.validator_id == "jest"
         for path in obligation.artifact_paths
     )
+    product = tuple(
+        path
+        for obligation in profile.obligations
+        if obligation.validator_id == "jest"
+        for path in obligation.code_under_test_paths
+    )
     try:
-        closure = _jest_support_closure(root, ref, tests)
+        closure = _jest_support_closure(root, ref, tests, product)
     except ValueError:
         return "invalid-jest-closure", ()
     digest = hashlib.sha256()
@@ -904,17 +973,16 @@ def _command_part_identity(root: Path, part: str) -> str:
     return _file_identity(resolved) if resolved.exists() else part
 
 
-def _is_script_like_operand(value: str) -> bool:
-    """Return true for argv operands that are likely executable script paths."""
-    return Path(value).suffix in _JAVASCRIPT_SUFFIXES + (".py",)
-
-
 def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
     """Bind explicitly supplied validator commands to signed runner evidence."""
     payload: dict[str, object] = {}
     if config.jest_command is not None:
         payload["jest"] = [
             _command_part_identity(root, part) for part in config.jest_command
+        ]
+        payload["jest_toolchain"] = [
+            _directory_identity(path)
+            for path in _jest_toolchain_roots(config.jest_command)
         ]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -1207,18 +1275,7 @@ def _pytest_exit_outcome(returncode: int, output: str) -> tuple[EvidenceOutcome,
 
 def _jest_environment(home: Path) -> dict[str, str]:
     """Return a credential-free, non-ambient environment for Jest."""
-    return {
-        key: value
-        for key, value in os.environ.items()
-        if not any(marker in key.upper() for marker in SECRET_ENV_MARKERS)
-        and not key.startswith(("JEST_", "NODE_", "npm_config_", "NPM_CONFIG_"))
-        and key not in {"HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"}
-    } | {
-        "HOME": str(home),
-        "XDG_CONFIG_HOME": str(home / "config"),
-        "XDG_CACHE_HOME": str(home / "cache"),
-        "NODE_ENV": "test",
-    }
+    return untrusted_child_environment(home=home, extra={"NODE_ENV": "test"})
 
 
 def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
@@ -1226,6 +1283,34 @@ def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     if config.jest_command is not None:
         return config.jest_command
     return None
+
+
+def _directory_identity(root: Path) -> str:
+    """Hash every regular file in an external validator package directory."""
+    digest = hashlib.sha256()
+    try:
+        paths = sorted(path for path in root.rglob("*") if path.is_file())
+        for path in paths:
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+            digest.update(path.read_bytes() + b"\0")
+    except OSError:
+        return _file_identity(root)
+    return digest.hexdigest()
+
+
+def _jest_toolchain_roots(command: tuple[str, ...]) -> tuple[Path, ...]:
+    """Return external package roots needed by an absolute Jest entry point."""
+    roots: set[Path] = set()
+    for part in command[1:]:
+        path = Path(part).expanduser()
+        if not path.is_absolute():
+            continue
+        resolved = path.resolve()
+        for parent in resolved.parents:
+            if parent.parent.name == "node_modules":
+                roots.add(parent)
+                break
+    return tuple(sorted(roots))
 
 
 def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bool:
@@ -1242,6 +1327,7 @@ def _command_uses_candidate_checkout(root: Path, command: tuple[str, ...]) -> bo
 
 
 def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    # pylint: disable=too-many-return-statements,too-many-branches
     """Return a fail-closed reason for unprotected explicit validator argv."""
     if not command:
         return "explicit validator command is empty"
@@ -1250,6 +1336,12 @@ def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None
     executable = Path(command[0]).expanduser()
     if not executable.is_absolute():
         return "explicit validator command executable must be an absolute path"
+    if executable.name.casefold() in {"npx", "npm", "pnpm", "yarn", "bunx", "env"}:
+        return "validator launcher indirection is not trusted"
+    if not executable.is_file():
+        return "explicit validator command executable is missing"
+    if not os.access(executable, os.X_OK):
+        return "explicit validator command executable is not executable"
     path_operands.append(executable)
     expect_module_operand = False
     for part in command[1:]:
@@ -1267,17 +1359,17 @@ def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None
             continue
         path = Path(part).expanduser()
         if not path.is_absolute() and "/" not in part:
-            if _is_script_like_operand(part):
-                return (
-                    "pathless validator script operand is not trusted; use an "
-                    "absolute external path"
-                )
-            continue
+            return (
+                "pathless validator entry point operand is not trusted; use an "
+                "absolute digest-bound external path"
+            )
         path_operands.append(path if path.is_absolute() else root / path)
     for operand in path_operands:
         resolved = operand.resolve()
         if _path_is_relative_to(resolved, candidate_root):
             return "explicit validator command inside the candidate checkout is not trusted"
+        if not resolved.is_file():
+            return "explicit validator command path is missing"
     return None
 
 
@@ -1353,6 +1445,7 @@ def _run_jest(
     root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
+    # pylint: disable=too-many-return-statements
     """Run exact protected Jest paths using a temporary trusted reporter."""
     command_prefix = _jest_command(config)
     if command_prefix is None:
@@ -1382,9 +1475,15 @@ def _run_jest(
         ), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-jest-") as directory:
         temporary = Path(directory)
-        reporter = temporary / "reporter.cjs"
-        output = temporary / "results.json"
+        controllers = temporary / f"controller-{os.urandom(16).hex()}"
+        controllers.mkdir(mode=0o700)
+        scratch = temporary / "scratch"
+        home = scratch / "home"
+        home.mkdir(mode=0o700, parents=True)
+        reporter = controllers / "reporter.cjs"
+        output = controllers / "results.json"
         reporter.write_text(_JEST_REPORTER, encoding="utf-8")
+        output.touch(mode=0o600)
         command = [
             *command_prefix,
             *(path.as_posix() for path in paths),
@@ -1396,19 +1495,50 @@ def _run_jest(
             json.dumps(command, separators=(",", ":")).encode()
         ).hexdigest()
         try:
-            result = subprocess.run(
+            result, surviving = _managed_subprocess(
                 command,
                 cwd=root,
-                capture_output=True,
-                text=True,
-                check=False,
                 timeout=timeout_seconds,
-                env=_jest_environment(temporary)
+                env=_jest_environment(home)
                 | {"PDD_TRUSTED_JEST_OUTPUT": str(output)},
+                writable_roots=(scratch,),
+                writable_files=(output,),
+                readable_roots=(
+                    root,
+                    reporter,
+                    *(
+                        Path(part).expanduser().resolve()
+                        for part in command_prefix[1:]
+                        if Path(part).expanduser().is_absolute()
+                    ),
+                    *_jest_toolchain_roots(command_prefix),
+                ),
             )
-        except subprocess.TimeoutExpired:
+        except OSError as exc:
+            return RunnerExecution(
+                "jest",
+                EvidenceOutcome.ERROR,
+                digest,
+                f"Jest process launch failed: {exc}",
+            ), ()
+        if surviving:
+            return RunnerExecution(
+                "jest",
+                EvidenceOutcome.ERROR,
+                digest,
+                "Jest left a surviving process-group descendant",
+            ), ()
+        if result.returncode == 124:
             return RunnerExecution(
                 "jest", EvidenceOutcome.TIMEOUT, digest, "Jest execution timed out"
+            ), ()
+        if result.returncode >= 125:
+            diagnostic = (result.stderr or result.stdout).strip()[-500:]
+            detail = "protected sandbox rejected Jest execution"
+            if diagnostic:
+                detail += f": {diagnostic}"
+            return RunnerExecution(
+                "jest", EvidenceOutcome.ERROR, digest, detail
             ), ()
         outcome, detail, identities = _jest_result(output, result.returncode, expected)
         return RunnerExecution("jest", outcome, digest, detail), identities
@@ -1712,16 +1842,22 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
         )
-    digest_function = (
-        pytest_validator_config_digest
-        if obligation.validator_id == "pytest"
-        else jest_validator_config_digest
-    )
     try:
-        expected_config_digests = {
-            digest_function(root, ref, obligation.artifact_paths)
-            for ref in (base_sha, head_sha)
-        }
+        if obligation.validator_id == "pytest":
+            expected_config_digests = {
+                pytest_validator_config_digest(root, ref, obligation.artifact_paths)
+                for ref in (base_sha, head_sha)
+            }
+        else:
+            expected_config_digests = {
+                jest_validator_config_digest(
+                    root,
+                    ref,
+                    obligation.artifact_paths,
+                    obligation.code_under_test_paths,
+                )
+                for ref in (base_sha, head_sha)
+            }
     except ValueError as exc:
         return RunnerExecution(
             obligation.obligation_id,
