@@ -677,6 +677,7 @@ def _trusted_collection_runner(
     """Create a process-separated checker and candidate collection worker."""
     worker = directory / "collection_worker.py"
     worker_output = directory / "candidate-node-ids.json"
+    worker_output.touch(mode=0o600)
     worker.write_text(
         "\n".join(
             (
@@ -712,7 +713,7 @@ def _trusted_collection_runner(
             "import pathlib, subprocess, sys",
             f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
             f"source = pathlib.Path({json.dumps(str(worker_output))})",
-            "if result.returncode != 0 or not source.is_file(): raise SystemExit(1)",
+            "if result.returncode not in (0, 5) or not source.stat().st_size: raise SystemExit(1)",
             f"pathlib.Path({json.dumps(str(collection_output))}).write_bytes(source.read_bytes())",
             "",)), encoding="utf-8",
     )
@@ -725,6 +726,7 @@ def _trusted_execution_runner(
     """Create a checker that never imports candidate code or pytest."""
     worker = directory / "execution_worker.py"
     worker_junit = directory / "candidate-junit.xml"
+    worker_junit.touch(mode=0o600)
     worker.write_text(
         "\n".join((
             "import os, sys", "import pytest",
@@ -740,8 +742,9 @@ def _trusted_execution_runner(
             "import pathlib, subprocess, sys",
             f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
             f"source = pathlib.Path({json.dumps(str(worker_junit))})",
-            "if result.returncode != 0 or not source.is_file(): raise SystemExit(1)",
+            "if not source.stat().st_size: raise SystemExit(1)",
             f"pathlib.Path({json.dumps(str(junit))}).write_bytes(source.read_bytes())",
+            "raise SystemExit(result.returncode)",
             "",)), encoding="utf-8",
     )
     return checker, worker_junit
