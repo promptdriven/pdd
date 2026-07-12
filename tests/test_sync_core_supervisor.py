@@ -18,8 +18,33 @@ from pdd.sync_core.supervisor import (
     _live_processes,
     _sandbox_library_path,
     _sandbox_command,
+    _runtime_directories,
     run_supervised,
 )
+
+
+def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stdlib = tmp_path / "python" / "lib"
+    purelib = stdlib / "site-packages"
+    platlib = tmp_path / "venv" / "site-packages"
+    purelib.mkdir(parents=True)
+    platlib.mkdir(parents=True)
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.sysconfig.get_paths",
+        lambda: {
+            "stdlib": str(stdlib),
+            "platstdlib": str(stdlib),
+            "purelib": str(purelib),
+            "platlib": str(platlib),
+        },
+    )
+
+    assert _runtime_directories() == (
+        ("python-runtime/stdlib", stdlib),
+        ("python-runtime/platlib", platlib),
+    )
 
 
 def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(

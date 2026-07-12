@@ -63,17 +63,22 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
         "platstdlib": locations.get("platstdlib"),
         "purelib": locations.get("purelib"),
         "platlib": locations.get("platlib"),
-        "prefix-lib": str(Path(sys.prefix) / "lib"),
     }
-    seen: set[Path] = set()
-    result = []
+    candidates = []
     for label, value in labels.items():
         if not value:
             continue
         path = Path(value).resolve()
-        if path.is_dir() and path not in seen:
-            seen.add(path)
-            result.append((f"python-runtime/{label}", path))
+        if path.is_dir() and path not in {item[1] for item in candidates}:
+            candidates.append((label, path))
+    result = []
+    for label, path in sorted(candidates, key=lambda item: len(item[1].parts)):
+        if any(path.is_relative_to(parent) for _parent_label, parent in result):
+            continue
+        result.append((label, path))
+    result = [
+        (f"python-runtime/{label}", path) for label, path in result
+    ]
     return tuple(result)
 
 
