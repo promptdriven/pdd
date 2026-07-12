@@ -1182,9 +1182,32 @@ class TestWorkspaceMembershipHardening:
         anc = tmp_path / "a"
         anc.mkdir()
         (anc / "package.json").write_text(
-            '{"workspaces":["packages/*"]}\n' + " " * (6 * 1024 * 1024)
+            '{"workspaces":["packages/*"]}\n' + " " * (2 * 1024 * 1024)
         )
         assert _workspace_globs_for(anc) == []
+
+    def test_high_cardinality_manifest_fails_closed_fast(self, tmp_path):
+        """A manifest under the byte cap but with a huge number of entries must
+        fail membership closed (cardinality guard) without a giant copy — and an
+        over-byte-cap manifest is rejected before it is parsed at all."""
+        import json as _json
+        import time
+        # Under byte cap, well over the raw-glob cardinality cap.
+        anc = tmp_path / "pkg"
+        anc.mkdir()
+        (anc / "package.json").write_text(_json.dumps({"workspaces": ["a"] * 50000}))
+        start = time.monotonic()
+        assert _workspace_globs_for(anc) == []
+        assert time.monotonic() - start < 2.0
+
+        # Over the (small) pnpm byte cap → rejected before parsing (no OOM).
+        pytest.importorskip("yaml")
+        anc2 = tmp_path / "pnpm"
+        anc2.mkdir()
+        (anc2 / "pnpm-workspace.yaml").write_text("packages: [" + "a," * 200000 + "a]")
+        start = time.monotonic()
+        assert _workspace_globs_for(anc2) == []
+        assert time.monotonic() - start < 2.0
 
     @pytest.mark.skipif(not os.path.exists("/dev/zero"), reason="needs /dev/zero")
     def test_manifest_symlinked_to_device_fails_closed(self, tmp_path):
