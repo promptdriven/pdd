@@ -876,7 +876,7 @@ def _collect_node_ids(
                     path.as_posix(),
                     EvidenceOutcome.COLLECTION_ERROR,
                     digest,
-                    "trusted collection probe produced no valid node IDs: "
+                    "protected collection probe produced no valid node IDs: "
                     + (result.stderr or result.stdout)[-500:],
                 ),
                 (),
