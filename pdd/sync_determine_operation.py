@@ -1588,11 +1588,15 @@ def _get_filepath_from_architecture(
                 os.path.normcase(os.path.abspath(os.path.normpath(owner)))
                 for owner in owners
             }
-            return (
-                _OWNERSHIP_PROVEN
-                if owner_keys.issubset(expected_keys)
-                else _OWNERSHIP_INELIGIBLE
-            )
+            if not owner_keys.issubset(expected_keys):
+                return _OWNERSHIP_INELIGIBLE
+            # PROVEN requires a UNIQUE physical owner. When a flat/same-leaf filename
+            # matches distinct prompts in more than one context root, the row does not
+            # unambiguously identify the resolved prompt, so it stays territory-guarded
+            # (ELIGIBLE) rather than letting two contexts both claim one shared target.
+            if len(owners) != 1:
+                return _OWNERSHIP_ELIGIBLE
+            return _OWNERSHIP_PROVEN
 
         borrow_ownership_cache: Dict[Tuple[str, str], bool] = {}
 

@@ -72,7 +72,7 @@ R10 (MUST): Reject degenerate or non-canonical basenames whose normalized POSIX 
 R11 (MUST): A bare (non-path-qualified) basename that architecture.json maps to two or more distinct valid outputs (R7-R10) MUST raise AmbiguousModuleError (a ValueError subclass) before any prompt or fallback resolution. Unsafe rows are excluded from that count, so an unsafe row neither blocks a valid module nor is chosen ahead of a later valid row for the same basename.
 R12 (MUST): Within a single resolution the returned prompt and code path MUST come from the same version of architecture.json; a concurrent atomic rewrite of architecture.json part-way through the resolution MUST NOT yield a prompt drawn from the old version paired with a code path from the new one (a torn pair).
 R13 (MUST NOT): Treat a null or non-string architecture filename as an error; treat it as absent and identify the module by its code filepath stem.
-R14 (MUST NOT): Emit any log record containing a raw caller basename, language, prompts_dir, or architecture filepath before it has passed validation; the architecture-path INFO record is emitted only after containment/portable validation, as an escaped normalized project-relative path.
+R14 (MUST NOT): Emit any log record containing a raw, unvalidated caller basename, language, prompts_dir, or architecture path value; such a value is logged only after it has passed validation, and then only in escaped, normalized form.
 R15 (MUST): For a not-yet-existing prompt (new module), construct prompt/code/example/test paths under the resolved subproject context, applying the context prefix exactly once with no duplicated context segment.
 </contract_rules>
 

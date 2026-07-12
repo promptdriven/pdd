@@ -2917,6 +2917,33 @@ def test_get_pdd_file_paths_proven_owner_still_rejects_sibling_context_target(tm
     assert not paths["code"].resolve(strict=False).as_posix().endswith("frontend/credits.py")
 
 
+def test_get_pdd_file_paths_flat_same_leaf_in_two_roots_not_proven(tmp_path, monkeypatch):
+    """A flat architecture filename that matches distinct same-leaf prompts in TWO
+    context roots is ambiguously owned: it must not be classified as a proven owner and
+    borrowed into a shared code target (both contexts would otherwise claim one file).
+    """
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "frontend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / "prompts" / "frontend" / "credits_Python.prompt").write_text("% frontend\n", encoding="utf-8")
+    _write_two_context_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "credits_Python.prompt", "filepath": "shared/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+
+    assert not paths["code"].resolve(strict=False).as_posix().endswith("shared/credits.py")
+
+
 def test_get_pdd_file_paths_rejects_symlinked_code_path_into_sibling_context(tmp_path, monkeypatch):
     """A code filepath that resolves THROUGH an in-project symlink into a sibling
     context's territory must be rejected, even though it is lexically inside the
