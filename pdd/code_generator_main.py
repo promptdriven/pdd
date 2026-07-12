@@ -289,6 +289,49 @@ class PublicSurfaceRegressionError(click.UsageError):
         return "\n".join(lines)
 
 
+_CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
+_CHURN_NONCE_CACHE: Optional[str] = None
+_CHURN_NONCE_READ = False
+
+
+def _read_churn_nonce() -> str:
+    """Read the one-time provenance nonce the PARENT sync runner handed this child
+    over a NON-inherited pipe FD (issue #1903 §B.4 review round 8).
+
+    The parent passes the read-end FD number via ``PDD_CHURN_NONCE_FD`` and keeps
+    the FD out of any grandchild test subprocess (``close_fds`` default), so only
+    THIS trusted child process can read the nonce. Stamping it into the churn
+    block lets the parent distinguish a genuine PDD-emitted block from one a
+    hostile project test merely printed to stdout (which cannot know the nonce).
+    Read once (the pipe yields EOF afterwards) and cached. Returns ``""`` when no
+    channel is present (standalone ``pdd test``/``sync`` — which never
+    never-blocks — or an older parent). Total: any error yields ``""``.
+    """
+    global _CHURN_NONCE_CACHE, _CHURN_NONCE_READ  # pylint: disable=global-statement
+    if _CHURN_NONCE_READ:
+        return _CHURN_NONCE_CACHE or ""
+    _CHURN_NONCE_READ = True
+    fd_s = os.environ.get(_CHURN_NONCE_ENV)
+    if not fd_s:
+        _CHURN_NONCE_CACHE = ""
+        return ""
+    try:
+        fd = int(fd_s)
+        chunks = []
+        while len(b"".join(chunks)) < 256:
+            data = os.read(fd, 256)
+            if not data:
+                break
+            chunks.append(data)
+        token = b"".join(chunks).decode("ascii", "ignore").strip()
+        # Accept only a plausible hex nonce so a coincidental FD-number collision
+        # in some process cannot inject arbitrary bytes as a "valid" nonce.
+        _CHURN_NONCE_CACHE = token if re.fullmatch(r"[0-9a-f]{8,128}", token) else ""
+    except (OSError, ValueError):
+        _CHURN_NONCE_CACHE = ""
+    return _CHURN_NONCE_CACHE or ""
+
+
 class TestChurnError(click.UsageError):
     """Raised when generation rewrites too much of an existing test file."""
 
@@ -321,6 +364,11 @@ class TestChurnError(click.UsageError):
         self.adopted_human = bool(adopted_human)
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
+        # Stamp the parent-issued nonce (round 8) so the parent can authenticate
+        # THIS block as genuinely PDD-emitted; a forged block printed by a hostile
+        # project test cannot carry the correct (secret) nonce and is refused.
+        nonce = _read_churn_nonce()
+        nonce_line = f"\nnonce: {nonce}" if nonce else ""
         super().__init__(
             f"Test churn threshold exceeded for {prompt_name}:\n"
             f"ratio: {self.churn_ratio:.2f}\n"
@@ -329,6 +377,7 @@ class TestChurnError(click.UsageError):
             f"pre_line_count: {self.pre_line_count}\n"
             f"post_line_count: {self.post_line_count}\n"
             f"adopted: {str(self.adopted_human).lower()}"
+            f"{nonce_line}"
         )
 
     @property

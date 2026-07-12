@@ -13,6 +13,7 @@ import datetime
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -314,6 +315,9 @@ _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 # Issue #1903 §B.4: emitted (stdout) when an unreconcilable adopted co-located
 # test is kept and flagged for review instead of hard-failing the issue workflow.
 _TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
+# Env var naming the pipe FD the child reads the churn-provenance nonce from
+# (issue #1903 §B.4 review round 8). MUST match code_generator_main._CHURN_NONCE_ENV.
+_CHURN_NONCE_ENV = "PDD_CHURN_NONCE_FD"
 
 
 _TEST_CHURN_HEADERS = (
@@ -360,30 +364,67 @@ def _all_indices(text: str, sub: str) -> list[int]:
     return out
 
 
-def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
-    """The churned ``output: <test path>`` — UNANIMOUS across all churn blocks.
+def _region_has_valid_nonce(region: str, expected_nonce: Optional[str]) -> bool:
+    """True when *region* carries a ``nonce:`` matching *expected_nonce* (round 8).
+
+    The parent hands each child a secret nonce over a non-inherited pipe FD; a
+    genuine PDD churn block echoes it, an untrusted project-test forgery cannot.
+    Constant-time compare. When no nonce is expected (``None``/empty), no region
+    can be authenticated so this is False.
+    """
+    if not expected_nonce:
+        return False
+    m = re.search(r"^nonce:\s*([0-9a-f]{8,128})\s*$", region, re.MULTILINE)
+    return bool(m) and secrets.compare_digest(m.group(1), expected_nonce)
+
+
+def _test_churn_block_regions_trusted(
+    stdout: str, stderr: str, expected_nonce: Optional[str]
+) -> list[str]:
+    """Churn regions used for provenance. When *expected_nonce* is provided
+    (the issue-driven never-block), ONLY regions bearing the matching nonce are
+    trusted — a forged in-band block is dropped, not merely out-voted. When it is
+    ``None`` (standalone/tests), all regions are considered (legacy behavior)."""
+    regions = _test_churn_block_regions(stdout, stderr)
+    if expected_nonce is None:
+        return regions
+    return [r for r in regions if _region_has_valid_nonce(r, expected_nonce)]
+
+
+def _extract_test_churn_output_path(
+    stdout: str, stderr: str, expected_nonce: Optional[str] = None
+) -> Optional[str]:
+    """The churned ``output: <test path>`` — UNANIMOUS across all TRUSTED churn
+    blocks.
 
     Fails CLOSED to ``None`` when absent or when any two churn blocks disagree,
-    so a forged/injected block cannot substitute a different path.
+    so a forged/injected block cannot substitute a different path. With
+    *expected_nonce* set, only nonce-authenticated blocks are consulted.
     """
     values = {
         m.group(1).strip()
-        for region in _test_churn_block_regions(stdout, stderr)
+        for region in _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
         for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
         if m.group(1).strip()
     }
     return next(iter(values)) if len(values) == 1 else None
 
 
-def _extract_test_churn_adopted(stdout: str, stderr: str) -> bool:
+def _extract_test_churn_adopted(
+    stdout: str, stderr: str, expected_nonce: Optional[str] = None
+) -> bool:
     """The ``adopted:`` provenance — True ONLY when UNANIMOUSLY ``true`` across
-    every churn block. A missing marker, any ``false``, or a conflict → False
-    (keep the strict hard-fail), so injecting an ``adopted: true`` cannot flip a
-    real ``adopted: false`` churn (issue #1903 review round 6).
+    every TRUSTED churn block. A missing marker, any ``false``, or a conflict →
+    False (keep the strict hard-fail), so injecting an ``adopted: true`` cannot
+    flip a real ``adopted: false`` churn (issue #1903 review round 6). With
+    *expected_nonce* set (round 8), a block that does not carry the parent's
+    secret nonce is not trusted at all — so a hostile project test that merely
+    PRINTS ``adopted: true`` is ignored and the module keeps the strict hard-fail.
     """
+    regions = _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
     values = {
         m.group(1).lower()
-        for region in _test_churn_block_regions(stdout, stderr)
+        for region in regions
         for m in re.finditer(
             r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
         )
@@ -1480,6 +1521,12 @@ class AsyncSyncRunner:
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
+        # Secret per-run nonce for the trusted churn-provenance channel (issue
+        # #1903 §B.4 review round 8): handed to each child sync over a
+        # non-inherited pipe FD and required back in any churn block the
+        # never-block trusts, so untrusted project-test stdout cannot forge the
+        # adoption provenance / output path that downgrades a hard-fail.
+        self._churn_nonce: str = secrets.token_hex(16)
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
@@ -2825,10 +2872,17 @@ class AsyncSyncRunner:
             # coverage loss there is never silently swallowed. (Standalone
             # `pdd sync <module>` / `pdd test`, which do not run through this
             # issue-driven runner, always keep the strict hard-fail.)
+            # Round 8: gate BOTH the path and the adoption provenance on the
+            # per-run secret nonce, so only a genuinely PDD-emitted churn block
+            # (which echoed the nonce it read over the private FD) can drive the
+            # never-block. A block a hostile project test printed to stdout lacks
+            # the nonce and is ignored -> strict hard-fail.
             churned_test_path = _extract_test_churn_output_path(
-                last_stdout, last_stderr
+                last_stdout, last_stderr, expected_nonce=self._churn_nonce
             )
-            churn_was_adopted = _extract_test_churn_adopted(last_stdout, last_stderr)
+            churn_was_adopted = _extract_test_churn_adopted(
+                last_stdout, last_stderr, expected_nonce=self._churn_nonce
+            )
             # THREE guards, ALL required, so the relief never escapes its scope:
             #   (1) issue-driven workflow only — ``self.issue_url`` is set only
             #       when this runner backs a GitHub issue → PR sync (agentic_sync
@@ -3165,7 +3219,7 @@ class AsyncSyncRunner:
                 # stamp in the FINAL recorded block too (round-5 lockstep), so a
                 # hard-failure recorded when the never-block does NOT apply still
                 # carries whether the churned test was an adopted human test.
-                f"adopted: {str(_extract_test_churn_adopted(stdout, stderr)).lower()}",
+                f"adopted: {str(_extract_test_churn_adopted(stdout, stderr, expected_nonce=self._churn_nonce)).lower()}",
                 "",
                 "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
                 "directive to the prompt body.",
@@ -3329,6 +3383,19 @@ class AsyncSyncRunner:
 
         cwd_str = str(self._module_cwd_path(basename))
 
+        # Trusted churn-provenance channel (issue #1903 §B.4 review round 8): write
+        # the secret nonce into a pipe and hand the child ONLY the read end via
+        # ``pass_fds``. The child inherits this FD; the grandchild test processes it
+        # later spawns do NOT (subprocess ``close_fds`` default), so a hostile
+        # project test can read the ``PDD_CHURN_NONCE_FD`` env var but not the FD it
+        # names — it cannot learn the nonce and thus cannot forge a trusted block.
+        nonce_read_fd, nonce_write_fd = os.pipe()
+        try:
+            os.write(nonce_write_fd, self._churn_nonce.encode("ascii"))
+        finally:
+            os.close(nonce_write_fd)
+        env[_CHURN_NONCE_ENV] = str(nonce_read_fd)
+
         try:
             process = subprocess.Popen(
                 cmd,
@@ -3340,6 +3407,7 @@ class AsyncSyncRunner:
                 text=False,
                 bufsize=0,
                 start_new_session=True,
+                pass_fds=(nonce_read_fd,),
             )
             try:
                 self._child_pgids.add(process.pid)
@@ -3355,6 +3423,13 @@ class AsyncSyncRunner:
             except OSError:
                 pass
             return False, cost, str(exc), "", ""
+        finally:
+            # The child holds its own inherited copy; drop the parent's so the
+            # write side's EOF reaches the child and no FD leaks per attempt.
+            try:
+                os.close(nonce_read_fd)
+            except OSError:
+                pass
 
         t_out = threading.Thread(
             target=_read_stream,
