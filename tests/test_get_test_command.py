@@ -803,6 +803,27 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "app"), [r"packages/\{app\}"]) is False
 
+    def test_bracket_character_class_glob_fails_membership_closed(self):
+        """Per-segment ``fnmatch`` diverges from minimatch on bracket character
+        classes: ``[^a]`` negates in minimatch but ``^`` is a literal member in
+        fnmatch, and POSIX classes like ``[[:alpha:]]`` are unsupported. A glob
+        using a bracket class therefore fails membership closed rather than
+        over-matching a positive or under-matching an exclusion into a false
+        member."""
+        # fnmatch would falsely match `a` against `[^a]`; must fail closed instead.
+        assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
+        # Bracket construct in an exclusion also fails the whole set closed.
+        assert _package_matches_workspace(
+            ("packages", "a"), ["packages/*", "!packages/[^a]"]) is False
+        assert _package_matches_workspace(
+            ("packages", "a"), ["packages/[[:alpha:]]"]) is False
+        # Even a range fnmatch *could* handle is rejected — the whole class of
+        # bracket constructs fails closed for a single, auditable boundary.
+        assert _package_matches_workspace(("packages", "app"), ["packages/[a-z]pp"]) is False
+        # Critically, a bracket in the *path* (a dynamic-route dir name) is NOT a
+        # glob metacharacter and still matches an ordinary `*` glob.
+        assert _package_matches_workspace(("packages", "[eventId]"), ["packages/*"]) is True
+
     def test_deeply_nested_singleton_with_alternations_is_time_bounded(self):
         """A tiny (<1 KB) glob nesting a deep singleton before several alternations
         stays within the byte/count/segment budgets yet would cost tens of seconds
