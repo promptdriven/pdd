@@ -90,6 +90,34 @@ _MAX_BRACE_SCAN_WORK = 8_000_000
 _EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
 
 
+def _has_complete_bracket_class(raw: str) -> bool:
+    """True when ``raw`` contains a *closed* ``[...]`` bracket group. An unmatched
+    ``[`` (no later ``]``) is literal in both minimatch and ``fnmatch``, so it is
+    NOT flagged — only a syntactically complete class, whose ``[^…]`` negation and
+    POSIX ``[[:…:]]`` semantics diverge between the two, is."""
+    start = raw.find("[")
+    return start != -1 and raw.find("]", start + 1) != -1
+
+
+def _has_brace_range(raw: str) -> bool:
+    """True when ``raw`` contains a ``..`` *inside a brace group* — i.e. minimatch
+    numeric/alphabetic range syntax (``{1..3}``, ``{a..c}``, ``{1..9..2}``) that a
+    comma-only expander would emit literally. A literal ``..`` outside braces (a
+    package dir named ``foo..bar``) is matched literally by ``fnmatch`` and is NOT
+    flagged."""
+    depth = 0
+    prev = ""
+    for ch in raw:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        elif ch == "." and prev == "." and depth > 0:
+            return True
+        prev = ch
+    return False
+
+
 def _glob_beyond_supported_subset(raw: str, has_astral: bool) -> bool:
     """Return True when ``raw`` uses a minimatch construct this matcher does not
     implement with faithful parity, so the whole membership check must fail closed.
@@ -99,12 +127,14 @@ def _glob_beyond_supported_subset(raw: str, has_astral: bool) -> bool:
     Everything below is rejected because ``fnmatch``/this expander would diverge —
     over-matching a positive or under-matching an exclusion into a false member:
 
-      * ``\\``  — backslash escapes of brace metacharacters (expander is not
+      * ``\\`` — backslash escapes of brace metacharacters (expander is not
         escape-aware; ``{foo\\,bar}`` is two options, not three).
-      * ``[``   — bracket character classes (``[^a]`` negates in minimatch but
-        ``^`` is literal in ``fnmatch``; POSIX ``[[:alpha:]]`` is unsupported).
-      * ``..``  — brace ranges (``{1..3}``, ``{a..c}``, ``{01..03}``, ``{1..9..2}``);
-        no legitimate workspace path holds ``..`` either.
+      * a *closed* ``[...]`` bracket class — ``[^a]`` negates in minimatch but ``^``
+        is literal in ``fnmatch``; POSIX ``[[:alpha:]]`` is unsupported. An unmatched
+        literal ``[`` is fine (both treat it literally) and is NOT rejected.
+      * a brace *range* — ``..`` inside a brace group (``{1..3}``, ``{a..c}``,
+        ``{01..03}``, ``{1..9..2}``), which a comma-only expander emits literally. A
+        literal ``..`` outside braces (dir ``foo..bar``) is fine and is NOT rejected.
       * extglobs (``?(…)``/``*(…)``/``+(…)``/``@(…)``/``!(…)``) — ``fnmatch`` treats
         them literally, so an extglob exclusion fails to exclude.
       * ``?`` against an astral-character leaf — minimatch counts a non-BMP char as
@@ -115,7 +145,11 @@ def _glob_beyond_supported_subset(raw: str, has_astral: bool) -> bool:
     globs use ``*``/``**``/``{,}`` — not these — so legitimate declarations are
     unaffected.
     """
-    if "\\" in raw or "[" in raw or ".." in raw:
+    if "\\" in raw:
+        return True
+    if _has_complete_bracket_class(raw):
+        return True
+    if _has_brace_range(raw):
         return True
     if any(marker in raw for marker in _EXTGLOB_MARKERS):
         return True
@@ -546,10 +580,29 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                 # An over-long glob would blow up expansion by bytes even under
                 # the count budget → membership unproven (fail closed).
                 raise _PatternBudgetError
-            if raw.startswith("!"):
-                negatives.extend(_expand_braces(raw[1:], budget, work))
+            negated = raw.startswith("!")
+            body = raw[1:] if negated else raw
+            if body.startswith("!"):
+                # Two or more leading ``!`` toggle negation in minimatch (``!!x`` is
+                # positive, ``!!!x`` negates again). This matcher does not track that
+                # parity, so a multi-bang glob fails membership closed rather than be
+                # mis-classified (e.g. treating ``!!!packages/foo`` as a literal and
+                # falsely proving membership).
+                raise _PatternBudgetError
+            # A *positive* pattern whose effective form (after an optional leading
+            # ``./``) begins with ``#`` is a minimatch comment: it matches nothing,
+            # so it must not be fnmatch-ed literally into a false member. Skip it.
+            # (A ``!``-exclusion body starting with ``#`` is left to match its literal
+            # ``#`` — the safe direction, since a spurious exclusion only removes a
+            # member, never adds one.)
+            if not negated:
+                effective = body[2:] if body.startswith("./") else body
+                if effective.startswith("#"):
+                    continue
+            if negated:
+                negatives.extend(_expand_braces(body, budget, work))
             else:
-                positives.extend(_expand_braces(raw, budget, work))
+                positives.extend(_expand_braces(body, budget, work))
         if not any(_relative_matches_workspace_glob(rel_parts, p, cells) for p in positives):
             return False
         return not any(_relative_matches_workspace_glob(rel_parts, n, cells) for n in negatives)

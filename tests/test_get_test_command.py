@@ -827,6 +827,9 @@ class TestWorkspaceMembershipHardening:
         # Critically, a bracket in the *path* (a dynamic-route dir name) is NOT a
         # glob metacharacter and still matches an ordinary `*` glob.
         assert _package_matches_workspace(("packages", "[eventId]"), ["packages/*"]) is True
+        # An *unmatched* `[` (no closing `]`) is literal in both fnmatch and
+        # minimatch, so it is NOT rejected — the literal glob still matches its dir.
+        assert _package_matches_workspace(("packages", "foo[bar"), ["packages/foo[bar"]) is True
 
     def test_extglob_glob_fails_membership_closed(self):
         """minimatch expands extglobs (``@(a|b)``, ``!(x)``, ``+(…)``, ``?(…)``,
@@ -926,6 +929,46 @@ class TestWorkspaceMembershipHardening:
         # `*` still matches an astral segment; a BMP `?` still works normally.
         assert _package_matches_workspace(("packages", emoji), ["packages/*"]) is True
         assert _package_matches_workspace(("packages", "ab"), ["packages/a?"]) is True
+
+    def test_multiple_leading_bang_fails_membership_closed(self):
+        """Two or more leading ``!`` toggle negation in minimatch (``!!x`` positive,
+        ``!!!x`` negates again). This matcher does not track that parity, so a
+        multi-bang glob fails membership closed rather than be mis-classified as a
+        literal (which would falsely prove membership for ``!!!packages/foo``)."""
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/**", "!!!packages/foo"]) is False
+        assert _package_matches_workspace(("packages", "foo"), ["!!packages/foo"]) is False
+        # A single `!` exclusion is unaffected and still excludes.
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/**", "!packages/foo"]) is False
+        assert _package_matches_workspace(
+            ("packages", "bar"), ["packages/**", "!packages/foo"]) is True
+
+    def test_leading_hash_comment_glob_matches_nothing(self):
+        """A positive pattern whose effective form (after an optional leading
+        ``./``) begins with ``#`` is a minimatch comment: it matches nothing and
+        must not be fnmatch-ed literally into a false member. It is skipped, not
+        fail-closed, so a real glob alongside a comment still works."""
+        assert _package_matches_workspace(("packages", "#foo"), ["#*"]) is False
+        assert _package_matches_workspace(("packages", "#foo"), ["./#*"]) is False
+        # A comment entry does not disable the rest of the declaration.
+        assert _package_matches_workspace(
+            ("packages", "app"), ["#comment", "packages/*"]) is True
+
+    def test_literal_double_dot_and_unmatched_bracket_are_not_over_rejected(self):
+        """The fail-closed guard targets *unsupported* constructs, not any literal
+        occurrence of their characters. A package dir named ``foo..bar`` (literal
+        ``..`` outside a brace) or ``foo[bar`` (an unmatched ``[``) is matched
+        literally by fnmatch, exactly like minimatch, so such globs must still
+        prove membership rather than be needlessly rejected."""
+        assert _package_matches_workspace(
+            ("packages", "foo..bar"), ["packages/foo..bar"]) is True
+        assert _package_matches_workspace(
+            ("packages", "foo[bar"), ["packages/foo[bar"]) is True
+        # But an in-brace range and a closed class still fail closed.
+        assert _package_matches_workspace(
+            ("packages", "1"), ["packages/**", "!packages/{1..3}"]) is False
+        assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
