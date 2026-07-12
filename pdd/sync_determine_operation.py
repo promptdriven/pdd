@@ -2093,9 +2093,12 @@ def _architecture_module_choices(
             filename_value_q = module.get("filename")
             if (
                 isinstance(filename_value_q, str)
-                and filename_value_q.strip()
+                and filename_value_q != ""
                 and _safe_architecture_prompt_filename(filename_value_q) is None
             ):
+                # A non-empty STRING filename that fails validation (incl. whitespace-only)
+                # is unsafe/ineligible in selection too — skip it so it cannot inflate the
+                # count. An EMPTY string and null/non-string stay filepath-stem-eligible.
                 continue
             # Mirror selection eligibility: a row whose PROMPT filename names a DIFFERENT
             # module (its leaf is a recognized prompt filename but not this module's) is not
@@ -2151,13 +2154,13 @@ def _architecture_module_choices(
         if not filepath:
             continue
         filename_value = module.get("filename")
-        # An unsafe metadata filename (absolute, parent traversal, backslash, Windows
-        # drive) is excluded from ambiguity counting. A null/empty filename is left to
-        # the filepath-stem branch (the module is filepath-owned). This is a cheap
-        # string check, done before the expensive filesystem containment resolution.
+        # A non-empty STRING filename that fails validation (unsafe path, OR whitespace-only,
+        # which selection also treats as ineligible) is excluded from ambiguity counting. An
+        # EMPTY string and null/non-string are left to the filepath-stem branch (the module
+        # is filepath-owned). Cheap string check before the filesystem containment resolve.
         if (
             isinstance(filename_value, str)
-            and filename_value.strip()
+            and filename_value != ""
             and _safe_architecture_prompt_filename(filename_value) is None
         ):
             continue

@@ -2443,6 +2443,43 @@ def test_get_pdd_file_paths_context_prefixed_qualified_ambiguity_uses_stripped_b
         )
 
 
+def test_get_pdd_file_paths_whitespace_filename_row_does_not_inflate_ambiguity(tmp_path, monkeypatch):
+    """A whitespace-only architecture filename (ineligible in selection) must not count
+    toward ambiguity and falsely block a valid uniquely-named module."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "   ", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("app/login/page.py")
+
+
+def test_get_pdd_file_paths_noncanonical_architecture_metadata_rejected_end_to_end(tmp_path, monkeypatch):
+    """End-to-end (public API): a noncanonical architecture output filepath (dot segments)
+    is not used as an authoritative mapping; resolution falls back to a canonical path (R10)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_Python.prompt").write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "widget_Python.prompt", "filepath": "src/./widget.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert "/./" not in paths["code"].as_posix()
+    assert paths["code"].name == "widget.py"
+
+
 def test_get_pdd_file_paths_qualified_foreign_named_suffix_row_no_false_ambiguity(tmp_path, monkeypatch):
     """A row whose FILEPATH suffix-aligns with a path-qualified basename but whose PROMPT
     filename names a DIFFERENT module must not count toward ambiguity; the uniquely named
