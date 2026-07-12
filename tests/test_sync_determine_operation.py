@@ -2314,6 +2314,35 @@ def test_find_named_file_case_collision_is_deterministic(tmp_path):
     assert found is not None and found.name == "FOO_example.py"
 
 
+def test_get_pdd_file_paths_construct_paths_failure_anchors_fallback_at_subproject(tmp_path, monkeypatch):
+    """When construct_paths raises for a new module, the convention fallback anchors
+    code/example/test under the resolved subproject (.pddrc dir), not the parent CWD."""
+    import sync_determine_operation as sync_determine_module
+
+    project = tmp_path / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: [\"**\"]\n    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT of the subproject.
+
+    def boom(*_a, **_k):
+        raise RuntimeError("construct_paths failed")
+
+    monkeypatch.setattr(sync_determine_module, "construct_paths", boom)
+
+    paths = get_pdd_file_paths(
+        "widget", "python", prompts_dir=str((project / "prompts").resolve()),
+    )
+
+    assert str(paths["code"].resolve(strict=False)).startswith(str(project.resolve()))
+    assert str(paths["test"].resolve(strict=False)).startswith(str(project.resolve()))
+
+
 def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_path, monkeypatch):
     """A bare basename that architecture.json maps to two DISTINCT valid outputs MUST
     raise AmbiguousModuleError before any prompt/fallback resolution (positive R11)."""

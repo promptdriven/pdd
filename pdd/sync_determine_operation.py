@@ -2831,22 +2831,40 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
                 return result
             except Exception as e:
-                # If construct_paths fails, fall back to current directory paths
-                # This maintains backward compatibility
+                # If construct_paths fails, fall back to convention-based paths. Anchor
+                # them at the resolved subproject (the .pddrc directory) when it differs
+                # from the process CWD, so a new module resolved from a parent/sibling CWD
+                # does not land its code/example/test under the wrong root; when they
+                # coincide the paths stay relative, preserving the legacy return contract.
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
                 dir_prefix, name_part = _extract_name_part(construct_paths_basename)
-                fallback_test_path = Path(f"{dir_prefix}test_{name_part}{_dot(extension)}")
-                # Bug #156: Find matching test files even in fallback
-                if Path('.').exists():
-                    fallback_matching = sorted(Path('.').glob(f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}*.{glob.escape(extension)}"))
+                _pddrc_fallback = _find_pddrc_file(prompts_root_anchor)
+                _subproject = _pddrc_fallback.parent if _pddrc_fallback else None
+
+                def _anchor_fallback(rel: str) -> Path:
+                    rel_path = Path(rel)
+                    if (
+                        _subproject is not None
+                        and _subproject.resolve(strict=False) != Path.cwd().resolve(strict=False)
+                    ):
+                        return _subproject / rel_path
+                    return rel_path
+
+                fallback_test_path = _anchor_fallback(f"{dir_prefix}test_{name_part}{_dot(extension)}")
+                # Bug #156: Find matching test files even in fallback (under the anchored dir)
+                fallback_test_dir = fallback_test_path.parent
+                if fallback_test_dir.exists():
+                    fallback_matching = sorted(
+                        fallback_test_dir.glob(f"test_{glob.escape(name_part)}*.{glob.escape(extension)}")
+                    )
                 else:
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
                     'prompt': Path(prompt_path),
-                    'code': Path(f"{dir_prefix}{name_part}{_dot(extension)}"),
-                    'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
+                    'code': _anchor_fallback(f"{dir_prefix}{name_part}{_dot(extension)}"),
+                    'example': _anchor_fallback(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
