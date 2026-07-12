@@ -8,6 +8,7 @@ import hashlib
 import ast
 import configparser
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -464,7 +465,9 @@ def _support_digest(
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
-    return digest.hexdigest(), tuple(path for path, _content in closure)
+    return digest.hexdigest(), tuple(
+        path for path, _content in closure if path not in set(product)
+    )
 
 
 def _config_loads_plugin(root: Path, ref: str) -> bool:
@@ -680,7 +683,7 @@ def _trusted_collection_runner(
 ) -> tuple[Path, Path]:
     """Create a process-separated checker and candidate collection worker."""
     worker = directory / "collection_worker.py"
-    worker_output = directory / "candidate-node-ids.json"
+    worker_output = directory / f"collection-{os.urandom(16).hex()}.json"
     worker_output.touch(mode=0o600)
     worker.write_text(
         "\n".join(
@@ -729,7 +732,7 @@ def _trusted_execution_runner(
 ) -> tuple[Path, Path]:
     """Create a checker that never imports candidate code or pytest."""
     worker = directory / "execution_worker.py"
-    worker_junit = directory / "candidate-junit.xml"
+    worker_junit = directory / f"execution-{os.urandom(16).hex()}.xml"
     worker_junit.touch(mode=0o600)
     worker.write_text(
         "\n".join((
