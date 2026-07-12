@@ -2153,7 +2153,8 @@ def _output_path_within_root(path: Any, project_root: Path) -> bool:
     except (OSError, RuntimeError, ValueError):
         return False
     return not any(
-        _unsafe_portable_path_component(part) for part in relative.parts
+        _unsafe_portable_path_component(part) or _contains_disallowed_path_text(part)
+        for part in relative.parts
     )
 
 
@@ -2164,6 +2165,26 @@ def _ensure_output_within_root(
     if not _output_path_within_root(path, project_root):
         raise UnsafeOutputPathError(path, project_root, artifact)
     return path
+
+
+def _configured_output_escapes_root(raw: Any, project_root: Path) -> bool:
+    """Whether a RAW absolute ``.pddrc`` output value points outside ``project_root``.
+
+    Only ABSOLUTE (or Windows-drive) configured values are checked here: an
+    explicit away-pointing absolute destination must fail closed rather than be
+    silently re-anchored under the project. Relative values are left to the
+    provenance-based re-anchoring + containment path (they cannot be told apart
+    from a legitimate CWD expansion once resolved).
+    """
+    if not isinstance(raw, str) or not raw:
+        return False
+    if not (PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive):
+        return False
+    try:
+        Path(raw).resolve(strict=False).relative_to(project_root.resolve(strict=False))
+        return False
+    except (OSError, RuntimeError, ValueError):
+        return True
 
 
 def _configured_output_string_is_unsafe(raw: Any) -> bool:
@@ -2202,7 +2223,9 @@ def _reject_unsafe_output_config(
 ) -> None:
     """Fail closed on any unsafe ``.pddrc`` output directory/template value."""
     for raw in raw_values:
-        if _configured_output_string_is_unsafe(raw):
+        if _configured_output_string_is_unsafe(raw) or _configured_output_escapes_root(
+            raw, project_root
+        ):
             raise UnsafeOutputPathError(raw, project_root, artifact)
 
 

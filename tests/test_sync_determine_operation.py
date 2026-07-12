@@ -8821,3 +8821,38 @@ def test_get_pdd_file_paths_missing_prompt_escaping_output_not_swallowed(tmp_pat
     with pytest.raises(UnsafeOutputPathError):
         get_pdd_file_paths("newmodule", "python", prompts_dir="prompts", context_override="backend")
     assert not (tmp_path.parent.parent / "escape_missing").exists()
+
+
+# ---------------------------------------------------------------------------
+# Round-4 review hardening: explicit absolute .pddrc destinations that point
+# outside the project fail closed (not silently re-anchored into the project),
+# and control-bearing components are rejected on the resolved path too.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "defaults_yaml",
+    [
+        '      generate_output_path: "/work/foreign/"\n',
+        '      example_output_path: "/etc/pdd-out/"\n',
+        '      outputs:\n        test:\n          path: "/tmp/foreign/test_{name}.py"\n',
+    ],
+)
+def test_get_pdd_file_paths_rejects_absolute_escape_pddrc_output(tmp_path, monkeypatch, defaults_yaml):
+    """R16: an explicit absolute `.pddrc` output pointing OUTSIDE the project must fail
+    closed — it must NOT be silently re-anchored into a (wrong) in-project location."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(tmp_path, defaults_yaml, with_arch=True)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_rejects_control_component_pddrc_output(tmp_path, monkeypatch):
+    """R16: a control-character component in a `.pddrc` output is rejected (raw gate and,
+    for values that reach a sink via a nearer config, the resolved-path component check)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path, '      generate_output_path: "bad\\u000aname/"\n', with_arch=True
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
