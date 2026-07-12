@@ -14548,7 +14548,12 @@ def test_step5_failure_resolved_by_layer2_does_not_force_canonical_fail(
     out = crl._maybe_write_agentic_artifact(ctx, cfg, state)
     data = _json.loads(Path(out).read_text())
     assert data["authority"] != "canonical_fail_agentic_not_authoritative"
-    assert data["authority"] == "canonical_unknown_agentic_fallback_pass"
+    # The resolved handoff is the successful completion of Layer 1's delegated
+    # Step 5 gate, so the private artifact must carry a coherent Layer 1 pass
+    # for the outer finalizer to preserve (issue #1788 re-review).
+    assert data["layer1"]["status"] == "pass"
+    assert data["layer1"]["blockers"] == []
+    assert data["authority"] == "canonical_pass_agentic_mirror_clean"
     assert data["status"] == "passed"
     assert data["verdict"]["decision"] == "pass"
 

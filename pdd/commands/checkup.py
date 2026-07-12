@@ -4,6 +4,7 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 
 # pylint: disable=unknown-option-value
 import math
+import re
 import secrets
 import sys
 import tempfile
@@ -132,11 +133,38 @@ def _prepare_agentic_review_loop_artifact(
 # provider exceptions and model output can embed credentials, and hosted job
 # logs retain stdout even when nothing is persisted to disk (issue #1788).
 _AGENTIC_WRAPPER_SCHEMA = "pdd.checkup.agentic.v1.wrapper"
+_AGENTIC_PUBLIC_ARTIFACT_NAME_MAX_CHARS = 128
+_AGENTIC_PUBLIC_ARTIFACT_NAME_RE = re.compile(
+    r"pdd-checkup-agentic-[0-9]+-[0-9a-f]{32}\.json\Z"
+)
 _AGENTIC_FAILURE_TOMBSTONE = {
     "schema_version": _AGENTIC_WRAPPER_SCHEMA,
     "success": False,
     "status": "failed",
 }
+
+
+def _safe_agentic_artifact_reference(
+    published_artifact_path: Optional[Path],
+) -> Optional[str]:
+    """Return the bounded cwd-relative reference safe to serialize.
+
+    Standalone public names are generated locally from a numeric PR number and
+    a cryptographic nonce.  Accept only that closed shape: serializing the raw
+    absolute path would expose caller cwd components after the bounded artifact
+    builder has already finished, including credential-shaped directory names.
+    A malformed or oversized name fails closed instead of emitting a reference
+    that is secret-bearing, misleading, or unusable.
+    """
+    if published_artifact_path is None:
+        return None
+    name = published_artifact_path.name
+    if (
+        len(name) > _AGENTIC_PUBLIC_ARTIFACT_NAME_MAX_CHARS
+        or _AGENTIC_PUBLIC_ARTIFACT_NAME_RE.fullmatch(name) is None
+    ):
+        return None
+    return name
 
 
 def _publish_agentic_failure_tombstone(
@@ -207,7 +235,12 @@ def _emit_agentic_review_loop_json(
     """
     import json as _json  # pylint: disable=import-outside-toplevel
 
-    if artifact_path is not None and published_artifact_path is not None:
+    artifact_reference = _safe_agentic_artifact_reference(published_artifact_path)
+    if (
+        artifact_path is not None
+        and published_artifact_path is not None
+        and artifact_reference is not None
+    ):
         try:
             artifact = _json.loads(artifact_path.read_text(encoding="utf-8"))
             if not isinstance(artifact, dict):
@@ -217,7 +250,7 @@ def _emit_agentic_review_loop_json(
             verdict = artifact.get("verdict")
             if not isinstance(verdict, dict):
                 raise ValueError("agentic artifact verdict must be a JSON object")
-            artifact["artifact_path"] = str(published_artifact_path)
+            artifact["artifact_path"] = artifact_reference
             artifact_path.write_text(_json.dumps(artifact, indent=2), encoding="utf-8")
             artifact_path.replace(published_artifact_path)
         except (OSError, ValueError):
@@ -233,11 +266,7 @@ def _emit_agentic_review_loop_json(
     _publish_agentic_failure_tombstone(artifact_path, published_artifact_path)
     wrapper = {
         "schema_version": _AGENTIC_WRAPPER_SCHEMA,
-        "artifact_path": (
-            str(published_artifact_path)
-            if published_artifact_path is not None
-            else None
-        ),
+        "artifact_path": artifact_reference,
         "success": False,
         "status": "failed",
         "failure_category": failure_category,

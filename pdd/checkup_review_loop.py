@@ -2297,11 +2297,10 @@ def _maybe_write_agentic_artifact(
                     #     final-gate caller always wins — it is the authoritative
                     #     verdict entering/leaving Layer 2;
                     #   * otherwise, once Layer 2 has resolved (``fixed``) the
-                    #     seeded finding, the review-loop mirror is
-                    #     non-authoritative on the canonical verdict
-                    #     (``unknown``); the loop-state findings then drive the
-                    #     fallback pass/block signal in the builder — do NOT force
-                    #     ``fail``;
+                    #     seeded finding, the handoff gate has passed: record
+                    #     ``pass`` with no blockers in the private artifact so
+                    #     the outer finalizer can preserve the actual Layer 1
+                    #     result instead of publishing an ambiguous ``unknown``;
                     #   * only while the seeded finding is still OPEN does the raw
                     #     Step 5 failure remain the reported layer1 status/blocker.
                     step5_still_open = any(
@@ -2327,7 +2326,7 @@ def _maybe_write_agentic_artifact(
                     ):
                         # Handed-off Step 5 failure was resolved by Layer 2.
                         final_gate_report = {
-                            "layer1_status": "unknown",
+                            "layer1_status": "pass",
                             "blockers": [],
                         }
                     else:

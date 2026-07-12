@@ -488,6 +488,80 @@ def test_agentic_review_loop_emits_artifact_json_on_stdout() -> None:
     assert persisted_payload == payload
 
 
+def test_agentic_success_artifact_path_is_relative_bounded_and_secret_safe(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The public artifact reference must not serialize the absolute cwd.
+
+    Issue #1788: the publisher runs after the bounded artifact builder, so a
+    credential-shaped or oversized cwd must not leak through ``artifact_path``
+    in either stdout or the persisted passing artifact.
+    """
+    import json
+
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    workdir = tmp_path / secret / ("oversized-cwd-component-" + "x" * 160)
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    private, public = _prepare_agentic_review_loop_artifact(
+        "https://github.com/org/repo/pull/7"
+    )
+    assert private is not None and public is not None
+    private.write_text(
+        json.dumps(
+            {
+                "schema_version": "pdd.checkup.agentic.v1",
+                "status": "passed",
+                "verdict": {"decision": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert _emit_agentic_review_loop_json(
+        artifact_path=private,
+        published_artifact_path=public,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    persisted = json.loads(public.read_text(encoding="utf-8"))
+
+    assert payload["artifact_path"] == public.name
+    assert not Path(payload["artifact_path"]).is_absolute()
+    assert len(payload["artifact_path"]) <= 128
+    assert persisted == payload
+    assert secret not in json.dumps(payload)
+
+
+def test_agentic_failure_wrapper_path_is_relative_bounded_and_secret_safe(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Failure stdout must apply the same safe path-reference contract."""
+    import json
+
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    workdir = tmp_path / secret / ("oversized-cwd-component-" + "x" * 160)
+    workdir.mkdir(parents=True)
+    monkeypatch.chdir(workdir)
+    private, public = _prepare_agentic_review_loop_artifact(
+        "https://github.com/org/repo/pull/7"
+    )
+    assert private is not None and public is not None
+    private.write_text("not json", encoding="utf-8")
+
+    assert not _emit_agentic_review_loop_json(
+        artifact_path=private,
+        published_artifact_path=public,
+        failure_category="agentic_artifact_unavailable",
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["schema_version"] == "pdd.checkup.agentic.v1.wrapper"
+    assert payload["artifact_path"] == public.name
+    assert not Path(payload["artifact_path"]).is_absolute()
+    assert len(payload["artifact_path"]) <= 128
+    assert secret not in json.dumps(payload)
+
+
 def test_agentic_review_loop_blocking_artifact_exits_nonzero() -> None:
     import json
 
@@ -691,7 +765,7 @@ def test_concurrent_agentic_invocations_accept_only_their_own_artifact(
     second_payload = json.loads(capsys.readouterr().out)
     assert second_payload["schema_version"] == "pdd.checkup.agentic.v1"
     assert second_payload["status"] == "passed"
-    assert second_payload["artifact_path"] == str(second_public)
+    assert second_payload["artifact_path"] == second_public.name
     assert json.loads(second_public.read_text(encoding="utf-8")) == second_payload
 
 

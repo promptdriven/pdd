@@ -69,9 +69,10 @@ Layer 1 gate results, structured `findings[]`, `fix_attempts[]`,
 `validation_after_fix`, `fresh_final_review`, `verdict`, and `budget` blocks.
 Manual `--agentic-review-loop` writes the artifact to stdout (with `--json`) and
 to an invocation-specific `./pdd-checkup-agentic-{pr_number}-{nonce}.json` path.
-The exact public path is included in the successful artifact's top-level
-`artifact_path` field so file-based callers never guess or consume another
-concurrent invocation's verdict.
+The exact cwd-relative public basename is included in the successful artifact's
+top-level `artifact_path` field so file-based callers never guess or consume
+another concurrent invocation's verdict, while absolute working-directory
+components are never serialized into artifacts or retained stdout.
 
 Hosted `pdd_cloud` integration uses the canonical final-gate command instead of
 a second CLI invocation. When `PDD_CHECKUP_FALLBACK_MIRROR=1` is present,
