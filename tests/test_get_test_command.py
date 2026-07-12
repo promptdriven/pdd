@@ -1079,6 +1079,88 @@ class TestWorkspaceMembershipHardening:
         pytest.importorskip("yaml")
         assert _workspace_globs_for(anc) == ["packages/*"]
 
+    def test_dangling_pnpm_symlink_is_authoritative_fail_closed(self, tmp_path):
+        """A dangling pnpm-workspace.yaml symlink is still authoritative: it must
+        not fall through to a stale package.json `workspaces` field."""
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "package.json").write_text('{"workspaces": ["packages/*"]}')  # stale
+        (anc / "pnpm-workspace.yaml").symlink_to(tmp_path / "does-not-exist.yaml")
+        assert _workspace_globs_for(anc) == []
+
+    def test_dangling_pnpm_symlink_leaf_not_a_member(self, tmp_path):
+        """End-to-end: a dangling pnpm symlink must not let a leaf adopt root Jest."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "pnpm-workspace.yaml").symlink_to(tmp_path / "missing.yaml")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_self_referential_symlink_path_is_refused(self, tmp_path):
+        """A self-referential (looping) symlink path must fail closed, not raise."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        loop = repo / "loop"
+        loop.symlink_to(loop)  # points at itself → resolve() raises on 3.12
+        assert _detect_ts_test_runner(loop / "a.test.ts") is None
+
+    def test_directory_symlink_loop_is_refused(self, tmp_path):
+        """A pair of mutually-referential directory symlinks must fail closed."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        a = repo / "a"
+        b = repo / "b"
+        a.symlink_to(b)
+        b.symlink_to(a)
+        assert _detect_ts_test_runner(a / "x.test.ts") is None
+
+    def test_ancestor_manifests_parsed_at_most_once_per_discovery(self, tmp_path):
+        """Deeply nested packages must not re-parse every ancestor manifest
+        quadratically — each ancestor is read at most once per discovery."""
+        import pdd.get_test_command as mod
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["**"]}')
+        deep = repo
+        depth = 25
+        for i in range(depth):
+            deep = deep / f"p{i}"
+            deep.mkdir()
+            (deep / "package.json").write_text("{}")
+        test_file = deep / "src" / "w.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        reads = {"n": 0}
+        original = mod._workspace_globs_uncached
+
+        def _counting(ancestor):
+            reads["n"] += 1
+            return original(ancestor)
+
+        mod._workspace_globs_uncached = _counting
+        try:
+            result = _detect_ts_test_runner(test_file)
+        finally:
+            mod._workspace_globs_uncached = original
+        assert result is not None and "npx jest" in result[0]
+        # With caching, reads are bounded near the path depth, not depth^2.
+        assert reads["n"] <= depth + 5, reads["n"]
+
     def test_malformed_lerna_does_not_grant_default_glob(self, tmp_path):
         """A parse-failing lerna.json must not fall through to the `packages/*` default."""
         repo = tmp_path / "repo"
