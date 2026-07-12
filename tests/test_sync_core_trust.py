@@ -420,6 +420,32 @@ def test_durable_nonce_collision_is_rejected_across_policy_instances(tmp_path) -
     assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_durable_same_attestation_id_with_distinct_signed_payload_is_rejected(
+    tmp_path,
+) -> None:
+    path = tmp_path / "external/replay.json"
+    first = AttestationTrustPolicy(
+        {"trusted-ci": PUBLIC_KEY}, replay_store=FileReplayStore(path)
+    )
+    second = AttestationTrustPolicy(
+        {"trusted-ci": PUBLIC_KEY}, replay_store=FileReplayStore(path)
+    )
+    envelope = _envelope()
+    _verify(first, envelope)
+    conflicting = SIGNER.issue(
+        AttestationRequest(
+            envelope.attestation_id,
+            _binding(),
+            (ObligationEvidence("test", EvidenceOutcome.FAIL),),
+            envelope.validity.nonce,
+            NOW,
+        )
+    )
+
+    with pytest.raises(AttestationError, match="replayed"):
+        _verify(second, conflicting)
+
+
 def test_durable_exact_statement_recheck_is_idempotent(tmp_path) -> None:
     path = tmp_path / "external/replay.json"
     envelope = _envelope()
@@ -458,7 +484,7 @@ def test_file_replay_store_rejects_symlink_lock(tmp_path) -> None:
     path.with_name("replay.json.lock").symlink_to(outside)
     store = FileReplayStore(path)
     with pytest.raises(AttestationError, match="unsafe"):
-        store.consume("trusted-ci", "nonce", "attestation")
+        store.consume("trusted-ci", "nonce", "digest")
 
 
 def test_file_replay_store_rejects_symlinked_ancestor(tmp_path) -> None:
@@ -469,4 +495,4 @@ def test_file_replay_store_rejects_symlinked_ancestor(tmp_path) -> None:
     (protected / "linked").symlink_to(outside, target_is_directory=True)
     store = FileReplayStore(protected / "linked" / "nested" / "replay.json")
     with pytest.raises(AttestationError, match="unsafe"):
-        store.consume("trusted-ci", "nonce", "attestation")
+        store.consume("trusted-ci", "nonce", "digest")

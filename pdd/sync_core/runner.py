@@ -549,8 +549,10 @@ def runner_identity_digest(
         "checker_artifact_digest": _checker_artifact_digest(),
         "pytest_command": [
             "<measured-python-runtime>",
-            "-m",
-            "pytest",
+            "-P",
+            "<trusted-worker-imports-pytest-before-candidate-root>",
+            "import pytest",
+            "pytest.main",
             "-q",
             *PYTEST_PROTECTED_FLAGS,
             "<protected-node-id>",
@@ -558,8 +560,10 @@ def runner_identity_digest(
         ],
         "pytest_collection_command": [
             "<measured-python-runtime>",
-            "-m",
-            "pytest",
+            "-P",
+            "<trusted-worker-imports-pytest-before-candidate-root>",
+            "import pytest",
+            "pytest.main",
             "--collect-only",
             "-q",
             "--strict-config",
@@ -821,16 +825,16 @@ def _trusted_collection_runner(
     worker.write_text(
         "\n".join(
             (
-                "import os, subprocess, sys",
+                "import os, sys",
                 "",
                 f"_ROOT = {json.dumps(str(root))}",
                 f"_CONTROLLER = {json.dumps(str(directory))}",
                 "",
                 "os.chdir(_ROOT)",
-                "_ENV = os.environ.copy()",
-                "_ENV['PYTHONPATH'] = _CONTROLLER + os.pathsep + _ROOT",
-                "_STATUS = subprocess.run([sys.executable, '-P', '-m', 'pytest'] + "
-                + json.dumps(pytest_args) + ", env=_ENV).returncode",
+                "sys.path.insert(0, _CONTROLLER)",
+                "import pytest",
+                "sys.path.insert(0, _ROOT)",
+                "_STATUS = pytest.main(" + json.dumps(pytest_args) + ")",
                 "sys.stdout.flush(); sys.stderr.flush()",
                 "os._exit(_STATUS if _STATUS in (0, 5) else 125)",
                 "",
@@ -848,11 +852,13 @@ def _trusted_execution_runner(
     worker = directory / "execution_worker.py"
     worker.write_text(
         "\n".join((
-            "import os, subprocess, sys",
+            "import os, sys",
+            f"_CONTROLLER = {json.dumps(str(directory))}",
             f"os.chdir({json.dumps(str(root))})",
+            "sys.path.insert(0, _CONTROLLER)",
+            "import pytest",
             f"sys.path.insert(0, {json.dumps(str(root))})",
-            "_STATUS = subprocess.run([sys.executable, '-m', 'pytest'] + "
-            + json.dumps(pytest_args) + ").returncode",
+            "_STATUS = pytest.main(" + json.dumps(pytest_args) + ")",
             "sys.stdout.flush(); sys.stderr.flush()",
             "os._exit(_STATUS if 0 <= _STATUS <= 5 else 125)", "",
         )), encoding="utf-8",
@@ -876,13 +882,18 @@ def _run_test_node(
     node_id: str,
     timeout_seconds: int,
 ) -> RunnerExecution:
-    command = [
-        sys.executable,
-        "-m",
-        "pytest",
+    pytest_args = [
         "-q",
         *PYTEST_PROTECTED_FLAGS,
         node_id,
+    ]
+    command = [
+        sys.executable,
+        "-P",
+        "pdd-trusted-execution-runner",
+        "import-trusted-pytest",
+        "pytest.main",
+        *pytest_args,
     ]
     command_digest = hashlib.sha256(
         json.dumps(command, separators=(",", ":")).encode()
@@ -896,10 +907,10 @@ def _run_test_node(
         junit = controllers / f"result-{os.urandom(16).hex()}.xml"
         junit.touch(mode=0o600)
         worker = _trusted_execution_runner(
-            controllers, root, [*command[3:], f"--junitxml={junit}"]
+            controllers, root, [*pytest_args, f"--junitxml={junit}"]
         )
         result, surviving = _managed_subprocess(
-            [sys.executable, str(worker)], cwd=controllers,
+            [sys.executable, "-P", str(worker)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
             writable_roots=(home.parent,),
             writable_files=(junit,), readable_roots=(root,),
@@ -946,7 +957,7 @@ def _collect_node_ids(
         plugin_name, _plugin_directory = _trusted_probe_plugin(controllers)
         pytest_args.extend(("-p", plugin_name))
         worker = _trusted_collection_runner(controllers, root, pytest_args)
-        command = [sys.executable, str(worker)]
+        command = [sys.executable, "-P", str(worker)]
         digest = hashlib.sha256(
             json.dumps(
                 {

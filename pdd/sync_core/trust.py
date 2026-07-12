@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -43,8 +44,8 @@ class AttestationIssuer(Protocol):
 class ReplayStore:
     """Interface for atomic cross-verifier attestation nonce consumption."""
 
-    def consume(self, issuer: str, nonce: str, attestation_id: str) -> None:
-        """Bind a nonce to one attestation ID, allowing idempotent rechecks."""
+    def consume(self, issuer: str, nonce: str, envelope_digest: str) -> None:
+        """Bind a nonce to one immutable signed envelope, allowing exact rechecks."""
         raise NotImplementedError
 
     def is_durable(self) -> bool:
@@ -58,15 +59,15 @@ class InMemoryReplayStore(ReplayStore):
     def __init__(self) -> None:
         self._seen: dict[tuple[str, str], str] = {}
 
-    def consume(self, issuer: str, nonce: str, attestation_id: str) -> None:
+    def consume(self, issuer: str, nonce: str, envelope_digest: str) -> None:
         """Reject nonce reuse for a different signed statement."""
         key = (issuer, nonce)
         previous = self._seen.get(key)
         if previous is not None:
-            if previous == attestation_id:
+            if previous == envelope_digest:
                 return
             raise AttestationError("attestation nonce was replayed")
-        self._seen[key] = attestation_id
+        self._seen[key] = envelope_digest
 
     def is_durable(self) -> bool:
         """Return false for process-local test storage."""
@@ -120,7 +121,7 @@ class FileReplayStore(ReplayStore):
             temporary.unlink(missing_ok=True)
             raise
 
-    def consume(self, issuer: str, nonce: str, attestation_id: str) -> None:
+    def consume(self, issuer: str, nonce: str, envelope_digest: str) -> None:
         """Atomically reject and record every repeated issuer/nonce pair."""
         def consume_record(records):
             if not isinstance(records, dict) or not all(
@@ -130,10 +131,10 @@ class FileReplayStore(ReplayStore):
                 raise AttestationError("replay ledger has invalid records")
             key = base64.b64encode(f"{issuer}\0{nonce}".encode()).decode("ascii")
             previous = records.get(key)
-            if previous is not None and previous != attestation_id:
+            if previous is not None and previous != envelope_digest:
                 raise AttestationError("attestation nonce was replayed")
             if previous is None:
-                records[key] = attestation_id
+                records[key] = envelope_digest
             return records
         error = None
         for _attempt in range(3):
@@ -430,8 +431,13 @@ class AttestationTrustPolicy:
             raise AttestationError("attestation is expired")
 
     def _verify_replay(self, envelope: AttestationEnvelope) -> None:
+        envelope_digest = hashlib.sha256(
+            envelope.payload() + b"\0" + envelope.signature.encode("ascii")
+        ).hexdigest()
         self._replay_store.consume(
-            envelope.issuer, envelope.validity.nonce, envelope.attestation_id
+            envelope.issuer,
+            envelope.validity.nonce,
+            envelope_digest,
         )
 
     def _verify(

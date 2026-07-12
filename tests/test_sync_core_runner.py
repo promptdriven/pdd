@@ -627,8 +627,114 @@ def test_collection_worker_uses_trusted_plugin_path(tmp_path: Path) -> None:
 
     assert "_CONTROLLER =" in source
     assert str(controller) in source
-    assert "_ENV['PYTHONPATH'] = _CONTROLLER + os.pathsep + _ROOT" in source
-    assert "[sys.executable, '-P', '-m', 'pytest']" in source
+    assert "PYTHONPATH" not in source
+    assert source.index("import pytest") < source.index("sys.path.insert(0, _ROOT)")
+    assert "_STATUS = pytest.main" in source
+
+
+def test_worker_imports_trusted_pytest_before_candidate_root(tmp_path: Path) -> None:
+    root = tmp_path / "candidate"
+    controller = tmp_path / "controller"
+    root.mkdir()
+    controller.mkdir()
+    (root / "tests").mkdir()
+    (root / "product.py").write_text(
+        "def expected(): return 'candidate product'\n", encoding="utf-8"
+    )
+    (root / "tests/test_widget.py").write_text(
+        "from pathlib import Path\n"
+        "import product\n"
+        "import pytest\n"
+        "def test_widget():\n"
+        "    assert product.expected() == 'candidate product'\n"
+        "    assert Path(pytest.__file__).resolve() != Path('pytest.py').resolve()\n",
+        encoding="utf-8",
+    )
+    (root / "pytest.py").write_text(
+        "from pathlib import Path\n"
+        "Path('candidate-pytest-loaded').write_text('loaded')\n"
+        "def main(*_args, **_kwargs): return 0\n",
+        encoding="utf-8",
+    )
+    worker = runner_module._trusted_execution_runner(
+        controller, root, ["-q", "tests/test_widget.py::test_widget"]
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "-P", str(worker)], cwd=controller, env=environment,
+        capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (root / "candidate-pytest-loaded").exists()
+
+
+def test_candidate_pytest_module_cannot_forge_collection_or_junit_pass(tmp_path) -> None:
+    root = tmp_path / "candidate"
+    controller = tmp_path / "controller"
+    root.mkdir()
+    controller.mkdir()
+    (root / "tests").mkdir()
+    (root / "product.py").write_text("def expected(): return 1\n", encoding="utf-8")
+    (root / "tests/test_widget.py").write_text(
+        "import product\n\ndef test_widget(): assert product.expected() == 2\n",
+        encoding="utf-8",
+    )
+    (root / "pytest.py").write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "def forge(arguments):\n"
+        "    Path('candidate-pytest-loaded').write_text('loaded')\n"
+        "    if '--collect-only' in arguments:\n"
+        "        print('PDD_PROTECTED_NODE_IDS=[\"forged::node\"]')\n"
+        "    for argument in arguments:\n"
+        "        if argument.startswith('--junitxml='):\n"
+        "            Path(argument.split('=', 1)[1]).write_text(\n"
+        "                '<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>'\n"
+        "            )\n"
+        "    return 0\n"
+        "def main(arguments=None): return forge(arguments or [])\n"
+        "if __name__ == '__main__': raise SystemExit(forge(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    plugin_name, _plugin_directory = runner_module._trusted_probe_plugin(controller)
+    collection = runner_module._trusted_collection_runner(
+        controller,
+        root,
+        [
+            "--collect-only", "-q", "--strict-config", "--strict-markers",
+            "-p", "no:cacheprovider", "tests/test_widget.py", "-p", plugin_name,
+        ],
+    )
+    junit = controller / "result.xml"
+    execution = runner_module._trusted_execution_runner(
+        controller,
+        root,
+        ["-q", "tests/test_widget.py::test_widget", f"--junitxml={junit}"],
+    )
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+
+    collected = subprocess.run(
+        [sys.executable, "-P", str(collection)], cwd=controller, env=environment,
+        capture_output=True, text=True, check=False,
+    )
+    executed = subprocess.run(
+        [sys.executable, "-P", str(execution)], cwd=controller, env=environment,
+        capture_output=True, text=True, check=False,
+    )
+
+    assert collected.returncode == 0, collected.stderr
+    assert "PDD_PROTECTED_NODE_IDS=[\"tests/test_widget.py::test_widget\"]" in (
+        collected.stdout
+    )
+    assert "forged::node" not in collected.stdout
+    assert executed.returncode == 1, executed.stderr
+    assert 'failures="1"' in junit.read_text(encoding="utf-8")
+    assert not (root / "candidate-pytest-loaded").exists()
 
 
 def test_execution_precreates_private_junit_channel(
