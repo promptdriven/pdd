@@ -42,6 +42,7 @@ from sync_determine_operation import (
     _contained_architecture_code_path,
     _find_prompt_file,
     UnsafePromptPathError,
+    UnsafeOutputPathError,
 )
 
 # --- Test Plan ---
@@ -8321,3 +8322,178 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"FM1: generation writes {written.suffix!r} but sync expects "
             f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )
+
+
+# ---------------------------------------------------------------------------
+# R16: configured .pddrc output paths (generate_output_path,
+# example/test_output_path, outputs.*.path) are held to the same project
+# containment as architecture code filepaths (R7). An escaping configured output
+# must fail closed (UnsafeOutputPathError) and must never materialize a file or
+# directory outside the project during resolution — not even in dry-run.
+# Regression for the independent-review finding that R7-R10 containment was
+# applied only to architecture metadata, not to .pddrc-derived destinations.
+# ---------------------------------------------------------------------------
+
+
+def _write_escape_pddrc_project(root: Path, defaults_yaml: str, *, with_arch: bool) -> None:
+    """A minimal project whose .pddrc `backend` context carries `defaults_yaml`."""
+    (root / "prompts").mkdir(parents=True)
+    (root / "prompts" / "widget_python.prompt").write_text(
+        "% widget\n", encoding="utf-8"
+    )
+    (root / ".pdd" / "meta").mkdir(parents=True)
+    (root / ".pdd" / "locks").mkdir(parents=True)
+    (root / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        + defaults_yaml,
+        encoding="utf-8",
+    )
+    if with_arch:
+        (root / "architecture.json").write_text(
+            json.dumps({"modules": [
+                {"filename": "widget_python.prompt", "filepath": "widget.py"}
+            ]}),
+            encoding="utf-8",
+        )
+
+
+def test_get_pdd_file_paths_rejects_pddrc_example_test_output_escape(tmp_path, monkeypatch):
+    """R16: escaping example_output_path/test_output_path fail closed (arch branch)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      example_output_path: "../../../escape_ex/"\n'
+        '      test_output_path: "../../escape_test/"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent.parent / "escape_ex").exists()
+    assert not (tmp_path.parent.parent / "escape_test").exists()
+
+
+def test_get_pdd_file_paths_rejects_pddrc_generate_output_escape(tmp_path, monkeypatch):
+    """R16: an escaping generate_output_path cannot redirect the code target out of tree."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "../../escape_gen/"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent / "escape_gen").exists()
+
+
+def test_get_pdd_file_paths_rejects_pddrc_outputs_template_escape(tmp_path, monkeypatch):
+    """R16: escaping outputs.*.path templates fail closed (arch branch)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      outputs:\n'
+        '        example:\n          path: "../../../escape_out/{name}_example.py"\n'
+        '        test:\n          path: "../../escape_out/test_{name}.py"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent.parent / "escape_out").exists()
+
+
+def test_get_pdd_file_paths_non_arch_generate_escape_creates_nothing_out_of_tree(tmp_path, monkeypatch):
+    """R16: without architecture.json, an escaping generate_output_path must not
+    mkdir/touch a probe file outside the project during resolution and must fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "../../escape_gen/"\n',
+        with_arch=False,
+    )
+    outside = tmp_path.parent.parent / "escape_gen"
+    with pytest.raises(UnsafeOutputPathError, match="resolves outside project root"):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    # The pre-existing temp-probe mkdir/touch must not have leaked out of tree.
+    assert not outside.exists()
+
+
+def test_get_pdd_file_paths_pddrc_within_project_outputs_allowed(tmp_path, monkeypatch):
+    """R16 neighboring positive control: custom BUT in-project output dirs still resolve
+    (the containment guard must not over-reject legitimate non-default layouts)."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      example_output_path: "custom/usage/"\n'
+        '      test_output_path: "custom/specs/"\n'
+        '      generate_output_path: "src/lib/"\n',
+        with_arch=True,
+    )
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+    root = tmp_path.resolve()
+    for key in ("code", "example", "test"):
+        assert paths[key].resolve(strict=False).is_relative_to(root), (
+            f"{key}={paths[key]} should stay within {root}"
+        )
+    assert paths["example"].resolve(strict=False) == (root / "custom" / "usage" / "widget_example.py")
+    assert paths["test"].resolve(strict=False) == (root / "custom" / "specs" / "test_widget.py")
+
+
+def test_pdd_sync_dry_run_cli_resolves_nested_context(tmp_path, monkeypatch):
+    """Finding-3 boundary test: the REAL `pdd sync <module> --dry-run --json` Click
+    entrypoint (context discovery + prompts_dir rewrite in sync_main) resolves a
+    nested-context, path-qualified architecture unit to its prefix-retained prompt
+    and code — not just the get_pdd_file_paths helper in isolation."""
+    from click.testing import CliRunner
+    from pdd.cli import cli
+
+    proj = tmp_path
+    (proj / "prompts" / "commands").mkdir(parents=True)
+    (proj / "prompts" / "commands" / "checkup_python.prompt").write_text("% checkup\n", encoding="utf-8")
+    (proj / "pdd" / "commands").mkdir(parents=True)
+    (proj / "pdd" / "commands" / "checkup.py").write_text("x = 1\n", encoding="utf-8")
+    (proj / ".pdd" / "meta").mkdir(parents=True)
+    (proj / ".pdd" / "locks").mkdir(parents=True)
+    (proj / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      generate_output_path: "pdd/"\n',
+        encoding="utf-8",
+    )
+    (proj / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "commands/checkup_python.prompt", "filepath": "pdd/commands/checkup.py"}
+        ]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(cli, ["sync", "commands/checkup", "--dry-run", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    unit = payload["units"][0]
+    assert unit["paths"]["prompt"].replace("\\", "/").endswith("prompts/commands/checkup_python.prompt")
+    assert unit["paths"]["code"].replace("\\", "/").endswith("pdd/commands/checkup.py")
+
+
+def test_pdd_sync_cli_refuses_escaping_pddrc_output(tmp_path, monkeypatch):
+    """Finding-3 negative CLI control: a malicious .pddrc artifact path routed through
+    the real `pdd sync --dry-run` entrypoint must not create or write anything outside
+    the project tree."""
+    from click.testing import CliRunner
+    from pdd.cli import cli
+
+    proj = tmp_path / "proj"
+    _write_escape_pddrc_project(
+        proj,
+        '      generate_output_path: "../../escape_cli/"\n',
+        with_arch=True,
+    )
+    outside = tmp_path.parent / "escape_cli"
+    monkeypatch.chdir(proj)
+    result = CliRunner().invoke(cli, ["sync", "widget", "--dry-run", "--json"])
+    # Whatever the CLI reports, it must NOT have materialized an out-of-tree target.
+    assert not outside.exists(), f"CLI dry-run created out-of-tree {outside}"
+    assert not (tmp_path.parent / "escape_cli").exists()

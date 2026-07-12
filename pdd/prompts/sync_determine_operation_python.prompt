@@ -58,6 +58,7 @@ You are an expert Python developer. Your task is to implement the core decision-
 - Row that names this module: an architecture row whose filename equals the requested module's prompt filename (exact, case-insensitive), as opposed to a foreign row matched only by filename leaf or code-filepath stem.
 - Unowned / shared target: an output filepath that lies in NO named (non-`default`) context's territory — a repo-root or deliberately cross-cutting path that no context claims.
 - Valid output / unsafe output: an architecture output filepath is valid when it passes the checks that apply to output filepaths — R7 (relative and contained: no absolute, parent-traversal, or resolved-symlink escape), R9 (portable components, which is where backslash / Windows drive-colon / device / control rejection lives), and R10 (canonical spelling); a filepath that fails any of them is unsafe. (R8 governs prompt paths, not outputs.)
+- Project boundary (R16): the set of directories a resolved output may legitimately live under for a given resolution — the governing .pddrc/architecture.json project root AND the working roots outputs are anchored at (the process CWD for a parent/sibling-CWD run, and the config/custom prompt-root anchor). An output is "inside the boundary" when it resolves within any one of them; a genuine escape resolves outside all of them.
 </vocabulary>
 
 <contract_rules>
@@ -76,6 +77,7 @@ R12 (MUST): Within a single resolution the returned prompt and code path MUST co
 R13 (MUST NOT): Treat a null or non-string architecture filename as an error; treat it as absent and identify the module by its code filepath stem.
 R14 (MUST NOT): Emit any log record containing a raw, unvalidated caller basename, language, prompts_dir, or architecture path value; such a value is logged only after it has passed validation, and no logged value may let control, newline, or ANSI content forge or split a log record (however that is achieved).
 R15 (MUST): For a not-yet-existing prompt (new module), construct prompt/code/example/test paths under the resolved subproject context, applying the context prefix exactly once with no duplicated context segment.
+R16 (MUST): A returned code/example/test output filepath MUST resolve inside the resolution's project boundary regardless of whether the destination came from architecture.json OR from .pddrc configuration (generate_output_path, example_output_path/test_output_path, or an outputs.<artifact>.path template). A configured output that resolves outside every project boundary (parent traversal, an escaping symlink, or an away-pointing absolute path) fails closed with a path-resolution error, and resolution MUST NOT create or write any file or directory outside the boundary while discovering paths — not even a temporary probe, and not even in read-only/dry-run analysis. A configured output that stays inside the boundary is honored unchanged.
 </contract_rules>
 
 <coverage>
@@ -94,6 +96,7 @@ R12: test_get_pdd_file_paths_no_torn_pair_on_concurrent_architecture_rewrite
 R13: test_get_pdd_file_paths_null_filename_uses_architecture_filepath, test_get_pdd_file_paths_non_string_filename_uses_filepath
 R14: test_get_pdd_file_paths_does_not_info_log_raw_unsafe_arch_filepath, test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging, test_get_pdd_file_paths_validates_before_logging_raw_input, test_get_pdd_file_paths_validates_language_before_logging
 R15: test_get_pdd_file_paths_missing_custom_module_keeps_context_root, test_get_pdd_file_paths_nested_missing_custom_module_keeps_context_root, test_get_pdd_file_paths_non_architecture_templates_not_duplicated_from_parent_cwd, test_get_pdd_file_paths_construct_paths_failure_anchors_fallback_at_subproject
+R16: test_get_pdd_file_paths_rejects_pddrc_example_test_output_escape, test_get_pdd_file_paths_rejects_pddrc_generate_output_escape, test_get_pdd_file_paths_rejects_pddrc_outputs_template_escape, test_get_pdd_file_paths_non_arch_generate_escape_creates_nothing_out_of_tree, test_get_pdd_file_paths_pddrc_within_project_outputs_allowed, test_pdd_sync_dry_run_cli_resolves_nested_context, test_pdd_sync_cli_refuses_escaping_pddrc_output
 </coverage>
 
 ### Dependencies:

@@ -18,7 +18,7 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Iterable, List, Optional, Any, Tuple
 from datetime import datetime
 import psutil
 
@@ -153,6 +153,32 @@ class MalformedArchitectureError(AmbiguousModuleError):
             f"architecture.json at '{architecture_path}' is present but could not be "
             f"read/parsed ({reason}); fix or remove it — refusing to resolve at "
             f"convention fallback paths.",
+        )
+
+
+class UnsafeOutputPathError(AmbiguousModuleError):
+    """Raised when a resolved code/example/test output escapes the project root.
+
+    Architecture code filepaths are already contained by
+    :func:`_contained_architecture_code_path` (R7), but the *destination* of an
+    output can also come from ``.pddrc`` configuration — ``generate_output_path``,
+    ``example_output_path``/``test_output_path``, and ``outputs.*.path`` templates.
+    A configured value with parent traversal, an escaping symlink, or an absolute
+    path pointing away from the project would otherwise let sync (or even dry-run
+    path discovery) create/write files outside the project tree. Subclassing the
+    hard path-resolution error means every sync entry point that already fails
+    closed on :class:`AmbiguousModuleError` also refuses an out-of-tree output,
+    while best-effort callers (logging, drift heal, checkup) degrade gracefully.
+    """
+
+    def __init__(self, output_path: object, project_root: object, artifact: str):
+        self.output_path = output_path
+        self.project_root = project_root
+        self.artifact = artifact
+        ValueError.__init__(
+            self,
+            f"Unsafe {artifact} output path '{output_path}' resolves outside "
+            f"project root '{project_root}'",
         )
 
 
@@ -2030,6 +2056,76 @@ def _contained_architecture_code_path(
     return candidate
 
 
+def _resolution_containment_roots(
+    config_anchor: Path, prompts_root_anchor: Path
+) -> Tuple[Path, ...]:
+    """Legitimate project boundaries a resolved output may live under.
+
+    Output destinations in ``get_pdd_file_paths`` are anchored at one of several
+    legitimate roots depending on the branch: the governing ``.pddrc`` /
+    ``architecture.json`` directory (project-relative outputs), or the process CWD
+    (a parent/sibling CWD run whose outputs stay CWD-relative), or the config /
+    custom prompt-root anchor. A path is contained when it resolves inside ANY of
+    these; a genuine escape (parent traversal, escaping symlink, or an
+    away-pointing absolute path) lands outside every one of them. Checking the set
+    keeps CWD-relative legitimate layouts working while still refusing an
+    out-of-tree write, so ``.pddrc``/architecture config cannot turn a sync (or
+    even dry-run discovery) into an arbitrary filesystem write.
+    """
+    roots: List[Path] = []
+    for base in (config_anchor, prompts_root_anchor, Path.cwd()):
+        try:
+            roots.append(base.resolve(strict=False))
+        except (OSError, RuntimeError, ValueError):
+            pass
+    for finder in (_find_pddrc_file, _find_architecture_json):
+        found = finder(config_anchor)
+        if found is not None:
+            try:
+                roots.append(found.parent.resolve(strict=False))
+            except (OSError, RuntimeError, ValueError):
+                pass
+    unique: List[Path] = []
+    seen = set()
+    for root in roots:
+        if root not in seen:
+            seen.add(root)
+            unique.append(root)
+    return tuple(unique)
+
+
+def _output_path_within_project(
+    path: Any, project_roots: Iterable[Path]
+) -> bool:
+    """Whether ``path`` resolves (symlinks followed) inside ANY allowed root."""
+    try:
+        resolved = Path(path).resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for root in project_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _ensure_output_within_project(
+    path: Any, project_roots: Tuple[Path, ...], artifact: str
+) -> Any:
+    """Return ``path`` when contained in an allowed root; else fail closed.
+
+    Raises :class:`UnsafeOutputPathError` (a hard, propagating path-resolution
+    error) when a configured code/example/test destination escapes every project
+    boundary.
+    """
+    if not _output_path_within_project(path, project_roots):
+        primary = project_roots[0] if project_roots else Path.cwd()
+        raise UnsafeOutputPathError(path, primary, artifact)
+    return path
+
+
 def _architecture_module_choices(
     architecture_path: Path,
     basename: str,
@@ -2621,6 +2717,26 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         ):
             config_anchor = Path.cwd()
 
+        # The project boundaries every returned output must stay within. Computed
+        # once from the same anchors the branches use, so architecture- and
+        # .pddrc-derived code/example/test destinations are held to the same
+        # containment as the architecture code filepath (R7). A configured output
+        # that escapes the tree (parent traversal / escaping symlink / away-pointing
+        # absolute path) fails closed via _finalize_output_paths instead of writing
+        # out of tree.
+        _containment_roots = _resolution_containment_roots(
+            config_anchor, prompts_root_anchor
+        )
+
+        def _finalize_output_paths(paths: Dict[str, Path]) -> Dict[str, Path]:
+            for _artifact in ("code", "example", "test"):
+                _candidate = paths.get(_artifact)
+                if _candidate is not None:
+                    _ensure_output_within_project(
+                        _candidate, _containment_roots, _artifact
+                    )
+            return paths
+
         resolved_context_name = _resolve_context_name_for_basename(
             basename, context_override, pddrc_anchor=config_anchor
         )
@@ -2943,7 +3059,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test_files': matching_test_files or [test_path]
                 }
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
-                return result
+                return _finalize_output_paths(result)
 
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():
@@ -3001,7 +3117,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     if _new_pddrc is not None:
                         result = _anchor_output_paths_at_project(result, _new_pddrc.parent)
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
-                    return result
+                    return _finalize_output_paths(result)
 
                 # Legacy path construction (backwards compatibility)
                 # Extract directory configuration from resolved_config
@@ -3096,7 +3212,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     'test_files': matching_test_files or [test_path]  # Bug #156
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
-                return result
+                return _finalize_output_paths(result)
             except Exception as e:
                 # If construct_paths fails, fall back to convention-based paths. Anchor
                 # them at the resolved subproject (the .pddrc directory) when it differs
@@ -3128,13 +3244,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     )
                 else:
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
-                return {
+                return _finalize_output_paths({
                     'prompt': Path(prompt_path),
                     'code': _anchor_fallback(f"{dir_prefix}{name_part}{_dot(extension)}"),
                     'example': _anchor_fallback(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
-                }
+                })
         
         input_file_paths = {
             "prompt_file": prompt_path
@@ -3182,7 +3298,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _existing_pddrc is not None:
                 result = _anchor_output_paths_at_project(result, _existing_pddrc.parent)
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
-            return result
+            return _finalize_output_paths(result)
 
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths
@@ -3213,7 +3329,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Create a temporary empty code file if it doesn't exist for path resolution
             code_path_obj = Path(code_path)
             temp_code_created = False
-            if not code_path_obj.exists():
+            # Never materialize a probe file outside the project: a .pddrc
+            # generate_output_path with parent traversal (or an away-pointing
+            # absolute path) must not create directories out of tree here. When the
+            # target escapes, skip the probe — the containment guard on the return
+            # value fails the whole resolution closed.
+            if not code_path_obj.exists() and _output_path_within_project(
+                code_path_obj, _containment_roots
+            ):
                 code_path_obj.parent.mkdir(parents=True, exist_ok=True)
                 code_path_obj.touch()
                 temp_code_created = True
@@ -3325,13 +3448,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         else:
             matching_test_files = [test_path] if test_path.exists() else []
 
-        return {
+        return _finalize_output_paths({
             'prompt': Path(prompt_path),
             'code': code_path,
             'example': example_path,
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
-        }
+        })
 
     except AmbiguousModuleError:
         # Issue #1677: ambiguity is a hard, actionable error — never let the broad
