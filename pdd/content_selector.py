@@ -773,7 +773,11 @@ _JS_RUNNER_DISCOVERY_RE = re.compile(
 # (issue #1903 review rounds 2-3, delegating/wrapper jest.config.js).
 _JS_RUNNER_UNRESOLVABLE_RE = re.compile(
     r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\."
-    r"|=>|\bfunction\b|=\s*[A-Za-z_$][\w$.]*\s*\("
+    r"|=>|\bfunction\b"
+    r"|=\s*[A-Za-z_$][\w$.]*\s*\("          # export is a call: = buildConfig(
+    r"|\[[^\]\n]*\]\s*:"                    # computed property key: {[..]: ..}
+    r"|module\.exports\s*=\s*[A-Za-z_$]"    # export is an identifier: = config
+    r"|export\s+default\s+[A-Za-z_$]"       # export default ident / defineConfig
 )
 _JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
 
@@ -948,20 +952,53 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
     return "".join(out)
 
 
+try:  # `regex` (already a pdd dependency) supports a per-match wall-clock timeout
+    import regex as _redos_regex  # type: ignore
+    _HAVE_REDOS_REGEX = True
+except ImportError:  # pragma: no cover - stdlib fallback (no timeout, caps only)
+    _redos_regex = re  # type: ignore
+    _HAVE_REDOS_REGEX = False
+
+# Repo-controlled ``testMatch``/``testRegex``/``testPathIgnorePatterns`` are
+# hosted/issue-influenced. Matching them with backtracking regex is a ReDoS
+# vector (issue #1903 review round 4), so every such match runs with a strict
+# wall-clock timeout and generous length caps, and FAILS CLOSED (``None``).
+_REGEX_MATCH_TIMEOUT_S = 0.1
+_REGEX_MAX_PATTERN_LEN = 4096
+_REGEX_MAX_TEXT_LEN = 2048
+
+
+def _safe_regex_search(pattern: Optional[str], text: str) -> Optional[bool]:
+    """Timeout-bounded, fail-closed ``search`` for a repo-controlled pattern.
+
+    Returns ``True``/``False`` on a decisive match, or ``None`` (fail closed) on
+    a timeout (catastrophic backtracking), a compile error, or over-long input —
+    so a malicious/pathological runner pattern can never stall sync.
+    """
+    if pattern is None or text is None:
+        return None
+    if len(pattern) > _REGEX_MAX_PATTERN_LEN or len(text) > _REGEX_MAX_TEXT_LEN:
+        return None
+    try:
+        if _HAVE_REDOS_REGEX:
+            return _redos_regex.search(
+                pattern, text, timeout=_REGEX_MATCH_TIMEOUT_S
+            ) is not None
+        return re.search(pattern, text) is not None
+    except (re.error, ValueError, RecursionError, TimeoutError):
+        return None
+    except Exception:  # pylint: disable=broad-except  (regex.TimeoutError etc.)
+        return None
+
+
 def _glob_matches(glob: str, posix_path: str) -> Optional[bool]:
     """Best-effort: does *posix_path* match jest ``testMatch`` *glob*?
 
-    Returns ``True``/``False`` when the glob is translatable, or ``None`` when it
-    is not (negation, or a regex-compile failure) so the caller stays
-    conservative rather than guessing.
+    Returns ``True``/``False`` when the glob is translatable and matched within
+    the ReDoS timeout, or ``None`` when it is not (negation, compile failure, or
+    a timeout) so the caller stays conservative rather than guessing.
     """
-    pattern = _micromatch_to_regex(glob)
-    if pattern is None:
-        return None
-    try:
-        return re.search(pattern, posix_path) is not None
-    except re.error:
-        return None
+    return _safe_regex_search(_micromatch_to_regex(glob), posix_path)
 
 
 def _sub_root_dir(value: str, root_dir: Path) -> str:
@@ -1134,13 +1171,12 @@ def _candidate_is_collected(
         if not any(_contained_in_root(candidate, root) for root in resolved_roots):
             return False
 
-    # testPathIgnorePatterns exclusion (regex over the path).
+    # testPathIgnorePatterns exclusion (repo-controlled regex over the path,
+    # ReDoS-bounded). A match excludes; an UNEVALUABLE ignore pattern could also
+    # exclude, so fail closed to "not collected" either way.
     for pat in _as_str_list(config.get("testPathIgnorePatterns")):
-        try:
-            if re.search(_sub_root_dir(pat, root_dir), posix):
-                return False
-        except re.error:
-            continue
+        if _safe_regex_search(_sub_root_dir(pat, root_dir), posix) is not False:
+            return False
 
     # testMatch / testRegex collection patterns.
     match_globs = _as_str_list(config.get("testMatch"))
@@ -1170,11 +1206,11 @@ def _candidate_is_collected(
         if matched:
             included = not negated
     for rgx in test_regexes:
-        try:
-            if re.search(_sub_root_dir(rgx, root_dir), posix):
-                included = True
-        except re.error:
-            return False  # unevaluable regex -> fail closed
+        res = _safe_regex_search(_sub_root_dir(rgx, root_dir), posix)
+        if res is None:
+            return False  # unevaluable / timed-out regex -> fail closed
+        if res:
+            included = True
     return bool(included)  # True = collected; explicit miss / excluded -> False
 
 
@@ -1218,6 +1254,39 @@ def _project_uses_vitest(module_path: Path, root_resolved: Path) -> bool:
             break
         current = parent
     return False
+
+
+def _detected_jest_major(module_path: Path, root_resolved: Path) -> Optional[int]:
+    """The declared jest MAJOR version (floor) from the nearest package.json, or
+    ``None`` when unknown. Uses the lowest integer in the version range as a
+    conservative floor (``">=29"`` -> 29). Total."""
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return None
+    root_s = str(root_resolved)
+    while True:
+        pkg = current / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, Mapping):
+                for dep_key in ("dependencies", "devDependencies",
+                                "peerDependencies", "optionalDependencies"):
+                    deps = data.get(dep_key)
+                    if isinstance(deps, Mapping) and isinstance(deps.get("jest"), str):
+                        m = re.search(r"(\d+)", deps["jest"])
+                        if m:
+                            return int(m.group(1))
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
 
 
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
@@ -1286,7 +1355,14 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             config.get("testMatch") is not None or config.get("testRegex") is not None
         )
         default_exts = (".js", ".jsx", ".ts", ".tsx")
-        if _project_uses_vitest(module_path, root_resolved):
+        # vitest's default ``include`` collects mjs/cjs; jest's default collects
+        # them only from v30+ (v30 added `[mc]` to the default testMatch). Widen
+        # the default set accordingly; an UNKNOWN jest version stays strict
+        # (refuse mjs/cjs) since jest <=29 would not collect them (#1903 review).
+        jest_major = _detected_jest_major(module_path, root_resolved)
+        if _project_uses_vitest(module_path, root_resolved) or (
+            jest_major is not None and jest_major >= 30
+        ):
             default_exts = default_exts + (".mjs", ".cjs")
         if not has_explicit_match and module_path.suffix.lower() not in default_exts:
             return None

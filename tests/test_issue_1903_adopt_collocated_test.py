@@ -499,6 +499,44 @@ class TestGreenfieldRunnerDiscovery:
         got = find_runner_collected_test_path(code)
         assert got is not None and Path(got).name == "util.test.mjs"
 
+    def test_jest30_collects_mjs_but_jest29_does_not(self, tmp_path, monkeypatch):
+        # Jest 30's default testMatch collects .mjs/.cjs; Jest 29 does not.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"devDependencies": {"jest": "^30.0.0"}}))
+        got = find_runner_collected_test_path(_write(tmp_path / "src/util.mjs"))
+        assert got is not None and Path(got).name == "util.test.mjs"
+        # Downgrade to jest 29 -> refuse the .mjs (would be uncollected).
+        (tmp_path / "package.json").write_text(
+            json.dumps({"devDependencies": {"jest": "^29.7.0"}}), encoding="utf-8")
+        assert find_runner_collected_test_path(_write(tmp_path / "lib/util.mjs")) is None
+
+    def test_computed_key_and_identifier_configs_refuse(self, tmp_path, monkeypatch):
+        # A computed testMatch key or a non-literal (identifier) export cannot be
+        # proven default -> refuse.
+        monkeypatch.chdir(tmp_path)
+        for content in (
+            "const c = {['test' + 'Match']: ['**/qa/**/*.test.ts']}; module.exports = c\n",
+            "const config = {}; module.exports = config\n",
+        ):
+            (tmp_path / "jest.config.js").write_text(content, encoding="utf-8")
+            code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
+            assert find_runner_collected_test_path(code) is None, content
+
+    def test_runner_pattern_matching_is_redos_bounded(self):
+        # A catastrophic-backtracking testMatch pattern must not stall: the
+        # bounded matcher fails closed (None) rather than hanging.
+        import time
+        from pdd.content_selector import _safe_regex_search, _micromatch_to_regex
+        pat = _micromatch_to_regex("**/+(a|aa)b.test.ts")
+        # all 'a', no trailing 'b' -> exponential backtracking on a naive engine.
+        text = "src/" + ("a" * 48) + ".test.ts"
+        start = time.time()
+        result = _safe_regex_search(pat, text)
+        elapsed = time.time() - start
+        assert result is None, "catastrophic pattern must fail closed"
+        assert elapsed < 1.0, f"matcher must be time-bounded, took {elapsed:.2f}s"
+
 
 # ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the
