@@ -21,12 +21,15 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
+from .agentic_change_orchestrator import _extract_marker_paths
 from .agentic_common import build_agentic_task_instruction, run_agentic_task
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
+    _basename_from_architecture_filepath,
     _find_pdd_executable,
+    _target_basename_aliases,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
@@ -226,6 +229,395 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return basenames
     except (subprocess.CalledProcessError, OSError):
         return []
+
+
+# Backticked inline-code spans (single-line, non-empty) in issue markdown.
+_ISSUE_BACKTICK_TOKEN_RE = re.compile(r"`([^`\n]+)`")
+# Prompt-file path tokens (FILES_MODIFIED lists, prose references). Captures
+# full non-whitespace paths so supported route-segment characters like the
+# brackets in ``app/users/[id]/page_TypeScriptReact.prompt`` survive
+# (PR #1983 round 3, P1#2); surrounding markdown punctuation is trimmed
+# afterwards by ``_prompt_path_tokens``.
+_ISSUE_PROMPT_PATH_RE = re.compile(r"\S+\.prompt\b")
+# Leading punctuation markdown wraps around a path (backticks, quotes, parens,
+# emphasis, list/link leftovers). The ``\.prompt`` anchor already excludes
+# trailing punctuation. ``[`` is handled separately: it is markdown link syntax
+# only when no matching ``]`` follows (otherwise it starts a dynamic route
+# segment such as ``[id]/page_...``).
+_PROMPT_PATH_LEAD_TRIM = "`\"'(<*,;:!]}>"
+# Opening/closing fence line: a run of 3+ backticks or tildes (CommonMark).
+_FENCE_LINE_RE = re.compile(r"(`{3,}|~{3,})")
+
+
+def _prompt_path_tokens(text: str) -> List[str]:
+    """Extract prompt-file path tokens from text, trimming markdown wrapping."""
+    tokens: List[str] = []
+    for raw in _ISSUE_PROMPT_PATH_RE.findall(text):
+        token = raw.lstrip(_PROMPT_PATH_LEAD_TRIM)
+        while token.startswith("[") and "]" not in token:
+            token = token[1:]
+        if token:
+            tokens.append(token)
+    return tokens
+
+
+def _strip_fenced_code_blocks(text: str) -> str:
+    """Remove fenced code blocks (``` or ~~~) from markdown text.
+
+    Fenced content is quoted logs/snippets, not a request (PR #1983 round 3,
+    P2). An unclosed fence conservatively drops the remainder of the text —
+    under-matching noise is safe, while over-matching inflates a write-mode
+    sync scope.
+
+    Fences may be LONGER than three characters: a fence closes only on a run
+    of the SAME character at least as long as the opener (CommonMark;
+    PR #1983 round 4, P2#2), so a 4-backtick fence swallows inner ``` pairs
+    as quoted content instead of leaking the text between them.
+    """
+    kept: List[str] = []
+    fence_char: Optional[str] = None
+    fence_len = 0
+    for line in text.splitlines():
+        match = _FENCE_LINE_RE.match(line.lstrip())
+        if fence_char is None:
+            if match:
+                fence_char = match.group(1)[0]
+                fence_len = len(match.group(1))
+            else:
+                kept.append(line)
+            continue
+        if match and match.group(1)[0] == fence_char and len(match.group(1)) >= fence_len:
+            fence_char = None
+            fence_len = 0
+    return "\n".join(kept)
+
+
+def _architecture_identity_index(
+    architecture: Optional[List[Dict[str, Any]]],
+) -> Tuple[List[str], set, Dict[str, List[str]]]:
+    """Index REAL per-entry module identities, duplicates preserved.
+
+    ``_architecture_module_basenames`` dedupes by derived basename, which
+    collapses distinct modules that share a prompt FILENAME — the normal
+    Next.js shape: several ``page_TypeScriptReact.prompt`` entries differing
+    only by route dir / ``filepath``. Extraction and coverage must instead see
+    one identity per distinct entry so a shared tail is detectably ambiguous
+    (PR #1983 round 3, P1#1).
+
+    Returns ``(identities, known_keys, tail_to_identities)``:
+
+    * ``identities`` — one primary identity per distinct entry (filename
+      derivation with directories preserved, falling back to the
+      filepath-derived key); duplicates KEPT.
+    * ``known_keys`` — every exact-match alias (filename- and
+      filepath-derived, via ``_architecture_entry_aliases``).
+    * ``tail_to_identities`` — final path component -> per-entry identities;
+      a tail listing more than one entry is ambiguous.
+
+    Runtime ``*_LLM.prompt`` entries are excluded entirely. STRING-IDENTICAL
+    entries are deliberately NOT deduped (PR #1983 round 4, P1#1): the
+    combined inventory carries no source-project metadata
+    (``load_combined_architecture_data`` concatenates nested architecture
+    files without qualification), so two identical entries may be distinct
+    modules in different projects — treating them as ambiguous is the only
+    safe deterministic choice. The cost is recall-only and confined to a
+    module literally double-listed with identical strings (bare-name
+    resolution and tail coverage are disabled for it; exact/path-qualified
+    requests still work).
+    """
+    identities: List[str] = []
+    known_keys: set = set()
+    tail_to_identities: Dict[str, List[str]] = {}
+    for entry in architecture or []:
+        if not isinstance(entry, dict):
+            continue
+        filename = str(entry.get("filename", "") or "")
+        if _is_runtime_llm_template(filename):
+            continue
+        filepath = entry.get("filepath")
+        filepath_str = filepath if isinstance(filepath, str) else ""
+        primary = _basename_from_architecture_filename(filename)
+        if not primary and filepath_str:
+            primary = _basename_from_architecture_filepath(filepath_str)
+        if not primary:
+            continue
+        identities.append(primary)
+        known_keys.update(_architecture_entry_aliases(entry))
+        tail_to_identities.setdefault(primary.rsplit("/", 1)[-1], []).append(primary)
+    return identities, known_keys, tail_to_identities
+
+
+def _module_key_from_prompt_path(path_token: str) -> Optional[str]:
+    """Convert a prompt-file path token to a path-qualified module key.
+
+    Mirrors the key derivation in ``_detect_modules_from_branch_diff`` (#1675):
+    ``extensions/b/prompts/src/page_python.prompt`` yields
+    ``extensions/b/src/page`` — the owning-project prefix (path before
+    ``prompts/``) plus the sub-path under ``prompts/`` plus the
+    language-stripped basename. Reducing the token to just the filename would
+    lose the qualification and let a same-tail sibling mask the request
+    (PR #1983 review, P1b). A path without a ``prompts/`` component keeps only
+    its filename basename (there is no key convention to preserve for it).
+    Runtime ``*_LLM.prompt`` templates yield ``None``.
+    """
+    if path_token.startswith("prompts/"):
+        prefix, relative = "", path_token[len("prompts/"):]
+    else:
+        marker = "/prompts/"
+        idx = path_token.find(marker)
+        if idx == -1:
+            prefix, relative = "", path_token.rsplit("/", 1)[-1]
+        else:
+            prefix = path_token[: idx + 1]  # keep trailing slash
+            relative = path_token[idx + len(marker):]
+    rel_path = Path(relative)
+    basename = extract_module_from_include(rel_path.name)
+    if not basename:
+        stem = rel_path.name
+        if stem.endswith(".prompt"):
+            stem = stem[: -len(".prompt")]
+        if not stem or _is_runtime_llm_template(stem):
+            return None
+        basename = stem
+    if rel_path.parent != Path("."):
+        return f"{prefix}{rel_path.parent.as_posix()}/{basename}"
+    return f"{prefix}{basename}"
+
+
+def _resolve_issue_module_token(
+    token: str,
+    known_keys: set,
+    tail_to_identities: Dict[str, List[str]],
+) -> Optional[str]:
+    """Resolve one candidate token to a known module key, or ``None``.
+
+    Tries the token verbatim, then with ``.prompt`` / language suffixes
+    stripped. Rules over the REAL identity index (duplicates preserved):
+
+    * An exact alias match resolves — but a BARE candidate whose tail lists
+      more than one distinct entry has no deterministic referent (two Next.js
+      ``page`` modules answer to the same bare name) and is skipped; a
+      path-qualified alias stays exact.
+    * A non-exact candidate resolves through its final path component only
+      when that tail lists exactly ONE entry and the qualification is
+      consistent (one side is a path suffix of the other, or the candidate is
+      bare).
+
+    Runtime ``*_LLM`` templates never resolve (#1396 boundary).
+    """
+    if _is_runtime_llm_template(token):
+        return None
+    candidates = [token]
+    if token.endswith(".prompt"):
+        candidates.append(token[: -len(".prompt")])
+    stripped = _strip_language_suffix_preserving_path(candidates[-1])
+    if stripped:
+        candidates.append(stripped)
+    for cand in candidates:
+        tail_matches = tail_to_identities.get(cand.rsplit("/", 1)[-1], [])
+        if cand in known_keys:
+            if "/" in cand or len(tail_matches) == 1:
+                return cand
+            continue
+        if len(tail_matches) == 1 and (
+            "/" not in cand
+            or tail_matches[0].endswith(f"/{cand}")
+            or cand.endswith(f"/{tail_matches[0]}")
+        ):
+            return tail_matches[0]
+    return None
+
+
+def _bare_mention_identities(
+    prose_text: str,
+    identities: List[str],
+    tail_to_identities: Dict[str, List[str]],
+) -> List[str]:
+    """Class-3 scan: bare word-boundary mentions of identifier-like names.
+
+    Only tails containing an underscore or hyphen qualify (they cannot be
+    ordinary prose words) and only when the tail lists exactly one real entry.
+    The lookarounds exclude adjacent word chars, ``/``, ``.``, and ``-`` so a
+    standalone mention matches but longer identifiers (``ci_validation_extra``,
+    ``double-check-run``), path segments (``a/ci_validation/b``), and filenames
+    (``ci_validation.py`` — file mentions go through class 2) do not.
+    """
+    found: List[str] = []
+    for module in identities:
+        tail = module.rsplit("/", 1)[-1]
+        if module in found or len(tail_to_identities[tail]) != 1:
+            continue
+        if "_" not in tail and "-" not in tail:
+            continue
+        if re.search(rf"(?<![\w./\-]){re.escape(tail)}(?![\w./\-])", prose_text):
+            found.append(module)
+    return found
+
+
+def _trusted_comment_prompt_paths(
+    comments: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Collect prompt paths from trusted FILES_MODIFIED marker payloads only.
+
+    Issue comments are largely workflow noise (step logs, retries), so free
+    text in them must never widen a write-mode sync scope (PR #1983 round 3,
+    P2). The only trusted signal is a ``FILES_MODIFIED:`` marker payload — the
+    exact format the change orchestrator emits — parsed with the same
+    ``_extract_marker_paths`` walker that produces/consumes those markers.
+    Fenced code blocks are stripped FIRST so a marker quoted inside a log
+    fence is treated as a log, not a directive. Only ``*.prompt`` payload
+    entries are returned; code/doc paths are not module requests.
+    """
+    paths: List[str] = []
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        comment_body = str(comment.get("body", "") or "")
+        payload = _extract_marker_paths(
+            "FILES_MODIFIED", _strip_fenced_code_blocks(comment_body)
+        )
+        paths.extend(p for p in payload if p.endswith(".prompt"))
+    return paths
+
+
+def _explicit_token_modules(
+    text: str,
+    comments: Optional[List[Dict[str, Any]]],
+    known_keys: set,
+    tail_to_identities: Dict[str, List[str]],
+) -> List[str]:
+    """Resolve class-1 and class-2 tokens to module keys, in mention order.
+
+    Class 1: backticked single-word tokens from the title/body, resolved via
+    ``_resolve_issue_module_token``. Class 2: prompt-file paths from the
+    title/body plus trusted FILES_MODIFIED marker payloads from the filtered
+    comments. A path-qualified derived key whose tail exists in the inventory
+    is accepted directly: the path itself is the disambiguation, and the key
+    form matches what ``_detect_modules_from_branch_diff`` schedules for the
+    same file (#1675). Bare derived keys must still resolve uniquely.
+    """
+    modules: List[str] = []
+
+    def _push(module: Optional[str]) -> None:
+        if module and module not in modules:
+            modules.append(module)
+
+    for raw in _ISSUE_BACKTICK_TOKEN_RE.findall(text):
+        token = raw.strip()
+        if token and not any(ch.isspace() for ch in token):
+            _push(_resolve_issue_module_token(token, known_keys, tail_to_identities))
+
+    for path_token in _prompt_path_tokens(text) + _trusted_comment_prompt_paths(comments):
+        module_key = _module_key_from_prompt_path(path_token)
+        if not module_key:
+            continue
+        if "/" in module_key and module_key.rsplit("/", 1)[-1] in tail_to_identities:
+            _push(module_key)
+        else:
+            _push(
+                _resolve_issue_module_token(module_key, known_keys, tail_to_identities)
+            )
+    return modules
+
+
+def _extract_issue_named_modules(
+    title: str,
+    body: str,
+    architecture: Optional[List[Dict[str, Any]]],
+    comments: Optional[List[Dict[str, Any]]] = None,
+) -> List[str]:
+    """Deterministically extract known modules explicitly named in an issue.
+
+    Issue #1980: the branch-diff fast path must not silently drop modules the
+    issue explicitly requests. This helper matches the issue title/body — plus
+    trusted marker payloads from the FILTERED comments (FILES_MODIFIED markers
+    arrive as comments, PR #1983 review P1a) — against the REAL module
+    identity index (runtime ``*_LLM`` templates excluded) using three
+    high-precision, zero-LLM token classes:
+
+    1. Backticked inline-code tokens (e.g. ```greeter```,
+       ```prompts/greeter_python.prompt```) that resolve to a known
+       basename after optional ``.prompt``/language-suffix stripping.
+    2. Prompt-file path tokens anywhere in the text (FILES_MODIFIED-style
+       lists such as ``prompts/textutil_python.prompt``), converted to
+       path-qualified module keys.
+    3. Bare word-boundary mentions, but ONLY for basenames whose final
+       component contains an underscore or hyphen: identifier-like names such
+       as ``ci_validation`` or ``check-run`` cannot be ordinary prose words,
+       while a single-word module named e.g. ``python`` must not be pulled in
+       just because the word appears in prose (precision over recall — a
+       plain-prose mention of a single-word module is deliberately NOT
+       treated as an explicit request; use backticks or the prompt path).
+
+    Scan surfaces (PR #1983 rounds 3-4, P2): ALL classes scan the title/body
+    with fenced code blocks stripped first (quoted logs/snippets are not
+    requests). Comments contribute ONLY trusted ``FILES_MODIFIED:`` marker
+    payloads (class 2), also fence-stripped first, never free text.
+
+    Ambiguous tails (listing more than one real entry) never resolve from
+    bare names and a path-qualified prompt-path key is accepted as a
+    scheduler key directly — the same key form the branch-diff detector emits
+    (#1675). Returns keys in first-mention order; empty when there is no
+    architecture inventory to match against.
+    """
+    identities, known_keys, tail_to_identities = _architecture_identity_index(
+        architecture
+    )
+    if not identities:
+        return []
+
+    # Fence-strip ONCE, before every class (PR #1983 round 4, P2#1): a fenced
+    # prior-run log in the body must not widen scope through backtick or
+    # prompt-path tokens any more than through bare-name matches.
+    text = _strip_fenced_code_blocks(f"{title or ''}\n{body or ''}")
+    named: List[str] = []
+    for module in _explicit_token_modules(
+        text, comments, known_keys, tail_to_identities
+    ) + _bare_mention_identities(text, identities, tail_to_identities):
+        if module not in named:
+            named.append(module)
+    return named
+
+
+def _issue_modules_missing_from_scope(
+    scope_modules: List[str],
+    issue_modules: List[str],
+    architecture: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Return issue-named modules not covered by the diff-detected scope.
+
+    Diff-detected keys may be path-qualified (``extensions/foo/src/worker_app``)
+    while issue-named keys resolve from architecture basenames, so coverage
+    accepts exactly two forms:
+
+    * exact full-key membership in the scope; or
+    * matching final path component, but ONLY when that tail lists exactly one
+      REAL entry in the identity index (pre-dedup, PR #1983 round 3 — two
+      ``page_TypeScriptReact.prompt`` entries are two modules even though the
+      deduped basename inventory collapses them). A globally-unique tail can
+      only refer to that one module, so key-form differences between the diff
+      derivation (repo path, #1675) and the architecture basename are safely
+      bridged. With duplicate tails, tail matching is disabled entirely: a
+      diff touching one sibling must not mask an explicit request for the
+      other, which then requires exact-key coverage. No looser path-suffix
+      matching is attempted — it reintroduces the same masking through bare
+      or partially-qualified keys.
+    """
+    def _tail(module: str) -> str:
+        return module.rsplit("/", 1)[-1]
+
+    _, _, tail_to_identities = _architecture_identity_index(architecture)
+
+    scope_full = set(scope_modules)
+    scope_tails = {_tail(m) for m in scope_modules}
+
+    def _covered(module: str) -> bool:
+        if module in scope_full:
+            return True
+        tail = _tail(module)
+        return len(tail_to_identities.get(tail, [])) <= 1 and tail in scope_tails
+
+    return [m for m in issue_modules if not _covered(m)]
 
 
 def _branch_diff_is_runtime_llm_only(project_root: Path) -> bool:
@@ -1889,6 +2281,45 @@ def _resolve_module_cwd_and_target(
     return project_root, basename
 
 
+def _dep_graph_target_for_module(rel_target: str, architecture: Any) -> str:
+    """Map a scheduler key to a dep-graph-resolvable target (PR #1983 round 4).
+
+    Scheduler keys derived from the prompt SUBPATH (``app/settings/page``)
+    qualify by the directory under ``prompts/``, while a flat-filename
+    architecture entry only exposes filename- and filepath-derived aliases
+    (``page``, ``src/app/settings/page``). ``build_dep_graph_from_architecture_data``
+    locates entries by exact alias, so such a key would silently resolve to no
+    entry and lose its declared dependency edges — the exact #1980 dropped-edge
+    failure, now on the widened scope.
+
+    When ``rel_target`` already alias-matches some entry it is returned
+    unchanged. Otherwise, if it path-suffix-matches the aliases of exactly ONE
+    entry (one side is a ``/``-suffix of the other), that entry's matched
+    qualified alias is returned so the builder finds the right entry — the
+    bare filename alias is never used, since it may be shared across sibling
+    entries. Ambiguous or unmatched targets are returned unchanged (existing
+    no-guess behavior).
+    """
+    entries = [e for e in (extract_modules(architecture) or []) if isinstance(e, dict)]
+    if not entries or "/" not in rel_target:
+        return rel_target
+    target_aliases = _target_basename_aliases(rel_target)
+    matched_aliases: List[str] = []
+    for entry in entries:
+        aliases = _architecture_entry_aliases(entry)
+        if aliases & target_aliases:
+            return rel_target
+        for alias in sorted(aliases):
+            if "/" in alias and (
+                alias.endswith(f"/{rel_target}") or rel_target.endswith(f"/{alias}")
+            ):
+                matched_aliases.append(alias)
+                break
+    if len(matched_aliases) == 1:
+        return matched_aliases[0]
+    return rel_target
+
+
 def _build_targeted_dep_graph(
     architecture: Any,
     modules: List[str],
@@ -1927,29 +2358,40 @@ def _build_targeted_dep_graph(
     for bn in modules:
         cwd_groups.setdefault(info[bn][0].resolve(), []).append(bn)
 
-    root_resolved = project_root.resolve()
     graph: Dict[str, List[str]] = {bn: [] for bn in modules}
     warnings: List[str] = []
 
     for cwd_resolved, group in cwd_groups.items():
-        if cwd_resolved == root_resolved:
+        if cwd_resolved == project_root.resolve():
             group_arch: Any = architecture
         else:
             group_arch, _ = _load_architecture_json(Path(cwd_resolved))
             if not group_arch:
                 group_arch = architecture
+        # PR #1983 round 4 (P1#2): a scheduler key derived from the prompt
+        # SUBPATH (``app/settings/page`` — emitted by both the branch-diff
+        # detector and issue prompt-path widening) may not alias-match a
+        # flat-filename entry whose aliases are filename-/filepath-derived
+        # (``page``, ``src/app/settings/page``); the builder would then
+        # silently return an empty dependency list. Pre-resolve such targets
+        # to the uniquely suffix-matched entry's resolvable alias, and remap
+        # the graph back to the original scheduler keys afterwards.
+        effective = {
+            bn: _dep_graph_target_for_module(info[bn][1], group_arch)
+            for bn in group
+        }
         # Relative targets are unique within a single project.
-        target_to_key = {info[bn][1]: bn for bn in group}
+        target_to_key = {effective[bn]: bn for bn in group}
         result = build_dep_graph_from_architecture_data(
             group_arch,
-            [info[bn][1] for bn in group],
+            [effective[bn] for bn in group],
             source_name=source_name,
         )
         warnings.extend(result.warnings)
         for bn in group:
             graph[bn] = [
                 target_to_key.get(dep, dep)
-                for dep in result.graph.get(info[bn][1], [])
+                for dep in result.graph.get(effective[bn], [])
             ]
 
     return graph, warnings
@@ -2745,6 +3187,26 @@ def run_agentic_sync(
         if not quiet:
             console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
         modules_to_sync = branch_modules
+        # Issue #1980: the branch diff reflects work already done, not the full
+        # request. Reconcile with the modules the issue explicitly names so the
+        # fast path never silently under-scopes: union any explicitly-named
+        # known module missing from the diff-detected set (still deterministic,
+        # zero LLM calls). When the diff already covers every issue-named
+        # module, behavior is unchanged.
+        issue_named_modules = _extract_issue_named_modules(
+            title, body, architecture, comments=filtered_comments
+        )
+        issue_only_modules = _issue_modules_missing_from_scope(
+            branch_modules, issue_named_modules, architecture
+        )
+        if issue_only_modules:
+            modules_to_sync = branch_modules + issue_only_modules
+            if not quiet:
+                console.print(
+                    "[green]Issue explicitly names known modules missing from the "
+                    f"branch diff; adding them to the sync scope: {issue_only_modules} "
+                    f"(from branch diff: {branch_modules})[/green]"
+                )
     elif _branch_diff_is_runtime_llm_only(project_root):
         # Hard boundary (Req 9 / issue #1396): the branch diff contains only
         # runtime *_LLM.prompt template changes. Those templates are consumed

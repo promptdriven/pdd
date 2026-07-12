@@ -340,11 +340,13 @@ def test_branch_diff_detection_skips_llm(harness):
     assert_no_billing(harness)
 
 
-def test_resume_skips_succeeded_modules(harness):
-    """A state file marking every identified module as succeeded lets the
-    execution phase complete without any provider or LLM call, and the
-    state file is cleaned up on success."""
-    # Branch-diff detection pins the module set to ['greeter'] (no LLM).
+def test_branch_diff_scope_reconciled_with_issue_named_modules(harness):
+    """Issue #1980 repro (from the #1868 E2E validation): the fixture issue
+    explicitly names BOTH prompts (greeter and textutil) but the work branch
+    diff touches only greeter. The old fast path silently synced greeter alone,
+    dropping the greeter -> textutil dependency edge while reporting Success.
+    The reconciled fast path must scope both modules — still deterministically,
+    with zero provider calls."""
     prompt = harness.project / "prompts" / "greeter_python.prompt"
     prompt.write_text(prompt.read_text() + "# friendlier greeting\n")
     subprocess.run(
@@ -352,28 +354,68 @@ def test_resume_skips_succeeded_modules(harness):
         cwd=harness.project, env=harness.git_env, check=True, timeout=60,
     )
 
+    result = run_sync(harness, "--dry-run", "--no-github-state")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert "Detected modules from branch diff" in out
+    # The issue-named module missing from the diff was added, loudly.
+    assert "adding them to the sync scope" in out
+    assert "textutil" in out
+
+    # BOTH modules reached real child dry-run validation subprocesses.
+    pdd_calls = read_log(harness, "pdd_calls.log")
+    assert (
+        "--force --local sync greeter --dry-run --agentic --no-steer"
+        in pdd_calls
+    )
+    assert (
+        "--force --local sync textutil --dry-run --agentic --no-steer"
+        in pdd_calls
+    )
+
+    # Still the free path: no provider was ever invoked.
+    assert read_log(harness, "claude_calls.log") == ""
+    assert_no_billing(harness)
+
+
+def test_resume_skips_succeeded_modules(harness):
+    """A state file marking every identified module as succeeded lets the
+    execution phase complete without any provider or LLM call, and the
+    state file is cleaned up on success."""
+    # Branch-diff detection finds ['greeter']; issue-scope reconciliation
+    # (#1980) adds the issue-named 'textutil' — still no LLM.
+    prompt = harness.project / "prompts" / "greeter_python.prompt"
+    prompt.write_text(prompt.read_text() + "# friendlier greeting\n")
+    subprocess.run(
+        ["git", "commit", "-qam", "tweak greeter prompt"],
+        cwd=harness.project, env=harness.git_env, check=True, timeout=60,
+    )
+
+    module_state = {
+        "status": "success",
+        "cost": 0.0,
+        "completed_phases": [],
+        "current_phase": None,
+        "start_time": None,
+        "end_time": None,
+        "error": None,
+    }
     state_dir = harness.project / ".pdd"
     state_dir.mkdir()
     (state_dir / "agentic_sync_state.json").write_text(json.dumps({
         "issue_url": ISSUE_URL,
         "modules": {
-            "greeter": {
-                "status": "success",
-                "cost": 0.0,
-                "completed_phases": [],
-                "current_phase": None,
-                "start_time": None,
-                "end_time": None,
-                "error": None,
-            },
+            "greeter": dict(module_state),
+            "textutil": dict(module_state),
         },
     }))
 
     result = run_sync(harness, "--no-github-state")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Resuming: skipping 1 already-succeeded module(s)" in result.stdout
-    assert "All 1 modules synced successfully" in result.stdout
+    assert "Resuming: skipping 2 already-succeeded module(s)" in result.stdout
+    assert "All 2 modules synced successfully" in result.stdout
     # State file removed after a fully successful run.
     assert not (state_dir / "agentic_sync_state.json").exists()
     assert_no_billing(harness)
