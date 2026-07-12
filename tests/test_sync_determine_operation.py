@@ -8695,14 +8695,24 @@ def test_sync_lock_language_cannot_escape_locks_dir(tmp_path, monkeypatch, malic
 
 
 def test_sync_determine_operation_malicious_language_writes_nothing_out_of_tree(tmp_path, monkeypatch):
-    """Mutable entrypoint: a traversal-bearing language must not create an out-of-tree
-    lock file even though the lock is taken before input validation."""
+    """Mutable entrypoint: the SyncLock the real (non-read-only) path constructs from a
+    traversal-bearing language — before input validation — must resolve inside the locks
+    directory. Captures the constructed lock path so the assertion is load-bearing
+    regardless of lock-file cleanup timing."""
     import sync_determine_operation as sync_determine_module
 
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".pdd" / "locks").mkdir(parents=True)
     (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-    victim = tmp_path.parent / "tmp-pdd-victim.lock"
+
+    captured = {}
+    original_init = sync_determine_module.SyncLock.__init__
+
+    def _spy_init(self, basename, language):
+        original_init(self, basename, language)
+        captured["lock_file"] = self.lock_file
+
+    monkeypatch.setattr(sync_determine_module.SyncLock, "__init__", _spy_init)
     try:
         # Not read-only/log: this path acquires SyncLock before validation.
         sync_determine_module.sync_determine_operation(
@@ -8710,7 +8720,13 @@ def test_sync_determine_operation_malicious_language_writes_nothing_out_of_tree(
         )
     except Exception:
         pass  # a hard validation error downstream is acceptable; the write is not
-    assert not victim.exists(), f"out-of-tree lock created at {victim}"
+    assert "lock_file" in captured, "the mutable path must construct a SyncLock"
+    locks_dir = sync_determine_module.get_locks_dir().resolve(strict=False)
+    resolved_lock = captured["lock_file"].resolve(strict=False)
+    assert locks_dir in resolved_lock.parents, (
+        f"lock {resolved_lock} escaped locks dir {locks_dir}"
+    )
+    assert "/" not in captured["lock_file"].name and "\\" not in captured["lock_file"].name
 
 
 @pytest.mark.parametrize(
@@ -8896,4 +8912,77 @@ def test_get_pdd_file_paths_rejects_nonstring_outputs_template_path(tmp_path, mo
         with_arch=True,
     )
     with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-6 review hardening: discovered test_files are contained (an escaping
+# symlink is dropped, never handed to a runner); a nearer descendant .pddrc is
+# raw-validated (normalized-away `..`); a non-string configured prompts_dir
+# fails closed instead of degrading to a wrong convention path.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_drops_escaping_test_file_symlink(tmp_path, monkeypatch):
+    """R16: a discovered test_files entry that resolves outside the project (via symlink)
+    is dropped from the returned list so it is never executed by the test runner."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n      test_output_path: "tests/"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_widget.py").write_text("x = 1\n", encoding="utf-8")
+    foreign = tmp_path.parent / "sdo_foreign_test.py"
+    foreign.write_text("raise SystemExit\n", encoding="utf-8")
+    try:
+        (tmp_path / "tests" / "test_widget_extra.py").symlink_to(foreign)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    try:
+        paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+        root = tmp_path.resolve()
+        for tf in paths.get("test_files", []):
+            assert Path(tf).resolve(strict=False).is_relative_to(root), (
+                f"escaping test file returned: {tf}"
+            )
+    finally:
+        foreign.unlink(missing_ok=True)
+
+
+def test_get_pdd_file_paths_rejects_nearer_pddrc_normalized_traversal(tmp_path, monkeypatch):
+    """R16: a nearer descendant `.pddrc` output with `safe/../src/` (which resolve()
+    would normalize back inside the project) still fails closed."""
+    project = tmp_path
+    sub = project / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "safe/../src/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_rejects_nonstring_prompts_dir_config(tmp_path, monkeypatch):
+    """A present non-string `.pddrc` prompts_dir is malformed and must fail closed, not
+    degrade to a wrong convention path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      prompts_dir: 123\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafeOutputPathError, UnsafePromptPathError)):
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")

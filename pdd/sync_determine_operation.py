@@ -2288,6 +2288,12 @@ def _reject_unsafe_pddrc_output_config(config_anchor: Path) -> None:
             project_root, "test", defaults.get("test_output_path")
         )
         _reject_unsafe_outputs_templates(defaults.get("outputs"), project_root)
+        # A present but non-string `prompts_dir` is malformed: it would reach the
+        # string-only context-prefix extraction, raise, and degrade to a wrong
+        # convention path. Fail closed instead (None/empty means "unset").
+        _prompts_dir_cfg = defaults.get("prompts_dir")
+        if _prompts_dir_cfg is not None and not isinstance(_prompts_dir_cfg, str):
+            raise UnsafeOutputPathError(_prompts_dir_cfg, project_root, "prompts_dir")
 
 
 def _architecture_module_choices(
@@ -2922,15 +2928,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     )
             _test_files = paths.get("test_files")
             if isinstance(_test_files, list):
-                paths["test_files"] = [
-                    _reanchor_output_to_root(
-                        _tf, _governing_root, _has_project_config
-                    )
-                    if isinstance(_tf, Path) else _tf
-                    for _tf in _test_files
-                ]
+                # test_files are DISCOVERED (globbed) siblings handed to the test
+                # runner. Re-anchor them, then DROP any entry that (via symlink or a
+                # nearer config) resolves outside the governing root or carries a
+                # non-portable component, so an out-of-project file is never executed.
+                _contained_tfs = []
+                for _tf in _test_files:
+                    if isinstance(_tf, Path):
+                        _tf = _reanchor_output_to_root(
+                            _tf, _governing_root, _has_project_config
+                        )
+                        if not _output_path_within_root(_tf, _governing_root):
+                            continue
+                    _contained_tfs.append(_tf)
+                _primary_test = paths.get("test")
+                paths["test_files"] = _contained_tfs or (
+                    [_primary_test] if _primary_test is not None else _test_files
+                )
             _prompt = paths.get("prompt")
             if _prompt is not None:
+                # A nearer descendant .pddrc (governing the resolved prompt's own
+                # subtree) may carry output values the up-front gate at config_anchor
+                # never saw; validate its RAW values too so a normalized-away `..` or
+                # a non-portable/non-string field fails closed (R16).
+                _reject_unsafe_pddrc_output_config(Path(_prompt).parent)
                 # R8: the returned prompt must resolve inside the prompts root — an
                 # outputs.prompt.path template must not hand back a foreign prompt a
                 # later `update` would overwrite. Resolve BOTH sides so a trusted
