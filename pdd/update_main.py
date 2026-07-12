@@ -1199,6 +1199,9 @@ def _finalize_single_file_fingerprint(
             model=model,
         )
     except Exception as exc:
+        from .sync_core.finalize import CanonicalFinalizationError
+        if isinstance(exc, CanonicalFinalizationError):
+            raise
         if not quiet:
             rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
 
@@ -1246,6 +1249,22 @@ def update_main(
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
+    from .sync_core.finalize import preflight_legacy_mutation
+    preflight_paths = None
+    if input_prompt_file or modified_code_file:
+        preflight_paths = {
+            "prompt": Path(input_prompt_file or modified_code_file),
+            "code": Path(modified_code_file) if modified_code_file else Path.cwd(),
+        }
+    try:
+        preflight_legacy_mutation(preflight_paths)
+    except Exception as exc:
+        from .sync_core.finalize import CanonicalFinalizationError
+        if isinstance(exc, CanonicalFinalizationError):
+            if not quiet:
+                rprint(f"[bold red]Error:[/bold red] {exc}")
+            raise click.exceptions.Exit(1) from exc
+        raise
     if repo:
         try:
             # Find the repo root by searching up from the current directory
@@ -1462,7 +1481,10 @@ def update_main(
                                         cost=result.get("cost", 0.0),
                                         model=result.get("model", "unknown"),
                                     )
-                                except Exception:
+                                except Exception as exc:
+                                    from .sync_core.finalize import CanonicalFinalizationError
+                                    if isinstance(exc, CanonicalFinalizationError):
+                                        raise
                                     pass  # Best-effort; don't fail the update
                 else:
                     if "Success" in result.get("status", ""):

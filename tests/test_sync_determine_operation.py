@@ -4187,6 +4187,69 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
+    def test_legacy_include_hash_uses_prompt_dir_then_process_cwd(
+        self, pdd_test_environment, monkeypatch
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        dependency = pdd_test_environment / "shared.py"
+        create_file(dependency, "VALUE = 1\n")
+        create_file(prompt, "Build it.\n<include>shared.py</include>\n")
+        expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+        hashes = []
+        for cwd in (pdd_test_environment, pdd_test_environment.parent):
+            monkeypatch.chdir(cwd)
+            hashes.append(calculate_prompt_hash(prompt))
+        assert hashes == [expected, hashlib.sha256(prompt.read_bytes()).hexdigest()]
+
+    def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        create_file(
+            prompt,
+            "Build.\n<include>b.py</include>\n<include>a.py</include>\n"
+            "<include>a.py</include>\n",
+        )
+        expected = hashlib.sha256(
+            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
+        ).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_preserves_pre_versioned_include_grammar_and_missing_files(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        body_dep = prompt.parent / "body.py"
+        attr_dep = prompt.parent / "attribute.py"
+        create_file(body_dep, "BODY = 1\n")
+        create_file(attr_dep, "ATTRIBUTE = 1\n")
+        create_file(
+            prompt,
+            "<include path=\"attribute.py\">body.py</include>\n"
+            "<include path=\"attribute.py\"/>\n"
+            "<include-many>*.py</include-many>\n"
+            "<include>missing.py</include>\n",
+        )
+        expected = hashlib.sha256(prompt.read_bytes() + body_dep.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_stored_dependencies_skip_missing_and_keep_key_order(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(prompt, "No includes.\n")
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
+        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
@@ -5506,3 +5569,67 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"FM1: generation writes {written.suffix!r} but sync expects "
             f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )
+
+
+def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "shared.bin"
+    dependency.write_bytes(b"dependency\xff")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"<include>  shared.bin  </include>\ninvalid:\xff\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+
+def test_v1_hash_resolves_stored_relative_keys_from_cwd(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "stored.txt"
+    dependency.write_bytes(b"stored")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"no includes\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(
+        prompt, {"stored.txt": "ignored"}, hash_version=1
+    ) == expected
+
+
+def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(
+        '<include path="missing.txt"/>\n<include-many>missing.txt</include-many>\n'
+    )
+    assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
+        prompt.read_bytes()
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<include path="dep.txt"/>',
+        '<include-many>dep.txt</include-many>',
+    ],
+)
+def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
+    tmp_path, monkeypatch, markup
+):
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(markup, encoding="utf-8")
+    (tmp_path / "dep.txt").write_text("dependency", encoding="utf-8")
+
+    first = calculate_prompt_hash(prompt, hash_version=1)
+    persisted = extract_include_deps(prompt, version=1)
+    reloaded = json.loads(json.dumps(persisted))
+    second = calculate_prompt_hash(prompt, reloaded, hash_version=1)
+
+    assert persisted == {}
+    assert second == first
