@@ -1752,8 +1752,11 @@ def _preflight_drift_heal(
 
     This runs ``sync_determine_operation`` on every prompt in the worktree
     (hash-only, no LLM) to find modules with ``operation == "update"`` (prompt
-    stale vs code), and runs ``pdd update <code_path>`` on each one *in the
-    worktree* to realign the prompt before Step 9 rewrites it.
+    stale vs code), and runs
+    ``pdd update --git <prompt_path> <code_path>`` on each authoritative pair
+    *in the worktree* to realign the prompt before Step 9 rewrites it. Passing
+    both paths is intentional: code-only update is regeneration mode and would
+    re-derive prompt identity from a weak leaf basename such as ``page``.
 
     Args:
         worktree_path: Path to the isolated git worktree where the change will
@@ -1886,7 +1889,13 @@ def _preflight_drift_heal(
     failed: List[str] = []
     healed_prompts: List[str] = []
     for drift in prompt_drifts:
-        if not drift.code_path:
+        prompt_path = getattr(drift, "prompt_path", None)
+        code_path = getattr(drift, "code_path", None)
+        # Issue #2004: detect_drift already resolved the canonical pair. Never
+        # discard its prompt identity and fall back to code-only regeneration;
+        # common leaves (page.tsx, layout.tsx, config.py) can otherwise overwrite
+        # a different existing prompt in the same context.
+        if not prompt_path or not code_path:
             failed.append(drift.basename)
             continue
         try:
@@ -1896,7 +1905,16 @@ def _preflight_drift_heal(
             # a different version when devs have a global install plus a
             # project-local one.
             result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
+                [
+                    sys.executable,
+                    "-m",
+                    "pdd",
+                    "update",
+                    "--sync-metadata",
+                    "--git",
+                    str(prompt_path),
+                    str(code_path),
+                ],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,
@@ -1905,8 +1923,7 @@ def _preflight_drift_heal(
             )
             if result.returncode == 0:
                 healed.append(drift.basename)
-                if drift.prompt_path:
-                    healed_prompts.append(drift.prompt_path)
+                healed_prompts.append(str(prompt_path))
                 if not quiet:
                     console.print(f"   [green]✓[/green] healed {drift.basename}")
             else:
