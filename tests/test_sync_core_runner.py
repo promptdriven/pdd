@@ -631,6 +631,27 @@ def test_collection_worker_uses_trusted_plugin_path(tmp_path: Path) -> None:
     assert "[sys.executable, '-P', '-m', 'pytest']" in source
 
 
+def test_execution_precreates_private_junit_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def supervised(command, **kwargs):
+        del command
+        junit, = kwargs["writable_files"]
+        assert junit.is_file()
+        assert junit.stat().st_mode & 0o777 == 0o600
+        junit.write_text(
+            '<testsuite tests="1" failures="0" errors="0" skipped="0"/>',
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess([], 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "_managed_subprocess", supervised)
+
+    execution = runner_module._run_test_node(tmp_path, "test_widget.py::test_widget", 10)
+
+    assert execution.outcome is EvidenceOutcome.PASS
+
+
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
     content = "def test_keep(): assert True\ndef test_drop(): assert True\n"
     root, head = _repository(tmp_path, content)

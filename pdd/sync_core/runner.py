@@ -894,6 +894,7 @@ def _run_test_node(
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
         junit = controllers / f"result-{os.urandom(16).hex()}.xml"
+        junit.touch(mode=0o600)
         worker = _trusted_execution_runner(
             controllers, root, [*command[3:], f"--junitxml={junit}"]
         )
