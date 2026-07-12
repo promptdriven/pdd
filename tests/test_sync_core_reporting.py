@@ -342,6 +342,19 @@ def test_committed_policy_stays_active_when_worktree_policy_is_deleted(tmp_path)
     assert canonical_sync_enabled(root) is True
 
 
+@pytest.mark.parametrize("mutation", ["delete", "rename"])
+def test_linked_worktree_committed_policy_stays_active(tmp_path, mutation) -> None:
+    root, _commit = _repository(tmp_path)
+    linked = tmp_path / "linked"
+    _git(root, "worktree", "add", "-q", str(linked), "-b", f"linked-{mutation}")
+    policy = linked / ".pdd/sync-policy.json"
+    if mutation == "delete":
+        policy.unlink()
+    else:
+        policy.rename(policy.with_suffix(".disabled"))
+    assert canonical_sync_enabled(linked) is True
+
+
 def test_policy_free_linked_worktree_avoids_git_subprocess(tmp_path, monkeypatch) -> None:
     (tmp_path / ".git").write_text("gitdir: /protected/main/.git/worktrees/unit\n")
 
@@ -374,6 +387,39 @@ def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names
     assert report["ok"] is True
     assert report["summary"]["total"] == 1
     assert report["units"][0]["basename"] == "commands/foo"
+
+
+def test_real_manifest_path_qualified_module_selects_one_duplicate_leaf(tmp_path) -> None:
+    root, _commit = _repository(tmp_path)
+    for scope in ("commands", "jobs"):
+        (root / "prompts" / scope).mkdir()
+        (root / "src" / scope).mkdir()
+        (root / "prompts" / scope / "foo_python.prompt").write_text(
+            f"REQ-{scope}: Build {scope} foo\n"
+        )
+        (root / "src" / scope / "foo.py").write_text("value = 1\n")
+    architecture = json.loads((root / "architecture.json").read_text())
+    architecture.extend([
+        {"filename": "commands/foo_python.prompt", "filepath": "src/commands/foo.py"},
+        {"filename": "jobs/foo_python.prompt", "filepath": "src/jobs/foo.py"},
+    ])
+    (root / "architecture.json").write_text(json.dumps(architecture))
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "duplicate qualified leaves")
+    head = _git(root, "rev-parse", "HEAD")
+    options = _options(tmp_path, head)
+    report = build_canonical_report(
+        root, CanonicalReportOptions(
+            base_ref=options.base_ref,
+            head_ref=options.head_ref,
+            modules=("commands/foo",),
+            replay_ledger_path=options.replay_ledger_path,
+            now=options.now,
+        )
+    )
+    assert [item["subject"] for item in report["units"]] == [
+        "prompts/commands/foo_python.prompt"
+    ]
 
 
 @pytest.mark.parametrize("protected_ref", ["missing-ref", "HEAD"])

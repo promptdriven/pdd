@@ -3,6 +3,8 @@
 import base64
 import json
 import subprocess
+import sys
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -22,6 +24,7 @@ from pdd.sync_core import (
 )
 from pdd.sync_core.trust import ValidationEvidence
 from pdd.sync_core.finalize import attestation_signer_from_environment
+from pdd.sync_core.signer_process import run_signer
 from pdd.sync_core.types import ObligationEvidence
 
 
@@ -117,6 +120,18 @@ def test_remote_attestation_signer_has_protected_timeout(monkeypatch) -> None:
                 "remote-nonce", NOW,
             )
         )
+
+
+def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
+    script = (
+        "import subprocess,sys,time; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+        "start_new_session=True); time.sleep(30)"
+    )
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_signer((sys.executable, "-c", script), b"", timeout=0.1)
+    assert time.monotonic() - started < 1.5
 
 
 def test_attestation_environment_forbids_local_private_key(monkeypatch) -> None:

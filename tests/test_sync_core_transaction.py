@@ -128,6 +128,36 @@ def test_process_death_recovers_committing_transaction(tmp_path, crash_event) ->
     assert manager.recover("tx-crash").no_op is True
 
 
+def test_recovery_race_cannot_false_commit(tmp_path, monkeypatch) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src/widget.py"
+    target.write_text("value = 1\n")
+    manager = TransactionManager(tmp_path)
+    manager.prepare("tx-recovery-race", _writes())
+
+    def crash(event):
+        if event == "after_committing":
+            raise SystemExit
+
+    with pytest.raises(SystemExit):
+        manager.commit("tx-recovery-race", crash_hook=crash)
+    original = manager._install_entry
+    calls = 0
+
+    def raced_install(transaction_dir, entry):
+        nonlocal calls
+        original(transaction_dir, entry)
+        calls += 1
+        if calls == 1:
+            target.write_text("external = True\n")
+
+    monkeypatch.setattr(manager, "_install_entry", raced_install)
+    with pytest.raises(TransactionConflict, match="destination changed"):
+        manager.recover("tx-recovery-race")
+    assert target.read_text() == "external = True\n"
+    assert manager.incomplete() == ("tx-recovery-race",)
+
+
 def test_prepared_transaction_recovers_by_rollback_without_destination_write(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     target = tmp_path / "src/widget.py"

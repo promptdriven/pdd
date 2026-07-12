@@ -874,11 +874,11 @@ def test_candidate_cannot_forge_worker_outputs_discovered_from_script_path(
         "import os, sys\nfrom pathlib import Path\n"
         "directory = Path(sys.argv[0]).resolve().parent\n"
         "if Path(sys.argv[0]).name == 'collection_worker.py':\n"
-        "    (directory / 'candidate-node-ids.json').write_text("
+        "    next(directory.glob('collection-*.json')).write_text("
         "'[\"tests/test_widget.py::test_widget\"]')\n"
         "    os._exit(0)\n"
         "if Path(sys.argv[0]).name == 'execution_worker.py':\n"
-        "    (directory / 'candidate-junit.xml').write_text("
+        "    next(directory.glob('execution-*.xml')).write_text("
         "'<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>')\n"
         "    os._exit(0)\n"
         "def test_widget(): assert False\n"
@@ -886,6 +886,35 @@ def test_candidate_cannot_forge_worker_outputs_discovered_from_script_path(
     root, commit = _repository(tmp_path, content)
     _envelope, executions = _run(root, commit, commit)
     assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_runner_identity_fails_closed_for_dynamic_product_loader(tmp_path: Path) -> None:
+    root, _commit = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.value == 1\n"
+    )
+    (root / "product.py").write_text(
+        "import importlib\nvalue = importlib.import_module('helper').value\n"
+    )
+    (root / "helper.py").write_text("value = 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "dynamic product closure")
+    commit = _git(root, "rev-parse", "HEAD")
+    profile = _profile(root, commit, (PurePosixPath("product.py"),))
+    with pytest.raises(ValueError, match="dynamic product dependency"):
+        runner_identity_digest(profile, root=root, ref=commit)
+
+
+def test_runner_identity_binds_measured_runtime_and_checker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    first = runner_identity_digest(profile, root=root, ref=commit)
+    monkeypatch.setattr("pdd.sync_core.runner.platform.python_version", lambda: "99.1")
+    assert runner_identity_digest(profile, root=root, ref=commit) != first
+    monkeypatch.undo()
+    monkeypatch.setattr("pdd.sync_core.runner._checker_artifact_digest", lambda: "0" * 64)
+    assert runner_identity_digest(profile, root=root, ref=commit) != first
 
 
 def test_runner_identity_binds_transitive_product_dependency(tmp_path: Path) -> None:

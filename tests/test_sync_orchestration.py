@@ -3119,6 +3119,23 @@ def test_protected_canonical_mode_blocks_legacy_generator_before_write(
     orchestration_fixture["code_generator_main"].assert_not_called()
 
 
+def test_protected_sync_preflights_before_log_or_lock(orchestration_fixture):
+    orchestration_fixture["sync_determine_operation"].side_effect = [
+        SyncDecision(operation="generate", reason="prompt changed")
+    ]
+    with patch(
+        "pdd.sync_core.finalize.preflight_legacy_mutation",
+        side_effect=RuntimeError("protected preflight"),
+    ) as preflight, patch("pdd.sync_orchestration.log_event") as log_event:
+        result = sync_orchestration(
+            basename="calculator", language="python", quiet=True, budget=1.0
+        )
+    preflight.assert_called_once()
+    log_event.assert_not_called()
+    orchestration_fixture["SyncLock"].assert_not_called()
+    assert result["success"] is False
+
+
 class TestCoverageTargetSelection:
     """Regression tests for selecting the correct `--cov` target."""
 
