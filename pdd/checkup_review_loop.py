@@ -974,6 +974,36 @@ def _degraded_role_independence_note(unavailable_reviewer: Optional[str]) -> str
     return f"degraded ({role} unavailable)"
 
 
+def _has_eligible_independent_fixer_fallback(
+    state: "ReviewLoopState",
+    config: "ReviewLoopConfig",
+    primary_fixer: str,
+    reviewer: str,
+) -> bool:
+    """True when a configured ``fixer_fallback`` resolves to an INDEPENDENT fixer.
+
+    "Independent" mirrors the eligibility ``_maybe_run_fallback_fixer`` enforces:
+    a normalizable ``fixer_fallback`` role distinct from the primary fixer, the
+    current/active reviewer, and the originally configured reviewer. The #1941
+    auto-degrade consults this so it prefers a genuine cross-family fallback
+    fixer over collapsing to a same-family session — it degrades ONLY when no
+    such independent fixer remains. Never raises.
+    """
+    fallback_role = getattr(config, "fixer_fallback", None)
+    if not fallback_role:
+        return False
+    normalized_fallback = _normalize_reviewers([fallback_role])
+    if not normalized_fallback:
+        return False
+    canonical = normalized_fallback[0]
+    excluded: set = set()
+    for role in (primary_fixer, reviewer, state.active_reviewer, state.original_reviewer):
+        if role:
+            norm = _normalize_reviewers([role])
+            excluded.add(norm[0] if norm else role)
+    return canonical not in excluded
+
+
 @provider_failure_workflow
 def run_checkup_review_loop(
     *,
@@ -1342,20 +1372,25 @@ def run_checkup_review_loop(
                     # (claude) just produced actionable findings. Falling
                     # straight through to the fix round would target the dead
                     # configured fixer and re-deadlock with "findings remain"
-                    # (``_maybe_run_fallback_fixer`` can't help — it excludes
-                    # the now-active reviewer). Promote the surviving fallback
-                    # family to a fresh SAME-family fixer session, stamp the
-                    # weaker guarantee, and let the normal fix + fresh-verify
-                    # path run. Automatic + disclosed for every consumer — no
-                    # ``--fallback-reviewer-on-failure`` opt-in required. Narrow
-                    # trigger: only when the configured fixer IS the identity
-                    # that just demonstrably failed, so a genuinely independent
-                    # cross-family fixer is still preferred and never bypassed.
+                    # Promote the surviving fallback family to a fresh SAME-family
+                    # fixer session, stamp the weaker guarantee, and let the normal
+                    # fix + fresh-verify path run. Automatic + disclosed for every
+                    # consumer — no ``--fallback-reviewer-on-failure`` opt-in
+                    # required. Narrow trigger: only when the configured fixer IS
+                    # the identity that just demonstrably failed AND no eligible
+                    # INDEPENDENT ``fixer_fallback`` remains — so a genuine
+                    # cross-family fallback fixer is preferred over a same-family
+                    # session (``_maybe_run_fallback_fixer`` will run it after the
+                    # dead configured fixer fails), and role independence is only
+                    # relaxed when there is truly no independent fixer left.
                     if (
                         fixer
                         and fixer == failed_primary_reviewer
                         and fallback != fixer
                         and _actionable_findings(state, fallback_review.findings)
+                        and not _has_eligible_independent_fixer_fallback(
+                            state, config, primary_fixer=fixer, reviewer=fallback
+                        )
                     ):
                         state.active_fixer = fallback
                         state.same_role_review_fix = True

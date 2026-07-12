@@ -757,27 +757,39 @@ _JS_RUNNER_DISCOVERY_KEYS = (
 _JS_RUNNER_DISCOVERY_RE = re.compile(
     r"\b(?:" + "|".join(_JS_RUNNER_DISCOVERY_KEYS) + r")\b"
 )
+# Composition/delegation a static text scan cannot resolve: a config that
+# imports/requires/spreads/extends a base, applies a preset, or is a function
+# could set discovery elsewhere. Presence of any of these makes the config
+# unresolvable -> refuse (issue #1903 review round 2, delegating jest.config.js).
+_JS_RUNNER_UNRESOLVABLE_RE = re.compile(
+    r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\.|=>|\bfunction\b"
+)
 _JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
 
 
 def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
-    """True when a JS/TS config *text* references a test-discovery key.
+    """True when a JS/TS config *text* is NOT a provably-default literal.
 
     We cannot execute/parse a ``jest.config.js`` / ``vitest.config.ts`` in
-    Python, but we CAN read it as text: if it mentions a jest OR vitest discovery
-    key it customizes where tests are collected and we must NOT assume the
-    default convention — the caller conservatively refuses to claim a co-located
-    path is collected. If it references none of them the project uses default
-    discovery (jest's default ``testMatch`` and vitest's default ``include`` both
-    collect the co-located ``.test.``/``.spec.`` file we would write). Whole-word
-    match so ``__dirname``/``rootReducer``/``includes(`` do not false-trigger.
-    Total — errors -> ``False``.
+    Python, so we only trust it to use DEFAULT discovery when its text is a plain
+    object literal that (a) references no jest/vitest discovery key AND (b)
+    contains no composition/delegation we can't follow — imports, ``require(``,
+    spreads, ``preset``/``extends``, or a function config (which could set
+    discovery in a base we can't read). Any of those -> True, so the caller
+    conservatively refuses to claim a co-located path is collected rather than
+    risk a false-green. A plain default literal -> False (default discovery, which
+    jest's default ``testMatch`` and vitest's default ``include`` both collect).
+    Whole-word discovery match so ``__dirname``/``rootReducer`` do not
+    false-trigger. Total — errors (incl. an unreadable config) -> ``True`` (refuse).
     """
     try:
         text = config_file.read_text(encoding="utf-8", errors="ignore")
     except (OSError, ValueError):
-        return False
-    return _JS_RUNNER_DISCOVERY_RE.search(text) is not None
+        return True  # unreadable opaque config -> cannot prove default -> refuse
+    return (
+        _JS_RUNNER_DISCOVERY_RE.search(text) is not None
+        or _JS_RUNNER_UNRESOLVABLE_RE.search(text) is not None
+    )
 
 
 def _collect_js_runner_config(
@@ -902,13 +914,22 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
             i += 1
             continue
         if c == "[":
-            j = glob.find("]", i)
-            if j == -1:
+            # micromatch/bash character class. A leading ``!`` (or ``^``) means
+            # NEGATION — translate to Python's ``[^...]`` (``[!_]`` = "not _", NOT
+            # "``!`` or ``_``"). ``]`` as the FIRST class member is a literal.
+            start = i + 1
+            neg = start < n and glob[start] in "!^"
+            scan = start + 1 if neg else start
+            if scan < n and glob[scan] == "]":  # literal ] as first member
+                scan += 1
+            j = glob.find("]", scan)
+            if j == -1:  # malformed / unterminated -> literal '['
                 out.append(r"\[")
                 i += 1
-            else:
-                out.append(glob[i : j + 1])
-                i = j + 1
+                continue
+            inner = glob[(start + 1 if neg else start):j]
+            out.append("[^" + inner + "]" if neg else "[" + inner + "]")
+            i = j + 1
             continue
         out.append(re.escape(c))
         i += 1
@@ -1060,6 +1081,10 @@ def _greenfield_candidate_paths(
                 anchor_dirs.append(literal)
         if config.get("roots"):
             anchor_dirs.extend(roots)
+        # An explicit rootDir centralizes collection under it — a module OUTSIDE
+        # rootDir has no collected co-located path, so derive one under rootDir.
+        if isinstance(config.get("rootDir"), str) and config.get("rootDir"):
+            anchor_dirs.append(root_dir)
         seen = {str(c) for c in candidates}
         for anchor in anchor_dirs:
             base = anchor / rel_dir if rel_dir is not None else anchor
@@ -1106,43 +1131,39 @@ def _candidate_is_collected(
         except re.error:
             continue
 
-    # testMatch / testRegex collection patterns. jest/micromatch apply patterns
-    # in ORDER: a leading-``!`` glob is a NEGATION that removes matches, not
-    # another positive alternative. So a candidate is collected iff it matches at
-    # least one POSITIVE pattern AND is excluded by NO negation. An unevaluable
-    # negation could exclude the candidate, so we stay conservative (no verdict).
+    # testMatch / testRegex collection patterns.
     match_globs = _as_str_list(config.get("testMatch"))
     test_regexes = _as_str_list(config.get("testRegex"))
     if not match_globs and not test_regexes:
-        return None  # no collection constraint declared -> no verdict
+        # DEFAULT discovery. jest's default ``testMatch`` collects
+        # ``.[jt]s?(x)`` — js/jsx/ts/tsx — but NOT ``.mjs``/``.cjs``; reject a
+        # default candidate the runner would ignore (issue #1903 review). No
+        # other constraint declared -> no verdict for a collectible extension.
+        if candidate.suffix.lower() in (".mjs", ".cjs"):
+            return False
+        return None
 
+    # jest/micromatch apply ``testMatch`` patterns SEQUENTIALLY: a positive glob
+    # includes, a leading-``!`` glob EXCLUDES, and a LATER match overrides an
+    # earlier one (negative-then-positive re-includes, positive-then-negative
+    # excludes). Walk in order, tracking the running include state. An
+    # unevaluable pattern whose position could change the outcome -> conservative.
+    included: Optional[bool] = None
     for glob in match_globs:
         g = _sub_root_dir(glob, root_dir)
-        if g.startswith("!"):
-            excluded = _glob_matches(g[1:], posix)
-            if excluded is None:
-                return None  # cannot evaluate an exclusion -> conservative
-            if excluded is True:
-                return False  # a negation removes this candidate
-
-    positive_verdicts: list[bool] = []
-    for glob in match_globs:
-        g = _sub_root_dir(glob, root_dir)
-        if g.startswith("!"):
-            continue
-        v = _glob_matches(g, posix)
-        if v is not None:
-            positive_verdicts.append(v)
+        negated = g.startswith("!")
+        matched = _glob_matches(g[1:] if negated else g, posix)
+        if matched is None:
+            return None  # cannot evaluate this pattern in order -> conservative
+        if matched:
+            included = not negated
     for rgx in test_regexes:
         try:
-            positive_verdicts.append(
-                re.search(_sub_root_dir(rgx, root_dir), posix) is not None
-            )
+            if re.search(_sub_root_dir(rgx, root_dir), posix):
+                included = True
         except re.error:
-            continue
-    if not positive_verdicts:
-        return None  # only negations / unevaluable positives -> no verdict
-    return any(positive_verdicts)
+            return None
+    return included  # True (collected) / False (excluded) / None (no match)
 
 
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
@@ -1199,6 +1220,20 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
         if isinstance(config, Mapping) and any(
             config.get(k) is not None
             for k in ("projects", "workspace", "include", "exclude")
+        ):
+            return None
+        # DEFAULT-convention safety: when the config declares no explicit
+        # ``testMatch``/``testRegex`` (so placement relies on the runner's
+        # default discovery), only a module whose extension the default collects
+        # (js/jsx/ts/tsx — NOT mjs/cjs, which jest's default ignores) is eligible.
+        has_explicit_match = isinstance(config, Mapping) and (
+            config.get("testMatch") is not None or config.get("testRegex") is not None
+        )
+        if not has_explicit_match and module_path.suffix.lower() not in (
+            ".js",
+            ".jsx",
+            ".ts",
+            ".tsx",
         ):
             return None
         candidates = _greenfield_candidate_paths(module_path, config, config_dir)

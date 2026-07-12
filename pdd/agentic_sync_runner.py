@@ -325,7 +325,9 @@ def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
     return None
 
 
-def _is_adopted_collocated_test_path(test_path: Optional[str]) -> bool:
+def _is_adopted_collocated_test_path(
+    test_path: Optional[str], *, project_root: Optional[Path] = None
+) -> bool:
     """True only when *test_path* is an IN-REPO, co-located (adopted) test.
 
     The never-block relief exists to keep a co-located test PDD adopted — NOT to
@@ -334,30 +336,39 @@ def _is_adopted_collocated_test_path(test_path: Optional[str]) -> bool:
     shape alone cannot prove human authorship, so it composes with the
     ``self.issue_url`` guard and the upstream coverage-preserving auto-accept.
 
-    Rejects (keeps the strict hard-fail) for:
-    - a falsy/blank path, an absolute path (POSIX ``/``, Windows drive/UNC), or a
-      home-relative (``~``) path — provenance of an out-of-tree path is untrusted;
-    - any ``..`` traversal component (CWE-022 — an out-of-root escape);
-    - PDD's derived shadow root: a top-level ``tests/`` directory (e.g.
-      ``tests/test_foo.py`` OR ``tests/foo.test.ts``).
-
-    Accepts only a runner co-location convention: a file under a
-    ``__test__``/``__tests__`` directory, or a basename containing
-    ``.test.``/``.spec.``.
+    Production churn paths are typically ABSOLUTE (``construct_paths`` /
+    ``resolve_test_output_path`` emit a canonical absolute path). Such a path is
+    accepted only after canonical containment in *project_root* (the worktree
+    root); it is then reduced to its repo-relative form for the shape checks. An
+    absolute path with no root to validate against, an out-of-root path, or any
+    ``..`` traversal (CWE-022) is rejected. PDD's derived shadow root (a
+    top-level ``tests/`` directory — ``tests/test_foo.py`` OR ``tests/foo.test.ts``)
+    is never "adopted". Accepts only a runner co-location convention: a file
+    under a ``__test__``/``__tests__`` directory, or a basename containing
+    ``.test.``/``.spec.``. Never raises.
     """
     if not test_path:
         return False
     normalized = test_path.replace("\\", "/").strip()
     if not normalized:
         return False
-    # Absolute / home-relative / Windows drive or UNC — reject.
-    if normalized[0] in "/~\\" or re.match(r"^[A-Za-z]:", normalized):
-        return False
-    segments = [seg for seg in normalized.split("/") if seg]
+    is_absolute = normalized[0] in "/~\\" or bool(re.match(r"^[A-Za-z]:", normalized))
+    if is_absolute:
+        # Only trust an absolute path we can prove is inside the worktree.
+        if project_root is None:
+            return False
+        try:
+            resolved = Path(test_path).expanduser().resolve()
+            root_resolved = Path(project_root).resolve()
+            rel = resolved.relative_to(root_resolved)  # raises if outside root
+        except (ValueError, OSError, RuntimeError):
+            return False
+        segments = [seg for seg in rel.as_posix().split("/") if seg]
+    else:
+        segments = [seg for seg in normalized.split("/") if seg]
+        if any(seg == ".." for seg in segments):
+            return False  # traversal escape
     if not segments:
-        return False
-    # Traversal escape.
-    if any(seg == ".." for seg in segments):
         return False
     # PDD's derived shadow root (top-level ``tests/``) is never "adopted".
     if segments[0] == "tests":
@@ -2739,7 +2750,9 @@ class AsyncSyncRunner:
             #       gate).
             #   (2) adopted co-located test only — a PDD-owned ``tests/`` shadow
             #       keeps the strict hard-fail (see ``_is_adopted_collocated_test_path``).
-            if self.issue_url and _is_adopted_collocated_test_path(churned_test_path):
+            if self.issue_url and _is_adopted_collocated_test_path(
+                churned_test_path, project_root=self.project_root
+            ):
                 note = self._register_test_churn_needs_review(
                     basename, churned_test_path
                 )
