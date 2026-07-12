@@ -2343,6 +2343,42 @@ def test_get_pdd_file_paths_construct_paths_failure_anchors_fallback_at_subproje
     assert str(paths["test"].resolve(strict=False)).startswith(str(project.resolve()))
 
 
+def test_get_pdd_file_paths_path_qualified_two_suffix_aligned_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """A PATH-QUALIFIED basename that suffix-aligns with two distinct valid outputs is
+    ambiguous and MUST raise, not resolve by architecture row order (R11)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "src/app/login/page_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_malformed_architecture_json_fails_closed(tmp_path, monkeypatch):
+    """A present-but-malformed architecture.json fails closed with a path-resolution
+    error rather than silently resolving at convention fallback paths (R1)."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text("{ not valid json ", encoding="utf-8")
+
+    with pytest.raises(sync_determine_module.MalformedArchitectureError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
 def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_path, monkeypatch):
     """A bare basename that architecture.json maps to two DISTINCT valid outputs MUST
     raise AmbiguousModuleError before any prompt/fallback resolution (positive R11)."""

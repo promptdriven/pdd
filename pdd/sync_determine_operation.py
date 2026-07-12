@@ -137,6 +137,25 @@ class UnsafePromptPathError(AmbiguousModuleError):
         )
 
 
+class MalformedArchitectureError(AmbiguousModuleError):
+    """Raised when a DISCOVERED architecture.json exists but cannot be read/parsed.
+
+    Subclasses the hard path-resolution error so every sync entry point that already
+    propagates :class:`AmbiguousModuleError` fails closed rather than silently resolving
+    at convention fallback paths — which can mis-target the authoritative registered
+    code file instead of the one the (present but broken) registry intended.
+    """
+
+    def __init__(self, architecture_path: Path, reason: object):
+        self.architecture_path = architecture_path
+        ValueError.__init__(
+            self,
+            f"architecture.json at '{architecture_path}' is present but could not be "
+            f"read/parsed ({reason}); fix or remove it — refusing to resolve at "
+            f"convention fallback paths.",
+        )
+
+
 def _safe_basename(basename: str) -> str:
     """Sanitize basename for use in metadata filenames.
 
@@ -1929,9 +1948,6 @@ def _architecture_module_choices(
     multi-architecture view resolves filepaths against each source architecture's
     directory before comparing; see ``agentic_sync._architecture_outputs_by_basename``.)
     """
-    if "/" in basename:
-        return []
-
     if modules is _ARCH_MODULES_UNSET:
         try:
             with open(architecture_path, "r", encoding="utf-8") as handle:
@@ -1941,6 +1957,31 @@ def _architecture_module_choices(
 
     if not modules:
         return []
+
+    if "/" in basename:
+        # A path-qualified basename is NOT automatically unambiguous: because a qualified
+        # basename matches by path-SUFFIX, more than one distinct valid output can align
+        # (e.g. `app/login/page` matches both `app/login/page.tsx` and
+        # `src/app/login/page.tsx`). Collect the distinct valid suffix-aligned outputs so
+        # the caller raises AmbiguousModuleError instead of resolving by architecture row
+        # order. A single (or zero) match keeps the canonical resolution unchanged.
+        lang_ext_q = get_extension(language).lower()
+        qualified: set = set()
+        for module in modules:
+            if not isinstance(module, dict):
+                continue
+            filepath_value = module.get("filepath")
+            if not isinstance(filepath_value, str) or not filepath_value.strip():
+                continue
+            filepath_q = filepath_value.strip()
+            if not _module_filepath_matches_basename(filepath_q, basename):
+                continue
+            if lang_ext_q and PurePosixPath(filepath_q).suffix.lstrip(".").lower() != lang_ext_q:
+                continue
+            if _contained_architecture_code_path(architecture_path.parent, filepath_q) is None:
+                continue
+            qualified.add(PurePosixPath(filepath_q).as_posix())
+        return sorted(qualified)
 
     target_filename = f"{basename}_{language}.prompt".lower()
     lang_ext = get_extension(language).lower()
@@ -2430,8 +2471,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             try:
                 with open(arch_path, "r", encoding="utf-8") as _arch_handle:
                     arch_modules = extract_modules(json.load(_arch_handle))
-            except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
+            except FileNotFoundError:
+                # Raced away between discovery and open — treat as no registry.
                 arch_modules = None
+            except (json.JSONDecodeError, ValueError, TypeError, OSError) as _arch_err:
+                # Present but unreadable/malformed: fail closed rather than downgrade to
+                # an empty registry and resolve at convention fallback paths.
+                raise MalformedArchitectureError(arch_path, _arch_err) from _arch_err
         prompt_ownership_roots: Tuple[Path, ...] = (prompts_root_anchor,)
         if arch_path:
             prompt_ownership_roots = _architecture_prompt_roots(
