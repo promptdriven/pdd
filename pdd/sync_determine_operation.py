@@ -885,6 +885,15 @@ def _filepath_matches_context(
     if project_root is not None:
         root_posix = PurePosixPath(str(project_root).replace("\\", "/"))
 
+    # Windows path semantics are case-insensitive. When the project root is a Windows
+    # (drive-qualified) path, compare territory case-insensitively so a drive/directory
+    # casing difference between .pddrc config and the resolved project root cannot hide
+    # sibling ownership. A POSIX root keeps case-sensitive matching (unchanged).
+    windows_ci = bool(project_root is not None and PureWindowsPath(str(project_root)).drive)
+
+    def _fold(value: str) -> str:
+        return value.lower() if windows_ci else value
+
     def _project_relative(value: str) -> Optional[str]:
         """Re-express a config path relative to the project; None if unusable."""
         v = value.replace("\\", "/")
@@ -903,6 +912,16 @@ def _filepath_matches_context(
         try:
             return pure.relative_to(root_posix).as_posix()
         except ValueError:
+            if windows_ci:
+                # Retry case-insensitively so ``C:/Proj/frontend`` relativizes against a
+                # ``c:/proj`` root; comparisons below fold both sides, so the lowered tail
+                # is fine.
+                try:
+                    return PurePosixPath(v.lower()).relative_to(
+                        PurePosixPath(str(root_posix).lower())
+                    ).as_posix()
+                except ValueError:
+                    return None
             return None  # absolute path outside the project — cannot own it
 
     globs = [p for p in context_config.get("paths", []) if isinstance(p, str) and p]
@@ -923,15 +942,17 @@ def _filepath_matches_context(
     if not globs and not prefixes:
         return None
 
+    normalized_cmp = _fold(normalized)
     for pattern in globs:
         pattern_norm = _project_relative(pattern)
         if pattern_norm is None:
             continue
-        base = pattern_norm.rstrip("*").rstrip("/")
+        pattern_cmp = _fold(pattern_norm)
+        base = pattern_cmp.rstrip("*").rstrip("/")
         if (
-            fnmatch.fnmatch(normalized, pattern_norm)
-            or normalized == base
-            or (base and normalized.startswith(base + "/"))
+            fnmatch.fnmatch(normalized_cmp, pattern_cmp)
+            or normalized_cmp == base
+            or (base and normalized_cmp.startswith(base + "/"))
         ):
             return True
 
@@ -944,7 +965,7 @@ def _filepath_matches_context(
         prefix_norm = _project_relative(prefix_head)
         if prefix_norm is None:
             continue
-        base = prefix_norm.strip().rstrip("/")
+        base = _fold(prefix_norm.strip().rstrip("/"))
         if base.startswith("./"):
             base = base[2:]
         if base in ("", "."):
@@ -952,7 +973,7 @@ def _filepath_matches_context(
             if repo_root_output_matches:
                 return True
             continue
-        if normalized == base or normalized.startswith(base + "/"):
+        if normalized_cmp == base or normalized_cmp.startswith(base + "/"):
             return True
 
     return False

@@ -2417,6 +2417,25 @@ def test_get_pdd_file_paths_non_string_filename_uses_filepath(tmp_path, monkeypa
     assert paths["code"].as_posix().endswith("src/foo.py")
 
 
+def test_filepath_matches_context_windows_paths_are_case_insensitive():
+    """When the project root is a Windows (drive-qualified) path, territory matching is
+    case-insensitive, so a drive/dir casing difference between .pddrc and the resolved
+    project root cannot hide sibling ownership. POSIX roots stay case-sensitive."""
+    import sync_determine_operation as sync_determine_module
+
+    # Config uses ``C:/Proj`` while the resolved project root is ``c:/proj`` (Windows is
+    # case-insensitive); ``Frontend/foo.py`` must still be recognized as frontend's.
+    ctx = {"paths": ["C:/Proj/Frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx, Path("c:/proj"), repo_root_output_matches=False
+    ) is True
+    # A POSIX root keeps case-sensitive semantics: a case-variant glob does NOT match.
+    ctx_posix = {"paths": ["Frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx_posix, Path("/proj"), repo_root_output_matches=False
+    ) is not True
+
+
 def test_filepath_matches_context_normalizes_dot_slash_glob():
     """A ``./frontend/**`` context glob is normalized so it matches the normalized
     project-relative architecture filepath instead of silently missing (territory
