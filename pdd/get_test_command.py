@@ -479,13 +479,22 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             raw = str(raw)
             if not raw:
                 continue
-            if "\\" in raw:
-                # A backslash escapes brace metacharacters in minimatch/brace
-                # expansion (e.g. `{foo\,bar,baz}` is two options, not three). This
-                # expander is not escape-aware, so an escaped glob would over-expand
-                # and could falsely prove membership — or, in an exclusion, fail to
-                # exclude. Rather than guess, treat the whole set as unparseable so
-                # membership is unproven (fail closed), never falsely proven.
+            if "\\" in raw or "[" in raw:
+                # Two constructs this matcher does not implement with minimatch
+                # parity, so a glob using either is treated as unparseable and the
+                # whole set fails membership closed (never falsely proven):
+                #   * Backslash escapes of brace metacharacters (e.g. `{foo\,bar}`,
+                #     where `\,` is a literal comma → two options, not three) — the
+                #     brace expander is not escape-aware and would over-expand.
+                #   * Bracket character classes (e.g. `[^a]`, `[[:alpha:]]`) — the
+                #     per-segment `fnmatch` diverges from minimatch (`^` is literal
+                #     in fnmatch but negates in minimatch; POSIX classes are
+                #     unsupported), so an exclusion could fail to exclude and a
+                #     positive could over-match, either way a false member.
+                # Failing closed only forgoes crossing a workspace boundary (the
+                # leaf still uses its nearest package.json); it never adopts a
+                # foreign config. Real workspace globs use `*`/`**`/`{,}` — not
+                # these — so legitimate declarations are unaffected.
                 raise _PatternBudgetError
             if len(raw) > _MAX_GLOB_LENGTH:
                 # An over-long glob would blow up expansion by bytes even under
