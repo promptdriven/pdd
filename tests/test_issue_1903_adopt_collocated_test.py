@@ -571,6 +571,36 @@ class TestGreenfieldRunnerDiscovery:
         code = _write(tmp_path / "src/page.tsx")
         assert find_runner_collected_test_path(code) is None
 
+    def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
+        # A config that DYNAMICALLY builds discovery keys (join/computed) cannot
+        # be proven a plain literal -> refuse.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js",
+               "const k = ['test','Match'].join(''); module.exports = {[k]: ['**/qa/**/*.test.ts']}\n")
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_jest29_with_vitest_dep_is_ambiguous_mjs_refused(self, tmp_path, monkeypatch):
+        # jest<=29 AND a vitest dependency is ambiguous for .mjs (a jest run would
+        # not collect it) -> fail closed.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"devDependencies": {"jest": "^29.0.0", "vitest": "^1"}}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/u.mjs")) is None
+        # A .tsx module is unaffected (collected by both).
+        got = find_runner_collected_test_path(_write(tmp_path / "src/w.tsx"))
+        assert got is not None
+
+    def test_discovery_has_total_time_budget(self, tmp_path, monkeypatch):
+        # Even at the pattern cap, the whole discovery call is time-bounded.
+        import time
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps(
+            {"jest": {"testMatch": ["**/+(a|aa)b.test.ts"] * 30}}))
+        code = _write(tmp_path / f"src/{'a' * 44}.tsx")
+        start = time.time()
+        find_runner_collected_test_path(code)  # must not hang
+        assert time.time() - start < 5.0, "discovery must be time-bounded"
+
     def test_runner_pattern_matching_is_redos_bounded(self):
         # A catastrophic-backtracking testMatch pattern must not stall: the
         # bounded matcher fails closed (None) rather than hanging.
