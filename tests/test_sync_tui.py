@@ -233,7 +233,11 @@ def test_sync_worker_seeds_parent_provider_failure_scope():
         )
 
     app._app_ref = [app]
-    app.run_worker_task()
+    # Invoke the worker body directly: the @work(thread=True) wrapper requires a
+    # running Textual event loop to schedule the thread on newer Textual releases,
+    # which is not present in this synchronous unit test. The body is the real
+    # production logic and guards app-dependent branches on self.is_running.
+    app._run_worker_body()
 
     assert observed == [{"openai": "auth"}]
     assert get_disabled_providers() == {}

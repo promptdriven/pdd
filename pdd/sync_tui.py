@@ -1346,6 +1346,18 @@ class SyncApp(App):
     @work(thread=True)
     def run_worker_task(self) -> None:
         """Runs the sync logic in a separate thread, capturing stdout/stderr/stdin."""
+        self._run_worker_body()
+
+    def _run_worker_body(self) -> None:
+        """Execute the sync worker logic.
+
+        Kept separate from the ``@work(thread=True)`` wrapper so the real worker
+        body can run synchronously in tests / non-interactive contexts. Newer
+        Textual releases require a running event loop to schedule a thread
+        worker, so invoking the decorated ``run_worker_task`` directly (without a
+        live app) raises ``RuntimeError: no running event loop``. The body itself
+        already guards every app-dependent branch on ``self.is_running``.
+        """
 
         # Set app reference for stdin redirector
         self._app_ref[0] = self
