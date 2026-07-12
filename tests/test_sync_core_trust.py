@@ -178,7 +178,10 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
         "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
         "child=subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
         "env=env, start_new_session=True, stdout=subprocess.DEVNULL, "
-        "stderr=subprocess.DEVNULL); print(child.pid, flush=True); time.sleep(30)"
+        "stderr=subprocess.DEVNULL); "
+        "status=open(f'/proc/{child.pid}/status').read().splitlines(); "
+        "nspid=next(line for line in status if line.startswith('NSpid:')); "
+        "print(nspid.split()[1], flush=True); time.sleep(30)"
     )
     command = (sys.executable, "-c", parent, detached, str(marker))
     actual_run_signer = run_signer
