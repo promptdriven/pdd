@@ -743,6 +743,32 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("packages", "app"), ["packages/{app,lib}"]) is True
         assert _package_matches_workspace(("packages", "web"), ["packages/{app,lib}"]) is False
 
+    def test_brace_after_single_option_group_still_expands(self):
+        """A real ``{a,b}`` alternation must expand even when a *single-option*
+        brace (``{foo}``) precedes it in the same pattern. Otherwise the earlier
+        singleton short-circuits expansion and an exclusion glob like
+        ``!packages/{foo}/{a,b}`` never matches, so an excluded package is falsely
+        treated as a workspace member and inherits an ancestor's Jest config."""
+        assert sorted(_expand_braces("packages/{foo}/{a,b}")) == [
+            "packages/{foo}/a",
+            "packages/{foo}/b",
+        ]
+        globs = ["packages/**", "!packages/{foo}/{a,b}"]
+        # The excluded leaf is NOT a member...
+        assert _package_matches_workspace(("packages", "{foo}", "a"), globs) is False
+        assert _package_matches_workspace(("packages", "{foo}", "b"), globs) is False
+        # ...but a sibling the exclusion does not name still is (negative control).
+        assert _package_matches_workspace(("packages", "{foo}", "c"), globs) is True
+
+    def test_nested_brace_inside_single_option_group_expands(self):
+        """A nested alternation inside a single-option outer brace still expands
+        (bash parity for ``{a{b,c}}`` → ``{ab} {ac}``), rather than being emitted
+        whole and left unexpanded."""
+        assert sorted(_expand_braces("packages/{a{b,c}}")) == [
+            "packages/{ab}",
+            "packages/{ac}",
+        ]
+
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
         repo = tmp_path / "repo"
