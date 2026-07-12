@@ -1365,6 +1365,38 @@ class TestWorkspaceMembershipHardening:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_lerna_explicit_null_packages_is_not_the_default(self, tmp_path):
+        """`lerna.json` `{"packages": null}` is an explicit value, NOT an omitted
+        key, so it must NOT grant the `packages/*` default; only a genuinely
+        omitted key does."""
+        # Direct: omitted vs explicit-null.
+        omitted = tmp_path / "omitted"
+        omitted.mkdir()
+        (omitted / "lerna.json").write_text("{}")
+        assert _workspace_globs_for(omitted) == ["packages/*"]
+
+        explicit_null = tmp_path / "explicit_null"
+        explicit_null.mkdir()
+        (explicit_null / "lerna.json").write_text('{"packages": null}')
+        assert _workspace_globs_for(explicit_null) == []
+
+        # End-to-end: an independent leaf must not adopt the root Jest via the
+        # spurious default from an explicit-null lerna.json.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "lerna.json").write_text('{"packages": null}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
 
 class TestFixErrorLoopPlaceholderSafety:
     """fix_error_loop must not re-substitute placeholders into a completed command."""
