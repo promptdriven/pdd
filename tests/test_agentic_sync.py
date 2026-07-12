@@ -6427,3 +6427,152 @@ class TestBranchDiffIssueScopeReconciliation:
             mock_dry_run.call_args.args[0] if mock_dry_run.call_args.args else None,
         )
         assert sorted(dry_run_modules) == ["app/login/page", "app/settings/page"]
+
+    # ------------------------------------------------------------------
+    # Round-4 review regressions (PR #1983 Codex round-3 findings)
+    # ------------------------------------------------------------------
+
+    # Two nested projects can legitimately declare STRING-IDENTICAL entries:
+    # load_combined_architecture_data concatenates architecture files without
+    # source-path qualification, so nothing distinguishes them in the combined
+    # list. They must be treated as ambiguous, never merged into one identity.
+    _CROSS_PROJECT_ARCH = [
+        {"filename": "src/page_python.prompt", "filepath": "src/page.py",
+         "dependencies": []},
+        {"filename": "src/page_python.prompt", "filepath": "src/page.py",
+         "dependencies": []},
+    ]
+
+    def test_string_identical_cross_project_entries_stay_ambiguous_for_coverage(self):
+        """P1#1: a diff touching project a's ``page`` must not cover an explicit
+        request for project b's ``page`` when the combined architecture carries
+        two string-identical (unqualifiable) entries."""
+        from pdd.agentic_sync import _issue_modules_missing_from_scope
+
+        missing = _issue_modules_missing_from_scope(
+            ["extensions/a/src/page"],
+            ["extensions/b/src/page"],
+            self._CROSS_PROJECT_ARCH,
+        )
+        assert missing == ["extensions/b/src/page"]
+
+    def test_string_identical_entries_bare_backtick_resolves_to_nothing(self):
+        """P1#1: with two indistinguishable entries a bare ``page`` has no
+        deterministic referent."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Fix page", "Please fix `page` soon.", self._CROSS_PROJECT_ARCH
+        )
+        assert named == []
+
+    def test_prompt_path_scheduler_key_keeps_declared_dependencies(self, tmp_path):
+        """P1#2: a prompt-subpath scheduler key (``app/settings/page``) must
+        still resolve its architecture entry's declared dependencies in the
+        targeted dep graph — flat-filename entries only expose filename-/
+        filepath-derived aliases, which previously yielded a silent empty
+        dependency list (the exact #1980 dropped-edge failure)."""
+        import json as _json
+        from pdd.agentic_sync import _build_targeted_dep_graph
+
+        arch = [
+            {"filename": "page_TypeScriptReact.prompt",
+             "filepath": "src/app/login/page.tsx", "dependencies": []},
+            {"filename": "page_TypeScriptReact.prompt",
+             "filepath": "src/app/settings/page.tsx",
+             "dependencies": ["textutil_python.prompt"]},
+            {"filename": "textutil_python.prompt",
+             "filepath": "src/textutil.py", "dependencies": []},
+        ]
+        (tmp_path / "architecture.json").write_text(_json.dumps(arch))
+
+        graph, warnings = _build_targeted_dep_graph(
+            arch, ["app/settings/page", "textutil"], tmp_path, "architecture.json"
+        )
+
+        assert graph["app/settings/page"] == ["textutil"]
+        assert graph["textutil"] == []
+
+    def test_ambiguous_suffix_target_left_unresolved_in_dep_graph(self, tmp_path):
+        """P1#2 guard: when a key suffix-matches more than one entry the target
+        stays unchanged (no guessing)."""
+        import json as _json
+        from pdd.agentic_sync import _build_targeted_dep_graph
+
+        arch = [
+            {"filename": "page_TypeScriptReact.prompt",
+             "filepath": "a/app/settings/page.tsx",
+             "dependencies": ["textutil_python.prompt"]},
+            {"filename": "page_TypeScriptReact.prompt",
+             "filepath": "b/app/settings/page.tsx",
+             "dependencies": []},
+            {"filename": "textutil_python.prompt",
+             "filepath": "src/textutil.py", "dependencies": []},
+        ]
+        (tmp_path / "architecture.json").write_text(_json.dumps(arch))
+
+        graph, warnings = _build_targeted_dep_graph(
+            arch, ["app/settings/page", "textutil"], tmp_path, "architecture.json"
+        )
+
+        # Ambiguous: both entries' filepath aliases end with /app/settings/page.
+        assert graph["app/settings/page"] == []
+
+    def test_fenced_body_content_does_not_widen_scope_via_classes_1_and_2(self):
+        """P2#1: fenced prior-run logs in the issue BODY must not widen scope
+        through backtick or prompt-path tokens either."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        named = _extract_issue_named_modules(
+            "Sync the greeter feature",
+            "Fix `greeter`. Previous run log:\n"
+            "```\n"
+            "FILES_MODIFIED:\n"
+            "- prompts/textutil_python.prompt\n"
+            "then we touched `textutil` again\n"
+            "```\n",
+            self._ARCH,
+        )
+        assert named == ["greeter"]
+
+    def test_quad_backtick_fence_does_not_leak_inner_content(self):
+        """P2#2: a 4-backtick fence containing an inner triple-fenced snippet
+        must strip as ONE block (CommonMark: close needs same char, >= length)."""
+        from pdd.agentic_sync import _strip_fenced_code_blocks
+
+        text = (
+            "before\n"
+            "````\n"
+            "outer quoted\n"
+            "```\n"
+            "inner leaked?\n"
+            "```\n"
+            "still fenced\n"
+            "````\n"
+            "after\n"
+        )
+        out = _strip_fenced_code_blocks(text)
+        assert "inner leaked?" not in out
+        assert "still fenced" not in out
+        assert "before" in out and "after" in out
+
+    def test_quad_fence_comment_marker_does_not_extract(self):
+        """P2#2 end-to-end: a FILES_MODIFIED marker between inner triple fences
+        of a 4-backtick comment block must not widen scope."""
+        from pdd.agentic_sync import _extract_issue_named_modules
+
+        comments = [
+            {"user": {"login": "app-bot"}, "body": (
+                "````\n"
+                "```\n"
+                "FILES_MODIFIED:\n"
+                "- prompts/textutil_python.prompt\n"
+                "```\n"
+                "````\n"
+            )},
+        ]
+        named = _extract_issue_named_modules(
+            "Sync the greeter feature", "Fix `greeter`.", self._ARCH,
+            comments=comments,
+        )
+        assert named == ["greeter"]
