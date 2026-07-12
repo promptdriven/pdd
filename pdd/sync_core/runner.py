@@ -16,9 +16,12 @@ import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ET
+import importlib.metadata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 from .trust import (
     AttestationBinding,
@@ -465,6 +468,16 @@ def _support_digest(
     product_closure = _transitive_support_blobs(
         root, ref, pending=product, included=set(product), fail_on_dynamic=True
     )
+    if product:
+        # Product code is an arbitrary Python runtime. Measuring every committed
+        # Python module is the only static closure that remains complete under
+        # loader aliasing and reflection without executing candidate code.
+        repository_python = tuple(
+            (path, blob)
+            for path in _git_python_paths(root, ref)
+            if (blob := read_git_blob(root, ref, path)) is not None
+        )
+        product_closure = tuple(sorted(set(product_closure + repository_python)))
     closure = tuple(sorted(set(closure + product_closure)))
     digest = hashlib.sha256()
     for path, content in closure:
@@ -585,11 +598,40 @@ def _measured_python_runtime() -> dict[str, str]:
 
 
 def _checker_artifact_digest() -> str:
-    """Hash the protected runner implementation that derives outcomes."""
+    """Hash checker modules and locked runtime dependency bytes by logical name."""
     digest = hashlib.sha256()
-    for path in sorted((_CHECKER_PYTEST_PROBE, Path(__file__))):
-        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    from . import isolation, supervisor  # pylint: disable=import-outside-toplevel
+
+    modules = {
+        "pdd/sync_core/runner.py": Path(__file__),
+        "pdd/sync_core/pytest_probe.py": _CHECKER_PYTEST_PROBE,
+        "pdd/sync_core/supervisor.py": Path(supervisor.__file__),
+        "pdd/sync_core/isolation.py": Path(isolation.__file__),
+        "pytest/__init__.py": Path(pytest.__file__),
+    }
+    for name, path in sorted(modules.items()):
+        digest.update(name.encode() + b"\0" + path.read_bytes() + b"\0")
+    for distribution_name in ("pytest", "pluggy", "iniconfig", "packaging"):
+        distribution = importlib.metadata.distribution(distribution_name)
+        digest.update(distribution_name.encode() + b"\0")
+        files = distribution.files or ()
+        for member in sorted(files, key=str):
+            path = Path(distribution.locate_file(member))
+            if path.is_file() and not path.is_symlink():
+                digest.update(str(member).encode() + b"\0" + path.read_bytes() + b"\0")
     return digest.hexdigest()
+
+
+def _git_python_paths(root: Path, ref: str) -> tuple[PurePosixPath, ...]:
+    """Return every committed Python path at an exact ref."""
+    result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", ref], cwd=root,
+        capture_output=True, text=True, check=True,
+    )
+    return tuple(
+        PurePosixPath(value) for value in result.stdout.splitlines()
+        if value.endswith(".py")
+    )
 
 
 def _changed_paths(
@@ -708,7 +750,7 @@ def _trusted_collection_runner(
 ) -> tuple[Path, Path]:
     """Create a process-separated checker and candidate collection worker."""
     worker = directory / "collection_worker.py"
-    result_dir = directory / f"results-{os.urandom(16).hex()}"
+    result_dir = directory.parent / f"results-{os.urandom(16).hex()}"
     result_dir.mkdir(mode=0o700)
     worker_output = result_dir / f"collection-{os.urandom(16).hex()}.json"
     worker_output.touch(mode=0o600)
@@ -735,7 +777,8 @@ def _trusted_collection_runner(
                 "import pytest",
                 "if _ROOT not in sys.path:",
                 "    sys.path.insert(0, _ROOT)",
-                "raise SystemExit(pytest.main(" + json.dumps(pytest_args) + ", plugins=[_MODULE]))",
+                "_STATUS = pytest.main(" + json.dumps(pytest_args) + ", plugins=[_MODULE])",
+                "os._exit(80 + int(_STATUS))",
                 "",
             )
         ),
@@ -747,7 +790,8 @@ def _trusted_collection_runner(
             "import pathlib, subprocess, sys",
             f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
             f"source = pathlib.Path({json.dumps(str(worker_output))})",
-            "if result.returncode not in (0, 5) or not source.stat().st_size: raise SystemExit(1)",
+            "if result.returncode not in (80, 85): raise SystemExit(1)",
+            "if not source.stat().st_size: raise SystemExit(1)",
             f"pathlib.Path({json.dumps(str(collection_output))}).write_bytes(source.read_bytes())",
             "",)), encoding="utf-8",
     )
@@ -759,7 +803,7 @@ def _trusted_execution_runner(
 ) -> tuple[Path, Path]:
     """Create a checker that never imports candidate code or pytest."""
     worker = directory / "execution_worker.py"
-    result_dir = directory / f"results-{os.urandom(16).hex()}"
+    result_dir = directory.parent / f"results-{os.urandom(16).hex()}"
     result_dir.mkdir(mode=0o700)
     worker_junit = result_dir / f"execution-{os.urandom(16).hex()}.xml"
     worker_junit.touch(mode=0o600)
@@ -768,8 +812,9 @@ def _trusted_execution_runner(
             "import os, sys", "import pytest",
             f"os.chdir({json.dumps(str(root))})",
             f"sys.path.insert(0, {json.dumps(str(root))})",
-            "raise SystemExit(pytest.main(" +
-            json.dumps(pytest_args + [f"--junitxml={worker_junit}"]) + "))", "",
+            "_STATUS = pytest.main(" +
+            json.dumps(pytest_args + [f"--junitxml={worker_junit}"]) + ")",
+            "os._exit(80 + int(_STATUS))", "",
         )), encoding="utf-8",
     )
     checker = directory / "run_execution.py"
@@ -780,7 +825,7 @@ def _trusted_execution_runner(
             f"source = pathlib.Path({json.dumps(str(worker_junit))})",
             "if not source.stat().st_size: raise SystemExit(1)",
             f"pathlib.Path({json.dumps(str(junit))}).write_bytes(source.read_bytes())",
-            "raise SystemExit(result.returncode)",
+            "raise SystemExit(result.returncode - 80 if 80 <= result.returncode <= 85 else 1)",
             "",)), encoding="utf-8",
     )
     return checker, worker_junit
@@ -804,15 +849,17 @@ def _run_test_node(
     ).hexdigest()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-runner-") as directory:
         temporary = Path(directory)
+        controllers = temporary / f"controller-{os.urandom(16).hex()}"
+        controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        junit = temporary / "junit.xml"
+        junit = temporary / f"authoritative-{os.urandom(16).hex()}.xml"
         junit.touch(mode=0o600)
         controller, worker_junit = _trusted_execution_runner(
-            temporary, root, command[3:], junit
+            controllers, root, command[3:], junit
         )
         result, surviving = _managed_subprocess(
-            [sys.executable, str(controller)], cwd=temporary,
+            [sys.executable, str(controller)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
             writable_roots=(home.parent,), writable_files=(junit, worker_junit),
             readable_roots=(root,),
@@ -847,9 +894,11 @@ def _collect_node_ids(
     """Collect exact pytest node IDs through the protected adapter."""
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-collection-") as directory:
         temporary = Path(directory)
+        controllers = temporary / f"controller-{os.urandom(16).hex()}"
+        controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        collection_output = temporary / "node-ids.json"
+        collection_output = temporary / f"authoritative-{os.urandom(16).hex()}.json"
         collection_output.touch(mode=0o600)
         pytest_args = [
             "--collect-only",
@@ -861,7 +910,7 @@ def _collect_node_ids(
             path.as_posix(),
         ]
         runner, worker_output = _trusted_collection_runner(
-            temporary, root, pytest_args, collection_output
+            controllers, root, pytest_args, collection_output
         )
         command = [sys.executable, str(runner)]
         digest = hashlib.sha256(
@@ -877,7 +926,7 @@ def _collect_node_ids(
             ).encode()
         ).hexdigest()
         result, surviving = _managed_subprocess(
-            command, cwd=temporary, timeout=timeout_seconds,
+            command, cwd=controllers, timeout=timeout_seconds,
             env=_pytest_environment(home), writable_roots=(home.parent,),
             writable_files=(collection_output, worker_output),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),

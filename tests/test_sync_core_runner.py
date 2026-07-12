@@ -957,9 +957,7 @@ def test_runner_identity_fails_closed_for_aliased_reflective_loader(
     _git(root, "add", "helper.py")
     _git(root, "commit", "-q", "-m", "change hidden helper")
     after = _git(root, "rev-parse", "HEAD")
-    with pytest.raises(ValueError, match="dynamic product dependency"):
-        runner_identity_digest(profile, root=root, ref=after)
-    assert before_digest
+    assert runner_identity_digest(profile, root=root, ref=after) != before_digest
 
 
 def test_runner_identity_binds_measured_runtime_and_checker(
