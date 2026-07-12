@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -212,7 +211,14 @@ def _run_non_python_initial_verification(unit_test_file: str, code_file: str) ->
     else:
         command = str(test_command)
         cwd = None
-    command = command.replace("{file}", shlex.quote(unit_test_file)).replace("{test}", shlex.quote(unit_test_file))
+    # NOTE: do NOT re-substitute ``{file}``/``{test}`` here. get_test_command_for_file
+    # already returns a fully-formed command with the (shell-quoted, absolute) test
+    # path embedded — CSV commands have their ``{file}`` placeholder resolved and TS
+    # runner commands embed the quoted path directly. Re-running .replace() would
+    # instead match those tokens if they appear *inside the resolved path* (e.g. a
+    # test file under a directory literally named ``{test}``), splicing an unbalanced
+    # quoted string into the middle of an already-quoted argument and breaking shell
+    # quoting — a command-injection vector via a maliciously named path.
     try:
         proc = subprocess.run(
             command,

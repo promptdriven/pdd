@@ -42,6 +42,23 @@ _MAX_GLOB_SEGMENTS = 256
 # bounds total brace expansion regardless of how the manifest splits the work.
 _MAX_RAW_GLOBS = 4096
 
+# Upper bound on the size of a workspace-declaration file we will read/parse. A
+# larger manifest is treated as hostile and contributes no globs, so a modest
+# git blob cannot force hundreds of megabytes of parsing/allocation before the
+# other budgets apply.
+_MAX_MANIFEST_BYTES = 5 * 1024 * 1024
+
+
+def _read_manifest_text(path: Path) -> Optional[str]:
+    """Read ``path`` as UTF-8, or return ``None`` if it is missing, too large,
+    unreadable, or not valid UTF-8 (so callers fail closed)."""
+    try:
+        if path.stat().st_size > _MAX_MANIFEST_BYTES:
+            return None
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
 
 class _PatternBudgetError(Exception):
     """Raised when an untrusted workspace pattern exceeds a safety budget
@@ -149,11 +166,14 @@ def _workspace_globs_for(ancestor: Path) -> list:
             import yaml  # optional dependency
         except ImportError:
             return []  # cannot parse pnpm config → membership unproven (fail closed)
+        text = _read_manifest_text(pnpm_path)  # None if missing/oversized/bad-utf8
+        if text is None:
+            return []
         try:
-            data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, OSError, UnicodeError, RecursionError):
-            # Unparseable, invalid-encoding, or deeply-nested (recursion-bomb)
-            # pnpm workspace → membership unproven (fail closed).
+            data = yaml.safe_load(text)
+        except (yaml.YAMLError, RecursionError):
+            # Unparseable or deeply-nested (recursion-bomb) pnpm workspace →
+            # membership unproven (fail closed).
             return []
         if isinstance(data, dict):
             return _string_globs(data.get("packages"))
@@ -162,9 +182,12 @@ def _workspace_globs_for(ancestor: Path) -> list:
     globs: list = []
     manifest_path = ancestor / "package.json"
     if manifest_path.exists():
+        text = _read_manifest_text(manifest_path)
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
+            manifest = json.loads(text) if text is not None else {}
+        except (ValueError, RecursionError):
+            # Malformed or deeply-nested (recursion-bomb) JSON → membership
+            # unproven (fail closed) rather than crashing discovery.
             manifest = {}
         if isinstance(manifest, dict):
             ws = manifest.get("workspaces")
@@ -173,14 +196,19 @@ def _workspace_globs_for(ancestor: Path) -> list:
             globs.extend(_string_globs(ws))
     lerna_path = ancestor / "lerna.json"
     if lerna_path.exists():
+        text = _read_manifest_text(lerna_path)
         try:
-            lerna = json.loads(lerna_path.read_text(encoding="utf-8"))
-        except (ValueError, OSError):
-            lerna = {}
+            lerna = json.loads(text) if text is not None else None
+        except (ValueError, RecursionError):
+            lerna = None  # parse failed → contribute nothing (fail closed)
         if isinstance(lerna, dict):
             pkgs = lerna.get("packages")
             if pkgs is None:
-                globs.append("packages/*")  # lerna default
+                # Successfully parsed lerna.json with no ``packages`` key → the
+                # documented lerna default. (A *parse failure* above sets
+                # ``lerna=None`` and skips this, so a malformed/bomb lerna.json
+                # does NOT silently grant the default glob.)
+                globs.append("packages/*")
             else:
                 globs.extend(_string_globs(pkgs))
     return globs
@@ -437,6 +465,66 @@ def _lexical_repo_root(test_path: Path) -> Optional[Path]:
     return None
 
 
+_RUNNER_CONFIGS = (
+    # (command prefix, (config filenames...), spec_only)
+    ("npx playwright test", ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs"), True),
+    ("npx jest --no-coverage --runTestsByPath", ("jest.config.js", "jest.config.ts", "jest.config.mjs"), False),
+    ("npx vitest run", ("vitest.config.ts", "vitest.config.js", "vitest.config.mjs"), False),
+)
+
+
+def _resolved_repo_root(test_path: Path) -> Optional[Path]:
+    """Walk the *fully resolved* (canonical) test path up to the nearest ``.git``.
+
+    Unlike the lexical anchor, this is reliable across harmless system symlinks
+    (e.g. macOS ``/var`` → ``/private/var``) because every path is canonical, so
+    it is the anchor used to bound a runner *config file* that may itself be a
+    symlink escaping the repository."""
+    try:
+        directory = test_path.resolve().parent
+    except OSError:
+        return None
+    for _ in range(4096):
+        if (directory / ".git").exists():
+            return directory
+        parent = directory.parent
+        if parent == directory:
+            break
+        directory = parent
+    return None
+
+
+def _config_allowed(config_path: Path, repo_root: Optional[Path]) -> bool:
+    """A runner config is adoptable only if its *resolved* path is a regular file
+    inside the anchored repository (``repo_root``). This refuses a config file
+    that is itself a symlink escaping the repository, and a broken symlink. When
+    no repository is anchored (``repo_root is None``) any existing regular file is
+    allowed."""
+    try:
+        real = Path(os.path.realpath(str(config_path)))
+        if not real.is_file():
+            return False
+    except OSError:
+        return False
+    if repo_root is None:
+        return True
+    return _is_within(real, repo_root)
+
+
+def _find_runner_here(search_dir: Path, is_spec: bool, repo_root: Optional[Path]) -> Optional[Tuple[str, Path]]:
+    """Return the runner ``(command_prefix, search_dir)`` for the highest-priority
+    runner config present in ``search_dir`` and allowed by containment, else
+    ``None``. Playwright is only considered for ``.spec`` files."""
+    for command, names, spec_only in _RUNNER_CONFIGS:
+        if spec_only and not is_spec:
+            continue
+        for name in names:
+            cfg = search_dir / name
+            if cfg.exists() and _config_allowed(cfg, repo_root):
+                return (command, search_dir)
+    return None
+
+
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """Detect Playwright, Jest, or Vitest config by walking up from the test file.
 
@@ -473,12 +561,26 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     regex character classes that never match the literal bracketed path — leaving
     the generated suite unexecutable.
     """
+    # Reject a path where a ``..`` component traverses a symlink: ``os.path.abspath``
+    # collapses ``..`` textually, which is unsound across symlinks and would let a
+    # crafted path mis-anchor repository containment. When the naive collapse and
+    # the true resolution disagree, fail closed.
+    try:
+        if os.path.realpath(os.path.abspath(str(test_path))) != os.path.realpath(str(test_path)):
+            return None
+    except OSError:
+        return None
+
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
     # Repository containment: anchor the repo root lexically (before symlinks are
     # resolved). If the resolved test path escapes that root, refuse to adopt any
     # out-of-repo runner config.
     contain = _lexical_repo_root(test_path)
+    # Canonical repository of the (real) test file, used to reject a runner config
+    # file that is itself a symlink escaping the repository — reliable even where
+    # the lexical anchor is unset because of a harmless system symlink above it.
+    repo_root = _resolved_repo_root(test_path)
     # Deepest ancestor-workspace root the original leaf must still reach; walk
     # *through* intermediate independent package.json manifests until then.
     ceiling: Optional[Path] = None
@@ -486,25 +588,28 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # Never step outside the repository (e.g. via a symlink that resolves out).
         if contain is not None and not _is_within(search_dir, contain):
             break
-        # For .spec.ts/.spec.tsx files, check Playwright first
-        if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
-            return ("npx playwright test", search_dir)
-        if any((search_dir / cfg).exists() for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')):
-            return ("npx jest --no-coverage --runTestsByPath", search_dir)
-        if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
-            return ("npx vitest run", search_dir)
-        # Stop at the JS project boundary (nearest package.json), but cross it when
-        # this package is a member of an ancestor workspace whose config lives at
-        # the workspace root — and keep crossing intermediate independent manifests
-        # until that workspace root is reached.
-        if (search_dir / "package.json").exists():
-            root = _workspace_root_for(search_dir)
-            if root is not None and (ceiling is None or _is_strict_ancestor(root, ceiling)):
-                # Extend the ceiling to the shallowest (highest) workspace root,
-                # so nested workspaces chain correctly.
-                ceiling = root
+        found = _find_runner_here(search_dir, is_spec, repo_root)
+        if found is not None:
+            return found
+        pkg_here = (search_dir / "package.json").exists()
+        # Extend the workspace ceiling from a proven member manifest here — or when
+        # we have reached the current ceiling, so a nested workspace root that lacks
+        # its own package.json can still chain outward.
+        member_root: Optional[Path] = None
+        if pkg_here or (ceiling is not None and search_dir == ceiling):
+            member_root = _workspace_root_for(search_dir)
+            if member_root is not None and (ceiling is None or _is_strict_ancestor(member_root, ceiling)):
+                ceiling = member_root
+        # Stop at the declaring workspace root, even when it has no package.json of
+        # its own (e.g. a pnpm/lerna root). If it was itself proven a member of an
+        # outer workspace, ``ceiling`` was extended above and this does not fire.
+        if ceiling is not None and search_dir == ceiling:
+            break
+        # Independent JS project boundary that is not a workspace member and not
+        # below the ceiling → stop.
+        if pkg_here:
             below_ceiling = ceiling is not None and _is_strict_ancestor(ceiling, search_dir)
-            if root is None and not below_ceiling:
+            if member_root is None and not below_ceiling:
                 break
         # Never escape the repository, even absent an in-project config.
         if (search_dir / ".git").exists():

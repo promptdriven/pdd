@@ -919,6 +919,177 @@ class TestWorkspaceMembershipHardening:
             _relative_matches_workspace_glob(("a",), "/".join(["x"] * 1000))
         assert _package_matches_workspace(("a",), ["/".join(["x"] * 1000)]) is False
 
+    def test_dotdot_through_symlink_is_refused(self, tmp_path):
+        """A `..` component that traverses a symlink must fail closed.
+
+        `os.path.abspath` collapses `..` textually before symlink inspection, so a
+        path like `repo/link/../../foreign/...` (link is a symlink) could otherwise
+        mis-anchor containment and adopt a foreign checkout's config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "pdd" / "prompts").mkdir(parents=True)
+        (repo / "prompts").symlink_to(repo / "pdd" / "prompts", target_is_directory=True)
+        foreign = tmp_path / "foreign"
+        (foreign / "pkg").mkdir(parents=True)
+        (foreign / "pkg" / "jest.config.js").write_text("module.exports = {};")
+        (foreign / "pkg" / "a.test.ts").write_text("describe('x', () => {})")
+
+        crafted = repo / "prompts" / ".." / ".." / "foreign" / "pkg" / "a.test.ts"
+        assert _detect_ts_test_runner(crafted) is None
+
+    def test_dotdot_without_symlink_still_works(self, tmp_path):
+        """A `..` component with no intervening symlink is handled normally."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "a" / "tests").mkdir(parents=True)
+        (repo / "a" / "tests" / "x.test.ts").write_text("describe('x', () => {})")
+
+        path = repo / "a" / ".." / "a" / "tests" / "x.test.ts"
+        cmd, _ = _detect_ts_test_runner(path)
+        assert "npx jest" in cmd
+
+    def test_config_file_symlink_escaping_repo_is_refused(self, tmp_path):
+        """A runner config that is itself a symlink escaping the repo is refused."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        (foreign / "jest.config.js").write_text("module.exports = {};")
+        (repo / "jest.config.js").symlink_to(foreign / "jest.config.js")
+        (repo / "src").mkdir()
+        (repo / "src" / "a.test.ts").write_text("describe('x', () => {})")
+
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+
+    def test_config_file_symlink_within_repo_is_allowed(self, tmp_path):
+        """An in-repo config symlink is fine; a broken one is refused."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "real.config.js").write_text("module.exports = {};")
+        (repo / "jest.config.js").symlink_to(repo / "real.config.js")
+        (repo / "src").mkdir()
+        (repo / "src" / "a.test.ts").write_text("describe('x', () => {})")
+        cmd, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+        assert "npx jest" in cmd
+
+        broken = tmp_path / "repo2"
+        broken.mkdir()
+        (broken / ".git").mkdir()
+        (broken / "jest.config.js").symlink_to(broken / "nonexistent.js")
+        (broken / "src").mkdir()
+        (broken / "src" / "a.test.ts").write_text("describe('x', () => {})")
+        assert _detect_ts_test_runner(broken / "src" / "a.test.ts") is None
+
+    def test_workspace_root_without_package_json_stops_the_walk(self, tmp_path):
+        """A pnpm/lerna workspace root lacking its own package.json still caps the walk.
+
+        An unrelated Jest config above the declared workspace root must NOT be
+        adopted just because the root has no package.json to trigger the boundary.
+        """
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / ".git").mkdir()
+        (outer / "jest.config.js").write_text("module.exports = {};")  # unrelated, above
+        ws = outer / "myws"
+        ws.mkdir()
+        (ws / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")  # no package.json
+        leaf = ws / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_workspace_root_with_own_config_is_still_inherited(self, tmp_path):
+        """A pnpm workspace root (no package.json) that DOES have a config is used."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+        (repo / "jest.config.js").write_text("module.exports = {};")  # at the ws root
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == repo.resolve()
+
+    def test_json_recursion_bomb_manifest_fails_closed(self, tmp_path):
+        """A deeply nested package.json/lerna.json must fail closed, not RecursionError."""
+        for name, body in (
+            ("package.json", '{"workspaces":' + "[" * 100000 + "]" * 100000 + "}"),
+            ("lerna.json", '{"packages":' + "[" * 100000 + "]" * 100000 + "}"),
+        ):
+            anc = tmp_path / name.replace(".", "_")
+            anc.mkdir()
+            (anc / name).write_text(body)
+            assert _workspace_globs_for(anc) == []
+
+    def test_oversized_manifest_fails_closed(self, tmp_path):
+        """An oversized declaration file contributes no globs (not fully parsed)."""
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "package.json").write_text(
+            '{"workspaces":["packages/*"]}\n' + " " * (6 * 1024 * 1024)
+        )
+        assert _workspace_globs_for(anc) == []
+
+    def test_malformed_lerna_does_not_grant_default_glob(self, tmp_path):
+        """A parse-failing lerna.json must not fall through to the `packages/*` default."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "lerna.json").write_text("{ this is not json")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        # Membership unproven (lerna parse failed → no default) → no root Jest.
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+
+class TestFixErrorLoopPlaceholderSafety:
+    """fix_error_loop must not re-substitute placeholders into a completed command."""
+
+    def test_no_reinjection_via_maliciously_named_path(self, tmp_path):
+        """A test path containing a literal `{test}` and shell metachars must not
+        break the shell quoting of the already-formed TS runner command."""
+        import shlex
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        evil_dir = repo / "{test};touch PWN"
+        evil_dir.mkdir()
+        test_file = evil_dir / "a.test.ts"
+        test_file.write_text("describe('x', () => {})")
+
+        tc = get_test_command_for_file(str(test_file), language="typescript")
+        # Simulate the caller: the command must round-trip through a POSIX shell
+        # tokenizer back to the exact resolved path — no injected `;`/`touch` token.
+        argv = shlex.split(tc.command)
+        assert str(test_file.resolve()) in argv, (tc.command, argv)
+        assert "touch" not in argv, argv
+
 
 class TestPlaywrightDetection:
     """Tests for Playwright detection for .spec.ts files."""
