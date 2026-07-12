@@ -96,6 +96,24 @@ def canonical_sync_enabled(root: Path) -> bool:
     candidate = Path(root).resolve()
     if not candidate.is_dir():
         candidate = candidate.parent
+    if protected_ref is None:
+        ancestors = (candidate, *candidate.parents)
+        has_worktree_policy = any(
+            (parent / ".pdd/sync-policy.json").is_file() for parent in ancestors
+        )
+        repository_marker = next(
+            (
+                parent / ".git"
+                for parent in ancestors
+                if (parent / ".git").exists()
+            ),
+            None,
+        )
+        has_repository_directory = bool(
+            repository_marker is not None and repository_marker.is_dir()
+        )
+        if not has_worktree_policy and not has_repository_directory:
+            return False
     root = repository_root(candidate)
     protected_ref = protected_ref or "HEAD"
     identity = subprocess.run(
