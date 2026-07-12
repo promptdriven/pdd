@@ -275,15 +275,15 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
         except (ValueError, RecursionError):
             lerna = None  # parse failed → contribute nothing (fail closed)
         if isinstance(lerna, dict):
-            pkgs = lerna.get("packages")
-            if pkgs is None:
-                # Successfully parsed lerna.json with no ``packages`` key → the
-                # documented lerna default. (A *parse failure* above sets
-                # ``lerna=None`` and skips this, so a malformed/bomb lerna.json
-                # does NOT silently grant the default glob.)
+            if "packages" not in lerna:
+                # Only an *omitted* ``packages`` key gets the documented lerna
+                # default. A parse failure above sets ``lerna=None`` and skips
+                # this, and an explicit ``"packages": null`` is NOT an omission —
+                # it falls through to ``_string_globs(None)`` → no globs (fail
+                # closed), so a crafted null must not grant the default glob.
                 globs.append("packages/*")
             else:
-                globs.extend(_string_globs(pkgs))
+                globs.extend(_string_globs(lerna["packages"]))
     return globs
 
 
