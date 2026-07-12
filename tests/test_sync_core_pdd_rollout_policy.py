@@ -94,7 +94,7 @@ def test_pdd_protected_inventory_is_complete_and_exact() -> None:
 
 
 def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -> None:
-    """Candidate additions grow the union; removals remain protected debt."""
+    """Candidate additions must persist the denominator; removals remain debt."""
     root = tmp_path / "inventory"
     (root / ".pdd").mkdir(parents=True)
     (root / "prompts").mkdir()
@@ -132,6 +132,32 @@ def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -
     added = _commit(root, "candidate addition")
     addition_manifest = build_unit_manifest(root, base_ref=base, head_ref=added)
     assert len(addition_manifest.expected_managed) == 2
+    assert any(
+        "fixed-point" in reason
+        and "protected expected-managed registry omits base unit" in reason
+        for reason in addition_manifest.invalid_reasons
+    )
+
+    expected = json.loads(
+        (root / ".pdd" / "expected-managed.json").read_text(encoding="utf-8")
+    )
+    expected["units"].append(
+        {"prompt_path": "prompts/added_python.prompt", "language_id": "python"}
+    )
+    (root / ".pdd" / "expected-managed.json").write_text(
+        json.dumps(expected), encoding="utf-8"
+    )
+    registered = _commit(root, "persist candidate denominator")
+    registered_manifest = build_unit_manifest(root, base_ref=base, head_ref=registered)
+    stable_manifest = build_unit_manifest(
+        root, base_ref=registered, head_ref=registered
+    )
+    assert not registered_manifest.invalid_reasons
+    assert not registered_manifest.unaccounted_tracked_paths
+    assert not stable_manifest.invalid_reasons
+    assert not stable_manifest.unaccounted_tracked_paths
+    assert len(registered_manifest.expected_managed) == 2
+    assert len(stable_manifest.expected_managed) == 2
 
     _git(root, "rm", "prompts/owned_python.prompt")
     removed = _commit(root, "candidate removal")
@@ -141,6 +167,74 @@ def test_pdd_registry_prevents_candidate_denominator_reduction(tmp_path: Path) -
         "removed managed unit lacks" in reason
         for reason in removal_manifest.invalid_reasons
     )
+
+
+def test_candidate_cannot_delete_protected_denominator_controls(
+    tmp_path: Path,
+) -> None:
+    """A head without either protected manifest cannot become the next base."""
+    root = tmp_path / "deleted-controls"
+    (root / ".pdd").mkdir(parents=True)
+    (root / "prompts").mkdir()
+    (root / ".pdd" / "repository-id").write_text(
+        f"{REPOSITORY_ID}\n", encoding="ascii"
+    )
+    (root / ".pdd" / "expected-managed.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "units": [
+                    {
+                        "prompt_path": "prompts/owned_python.prompt",
+                        "language_id": "python",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / ".pdd" / "sync-ownership.json").write_text(
+        json.dumps(
+            {
+                "rules": [
+                    {
+                        "pattern": "README.md",
+                        "inventory": "HUMAN_OWNED",
+                        "role": "human-maintained",
+                        "owner": "pdd-maintainers",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "prompts" / "owned_python.prompt").write_text(
+        "owned", encoding="utf-8"
+    )
+    (root / "README.md").write_text("human", encoding="utf-8")
+    _git(root, "init", "-q")
+    base = _commit(root, "protected baseline")
+
+    _git(
+        root,
+        "rm",
+        ".pdd/expected-managed.json",
+        ".pdd/sync-ownership.json",
+    )
+    deleted = _commit(root, "delete protected controls")
+    transition = build_unit_manifest(root, base_ref=base, head_ref=deleted)
+    stable = build_unit_manifest(root, base_ref=deleted, head_ref=deleted)
+
+    assert any(
+        "protected sync ownership policy is missing" in reason
+        for reason in transition.invalid_reasons
+    )
+    assert any(
+        "protected expected-managed registry is missing" in reason
+        for reason in transition.invalid_reasons
+    )
+    assert Path("README.md") in transition.unaccounted_tracked_paths
+    assert Path("README.md") in stable.unaccounted_tracked_paths
 
 
 def test_profile_candidate_accounts_for_foundation_paths_from_protected_base(

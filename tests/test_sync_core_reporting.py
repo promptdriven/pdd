@@ -563,6 +563,48 @@ def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(
     assert report["counts"]["trusted_in_sync"] == 1
 
 
+def test_trusted_finalizer_rejects_invalid_next_protected_base(tmp_path) -> None:
+    """Per-unit finalization cannot bypass invalid protected controls."""
+    root, _commit = _repository(tmp_path)
+    (root / ".pdd/expected-managed.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "units": [
+                    {
+                        "prompt_path": "prompts/widget_python.prompt",
+                        "language_id": "python",
+                    }
+                ],
+            }
+        )
+    )
+    _git(root, "add", ".pdd/expected-managed.json")
+    _git(root, "commit", "-q", "-m", "protect managed denominator")
+    base = _git(root, "rev-parse", "HEAD")
+    _git(
+        root,
+        "rm",
+        ".pdd/expected-managed.json",
+        ".pdd/sync-ownership.json",
+    )
+    _git(root, "commit", "-q", "-m", "delete protected controls")
+    head = _git(root, "rev-parse", "HEAD")
+
+    with pytest.raises(
+        ValueError,
+        match="canonical finalization requires a valid protected candidate manifest",
+    ):
+        finalize_unit(
+            root,
+            PurePosixPath("prompts/widget_python.prompt"),
+            base_ref=base,
+            head_ref=head,
+            signer=SIGNER,
+            replay_ledger_path=tmp_path / "external-trust/invalid-base.json",
+        )
+
+
 def test_trusted_finalizer_second_run_is_zero_write_no_op(tmp_path) -> None:
     root, commit = _repository(tmp_path)
     replay = tmp_path / "external-trust/idempotency.json"
