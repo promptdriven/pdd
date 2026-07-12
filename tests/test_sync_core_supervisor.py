@@ -15,6 +15,7 @@ from pdd.sync_core.supervisor import (
     _linked_libraries,
     _limited_command,
     _live_processes,
+    _sandbox_library_path,
     _sandbox_command,
     run_supervised,
 )
@@ -67,6 +68,28 @@ def test_linked_libraries_keeps_loader_alias_and_resolved_path(
     )
 
     assert _linked_libraries(tmp_path / "python") == (target, alias)
+
+
+def test_sandbox_library_path_uses_only_measured_loader_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loader_alias = tmp_path / "lib" / "libm.so.6"
+    loader_target = tmp_path / "usr" / "lib" / "libm-real.so"
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths",
+        lambda: (
+            ("native/lib/libm.so.6", loader_alias),
+            ("native/usr/lib/libm-real.so", loader_target),
+            ("interpreter/python", tmp_path / "python"),
+        ),
+    )
+
+    search_path = _sandbox_library_path({"LD_LIBRARY_PATH": "/checker/lib"})
+
+    assert search_path.split(os.pathsep)[:2] == [
+        str(loader_alias.parent), str(loader_target.parent)
+    ]
+    assert "/checker/lib" in search_path.split(os.pathsep)
 
 
 @pytest.mark.skipif(
