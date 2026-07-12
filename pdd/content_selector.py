@@ -792,29 +792,106 @@ _JS_RUNNER_UNRESOLVABLE_RE = re.compile(
 _JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
 
 
-def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
-    """True when a JS/TS config *text* is NOT a provably-default literal.
+def _strip_js_comments_and_strings(text: str) -> str:
+    """Best-effort: blank out JS comments and string/template literals.
 
-    We cannot execute/parse a ``jest.config.js`` / ``vitest.config.ts`` in
-    Python, so we only trust it to use DEFAULT discovery when its text is a plain
-    object literal that (a) references no jest/vitest discovery key AND (b)
-    contains no composition/delegation we can't follow — imports, ``require(``,
-    spreads, ``preset``/``extends``, or a function config (which could set
-    discovery in a base we can't read). Any of those -> True, so the caller
-    conservatively refuses to claim a co-located path is collected rather than
-    risk a false-green. A plain default literal -> False (default discovery, which
-    jest's default ``testMatch`` and vitest's default ``include`` both collect).
-    Whole-word discovery match so ``__dirname``/``rootReducer`` do not
-    false-trigger. Total — errors (incl. an unreadable config) -> ``True`` (refuse).
+    So a discovery keyword or extra ``;`` inside a comment or string cannot
+    change the structural (whitelist) analysis. Replaces the CONTENTS of each
+    ``//``, ``/* */``, ``'…'``, ``"…"``, `` `…` `` with spaces (preserving
+    length/newlines is unnecessary). A single pass; never raises.
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        two = text[i : i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if two == "/*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if c in "'\"`":
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            out.append('""')  # placeholder token for a string value
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _js_config_is_trivial_default_literal(text: str) -> bool:
+    """True ONLY when *text* is provably a SINGLE plain-object-literal export.
+
+    Whitelist (not blacklist): the config must be exactly ``module.exports = {…}``
+    or ``export default {…}`` — one statement, balanced braces, nothing else
+    before or after (only optional ``;``/whitespace) — and the object body must
+    reference no discovery key and no dynamic/composition construct. This refuses
+    evasions a blacklist misses, e.g. a second statement mutating the export
+    (``module.exports = {}; module.exports['test'+'Match'] = […]``). Total.
+    """
+    code = _strip_js_comments_and_strings(text).strip()
+    for prefix in ("module.exports", "export default"):
+        if not code.startswith(prefix):
+            continue
+        rest = code[len(prefix):].lstrip()
+        if prefix == "module.exports":
+            if not rest.startswith("="):
+                return False
+            rest = rest[1:].lstrip()
+        if not rest.startswith("{"):
+            return False
+        # Match the object literal via brace counting.
+        depth, end = 0, -1
+        for idx, ch in enumerate(rest):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = idx
+                    break
+        if end < 0:
+            return False  # unbalanced
+        body = rest[: end + 1]
+        trailing = rest[end + 1 :].strip().strip(";").strip()
+        if trailing:
+            return False  # extra statements/assignments after the literal
+        # The object body must be a plain literal with no discovery/dynamic bits.
+        if _JS_RUNNER_DISCOVERY_RE.search(body) or _JS_RUNNER_UNRESOLVABLE_RE.search(body):
+            return False
+        return True
+    return False
+
+
+def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
+    """True when a JS/TS config CANNOT be proven a trivial default literal.
+
+    We cannot execute a ``jest.config.js`` / ``vitest.config.ts`` in Python, so
+    (issue #1903 review round 7) we use a POSITIVE whitelist: trust DEFAULT
+    discovery ONLY when the config text is a single plain-object-literal export
+    with no discovery keys and no dynamic/composition constructs
+    (:func:`_js_config_is_trivial_default_literal`). ANY other shape — extra
+    statements, dynamic key construction, imports/require/spread/preset/function,
+    or an unreadable file — returns True so the caller conservatively refuses to
+    claim a co-located path is collected rather than risk a false-green.
     """
     try:
         text = config_file.read_text(encoding="utf-8", errors="ignore")
     except (OSError, ValueError):
         return True  # unreadable opaque config -> cannot prove default -> refuse
-    return (
-        _JS_RUNNER_DISCOVERY_RE.search(text) is not None
-        or _JS_RUNNER_UNRESOLVABLE_RE.search(text) is not None
-    )
+    return not _js_config_is_trivial_default_literal(text)
 
 
 def _collect_js_runner_config(
@@ -840,6 +917,12 @@ def _collect_js_runner_config(
         return {}, None, False
     root_s = str(root_resolved)
     while True:
+        # Gather EVERY runner-config source AT THIS LEVEL. When more than one
+        # exists (e.g. an inline package.json jest block AND a vitest.config.ts),
+        # the ACTIVE runner is ambiguous — a different source could set different
+        # discovery — so fail closed (opaque) rather than let one hide another
+        # (issue #1903 review round 7).
+        json_config: Optional[Mapping[str, Any]] = None
         for fname in ("jest.config.json", ".jestrc", ".jestrc.json"):
             candidate = current / fname
             if candidate.is_file():
@@ -848,21 +931,32 @@ def _collect_js_runner_config(
                         candidate.read_text(encoding="utf-8", errors="ignore")
                     )
                     if isinstance(data, Mapping):
-                        return data, current, False
+                        json_config = data
+                        break
                 except (OSError, ValueError):
                     pass
         pkg = current / "package.json"
-        if pkg.is_file():
-            block = _jest_config_from_package_json(pkg)
-            if block is not None:
-                return block, current, False
-        # Unparseable JS/TS config file at this level — inspect its text for
-        # custom discovery keys.
+        pkg_block = _jest_config_from_package_json(pkg) if pkg.is_file() else None
+        js_config_file: Optional[Path] = None
         for stem in _JS_RUNNER_CONFIG_FILE_STEMS:
             for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
                 jsfile = current / f"{stem}{ext}"
                 if jsfile.is_file():
-                    return {}, current, _js_config_text_has_custom_discovery(jsfile)
+                    js_config_file = jsfile
+                    break
+            if js_config_file is not None:
+                break
+
+        sources = [s for s in (json_config, pkg_block, js_config_file) if s is not None]
+        if len(sources) > 1:
+            return {}, current, True  # ambiguous active runner -> refuse
+        if json_config is not None:
+            return json_config, current, False
+        if pkg_block is not None:
+            return pkg_block, current, False
+        if js_config_file is not None:
+            return {}, current, _js_config_text_has_custom_discovery(js_config_file)
+
         if str(current) == root_s or not _contained_in_root(current, root_resolved):
             break
         parent = current.parent
@@ -1574,9 +1668,79 @@ def was_test_adopted(
             return False
         if find_collocated_test(code_file) is None:
             return False
-        return Path(resolved_test_path) != Path(derived_test_path)
+        if Path(resolved_test_path) == Path(derived_test_path):
+            return False
+        # Ownership provenance (issue #1903 review round 7): a test PDD itself
+        # GREENFIELD-created on a prior run must NOT be reclassified as
+        # human-adopted just because it now exists as a single co-located sibling.
+        if is_pdd_created_test(resolved_test_path):
+            return False
+        return True
     except Exception:  # pylint: disable=broad-except
         return False
+
+
+# Manifest of tests PDD GREENFIELD-created itself (issue #1903 review round 7),
+# so a later run never mistakes a PDD-owned co-located test for a human-adopted
+# one when deciding the churn never-block. Repo-relative POSIX paths, committed
+# with the project so it persists across the issue-driven runner's fresh
+# worktrees.
+_PDD_CREATED_TESTS_MANIFEST = Path(".pdd") / "pdd_created_tests.json"
+
+
+def _pdd_created_tests_manifest_path() -> Path:
+    return Path.cwd() / _PDD_CREATED_TESTS_MANIFEST
+
+
+def _load_pdd_created_tests() -> set:
+    try:
+        data = json.loads(_pdd_created_tests_manifest_path().read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(p) for p in data if isinstance(p, str)}
+    except (OSError, ValueError):
+        pass
+    return set()
+
+
+def _test_repo_relative(test_path: str | Path) -> Optional[str]:
+    """Repo-relative POSIX form of *test_path* (in-root), or ``None``."""
+    try:
+        root = Path.cwd().resolve()
+        p = Path(test_path)
+        resolved = (p if p.is_absolute() else (root / p)).resolve()
+        return resolved.relative_to(root).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def record_pdd_created_test(test_path: str | Path) -> None:
+    """Record that PDD GREENFIELD-created the test at *test_path* (#1903 §A/§B.4).
+
+    Callers invoke this ONLY when PDD writes a brand-new greenfield test (no
+    pre-existing human file), so :func:`was_test_adopted` can later exclude it
+    from the human-adopted never-block. Total — any error is swallowed.
+    """
+    rel = _test_repo_relative(test_path)
+    if rel is None:
+        return
+    try:
+        existing = _load_pdd_created_tests()
+        if rel in existing:
+            return
+        existing.add(rel)
+        manifest = _pdd_created_tests_manifest_path()
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(
+            json.dumps(sorted(existing), indent=2) + "\n", encoding="utf-8"
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def is_pdd_created_test(test_path: str | Path) -> bool:
+    """True when *test_path* is recorded as a PDD greenfield-created test. Total."""
+    rel = _test_repo_relative(test_path)
+    return rel is not None and rel in _load_pdd_created_tests()
 
 
 def _pins_test_output_location(config: Mapping[str, Any]) -> bool:
