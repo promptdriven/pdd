@@ -2465,6 +2465,32 @@ def test_get_pdd_file_paths_trailing_space_output_does_not_block_valid_row(tmp_p
     assert paths["code"].as_posix().endswith("src/bar.py")
 
 
+def test_get_pdd_file_paths_no_override_none_context_denies_foreign_sibling_borrow(tmp_path, monkeypatch):
+    """With no context_override and a basename that does not encode the context (resolved
+    context None), a FOREIGN heuristic row (filepath-stem match, not naming this module)
+    targeting a named sibling context must be denied, not paired with this prompt."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n      generate_output_path: \"backend/functions/\"\n"
+        "  frontend:\n    paths: [\"frontend/**\"]\n    defaults:\n      prompts_dir: \"prompts/frontend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits.tsx", "filepath": "frontend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python", prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+    )
+    assert not paths["code"].as_posix().endswith("frontend/credits.py")
+
+
 def test_get_pdd_file_paths_malformed_pddrc_denies_heuristic_borrow(tmp_path, monkeypatch):
     """When the .pddrc defining context territory is present but UNPARSEABLE, a heuristic
     (non-proven) architecture borrow cannot be confined and is denied (fail closed) rather

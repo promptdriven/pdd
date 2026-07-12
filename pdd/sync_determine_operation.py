@@ -1003,6 +1003,35 @@ _TERRITORY_CONFIG_UNSET: Any = object()
 _TERRITORY_MALFORMED: Any = object()
 
 
+def _filepath_in_named_context(
+    architecture_filepath: Optional[str],
+    config: Any,
+    project_root: Optional[Path] = None,
+) -> bool:
+    """True when the filepath lies in ANY named (non-``default``) context's territory.
+
+    Used when the resolving context cannot be established: a heuristic borrow whose
+    target sits in some named context may pair the prompt with a sibling context's code,
+    so it must be denied even though there is no single resolving context to exclude.
+    """
+    if not isinstance(architecture_filepath, str) or not architecture_filepath.strip():
+        return False
+    if not isinstance(config, dict):
+        return False
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return False
+    normalized = PurePosixPath(architecture_filepath.strip().replace("\\", "/")).as_posix()
+    for other_name, other_config in contexts.items():
+        if other_name == "default":
+            continue
+        if _filepath_matches_context(
+            normalized, other_config, project_root, repo_root_output_matches=False
+        ) is True:
+            return True
+    return False
+
+
 def _filepath_owned_by_other_context(
     architecture_filepath: Optional[str],
     context_name: Optional[str],
@@ -1754,6 +1783,29 @@ def _get_filepath_from_architecture(
             # borrow (fail closed) instead of falling open to the permissive default. A
             # proven, explicit prompt->code mapping is still honored.
             if territory_config is _TERRITORY_MALFORMED and ownership != _OWNERSHIP_PROVEN:
+                borrow_ownership_cache[cache_key] = False
+                return False
+            # When the resolving context cannot be established (no override and the
+            # basename does not encode one), a FOREIGN heuristic borrow — one whose
+            # architecture filename does not name this module (matched only by a leaf/stem
+            # collision) — whose target lies in ANY named context may pair this prompt with
+            # a sibling context's code. Deny it (fail closed). A row that names this module
+            # (even with no physical prompt yet), a proven mapping, and a genuinely
+            # unowned/shared target are still allowed.
+            row_names_this_module = (
+                PurePosixPath(str(module.get("filename") or "").replace("\\", "/")).name.lower()
+                == PurePosixPath(prompt_filename.replace("\\", "/")).name.lower()
+            )
+            if (
+                resolved_context_name is None
+                and ownership != _OWNERSHIP_PROVEN
+                and not row_names_this_module
+                and isinstance(territory_config, dict)
+                and any(
+                    _filepath_in_named_context(identity, territory_config, territory_project_root)
+                    for identity in identities
+                )
+            ):
                 borrow_ownership_cache[cache_key] = False
                 return False
             allowed = context_owned or ownership == _OWNERSHIP_PROVEN
