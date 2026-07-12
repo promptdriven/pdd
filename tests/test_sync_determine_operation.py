@@ -3830,6 +3830,20 @@ def test_get_pdd_file_paths_validates_before_logging_raw_input(
     assert not caplog.records
 
 
+@pytest.mark.parametrize("bad_language", ["py\ninjected", "py\x1b[31mred", "py\r\nx", "py\x07"])
+def test_get_pdd_file_paths_validates_language_before_logging(tmp_path, monkeypatch, caplog, bad_language):
+    """A control/newline/ANSI-bearing language never reaches an INFO log record before
+    it is rejected (log-injection guard for the language input, R14)."""
+    (tmp_path / "prompts").mkdir()
+    monkeypatch.chdir(tmp_path)
+    caplog.set_level("INFO", logger="sync_determine_operation")
+
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", bad_language, prompts_dir="prompts")
+
+    assert not caplog.records
+
+
 def test_get_pdd_file_paths_rejects_control_bearing_prompts_dir_before_logging(
     tmp_path,
     monkeypatch,
