@@ -6,6 +6,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
@@ -90,6 +91,90 @@ def repository_root(start: Optional[Path] = None) -> Path:
     return Path(result.stdout.strip()).resolve()
 
 
+def _git_root_from_marker(start: Path) -> Optional[Path]:
+    """Resolve the enclosing worktree root without spawning Git."""
+    candidate = start if start.is_dir() else start.parent
+    for parent in (candidate, *candidate.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _git_head_token(root: Path) -> str:
+    """Return a filesystem token that changes when checked-out HEAD changes."""
+    marker = root / ".git"
+    git_dir = marker
+    if marker.is_file():
+        value = marker.read_text(encoding="utf-8").strip()
+        if not value.startswith("gitdir:"):
+            return value
+        git_dir = Path(value.split(":", 1)[1].strip())
+        if not git_dir.is_absolute():
+            git_dir = (root / git_dir).resolve()
+    try:
+        value = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if value.startswith("ref:"):
+        ref_name = value.split(":", 1)[1].strip()
+        common_dir = git_dir
+        try:
+            common_value = (git_dir / "commondir").read_text(encoding="utf-8").strip()
+            common_dir = Path(common_value)
+            if not common_dir.is_absolute():
+                common_dir = (git_dir / common_dir).resolve()
+        except OSError:
+            pass
+        ref = common_dir / ref_name
+        try:
+            return f"{value}:{ref.read_text(encoding='utf-8').strip()}"
+        except OSError:
+            try:
+                packed = (common_dir / "packed-refs").read_text(encoding="utf-8")
+            except OSError:
+                packed = ""
+            suffix = f" {ref_name}"
+            for line in packed.splitlines():
+                if line.endswith(suffix):
+                    return f"{value}:{line.split(' ', 1)[0]}"
+    return value
+
+
+@lru_cache(maxsize=128)
+def _committed_canonical_policy(
+    root_value: str,
+    protected_ref: str,
+    head_token: str,
+) -> tuple[bool, str]:
+    """Read activation once per repository, protected ref, and checked-out HEAD."""
+    del head_token  # Included solely to invalidate the cache after HEAD movement.
+    root = Path(root_value)
+    policy = subprocess.run(
+        ["git", "show", f"{protected_ref}:.pdd/sync-policy.json"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if policy.returncode != 0:
+        return False, "policy cannot be resolved"
+    identity = subprocess.run(
+        ["git", "cat-file", "-e", f"{protected_ref}:.pdd/repository-id"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if identity.returncode != 0:
+        return False, "identity cannot be resolved"
+    try:
+        payload = json.loads(policy.stdout)
+    except json.JSONDecodeError:
+        return False, "policy is malformed"
+    if payload != {"schema_version": 1, "enforcement": "active"}:
+        return False, "policy is not active"
+    return True, ""
+
+
 def canonical_sync_enabled(root: Path) -> bool:
     """Return whether protected committed policy activates canonical sync."""
     protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
@@ -114,38 +199,17 @@ def canonical_sync_enabled(root: Path) -> bool:
         )
         if not has_worktree_policy and not has_repository_directory:
             return False
-    root = repository_root(candidate)
+    root = _git_root_from_marker(candidate)
+    if root is None:
+        if protected_ref is not None:
+            raise ValueError("explicit protected sync repository cannot be resolved")
+        return False
     protected_ref = protected_ref or "HEAD"
-    identity = subprocess.run(
-        ["git", "cat-file", "-e", f"{protected_ref}:.pdd/repository-id"],
-        cwd=root,
-        capture_output=True,
-        check=False,
+    active, reason = _committed_canonical_policy(
+        str(root), protected_ref, _git_head_token(root)
     )
-    if identity.returncode != 0:
-        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
-            raise ValueError("explicit protected sync identity cannot be resolved")
-        return False
-    policy = subprocess.run(
-        ["git", "show", f"{protected_ref}:.pdd/sync-policy.json"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if policy.returncode != 0:
-        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
-            raise ValueError("explicit protected sync policy cannot be resolved")
-        return False
-    try:
-        payload = json.loads(policy.stdout)
-    except json.JSONDecodeError as exc:
-        if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
-            raise ValueError("explicit protected sync policy is malformed") from exc
-        return False
-    active = payload == {"schema_version": 1, "enforcement": "active"}
     if not active and os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
-        raise ValueError("explicit protected sync policy is not active")
+        raise ValueError(f"explicit protected sync {reason}")
     return active
 
 
