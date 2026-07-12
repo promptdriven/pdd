@@ -191,6 +191,22 @@ def _safe_basename(basename: str) -> str:
     return basename.replace('/', '_')
 
 
+def _safe_lock_component(value: Any) -> str:
+    """Collapse a lock-name component to a portable, separator-free token.
+
+    Lock filenames are built from the caller basename and language BEFORE
+    :func:`get_pdd_file_paths` validates those inputs (the lock is acquired
+    first). A traversal- or separator-bearing ``language`` (e.g.
+    ``/../../../tmp/victim``) would otherwise interpolate into the lock path and
+    let ``SyncLock`` mkdir/touch/unlink an out-of-tree ``.lock`` file. Replacing
+    every character outside ``[A-Za-z0-9._-]`` with ``_`` yields a flat token
+    that cannot contain a path separator, ``:``, or drive marker, so the lock
+    file is always confined to the locks directory. Valid identifiers
+    (``python``, ``core/cloud`` -> ``core_cloud``) are unaffected.
+    """
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(value))
+
+
 def is_test_extend_disabled() -> bool:
     """Return True when coverage-driven ``test_extend`` is opted out via env.
 
@@ -2126,6 +2142,102 @@ def _ensure_output_within_project(
     return path
 
 
+def _configured_output_string_is_unsafe(raw: Any) -> bool:
+    """Whether a ``.pddrc`` output path/dir/template value is unsafe.
+
+    Applies the same portability/traversal validation the architecture code
+    filepath gets (R7/R9/R10), but on the RAW configured string BEFORE it is
+    joined and resolved — so it is independent of the process CWD and catches
+    parent traversal (``..``) that a later ``Path.resolve()`` would normalize
+    away. Rejects backslashes, control/format/line-separator characters, Windows
+    drive markers, parent traversal, and non-portable components (Windows-invalid
+    characters, reserved device names, NTFS ADS colons, trailing dot/space).
+    ``{placeholder}`` template segments and a trailing slash (directory form) are
+    permitted. Empty/non-string values are treated as safe (a default applies).
+    """
+    if not isinstance(raw, str) or not raw:
+        return False
+    if "\\" in raw or _contains_disallowed_path_text(raw):
+        return True
+    if PureWindowsPath(raw).drive:
+        return True
+    for part in PurePosixPath(raw).parts:
+        if part in ("/", ""):
+            continue
+        if part == "..":
+            return True
+        if part.startswith("{") and part.endswith("}"):
+            continue  # whole-segment template placeholder, e.g. {category}
+        if _unsafe_portable_path_component(part):
+            return True
+    return False
+
+
+def _reject_unsafe_output_config(
+    project_root: Path, artifact: str, *raw_values: Any
+) -> None:
+    """Fail closed on any unsafe ``.pddrc`` output directory/template value."""
+    for raw in raw_values:
+        if _configured_output_string_is_unsafe(raw):
+            raise UnsafeOutputPathError(raw, project_root, artifact)
+
+
+def _reject_unsafe_outputs_templates(
+    outputs_config: Any, project_root: Path
+) -> None:
+    """Fail closed on any unsafe ``outputs.<artifact>.path`` template value."""
+    if not isinstance(outputs_config, dict):
+        return
+    for artifact, entry in outputs_config.items():
+        if isinstance(entry, dict):
+            _reject_unsafe_output_config(
+                project_root, str(artifact), entry.get("path")
+            )
+
+
+def _reject_unsafe_pddrc_output_config(config_anchor: Path) -> None:
+    """Fail closed EARLY on any unsafe ``.pddrc`` output destination.
+
+    Validated once, before any branch-specific ``.pddrc`` load — whose
+    ``except ValueError`` / ``except Exception`` config-tolerance would otherwise
+    swallow the raised :class:`UnsafeOutputPathError` (a ``ValueError`` subclass)
+    and silently continue with the unsafe destination. This runs inside the
+    function's top-level ``try`` whose ``except AmbiguousModuleError: raise`` lets
+    the error propagate. Every context's output settings are checked so an unsafe
+    destination fails closed regardless of which context the resolution selects.
+    A malformed ``.pddrc`` is left to the existing per-branch handling.
+    """
+    pddrc_path = _find_pddrc_file(config_anchor)
+    if pddrc_path is None:
+        return
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except (ValueError, OSError):
+        return
+    if not isinstance(config, dict):
+        return
+    contexts = config.get("contexts", {})
+    if not isinstance(contexts, dict):
+        return
+    project_root = pddrc_path.parent.resolve(strict=False)
+    for context in contexts.values():
+        if not isinstance(context, dict):
+            continue
+        defaults = context.get("defaults", {})
+        if not isinstance(defaults, dict):
+            continue
+        _reject_unsafe_output_config(
+            project_root, "code", defaults.get("generate_output_path")
+        )
+        _reject_unsafe_output_config(
+            project_root, "example", defaults.get("example_output_path")
+        )
+        _reject_unsafe_output_config(
+            project_root, "test", defaults.get("test_output_path")
+        )
+        _reject_unsafe_outputs_templates(defaults.get("outputs"), project_root)
+
+
 def _architecture_module_choices(
     architecture_path: Path,
     basename: str,
@@ -2339,7 +2451,19 @@ class SyncLock:
     def __init__(self, basename: str, language: str):
         self.basename = basename
         self.language = language
-        self.lock_file = get_locks_dir() / f"{_safe_basename(basename)}_{language.lower()}.lock"
+        locks_root = get_locks_dir()
+        lock_file = locks_root / (
+            f"{_safe_lock_component(basename)}_"
+            f"{_safe_lock_component(str(language).lower())}.lock"
+        )
+        # Defense in depth: the sanitized components carry no separators, so the
+        # lock file can never resolve outside the locks directory. Assert it so a
+        # future change to the naming scheme fails loudly instead of silently
+        # letting a lock escape onto an arbitrary out-of-tree path.
+        resolved_root = locks_root.resolve(strict=False)
+        if resolved_root not in lock_file.resolve(strict=False).parents:
+            raise UnsafeOutputPathError(lock_file, resolved_root, "lock")
+        self.lock_file = lock_file
         self.fd = None
         self.current_pid = os.getpid()
     
@@ -2727,6 +2851,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         _containment_roots = _resolution_containment_roots(
             config_anchor, prompts_root_anchor
         )
+
+        # R16: reject unsafe .pddrc output destinations up front (CWD-independent,
+        # on the raw configured value) so parent traversal, non-portable components
+        # (device names, ADS colons, drive markers), or control characters fail
+        # closed before a branch-local `except ValueError` can swallow the error.
+        _reject_unsafe_pddrc_output_config(config_anchor)
 
         def _finalize_output_paths(paths: Dict[str, Path]) -> Dict[str, Path]:
             for _artifact in ("code", "example", "test"):
@@ -3270,6 +3400,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Issue #237: Check for 'outputs' config for template-based path generation
         # This must be checked even when prompt EXISTS (not just when it doesn't exist)
         outputs_config = resolved_config.get('outputs')
+        # R16: reject unsafe .pddrc output templates on the raw value.
+        _reject_unsafe_outputs_templates(outputs_config, _containment_roots[0])
         if outputs_config:
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")

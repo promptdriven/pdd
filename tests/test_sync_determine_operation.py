@@ -8494,9 +8494,20 @@ def test_pdd_sync_cli_refuses_escaping_pddrc_output(tmp_path, monkeypatch):
     outside = tmp_path.parent / "escape_cli"
     monkeypatch.chdir(proj)
     result = CliRunner().invoke(cli, ["sync", "widget", "--dry-run", "--json"])
-    # Whatever the CLI reports, it must NOT have materialized an out-of-tree target.
+    # It must NOT have materialized an out-of-tree target...
     assert not outside.exists(), f"CLI dry-run created out-of-tree {outside}"
     assert not (tmp_path.parent / "escape_cli").exists()
+    # ...AND it must surface the unsafe config as a hard failure, not silently
+    # accept it: the run is not ok and the offending unit is reported failed with
+    # an out-of-tree path-resolution reason.
+    payload = json.loads(result.output)
+    assert payload["ok"] is False, result.output
+    reported = payload.get("failures", []) + payload.get("units", [])
+    assert any(
+        u.get("classification") == "FAILURE"
+        and "resolves outside" in (u.get("reason") or "")
+        for u in reported
+    ), result.output
 
 
 # --- Additional tests appended ---
@@ -8650,3 +8661,79 @@ class TestReadOnlySkipsLock:
         with patch('sync_determine_operation.SyncLock') as mock_lock:
             sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, read_only=True)
             mock_lock.assert_not_called()
+
+# ---------------------------------------------------------------------------
+# Round-2 review hardening: lock-name confinement (SyncLock) and portable/
+# canonical validation of .pddrc output destinations (R16 / R9 parity).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "malicious_language",
+    [
+        "/../../../../tmp/pdd-victim",
+        "..\\..\\pdd-victim",
+        "python/../../../etc/pdd",
+    ],
+)
+def test_sync_lock_language_cannot_escape_locks_dir(tmp_path, monkeypatch, malicious_language):
+    """A traversal/separator-bearing language must not let the lock file escape.
+
+    `SyncLock` is constructed from raw basename/language BEFORE get_pdd_file_paths
+    validates them. The lock filename must be a sanitized, separator-free token so
+    it always resolves under the locks directory (no out-of-tree mkdir/touch/unlink).
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    locks_dir = sync_determine_module.get_locks_dir().resolve(strict=False)
+    lock = sync_determine_module.SyncLock("safe", malicious_language)
+    resolved = lock.lock_file.resolve(strict=False)
+    assert locks_dir in resolved.parents, f"{resolved} escaped {locks_dir}"
+    assert "/" not in lock.lock_file.name and "\\" not in lock.lock_file.name
+
+
+def test_sync_determine_operation_malicious_language_writes_nothing_out_of_tree(tmp_path, monkeypatch):
+    """Mutable entrypoint: a traversal-bearing language must not create an out-of-tree
+    lock file even though the lock is taken before input validation."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    victim = tmp_path.parent / "tmp-pdd-victim.lock"
+    try:
+        # Not read-only/log: this path acquires SyncLock before validation.
+        sync_determine_module.sync_determine_operation(
+            "safe", "/../../tmp-pdd-victim", 90.0, budget=1.0,
+        )
+    except Exception:
+        pass  # a hard validation error downstream is acceptable; the write is not
+    assert not victim.exists(), f"out-of-tree lock created at {victim}"
+
+
+@pytest.mark.parametrize(
+    "defaults_yaml",
+    [
+        '      generate_output_path: "CON/"\n',           # reserved device dir
+        '      example_output_path: "custom/usage/"\n',   # SAFE custom in-project dir (sanity)
+        '      outputs:\n        example:\n          path: "src/file:stream.py"\n',  # NTFS ADS colon
+        '      outputs:\n        test:\n          path: "C:/victim.py"\n',           # drive marker
+        '      outputs:\n        example:\n          path: "src/../other.py"\n',     # normalized-away ..
+        '      outputs:\n        code:\n          path: "sub/CON/x.py"\n',           # device mid-path
+    ],
+)
+def test_get_pdd_file_paths_rejects_nonportable_or_traversal_pddrc_output(tmp_path, monkeypatch, defaults_yaml):
+    """R16/R9 parity: .pddrc output destinations get the same portable/canonical
+    validation as architecture code filepaths — CWD-independent and before resolve()."""
+    monkeypatch.chdir(tmp_path)
+    # The 'custom/usage/' case is intentionally SAFE (a plain in-project dir); no raise.
+    expect_safe = "custom/usage" in defaults_yaml
+    _write_escape_pddrc_project(tmp_path, defaults_yaml, with_arch=True)
+    if expect_safe:
+        paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+        assert paths["example"].resolve(strict=False).is_relative_to(tmp_path.resolve())
+    else:
+        with pytest.raises(UnsafeOutputPathError):
+            get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
