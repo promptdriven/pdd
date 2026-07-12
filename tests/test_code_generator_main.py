@@ -7404,6 +7404,40 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.churn_ratio > excinfo.value.threshold
         assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
 
+    def test_churn_block_stamps_parent_nonce_from_fd(self, monkeypatch):
+        """Issue #1903 §B.4 (round 8): when the parent hands the child a nonce over
+        the private pipe FD, the child stamps it into the churn block so the parent
+        can authenticate the block. No FD -> no nonce line (standalone)."""
+        import os
+        import pdd.code_generator_main as cg
+
+        # Reset the once-only module cache between simulated child processes.
+        def _fresh():
+            cg._CHURN_NONCE_CACHE = None
+            cg._CHURN_NONCE_READ = False
+
+        nonce = "0123456789abcdef0123456789abcdef"
+        r, w = os.pipe()
+        os.write(w, nonce.encode("ascii"))
+        os.close(w)
+        monkeypatch.setenv(cg._CHURN_NONCE_ENV, str(r))
+        _fresh()
+        try:
+            err = cg.TestChurnError("m.prompt", "src/__test__/x.test.tsx", 0.9, 0.4, 100, 5)
+        finally:
+            try:
+                os.close(r)
+            except OSError:
+                pass
+        assert f"nonce: {nonce}" in str(err)
+
+        # Standalone (no FD env): no nonce line is emitted.
+        monkeypatch.delenv(cg._CHURN_NONCE_ENV, raising=False)
+        _fresh()
+        err2 = cg.TestChurnError("m.prompt", "tests/test_x.py", 0.9, 0.4, 100, 5)
+        assert "nonce:" not in str(err2)
+        _fresh()
+
     def test_test_churn_allows_pure_additive_growth(self, monkeypatch):
         from pdd.code_generator_main import _verify_test_churn
 
