@@ -157,6 +157,7 @@ def test_linux_signer_containment_binds_only_ready_root_writable(
     )
     bind_index = command.index("--bind")
     assert command[bind_index + 1:bind_index + 3] == (str(tmp_path), str(tmp_path))
+    assert "stdout=sys.stdout.buffer" in signer_process_module._LINUX_CONTAINMENT
 
 
 @pytest.mark.skipif(

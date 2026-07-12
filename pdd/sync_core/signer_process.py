@@ -42,19 +42,15 @@ def cleanup():
         time.sleep(.01)
 def stop(_signum, _frame):
     cleanup()
-    if child is not None:
-        stdout, stderr = child.communicate()
-        sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
     raise SystemExit(124)
 signal.signal(signal.SIGTERM, stop)
 ready_path = os.environ.pop('PDD_SIGNER_READY_PATH', '')
-child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, start_new_session=True)
+child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE, stdout=sys.stdout.buffer,
+                         stderr=sys.stderr.buffer, start_new_session=True)
 if ready_path:
     pathlib.Path(ready_path).touch(exist_ok=False)
 try:
-    stdout, stderr = child.communicate(sys.stdin.buffer.read())
-    sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
+    child.communicate(sys.stdin.buffer.read())
     status = child.returncode
 finally:
     cleanup()
