@@ -616,6 +616,21 @@ def test_collection_probe_fixed_name_is_not_candidate_shadowable(tmp_path) -> No
     assert not (root / "candidate-fixed-probe-loaded").exists()
 
 
+def test_collection_worker_uses_trusted_plugin_path(tmp_path: Path) -> None:
+    root = tmp_path / "candidate"
+    controller = tmp_path / "controller"
+    root.mkdir()
+    controller.mkdir()
+
+    worker = runner_module._trusted_collection_runner(controller, root, ["tests"])
+    source = worker.read_text(encoding="utf-8")
+
+    assert "_CONTROLLER =" in source
+    assert str(controller) in source
+    assert "_ENV['PYTHONPATH'] = _CONTROLLER" in source
+    assert "[sys.executable, '-P', '-m', 'pytest']" in source
+
+
 def test_deselected_declared_test_cannot_pass(tmp_path) -> None:
     content = "def test_keep(): assert True\ndef test_drop(): assert True\n"
     root, head = _repository(tmp_path, content)

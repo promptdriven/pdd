@@ -824,12 +824,13 @@ def _trusted_collection_runner(
                 "import os, subprocess, sys",
                 "",
                 f"_ROOT = {json.dumps(str(root))}",
+                f"_CONTROLLER = {json.dumps(str(directory))}",
                 "",
                 "os.chdir(_ROOT)",
-                "if _ROOT not in sys.path:",
-                "    sys.path.insert(0, _ROOT)",
-                "_STATUS = subprocess.run([sys.executable, '-m', 'pytest'] + "
-                + json.dumps(pytest_args) + ").returncode",
+                "_ENV = os.environ.copy()",
+                "_ENV['PYTHONPATH'] = _CONTROLLER",
+                "_STATUS = subprocess.run([sys.executable, '-P', '-m', 'pytest'] + "
+                + json.dumps(pytest_args) + ", env=_ENV).returncode",
                 "sys.stdout.flush(); sys.stderr.flush()",
                 "os._exit(_STATUS if _STATUS in (0, 5) else 125)",
                 "",
