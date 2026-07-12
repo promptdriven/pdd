@@ -73,6 +73,83 @@ def test_sandbox_directory_bind_provides_parent_for_nested_file(
     assert str(nested) not in directory_targets
 
 
+def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The namespace must retain the executable and loader lookup spellings."""
+    runtime = tmp_path / "runtime"
+    executable_source = runtime / "python-real"
+    executable_source.parent.mkdir()
+    executable_source.write_text("python", encoding="utf-8")
+    executable_destination = tmp_path / "toolcache" / "bin" / "python"
+    executable_destination.parent.mkdir(parents=True)
+    executable_destination.symlink_to(executable_source)
+    loader_source = runtime / "libc-real.so"
+    loader_source.write_bytes(b"library")
+    loader_destination = tmp_path / "loader" / "libc.so.6"
+    loader_destination.parent.mkdir()
+    loader_destination.symlink_to(loader_source)
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "executable", str(executable_destination))
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: {"bwrap": "/usr/bin/bwrap", "sudo": "/usr/bin/sudo",
+                      "setpriv": "/usr/bin/setpriv"}.get(name),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr("pdd.sync_core.supervisor._runtime_directories", lambda: ())
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths",
+        lambda: (
+            ("native/loader/libc.so.6", loader_destination),
+            ("native/runtime/libc-real.so", loader_source),
+        ),
+    )
+
+    argv, _profile = _sandbox_command(
+        [str(executable_destination), "-c", "pass"], (tmp_path,), cwd=tmp_path
+    )
+    bwrap = json.loads(argv[-2])
+    sources = json.loads(argv[-1])
+
+    def bind_source(destination: Path) -> str:
+        index = bwrap.index(str(destination))
+        assert bwrap[index - 2] == "--ro-bind"
+        placeholder = bwrap[index - 1]
+        assert placeholder.startswith("@FD:") and placeholder.endswith("@")
+        return sources[int(placeholder[4:-1])]
+
+    assert str(executable_destination.parent) in {
+        bwrap[index + 1] for index, value in enumerate(bwrap[:-1])
+        if value == "--dir"
+    }
+    assert bind_source(executable_destination) == str(executable_source)
+    assert bind_source(loader_destination) == str(loader_source)
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux kernel namespace containment",
+)
+def test_sandboxed_python_minimal_smoke(tmp_path: Path) -> None:
+    """A protected namespace can start the configured interpreter."""
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "pass"],
+        cwd=tmp_path,
+        timeout=10,
+        env=dict(os.environ),
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert surviving is False
+
+
 def test_protected_runner_declares_finite_resource_limits() -> None:
     limits = SupervisorLimits()
     assert 0 < limits.max_output_bytes <= 16 * 1024 * 1024
