@@ -78,14 +78,6 @@ def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     from ..continuous_sync import canonical_sync_enabled, lexical_repository_root
 
     start = Path(paths.get("prompt", Path.cwd())) if paths else Path.cwd()
-    lexical_start = Path(os.path.abspath(start))
-    if not lexical_start.is_dir():
-        lexical_start = lexical_start.parent
-    if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is None and not any(
-        (candidate / ".pdd/sync-policy.json").is_file()
-        for candidate in (lexical_start, *lexical_start.parents)
-    ):
-        return None
     root = lexical_repository_root(start)
     if not canonical_sync_enabled(root):
         return None

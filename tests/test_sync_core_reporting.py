@@ -520,6 +520,39 @@ def test_committed_policy_stays_active_when_worktree_policy_is_deleted(tmp_path)
 
 
 @pytest.mark.parametrize("mutation", ["delete", "rename"])
+@pytest.mark.parametrize("bridge", ["operation_log", "orchestration"])
+def test_dirty_worktree_policy_removal_cannot_enable_legacy_mutation(
+    tmp_path, monkeypatch, mutation, bridge
+) -> None:
+    root, _commit = _repository(tmp_path)
+    policy = root / ".pdd/sync-policy.json"
+    if mutation == "delete":
+        policy.unlink()
+    else:
+        policy.rename(policy.with_suffix(".disabled"))
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
+    paths = {"prompt": root / "prompts/widget_python.prompt"}
+    legacy_path = root / ".pdd/meta/widget_python.json"
+
+    if bridge == "operation_log":
+        from pdd.sync_core.finalize import CanonicalFinalizationError
+
+        with pytest.raises(CanonicalFinalizationError):
+            save_fingerprint("widget", "python", "generate", paths)
+    else:
+        from pdd.sync_orchestration import _save_fingerprint_atomic
+
+        with pytest.raises(RuntimeError):
+            _save_fingerprint_atomic(
+                "widget", "python", "generate", paths, 0.0, "test"
+            )
+
+    assert canonical_sync_enabled(root) is True
+    assert not legacy_path.exists()
+
+
+@pytest.mark.parametrize("mutation", ["delete", "rename"])
 def test_linked_worktree_committed_policy_stays_active(tmp_path, mutation) -> None:
     root, _commit = _repository(tmp_path)
     linked = tmp_path / "linked"

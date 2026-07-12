@@ -20,6 +20,7 @@ from ..sync_core import (
     FingerprintStore,
     GlobalCertificateOptions,
     NightlyObservation,
+    PathPolicy,
     PlannedWrite,
     RepositoryTarget,
     SemanticStatus,
@@ -318,9 +319,15 @@ def recover(ctx: click.Context, transaction_id: str) -> None:
     """Explicitly recover one crash-durable synchronization transaction."""
     ctx.ensure_object(dict)
     root = Path.cwd()
+    head = resolve_git_commit(root, "HEAD")
     result = TransactionManager(root).recover(
         transaction_id,
-        alias_policy_loader=lambda: load_committed_aliases(root),
+        alias_policy_loader=lambda: PathPolicy(
+            root,
+            approved_aliases=load_committed_aliases(root, head),
+            base_ref=head,
+            head_ref=head,
+        ),
     )
     click.echo(
         json.dumps(

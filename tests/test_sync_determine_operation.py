@@ -5665,8 +5665,9 @@ def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
     assert second == first
 
 
+@pytest.mark.parametrize("policy_mutation", [None, "delete", "rename"])
 def test_sync_classifier_preserves_nested_prompt_alias_identity(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, policy_mutation
 ):
     """Architecture, include closure, and hashing use the approved logical path."""
     root = tmp_path / "repo"
@@ -5690,9 +5691,16 @@ def test_sync_classifier_preserves_nested_prompt_alias_identity(
     contract.write_text("logical contract\n")
     code = root / "src/nested/widget.py"
     code.write_text("value = 1\n")
+    wrong_code = root / "wrong/nested/widget.py"
+    wrong_code.parent.mkdir(parents=True)
+    wrong_code.write_text("wrong = True\n")
     (root / "architecture.json").write_text(
         json.dumps(
             [
+                {
+                    "filename": "widget_python.prompt",
+                    "filepath": "wrong/nested/widget.py",
+                },
                 {
                     "filename": "nested/widget_python.prompt",
                     "filepath": "src/nested/widget.py",
@@ -5723,6 +5731,11 @@ def test_sync_classifier_preserves_nested_prompt_alias_identity(
     subprocess.run(
         ["git", "commit", "-q", "-m", "nested prompt alias"], cwd=root, check=True
     )
+    policy = root / ".pdd/sync-policy.json"
+    if policy_mutation == "delete":
+        policy.unlink()
+    elif policy_mutation == "rename":
+        policy.rename(policy.with_suffix(".disabled"))
     monkeypatch.chdir(root)
     monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
 

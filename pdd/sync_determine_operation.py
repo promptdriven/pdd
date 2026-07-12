@@ -1238,7 +1238,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             prompt_path_obj = Path(prompt_path)
             prompt_filename_for_lookup = Path(prompt_path).name
             try:
-                prompt_filename_for_lookup = str(prompt_path_obj.resolve().relative_to(prompts_root.resolve())).replace(os.sep, "/")
+                lexical_prompt = Path(os.path.abspath(prompt_path_obj))
+                lexical_prompts_root = Path(os.path.abspath(prompts_root))
+                prompt_filename_for_lookup = str(
+                    lexical_prompt.relative_to(lexical_prompts_root)
+                ).replace(os.sep, "/")
             except ValueError:
                 pass
             arch_filepath, _ = _get_filepath_from_architecture(
@@ -1793,12 +1797,6 @@ def _validated_report_live_includes(
 def _lexical_canonical_root(prompt_path: Path) -> Optional[Path]:
     """Return an active canonical root without resolving the prompt leaf."""
     lexical_prompt = Path(os.path.abspath(prompt_path))
-    lexical_start = lexical_prompt if lexical_prompt.is_dir() else lexical_prompt.parent
-    if os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is None and not any(
-        (candidate / ".pdd/sync-policy.json").is_file()
-        for candidate in (lexical_start, *lexical_start.parents)
-    ):
-        return None
     from pdd.continuous_sync import canonical_sync_enabled, lexical_repository_root
 
     root = lexical_repository_root(lexical_prompt)

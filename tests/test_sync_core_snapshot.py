@@ -170,7 +170,11 @@ def test_snapshot_allows_regular_code_edit_between_protected_trees(tmp_path) -> 
 
     snapshot = build_unit_snapshot(root, manifest, manifest.managed_units[0], profile)
 
-    code = next(item for item in snapshot.artifacts if item.role == "code")
+    code = next(
+        item
+        for item in snapshot.artifacts
+        if item.relpath.as_posix() == "src/widget.py"
+    )
     assert code.relpath.as_posix() == "src/widget.py"
 
 

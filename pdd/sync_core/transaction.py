@@ -699,10 +699,7 @@ class TransactionManager:
         self,
         transaction_id: str,
         *,
-        alias_policy_loader: Callable[
-            [], Mapping[PurePosixPath, PurePosixPath]
-        ]
-        | None = None,
+        alias_policy_loader: Callable[[], PathPolicy] | None = None,
     ) -> TransactionResult:
         """Complete COMMITTING work or discard a PREPARED transaction idempotently."""
         transaction_dir = self._transaction_dir(transaction_id)
@@ -719,7 +716,7 @@ class TransactionManager:
         if phase is not TransactionPhase.COMMITTING:
             return TransactionResult(transaction_id, phase, (), True)
         if alias_policy_loader is not None:
-            self.policy = PathPolicy(self.checkout_root, alias_policy_loader())
+            self.policy = alias_policy_loader()
         self._adopt_journal_aliases(payload)
         entries = payload.get("entries")
         if not isinstance(entries, list):

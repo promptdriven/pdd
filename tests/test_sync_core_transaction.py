@@ -590,6 +590,66 @@ def test_public_recover_loads_committed_protected_alias_policy(
     assert target.read_text() == "value = 2\n"
 
 
+@pytest.mark.parametrize("committed_mutation", ["remove", "regular", "retarget"])
+def test_public_recover_rejects_live_alias_absent_from_committed_authority(
+    tmp_path, monkeypatch, committed_mutation
+) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "recover@example.com")
+    _git(tmp_path, "config", "user.name", "Recover Test")
+    (tmp_path / ".pdd").mkdir()
+    (tmp_path / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [{"alias_path": "alias", "canonical_path": "canonical"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "canonical").mkdir()
+    target = tmp_path / "canonical/widget.py"
+    target.write_text("before\n")
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other/widget.py").write_text("other\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to("canonical", target_is_directory=True)
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "protected alias policy")
+    manager = TransactionManager(tmp_path, approved_aliases=_approved_aliases())
+    manager.prepare(
+        "tx-cli-uncommitted-alias",
+        (PlannedWrite(PurePosixPath("alias/widget.py"), b"after\n", "100644"),),
+    )
+    with pytest.raises(SystemExit):
+        manager.commit(
+            "tx-cli-uncommitted-alias",
+            crash_hook=lambda event: (_ for _ in ()).throw(SystemExit())
+            if event == "after_committing"
+            else None,
+        )
+
+    alias.unlink()
+    if committed_mutation == "regular":
+        alias.write_text("not a symlink\n")
+    elif committed_mutation == "retarget":
+        alias.symlink_to("other", target_is_directory=True)
+    _git(tmp_path, "add", "-A", "alias")
+    _git(tmp_path, "commit", "-q", "-m", f"{committed_mutation} committed alias")
+    if alias.exists() or alias.is_symlink():
+        alias.unlink()
+    alias.symlink_to("canonical", target_is_directory=True)
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        cli, ["recover", "--transaction", "tx-cli-uncommitted-alias"]
+    )
+
+    assert result.exit_code != 0
+    assert '"phase": "COMMITTED"' not in result.output
+    assert target.read_text() == "before\n"
+
+
 def test_public_recover_defers_removed_alias_policy_for_prepared_journal(
     tmp_path, monkeypatch
 ) -> None:
