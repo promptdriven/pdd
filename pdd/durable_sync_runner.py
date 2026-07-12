@@ -30,6 +30,10 @@ MAX_WORKERS = _read_sync_max_workers()
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
 CHECKPOINT_AUTHOR_NAME = "PDD Durable Sync"
 CHECKPOINT_AUTHOR_EMAIL = "pdd-durable-sync@example.invalid"
+# Shared (non-module-prefixed) greenfield-ownership manifest under .pdd/meta
+# (issue #1903 §B.4 round 10). Kept in lockstep with
+# content_selector._PDD_CREATED_TESTS_MANIFEST.
+_OWNERSHIP_MANIFEST_NAME = "pdd_created_tests.json"
 
 
 class DurableSyncRunner(AsyncSyncRunner):
@@ -433,6 +437,14 @@ class DurableSyncRunner(AsyncSyncRunner):
         for meta_dir in meta_dirs:
             if meta_dir.exists():
                 paths.extend(sorted(meta_dir.glob(f"{safe}_*.json")))
+                # Issue #1903 §B.4 (round 10): the SHARED greenfield-ownership
+                # manifest lives in .pdd/meta and is tracked, but it is NOT
+                # module-prefixed — force-add it too so a PDD-created co-located
+                # test's ownership travels on the durable branch and survives a
+                # fresh-worktree resume (else it is misread as human-adopted).
+                manifest = meta_dir / _OWNERSHIP_MANIFEST_NAME
+                if manifest.is_file():
+                    paths.append(manifest)
         if not paths:
             return
         rel_paths = [str(path.relative_to(module_worktree)) for path in paths]
@@ -460,7 +472,11 @@ class DurableSyncRunner(AsyncSyncRunner):
                 )
                 if matching_meta_prefix:
                     meta_name = Path(normalized).name
-                    if not meta_name.startswith(f"{safe}_") or not meta_name.endswith(".json"):
+                    # The shared ownership manifest is a legitimate tracked
+                    # non-module-prefixed .pdd/meta file (round 10) — allow it.
+                    if meta_name == _OWNERSHIP_MANIFEST_NAME:
+                        pass
+                    elif not meta_name.startswith(f"{safe}_") or not meta_name.endswith(".json"):
                         unsafe.append(path)
                 else:
                     unsafe.append(path)

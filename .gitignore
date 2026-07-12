@@ -244,6 +244,11 @@ yarn.lock
 !.pdd/
 !.pdd/meta/
 .pdd/meta/*.json
+# PDD greenfield-ownership manifest (issue #1903 §B.4): TRACKED so a fresh
+# checkout / durable worktree keeps ownership provenance for co-located tests
+# PDD created, else they are misread as human-adopted and can reach the churn
+# never-block. Not a fingerprint, but shares the tracked .pdd/meta home.
+!.pdd/meta/pdd_created_tests.json
 !.pdd/meta/agentic_bug_orchestrator_python.json
 !.pdd/meta/agentic_bug_python.json
 !.pdd/meta/agentic_checkup_python.json

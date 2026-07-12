@@ -1443,10 +1443,55 @@ def _project_uses_vitest(module_path: Path, root_resolved: Path) -> bool:
     return False
 
 
+def _semver_clause_min_major(clause: str) -> Optional[int]:
+    """The guaranteed-minimum major of ONE AND-clause (space-separated
+    comparators), or ``None`` when the clause has NO lower bound (only ``<``/
+    ``<=``/``*``). Round 10: conservative — an upper-bound-only or wildcard clause
+    admits arbitrarily low majors."""
+    tokens = clause.split()
+    if "-" in tokens:  # hyphen range "A - B": the lower bound is A
+        idx = tokens.index("-")
+        if idx > 0:
+            m = re.search(r"(\d+)", tokens[idx - 1])
+            return int(m.group(1)) if m else None
+        return None
+    lower: Optional[int] = None
+    for tok in tokens:
+        t = tok.strip()
+        if not t or t in ("*", "x", "X", "latest"):
+            continue
+        if t.startswith("<"):
+            continue  # upper bound, not a lower bound
+        mm = re.match(r"^(?:\^|~|>=|>|=|v)?\s*(\d+)", t)
+        if mm:
+            maj = int(mm.group(1))
+            lower = maj if lower is None else max(lower, maj)
+    return lower
+
+
+def _semver_range_min_major(range_str: str) -> int:
+    """The guaranteed-minimum MAJOR across a full npm range (``||`` union), i.e.
+    the lowest major any satisfying install could have (round 10). ``0`` when the
+    range cannot guarantee a floor (``"<30"``, ``"*"``, ``"latest"``, ``""``, or a
+    ``||`` alternative with no lower bound), so the caller enables version-gated
+    defaults ONLY when the WHOLE range is provably >= the required major."""
+    if not range_str or not range_str.strip():
+        return 0
+    mins: list[int] = []
+    for alt in range_str.split("||"):
+        cm = _semver_clause_min_major(alt)
+        if cm is None:
+            return 0  # an alternative admits arbitrarily low majors -> no floor
+        mins.append(cm)
+    return min(mins) if mins else 0
+
+
 def _detected_jest_major(module_path: Path, root_resolved: Path) -> Optional[int]:
-    """The declared jest MAJOR version (floor) from the nearest package.json, or
-    ``None`` when unknown. Uses the lowest integer in the version range as a
-    conservative floor (``">=29"`` -> 29). Total."""
+    """The GUARANTEED-MINIMUM declared jest major from the nearest package.json,
+    or ``None`` when no jest dependency is declared. Parses the full npm range
+    conservatively (round 10): ``"<30"`` -> 0, ``"^30 || ^29"`` -> 29, ``"^30"``
+    -> 30 — so a caller enabling jest-30-only discovery never certifies an
+    uncollected test on a range that could install jest <=29. Total."""
     try:
         current = module_path.parent.resolve()
     except (OSError, RuntimeError):
@@ -1464,9 +1509,7 @@ def _detected_jest_major(module_path: Path, root_resolved: Path) -> Optional[int
                                 "peerDependencies", "optionalDependencies"):
                     deps = data.get(dep_key)
                     if isinstance(deps, Mapping) and isinstance(deps.get("jest"), str):
-                        m = re.search(r"(\d+)", deps["jest"])
-                        if m:
-                            return int(m.group(1))
+                        return _semver_range_min_major(deps["jest"])
         if str(current) == root_s or not _contained_in_root(current, root_resolved):
             break
         parent = current.parent
@@ -1474,6 +1517,21 @@ def _detected_jest_major(module_path: Path, root_resolved: Path) -> Optional[int
             break
         current = parent
     return None
+
+
+_DEFAULT_RUNNER_IGNORED_SEGMENTS = frozenset({"node_modules"})
+
+
+def _has_default_ignored_segment(candidate: Path, root_resolved: Path) -> bool:
+    """True when *candidate* lies under a directory BOTH jest and vitest exclude
+    from default discovery (``node_modules``) — round 10. Checked on the path
+    RELATIVE to the project root so a root that legitimately sits under such a
+    name does not force-refuse everything."""
+    try:
+        rel = candidate.resolve().relative_to(root_resolved)
+    except (ValueError, OSError, RuntimeError):
+        return False
+    return any(seg in _DEFAULT_RUNNER_IGNORED_SEGMENTS for seg in rel.parts)
 
 
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
@@ -1584,6 +1642,13 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             if resolved is None or not _contained_in_root(resolved, root_resolved):
                 continue
             if resolved == module_path:
+                continue
+            # Default runner ignore (round 10): both jest (default
+            # ``testPathIgnorePatterns: ["/node_modules/"]``) and vitest (default
+            # ``exclude`` includes ``**/node_modules/**``) never collect a test
+            # under ``node_modules`` — so a co-located candidate there would be a
+            # false-green even when the filename convention matches.
+            if _has_default_ignored_segment(resolved, root_resolved):
                 continue
             if time.monotonic() > deadline:
                 return fallback_default  # budget exhausted -> stop, best-so-far

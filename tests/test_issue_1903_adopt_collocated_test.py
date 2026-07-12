@@ -688,6 +688,38 @@ class TestGreenfieldRunnerDiscovery:
                "export default { test: { include: ['x/**/*.spec.ts'] } }\n")
         assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
 
+    def test_jest_semver_range_min_major_is_conservative(self):
+        # Round 10: enable jest-30-only defaults ONLY when the WHOLE range
+        # guarantees major >= 30 — a first-integer parse would misread `<30`/
+        # `^30 || ^29` and certify an uncollected .mjs test.
+        from pdd.content_selector import _semver_range_min_major as mm
+        assert mm("<30") == 0
+        assert mm("^30 || ^29") == 29
+        assert mm("^30") == 30
+        assert mm(">=30") == 30
+        assert mm("~30.1") == 30
+        assert mm("*") == 0 and mm("latest") == 0 and mm("") == 0
+        assert mm(">=29 <31") == 29
+
+    def test_jest_below_30_range_refuses_mjs(self, tmp_path, monkeypatch):
+        # A `<30` jest range must NOT enable mjs default discovery (jest <=29
+        # does not collect .mjs) -> greenfield refuses for a .mjs module.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps({"devDependencies": {"jest": "<30"}}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/u.mjs")) is None
+        # A jest `^30` range DOES collect .mjs -> co-locates.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps({"devDependencies": {"jest": "^30"}}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/v.mjs")) is not None
+
+    def test_node_modules_candidate_is_not_collected(self, tmp_path, monkeypatch):
+        # Round 10: default jest/vitest discovery excludes node_modules, so a
+        # co-located candidate there is a false-green -> refuse.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^30"}}\n')
+        code = _write(tmp_path / "node_modules/pkg/src/thing.tsx")
+        assert find_runner_collected_test_path(code) is None
+
     def test_globstar_only_crosses_separators_at_segment_boundary(self):
         # Round 9: `**` is a globstar (crosses `/`) ONLY as a whole segment.
         # Embedded `**` (`qa**/`, `**bar`) is a single-segment `*` in micromatch;

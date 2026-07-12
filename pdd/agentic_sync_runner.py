@@ -400,14 +400,26 @@ def _extract_test_churn_output_path(
     Fails CLOSED to ``None`` when absent or when any two churn blocks disagree,
     so a forged/injected block cannot substitute a different path. With
     *expected_nonce* set, only nonce-authenticated blocks are consulted.
+
+    Round 10: validated PER BLOCK, then unanimous across blocks — a trusted block
+    MISSING the field (or carrying conflicting values WITHIN it) fails closed,
+    honoring the "ANY conflict OR absence fails closed" contract rather than
+    letting one complete block cover for an incomplete sibling.
     """
-    values = {
-        m.group(1).strip()
-        for region in _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
-        for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
-        if m.group(1).strip()
-    }
-    return next(iter(values)) if len(values) == 1 else None
+    regions = _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
+    if not regions:
+        return None
+    per_block: set[str] = set()
+    for region in regions:
+        vals = {
+            m.group(1).strip()
+            for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
+            if m.group(1).strip()
+        }
+        if len(vals) != 1:
+            return None  # a trusted block missing/conflicting output -> fail closed
+        per_block.add(next(iter(vals)))
+    return next(iter(per_block)) if len(per_block) == 1 else None
 
 
 def _extract_test_churn_adopted(
@@ -420,16 +432,25 @@ def _extract_test_churn_adopted(
     *expected_nonce* set (round 8), a block that does not carry the parent's
     secret nonce is not trusted at all — so a hostile project test that merely
     PRINTS ``adopted: true`` is ignored and the module keeps the strict hard-fail.
+    Round 10: validated PER BLOCK — a trusted block MISSING the ``adopted:``
+    marker (or carrying both values) fails closed, so an incomplete authenticated
+    block cannot be covered for by a complete one.
     """
     regions = _test_churn_block_regions_trusted(stdout, stderr, expected_nonce)
-    values = {
-        m.group(1).lower()
-        for region in regions
-        for m in re.finditer(
-            r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
-        )
-    }
-    return values == {"true"}
+    if not regions:
+        return False
+    per_block: set[str] = set()
+    for region in regions:
+        vals = {
+            m.group(1).lower()
+            for m in re.finditer(
+                r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
+            )
+        }
+        if len(vals) != 1:
+            return False  # a trusted block missing/conflicting adopted -> fail closed
+        per_block.add(next(iter(vals)))
+    return per_block == {"true"}
 
 
 def _is_adopted_collocated_test_path(
