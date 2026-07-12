@@ -29,6 +29,7 @@ from .agentic_sync_runner import (
     _basename_from_architecture_filename,
     _basename_from_architecture_filepath,
     _find_pdd_executable,
+    _target_basename_aliases,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
@@ -244,6 +245,8 @@ _ISSUE_PROMPT_PATH_RE = re.compile(r"\S+\.prompt\b")
 # only when no matching ``]`` follows (otherwise it starts a dynamic route
 # segment such as ``[id]/page_...``).
 _PROMPT_PATH_LEAD_TRIM = "`\"'(<*,;:!]}>"
+# Opening/closing fence line: a run of 3+ backticks or tildes (CommonMark).
+_FENCE_LINE_RE = re.compile(r"(`{3,}|~{3,})")
 
 
 def _prompt_path_tokens(text: str) -> List[str]:
@@ -265,21 +268,27 @@ def _strip_fenced_code_blocks(text: str) -> str:
     P2). An unclosed fence conservatively drops the remainder of the text —
     under-matching noise is safe, while over-matching inflates a write-mode
     sync scope.
+
+    Fences may be LONGER than three characters: a fence closes only on a run
+    of the SAME character at least as long as the opener (CommonMark;
+    PR #1983 round 4, P2#2), so a 4-backtick fence swallows inner ``` pairs
+    as quoted content instead of leaking the text between them.
     """
     kept: List[str] = []
-    fence_marker: Optional[str] = None
+    fence_char: Optional[str] = None
+    fence_len = 0
     for line in text.splitlines():
-        stripped = line.lstrip()
-        if fence_marker is None and (
-            stripped.startswith("```") or stripped.startswith("~~~")
-        ):
-            fence_marker = stripped[:3]
+        match = _FENCE_LINE_RE.match(line.lstrip())
+        if fence_char is None:
+            if match:
+                fence_char = match.group(1)[0]
+                fence_len = len(match.group(1))
+            else:
+                kept.append(line)
             continue
-        if fence_marker is not None and stripped.startswith(fence_marker):
-            fence_marker = None
-            continue
-        if fence_marker is None:
-            kept.append(line)
+        if match and match.group(1)[0] == fence_char and len(match.group(1)) >= fence_len:
+            fence_char = None
+            fence_len = 0
     return "\n".join(kept)
 
 
@@ -305,13 +314,20 @@ def _architecture_identity_index(
     * ``tail_to_identities`` — final path component -> per-entry identities;
       a tail listing more than one entry is ambiguous.
 
-    Runtime ``*_LLM.prompt`` entries are excluded entirely. True duplicate
-    entries (same primary identity AND same filepath) are counted once.
+    Runtime ``*_LLM.prompt`` entries are excluded entirely. STRING-IDENTICAL
+    entries are deliberately NOT deduped (PR #1983 round 4, P1#1): the
+    combined inventory carries no source-project metadata
+    (``load_combined_architecture_data`` concatenates nested architecture
+    files without qualification), so two identical entries may be distinct
+    modules in different projects — treating them as ambiguous is the only
+    safe deterministic choice. The cost is recall-only and confined to a
+    module literally double-listed with identical strings (bare-name
+    resolution and tail coverage are disabled for it; exact/path-qualified
+    requests still work).
     """
     identities: List[str] = []
     known_keys: set = set()
     tail_to_identities: Dict[str, List[str]] = {}
-    seen_entries: set = set()
     for entry in architecture or []:
         if not isinstance(entry, dict):
             continue
@@ -325,10 +341,6 @@ def _architecture_identity_index(
             primary = _basename_from_architecture_filepath(filepath_str)
         if not primary:
             continue
-        entry_key = (primary, filepath_str)
-        if entry_key in seen_entries:
-            continue
-        seen_entries.add(entry_key)
         identities.append(primary)
         known_keys.update(_architecture_entry_aliases(entry))
         tail_to_identities.setdefault(primary.rsplit("/", 1)[-1], []).append(primary)
@@ -537,10 +549,10 @@ def _extract_issue_named_modules(
        plain-prose mention of a single-word module is deliberately NOT
        treated as an explicit request; use backticks or the prompt path).
 
-    Scan surfaces (PR #1983 round 3, P2): classes 1 and 2 scan the title/body;
-    class 3 scans the title/body with fenced code blocks stripped (quoted
-    logs/snippets are not requests). Comments contribute ONLY trusted
-    ``FILES_MODIFIED:`` marker payloads (class 2), never free text.
+    Scan surfaces (PR #1983 rounds 3-4, P2): ALL classes scan the title/body
+    with fenced code blocks stripped first (quoted logs/snippets are not
+    requests). Comments contribute ONLY trusted ``FILES_MODIFIED:`` marker
+    payloads (class 2), also fence-stripped first, never free text.
 
     Ambiguous tails (listing more than one real entry) never resolve from
     bare names and a path-qualified prompt-path key is accepted as a
@@ -554,13 +566,14 @@ def _extract_issue_named_modules(
     if not identities:
         return []
 
-    text = f"{title or ''}\n{body or ''}"
+    # Fence-strip ONCE, before every class (PR #1983 round 4, P2#1): a fenced
+    # prior-run log in the body must not widen scope through backtick or
+    # prompt-path tokens any more than through bare-name matches.
+    text = _strip_fenced_code_blocks(f"{title or ''}\n{body or ''}")
     named: List[str] = []
     for module in _explicit_token_modules(
         text, comments, known_keys, tail_to_identities
-    ) + _bare_mention_identities(
-        _strip_fenced_code_blocks(text), identities, tail_to_identities
-    ):
+    ) + _bare_mention_identities(text, identities, tail_to_identities):
         if module not in named:
             named.append(module)
     return named
@@ -2268,6 +2281,45 @@ def _resolve_module_cwd_and_target(
     return project_root, basename
 
 
+def _dep_graph_target_for_module(rel_target: str, architecture: Any) -> str:
+    """Map a scheduler key to a dep-graph-resolvable target (PR #1983 round 4).
+
+    Scheduler keys derived from the prompt SUBPATH (``app/settings/page``)
+    qualify by the directory under ``prompts/``, while a flat-filename
+    architecture entry only exposes filename- and filepath-derived aliases
+    (``page``, ``src/app/settings/page``). ``build_dep_graph_from_architecture_data``
+    locates entries by exact alias, so such a key would silently resolve to no
+    entry and lose its declared dependency edges — the exact #1980 dropped-edge
+    failure, now on the widened scope.
+
+    When ``rel_target`` already alias-matches some entry it is returned
+    unchanged. Otherwise, if it path-suffix-matches the aliases of exactly ONE
+    entry (one side is a ``/``-suffix of the other), that entry's matched
+    qualified alias is returned so the builder finds the right entry — the
+    bare filename alias is never used, since it may be shared across sibling
+    entries. Ambiguous or unmatched targets are returned unchanged (existing
+    no-guess behavior).
+    """
+    entries = [e for e in (extract_modules(architecture) or []) if isinstance(e, dict)]
+    if not entries or "/" not in rel_target:
+        return rel_target
+    target_aliases = _target_basename_aliases(rel_target)
+    matched_aliases: List[str] = []
+    for entry in entries:
+        aliases = _architecture_entry_aliases(entry)
+        if aliases & target_aliases:
+            return rel_target
+        for alias in sorted(aliases):
+            if "/" in alias and (
+                alias.endswith(f"/{rel_target}") or rel_target.endswith(f"/{alias}")
+            ):
+                matched_aliases.append(alias)
+                break
+    if len(matched_aliases) == 1:
+        return matched_aliases[0]
+    return rel_target
+
+
 def _build_targeted_dep_graph(
     architecture: Any,
     modules: List[str],
@@ -2306,29 +2358,40 @@ def _build_targeted_dep_graph(
     for bn in modules:
         cwd_groups.setdefault(info[bn][0].resolve(), []).append(bn)
 
-    root_resolved = project_root.resolve()
     graph: Dict[str, List[str]] = {bn: [] for bn in modules}
     warnings: List[str] = []
 
     for cwd_resolved, group in cwd_groups.items():
-        if cwd_resolved == root_resolved:
+        if cwd_resolved == project_root.resolve():
             group_arch: Any = architecture
         else:
             group_arch, _ = _load_architecture_json(Path(cwd_resolved))
             if not group_arch:
                 group_arch = architecture
+        # PR #1983 round 4 (P1#2): a scheduler key derived from the prompt
+        # SUBPATH (``app/settings/page`` — emitted by both the branch-diff
+        # detector and issue prompt-path widening) may not alias-match a
+        # flat-filename entry whose aliases are filename-/filepath-derived
+        # (``page``, ``src/app/settings/page``); the builder would then
+        # silently return an empty dependency list. Pre-resolve such targets
+        # to the uniquely suffix-matched entry's resolvable alias, and remap
+        # the graph back to the original scheduler keys afterwards.
+        effective = {
+            bn: _dep_graph_target_for_module(info[bn][1], group_arch)
+            for bn in group
+        }
         # Relative targets are unique within a single project.
-        target_to_key = {info[bn][1]: bn for bn in group}
+        target_to_key = {effective[bn]: bn for bn in group}
         result = build_dep_graph_from_architecture_data(
             group_arch,
-            [info[bn][1] for bn in group],
+            [effective[bn] for bn in group],
             source_name=source_name,
         )
         warnings.extend(result.warnings)
         for bn in group:
             graph[bn] = [
                 target_to_key.get(dep, dep)
-                for dep in result.graph.get(info[bn][1], [])
+                for dep in result.graph.get(effective[bn], [])
             ]
 
     return graph, warnings
