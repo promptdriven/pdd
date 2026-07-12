@@ -18,7 +18,7 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import psutil
 
@@ -2072,73 +2072,97 @@ def _contained_architecture_code_path(
     return candidate
 
 
-def _resolution_containment_roots(
-    config_anchor: Path, prompts_root_anchor: Path
-) -> Tuple[Path, ...]:
-    """Legitimate project boundaries a resolved output may live under.
+def _governing_output_root(config_anchor: Path) -> Tuple[Path, bool]:
+    """The single trusted root that every resolved output must live under.
 
-    Output destinations in ``get_pdd_file_paths`` are anchored at one of several
-    legitimate roots depending on the branch: the governing ``.pddrc`` /
-    ``architecture.json`` directory (project-relative outputs), or the process CWD
-    (a parent/sibling CWD run whose outputs stay CWD-relative), or the config /
-    custom prompt-root anchor. A path is contained when it resolves inside ANY of
-    these; a genuine escape (parent traversal, escaping symlink, or an
-    away-pointing absolute path) lands outside every one of them. Checking the set
-    keeps CWD-relative legitimate layouts working while still refusing an
-    out-of-tree write, so ``.pddrc``/architecture config cannot turn a sync (or
-    even dry-run discovery) into an arbitrary filesystem write.
+    Authority comes from PROVENANCE, never from the process CWD: the governing
+    ``.pddrc`` directory, else the ``architecture.json`` directory. Outputs are
+    always anchored under this root — a parent/sibling-CWD run does not widen the
+    boundary. Only when neither config exists (a loose, unconfigured tree) does the
+    root fall back to ``config_anchor`` (which is CWD in that case). Returns
+    ``(root, has_project_config)``.
     """
-    roots: List[Path] = []
-    for base in (config_anchor, prompts_root_anchor, Path.cwd()):
+    pddrc = _find_pddrc_file(config_anchor)
+    if pddrc is not None:
+        return pddrc.parent.resolve(strict=False), True
+    arch = _find_architecture_json(config_anchor)
+    if arch is not None:
+        return arch.parent.resolve(strict=False), True
+    return config_anchor.resolve(strict=False), False
+
+
+def _reanchor_output_to_root(
+    path: Any, governing_root: Path, has_project_config: bool
+) -> Path:
+    """Anchor an output path under the governing project root.
+
+    A relative path joins the root. An absolute path already inside the root is
+    left unchanged. An absolute path that a branch anchored at the process CWD
+    (outside the governing root) is relativised against CWD and re-anchored under
+    the root, so a parent/sibling-CWD run still writes UNDER the project instead of
+    beside it. A path that is outside both the root and CWD is left as-is for the
+    containment check to reject.
+    """
+    p = Path(path)
+    root_resolved = governing_root.resolve(strict=False)
+    try:
+        cwd = Path.cwd().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        cwd = root_resolved
+    if not p.is_absolute():
+        # Relative paths resolve against the CWD. When the CWD IS the governing
+        # root they already land under it — keep them relative to preserve the
+        # legacy return contract. From a parent/sibling CWD, re-anchor them under
+        # the governing root so the write still lands under the project.
+        if cwd == root_resolved:
+            return p
+        return governing_root / p
+    try:
+        p_resolved = p.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return p
+    try:
+        p_resolved.relative_to(root_resolved)
+        return p  # already under the governing root
+    except ValueError:
+        pass
+    if has_project_config and cwd != root_resolved:
+        # An absolute output a branch anchored at the CWD (outside the governing
+        # root) is re-anchored under the project.
         try:
-            roots.append(base.resolve(strict=False))
+            return governing_root / p_resolved.relative_to(cwd)
         except (OSError, RuntimeError, ValueError):
             pass
-    for finder in (_find_pddrc_file, _find_architecture_json):
-        found = finder(config_anchor)
-        if found is not None:
-            try:
-                roots.append(found.parent.resolve(strict=False))
-            except (OSError, RuntimeError, ValueError):
-                pass
-    unique: List[Path] = []
-    seen = set()
-    for root in roots:
-        if root not in seen:
-            seen.add(root)
-            unique.append(root)
-    return tuple(unique)
+    return p
 
 
-def _output_path_within_project(
-    path: Any, project_roots: Iterable[Path]
-) -> bool:
-    """Whether ``path`` resolves (symlinks followed) inside ANY allowed root."""
+def _output_path_within_root(path: Any, project_root: Path) -> bool:
+    """Whether ``path`` resolves (symlinks followed) inside ``project_root`` AND
+    every component below the root is portable/canonical (R9/R10 parity).
+
+    Containment alone is not enough: a non-portable component (Windows device
+    name, NTFS ADS colon, drive marker, control char) can survive ``resolve()``
+    and stay physically inside the root on POSIX. Rejecting such components here
+    catches values that reached a sink WITHOUT passing the raw ``.pddrc`` gate
+    (e.g. a nearer descendant ``.pddrc`` selected by ``construct_paths``).
+    """
     try:
         resolved = Path(path).resolve(strict=False)
+        root_resolved = project_root.resolve(strict=False)
+        relative = resolved.relative_to(root_resolved)
     except (OSError, RuntimeError, ValueError):
         return False
-    for root in project_roots:
-        try:
-            resolved.relative_to(root)
-            return True
-        except ValueError:
-            continue
-    return False
+    return not any(
+        _unsafe_portable_path_component(part) for part in relative.parts
+    )
 
 
-def _ensure_output_within_project(
-    path: Any, project_roots: Tuple[Path, ...], artifact: str
+def _ensure_output_within_root(
+    path: Any, project_root: Path, artifact: str
 ) -> Any:
-    """Return ``path`` when contained in an allowed root; else fail closed.
-
-    Raises :class:`UnsafeOutputPathError` (a hard, propagating path-resolution
-    error) when a configured code/example/test destination escapes every project
-    boundary.
-    """
-    if not _output_path_within_project(path, project_roots):
-        primary = project_roots[0] if project_roots else Path.cwd()
-        raise UnsafeOutputPathError(path, primary, artifact)
+    """Return ``path`` when contained + portable under the root; else fail closed."""
+    if not _output_path_within_root(path, project_root):
+        raise UnsafeOutputPathError(path, project_root, artifact)
     return path
 
 
@@ -2841,16 +2865,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         ):
             config_anchor = Path.cwd()
 
-        # The project boundaries every returned output must stay within. Computed
-        # once from the same anchors the branches use, so architecture- and
-        # .pddrc-derived code/example/test destinations are held to the same
-        # containment as the architecture code filepath (R7). A configured output
-        # that escapes the tree (parent traversal / escaping symlink / away-pointing
-        # absolute path) fails closed via _finalize_output_paths instead of writing
-        # out of tree.
-        _containment_roots = _resolution_containment_roots(
-            config_anchor, prompts_root_anchor
-        )
+        # The single trusted project root every returned output must live under.
+        # Authority is from PROVENANCE (the governing .pddrc / architecture.json
+        # directory), NEVER the process CWD — so a parent/sibling-CWD run cannot
+        # widen the boundary and authorise a write beside the real project (R16).
+        _governing_root, _has_project_config = _governing_output_root(config_anchor)
 
         # R16: reject unsafe .pddrc output destinations up front (CWD-independent,
         # on the raw configured value) so parent traversal, non-portable components
@@ -2859,12 +2878,40 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         _reject_unsafe_pddrc_output_config(config_anchor)
 
         def _finalize_output_paths(paths: Dict[str, Path]) -> Dict[str, Path]:
+            # Re-anchor CWD-relative/absolute outputs UNDER the governing root, then
+            # fail closed if the result escapes it or carries a non-portable
+            # component (R16). The prompt is held to the prompts root (R8): an
+            # outputs.prompt.path template must not return a prompt outside it.
             for _artifact in ("code", "example", "test"):
                 _candidate = paths.get(_artifact)
                 if _candidate is not None:
-                    _ensure_output_within_project(
-                        _candidate, _containment_roots, _artifact
+                    _reanchored = _reanchor_output_to_root(
+                        _candidate, _governing_root, _has_project_config
                     )
+                    paths[_artifact] = _reanchored
+                    _ensure_output_within_root(
+                        _reanchored, _governing_root, _artifact
+                    )
+            _test_files = paths.get("test_files")
+            if isinstance(_test_files, list):
+                paths["test_files"] = [
+                    _reanchor_output_to_root(
+                        _tf, _governing_root, _has_project_config
+                    )
+                    if isinstance(_tf, Path) else _tf
+                    for _tf in _test_files
+                ]
+            _prompt = paths.get("prompt")
+            if _prompt is not None:
+                # R8: the returned prompt must resolve inside the prompts root — an
+                # outputs.prompt.path template must not hand back a foreign prompt a
+                # later `update` would overwrite. Resolve BOTH sides so a trusted
+                # in-root symlink alias (prompts -> pdd/prompts) is preserved.
+                try:
+                    _prompt_root_resolved = prompts_root_anchor.resolve(strict=False)
+                    Path(_prompt).resolve(strict=False).relative_to(_prompt_root_resolved)
+                except (OSError, RuntimeError, ValueError):
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
             return paths
 
         resolved_context_name = _resolve_context_name_for_basename(
@@ -3343,6 +3390,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 }
                 logger.debug(f"get_pdd_file_paths returning (prompt missing): test={test_path}")
                 return _finalize_output_paths(result)
+            except AmbiguousModuleError:
+                # A hard path-resolution error (ambiguity, unsafe/out-of-tree output
+                # or prompt) MUST fail closed — never fall through to the convention
+                # fallback below, which would silently return an unvalidated target.
+                raise
             except Exception as e:
                 # If construct_paths fails, fall back to convention-based paths. Anchor
                 # them at the resolved subproject (the .pddrc directory) when it differs
@@ -3400,8 +3452,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Issue #237: Check for 'outputs' config for template-based path generation
         # This must be checked even when prompt EXISTS (not just when it doesn't exist)
         outputs_config = resolved_config.get('outputs')
-        # R16: reject unsafe .pddrc output templates on the raw value.
-        _reject_unsafe_outputs_templates(outputs_config, _containment_roots[0])
+        # R16: reject unsafe .pddrc output templates on the EFFECTIVE resolved config
+        # (construct_paths may select a nearer descendant .pddrc than config_anchor).
+        _reject_unsafe_outputs_templates(outputs_config, _governing_root)
         if outputs_config:
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
@@ -3461,13 +3514,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Create a temporary empty code file if it doesn't exist for path resolution
             code_path_obj = Path(code_path)
             temp_code_created = False
-            # Never materialize a probe file outside the project: a .pddrc
-            # generate_output_path with parent traversal (or an away-pointing
+            # Never materialize a probe file outside the governing project: a
+            # .pddrc generate_output_path that resolves outside the trusted root
+            # (traversal, sibling-of-project under a parent CWD, or an away-pointing
             # absolute path) must not create directories out of tree here. When the
-            # target escapes, skip the probe — the containment guard on the return
-            # value fails the whole resolution closed.
-            if not code_path_obj.exists() and _output_path_within_project(
-                code_path_obj, _containment_roots
+            # target is not within the governing root, skip the probe — the
+            # containment guard on the return value fails the resolution closed.
+            if not code_path_obj.exists() and _output_path_within_root(
+                code_path_obj, _governing_root
             ):
                 code_path_obj.parent.mkdir(parents=True, exist_ok=True)
                 code_path_obj.touch()
@@ -3506,7 +3560,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Clean up temporary file if we created it
                 if temp_code_created and code_path_obj.exists() and code_path_obj.stat().st_size == 0:
                     code_path_obj.unlink()
-            
+
+        except AmbiguousModuleError:
+            # A hard path-resolution error (unsafe/out-of-tree target) must fail
+            # closed, not degrade into the convention fallback below.
+            raise
         except Exception as e:
             # Log the specific exception that's causing fallback to wrong paths
             import logging

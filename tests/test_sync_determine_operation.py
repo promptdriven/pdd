@@ -8737,3 +8737,87 @@ def test_get_pdd_file_paths_rejects_nonportable_or_traversal_pddrc_output(tmp_pa
     else:
         with pytest.raises(UnsafeOutputPathError):
             get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-3 review hardening: outputs.prompt.path containment (R8), single
+# provenance-based output root (R16, no CWD authority), nearer-.pddrc portable
+# validation, and fail-closed missing-prompt fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prompt_template",
+    ['/tmp/foreign/{name}_{language}.prompt', '../../../foreign/{name}_{language}.prompt'],
+)
+def test_get_pdd_file_paths_rejects_outputs_prompt_path_escape(tmp_path, monkeypatch, prompt_template):
+    """R8/R16: an `outputs.prompt.path` template must not return a prompt outside the
+    prompts root (a later `update` would overwrite that foreign file)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        prompt:\n          path: "' + prompt_template + '"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_parent_cwd_sibling_output_stays_under_project(tmp_path, monkeypatch):
+    """R16: a benign relative `.pddrc` output (no `..`) resolved from a PARENT CWD must
+    land UNDER the governing project, not beside it — CWD does not widen the boundary."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "sibling-output/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # PARENT of the governing project
+    paths = get_pdd_file_paths(
+        "widget", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+    code = paths["code"].resolve(strict=False)
+    assert code.is_relative_to(project.resolve()), f"{code} escaped project {project}"
+    assert not (parent / "sibling-output").exists(), "created a sibling dir outside the project"
+
+
+def test_get_pdd_file_paths_nearer_pddrc_nonportable_output_fails_closed(tmp_path, monkeypatch):
+    """R16: a non-portable output (reserved device) from a NEARER descendant `.pddrc`
+    that the early raw gate did not see is still rejected at the resolved-path check."""
+    project = tmp_path
+    sub = project / "pkg"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "src/"\n',
+        encoding="utf-8",
+    )
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "CON/"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+
+
+def test_get_pdd_file_paths_missing_prompt_escaping_output_not_swallowed(tmp_path, monkeypatch):
+    """A hard out-of-tree output error on the MISSING-prompt path must fail closed, not
+    be swallowed by the broad construct_paths fallback into an unvalidated target."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)  # prompt does NOT exist -> missing-prompt branch
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "../../escape_missing/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("newmodule", "python", prompts_dir="prompts", context_override="backend")
+    assert not (tmp_path.parent.parent / "escape_missing").exists()
