@@ -13,6 +13,7 @@ import json
 import os
 import re
 import textwrap
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -782,7 +783,9 @@ _JS_RUNNER_UNRESOLVABLE_RE = re.compile(
     r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\."
     r"|=>|\bfunction\b"
     r"|=\s*[A-Za-z_$][\w$.]*\s*\("          # export is a call: = buildConfig(
+    r"|\.\w+\s*\("                          # ANY method call: ['a','b'].join(
     r"|\[[^\]\n]*\]\s*:"                    # computed property key: {[..]: ..}
+    r"|`"                                   # template literal (dynamic strings)
     r"|module\.exports\s*=\s*[A-Za-z_$]"    # export is an identifier: = config
     r"|export\s+default\s+[A-Za-z_$]"       # export default ident / defineConfig
 )
@@ -986,13 +989,16 @@ except ImportError:  # pragma: no cover - stdlib fallback (no timeout, caps only
 # hosted/issue-influenced. Matching them with backtracking regex is a ReDoS
 # vector (issue #1903 review round 4), so every such match runs with a strict
 # wall-clock timeout and generous length caps, and FAILS CLOSED (``None``).
-_REGEX_MATCH_TIMEOUT_S = 0.1
+_REGEX_MATCH_TIMEOUT_S = 0.05
 _REGEX_MAX_PATTERN_LEN = 4096
 _REGEX_MAX_TEXT_LEN = 2048
-# Aggregate-work caps for greenfield discovery (issue #1903 review round 5): a
+# Aggregate-work caps for greenfield discovery (issue #1903 review rounds 5-6): a
 # hostile config with very many patterns/roots/candidates must not stall sync.
-_MAX_RUNNER_PATTERNS = 64
-_MAX_GREENFIELD_CANDIDATES = 48
+# Bounded by BOTH element caps AND a single wall-clock budget for the whole
+# discovery call (worst case ~ caps * per-match timeout is further capped here).
+_MAX_RUNNER_PATTERNS = 32
+_MAX_GREENFIELD_CANDIDATES = 24
+_DISCOVERY_TOTAL_BUDGET_S = 1.0
 
 
 def _safe_regex_search(pattern: Optional[str], text: str) -> Optional[bool]:
@@ -1181,6 +1187,7 @@ def _candidate_is_collected(
     candidate: Path,
     config: Mapping[str, Any],
     config_dir: Optional[Path],
+    deadline: Optional[float] = None,
 ) -> Optional[bool]:
     """Would the runner collect a test written at *candidate*?
 
@@ -1190,10 +1197,14 @@ def _candidate_is_collected(
     collected, ``False`` when provably NOT collected (so the caller falls back to
     the derived path rather than emit an uncollected test), or ``None`` when the
     config gives no verdict (no relevant keys, or unparseable patterns) so the
-    caller keeps the default-convention behavior.
+    caller keeps the default-convention behavior. When *deadline* (a
+    ``time.monotonic`` value) is passed and already exceeded, fails CLOSED
+    (``False``) so aggregate regex work stays bounded (issue #1903 review r6).
     """
     if config_dir is None:
         return None
+    if deadline is not None and time.monotonic() > deadline:
+        return False
     posix = candidate.as_posix()
     resolved_roots, root_dir = _resolve_config_roots(config, config_dir)
 
@@ -1241,6 +1252,8 @@ def _candidate_is_collected(
     # (negative-then-positive re-includes, positive-then-negative excludes).
     included: Optional[bool] = None
     for glob in match_globs:
+        if deadline is not None and time.monotonic() > deadline:
+            return False  # aggregate budget exhausted mid-candidate -> fail closed
         g = _sub_root_dir(glob, root_dir)
         negated = g.startswith("!")
         matched = _glob_matches(g[1:] if negated else g, posix)
@@ -1249,6 +1262,8 @@ def _candidate_is_collected(
         if matched:
             included = not negated
     for rgx in test_regexes:
+        if deadline is not None and time.monotonic() > deadline:
+            return False
         res = _safe_regex_search(_sub_root_dir(rgx, root_dir), posix)
         if res is None:
             return False  # unevaluable / timed-out regex -> fail closed
@@ -1414,10 +1429,15 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
         # them only from v30+ (v30 added `[mc]` to the default testMatch). Widen
         # the default set accordingly; an UNKNOWN jest version stays strict
         # (refuse mjs/cjs) since jest <=29 would not collect them (#1903 review).
+        # Widen to mjs/cjs ONLY when the ACTIVE runner unambiguously collects
+        # them: jest>=30 (any project), OR vitest with NO jest present. A project
+        # with jest<=29 AND a vitest dependency is AMBIGUOUS (a jest run would not
+        # collect .mjs) -> fail closed, refuse (issue #1903 review round 6).
         jest_major = _detected_jest_major(module_path, root_resolved)
-        if _project_uses_vitest(module_path, root_resolved) or (
-            jest_major is not None and jest_major >= 30
-        ):
+        allow_mc = (jest_major is not None and jest_major >= 30) or (
+            jest_major is None and _project_uses_vitest(module_path, root_resolved)
+        )
+        if allow_mc:
             default_exts = default_exts + (".mjs", ".cjs")
         if not has_explicit_match and module_path.suffix.lower() not in default_exts:
             return None
@@ -1425,6 +1445,10 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             :_MAX_GREENFIELD_CANDIDATES
         ]
 
+        # Single wall-clock budget for the whole discovery call so an adversarial
+        # config of many near-timeout patterns cannot accumulate minutes of work
+        # (issue #1903 review round 6). On exhaustion, fail closed.
+        deadline = time.monotonic() + _DISCOVERY_TOTAL_BUDGET_S
         fallback_default: Optional[Path] = None
         for candidate in candidates:
             resolved = _validated_project_path(candidate, root=root_resolved)
@@ -1432,7 +1456,9 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
                 continue
             if resolved == module_path:
                 continue
-            verdict = _candidate_is_collected(resolved, config, config_dir)
+            if time.monotonic() > deadline:
+                return fallback_default  # budget exhausted -> stop, best-so-far
+            verdict = _candidate_is_collected(resolved, config, config_dir, deadline)
             if verdict is True:
                 return resolved
             if verdict is False:

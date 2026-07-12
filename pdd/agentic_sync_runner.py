@@ -316,64 +316,79 @@ _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 _TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
 
 
-def _test_churn_block_region(stdout: str, stderr: str) -> str:
-    """Return the captured text FROM the last test-churn header onward.
+_TEST_CHURN_HEADERS = (
+    "=== test churn threshold exceeded ===",
+    "Test churn threshold exceeded for ",
+)
 
-    Both the ``TestChurnError`` message (``Test churn threshold exceeded for``)
-    and the structured block (``=== test churn threshold exceeded ===``) mark a
-    churn block; the ``output:``/``adopted:`` fields belong to it. Scoping field
-    extraction to the region after the LAST such header prevents an UNRELATED
-    earlier ``output:``/``adopted:`` diagnostic line (elsewhere in child stdout)
-    from being misread as the churned test (issue #1903 review round 3).
+
+def _test_churn_block_regions(stdout: str, stderr: str) -> list[str]:
+    """Every test-churn block region in the captured output.
+
+    Each region runs from a churn header to the next header (or end). Field
+    extraction is scoped to these regions so an UNRELATED ``output:``/``adopted:``
+    diagnostic line OUTSIDE any churn block is ignored (round 3). But it scans
+    ALL blocks — not just the last — so a forged churn block injected by
+    untrusted test output cannot silently OVERRIDE the real one: the extractors
+    require the fields to be UNANIMOUS across every block and otherwise fail
+    closed, so an attacker who prints a conflicting block only causes a strict
+    hard-fail, never a flipped never-block (issue #1903 review round 6, forgeable
+    provenance). A fully in-band signal is not attacker-proof; this raises the
+    bar and defaults to the safe outcome.
     """
     combined = (stdout or "") + "\n" + (stderr or "")
-    last = -1
-    for header in (
-        "=== test churn threshold exceeded ===",
-        "Test churn threshold exceeded for ",
-    ):
-        idx = combined.rfind(header)
-        if idx > last:
-            last = idx
-    return combined[last:] if last >= 0 else ""
+    starts = sorted(
+        idx
+        for header in _TEST_CHURN_HEADERS
+        for idx in _all_indices(combined, header)
+    )
+    regions: list[str] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(combined)
+        regions.append(combined[start:end])
+    return regions
+
+
+def _all_indices(text: str, sub: str) -> list[int]:
+    out, start = [], 0
+    while True:
+        idx = text.find(sub, start)
+        if idx < 0:
+            break
+        out.append(idx)
+        start = idx + 1
+    return out
 
 
 def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
-    """Pull the ``output: <test path>`` line out of THE test-churn block.
+    """The churned ``output: <test path>`` — UNANIMOUS across all churn blocks.
 
-    Scoped to the churn block (see :func:`_test_churn_block_region`) and fails
-    CLOSED: if the block carries conflicting ``output:`` values, return ``None``
-    so the never-block does not act on the wrong file.
+    Fails CLOSED to ``None`` when absent or when any two churn blocks disagree,
+    so a forged/injected block cannot substitute a different path.
     """
-    region = _test_churn_block_region(stdout, stderr)
-    values = [
+    values = {
         m.group(1).strip()
+        for region in _test_churn_block_regions(stdout, stderr)
         for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
         if m.group(1).strip()
-    ]
-    if not values:
-        return None
-    return values[0] if len(set(values)) == 1 else None
+    }
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def _extract_test_churn_adopted(stdout: str, stderr: str) -> bool:
-    """Read the ``adopted: true|false`` provenance from THE test-churn block.
-
-    Issue #1903 §B.4: the child sync stamps whether the churned test was ADOPTED
-    from an existing human co-located test (unpinned), determined at path
-    resolution before generation. Only a UNANIMOUS ``true`` permits the
-    never-block; a missing marker, a ``false``, or conflicting values read as
-    ``False`` (conservative — keep the strict hard-fail). Scoped to the churn
-    block so an unrelated earlier ``adopted:`` line cannot leak in.
+    """The ``adopted:`` provenance — True ONLY when UNANIMOUSLY ``true`` across
+    every churn block. A missing marker, any ``false``, or a conflict → False
+    (keep the strict hard-fail), so injecting an ``adopted: true`` cannot flip a
+    real ``adopted: false`` churn (issue #1903 review round 6).
     """
-    region = _test_churn_block_region(stdout, stderr)
-    values = [
+    values = {
         m.group(1).lower()
+        for region in _test_churn_block_regions(stdout, stderr)
         for m in re.finditer(
             r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
         )
-    ]
-    return bool(values) and all(v == "true" for v in values)
+    }
+    return values == {"true"}
 
 
 def _is_adopted_collocated_test_path(
@@ -404,14 +419,20 @@ def _is_adopted_collocated_test_path(
     if not normalized:
         return False
     is_absolute = normalized[0] in "/~\\" or bool(re.match(r"^[A-Za-z]:", normalized))
-    if is_absolute:
-        # Only trust an absolute path we can prove is inside the worktree.
+    # Canonicalize BOTH absolute and relative paths against the worktree root and
+    # require containment (issue #1903 review round 6): a relative path whose
+    # segment is a symlink escaping the root (`src/link/foo.test.ts`) must be
+    # rejected, not merely lexically checked for ``..``. No trusted root -> fail
+    # closed for absolute paths; a relative path with no root falls back to a
+    # lexical-only check (best effort, still rejecting ``..``).
+    if is_absolute or project_root is not None:
         if project_root is None:
             return False
         try:
-            resolved = Path(test_path).expanduser().resolve()
             root_resolved = Path(project_root).resolve()
-            rel = resolved.relative_to(root_resolved)  # raises if outside root
+            raw = Path(test_path).expanduser()
+            resolved = (raw if raw.is_absolute() else (root_resolved / normalized)).resolve()
+            rel = resolved.relative_to(root_resolved)  # raises if outside root (incl. symlink escape)
         except (ValueError, OSError, RuntimeError):
             return False
         segments = [seg for seg in rel.as_posix().split("/") if seg]
