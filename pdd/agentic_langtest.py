@@ -65,7 +65,9 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     if lang == "python":
         # ``shlex.quote`` (not bare double quotes): ``"$(...)"`` is still expanded
         # by the shell inside double quotes, so double quotes do not stop injection.
-        return f'{os.sys.executable} -m pytest {shlex.quote(unit_test_file)} -q'
+        # The interpreter path is quoted too, so a Python installed under a path
+        # with spaces (e.g. ``/opt/Python Env/bin/python``) does not re-split.
+        return f'{shlex.quote(os.sys.executable)} -m pytest {shlex.quote(unit_test_file)} -q'
 
     # 3. No command available — triggers agentic fallback
     return None

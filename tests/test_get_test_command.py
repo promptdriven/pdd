@@ -704,6 +704,32 @@ class TestWorkspaceMembershipHardening:
         with pytest.raises(_BraceBudgetError):
             _expand_braces("x" + "{a,b}" * 40)
 
+    def test_whitespace_surrounded_glob_is_not_normalized(self):
+        """Surrounding whitespace is literal to workspace tools, so `" packages/* "`
+        must NOT be normalized into a broader `packages/*` (which would falsely
+        prove membership). A clean glob still matches."""
+        assert _package_matches_workspace(("packages", "app"), [" packages/* "]) is False
+        assert _package_matches_workspace(("packages", "app"), ["\tpackages/*"]) is False
+        assert _package_matches_workspace(("packages", "app"), ["packages/*"]) is True
+
+    def test_whitespace_glob_does_not_adopt_workspace_config(self, tmp_path):
+        """A whitespace-padded workspace glob must not let an independent leaf adopt
+        the root Jest config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": [" packages/* "]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_brace_bomb_membership_fails_closed(self):
         """Membership fails closed (False) on a brace-bomb glob rather than hanging."""
         bomb = "x" + "{a,b}" * 40

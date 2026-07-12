@@ -391,7 +391,11 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
         positives, negatives = [], []
         for raw in globs:
-            raw = str(raw).strip()
+            # Do NOT strip surrounding whitespace: workspace tools treat it
+            # literally, so `" packages/* "` is a package literally named with
+            # spaces (a non-match), not a broader `packages/*`. Normalizing it
+            # would falsely prove membership. Skip only an exactly-empty entry.
+            raw = str(raw)
             if not raw:
                 continue
             if len(raw) > _MAX_GLOB_LENGTH:
