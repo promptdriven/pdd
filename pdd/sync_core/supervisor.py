@@ -126,6 +126,20 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
     return tuple(sorted(roots, key=lambda item: (len(item.parts), str(item))))
 
 
+def _sandbox_library_path(environment: dict[str, str]) -> str:
+    """Return loader search directories derived only from the measured closure."""
+    directories = []
+    for label, path in released_runtime_closure_paths():
+        if label.startswith("native/"):
+            directories.append(str(path.parent))
+    directories.append(str(Path(sys.prefix) / "lib"))
+    directories.extend(
+        item for item in environment.get("LD_LIBRARY_PATH", "").split(os.pathsep)
+        if item
+    )
+    return os.pathsep.join(dict.fromkeys(directories))
+
+
 def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
     """Apply non-raiseable POSIX limits after the namespace uid drop."""
     script = (
@@ -341,13 +355,19 @@ def run_supervised(
     token = uuid.uuid4().hex
     stdout_file = tempfile.TemporaryFile(mode="w+b")
     stderr_file = tempfile.TemporaryFile(mode="w+b")
+    sandbox_environment = env | {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PDD_SUPERVISION_TOKEN": token,
+        "TMPDIR": str(writable_roots[0].resolve()),
+        "TEMP": str(writable_roots[0].resolve()),
+        "TMP": str(writable_roots[0].resolve()),
+    }
+    library_path = _sandbox_library_path(env)
+    if library_path:
+        sandbox_environment["LD_LIBRARY_PATH"] = library_path
     process = subprocess.Popen(
         argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-        env=env | {"PYTHONDONTWRITEBYTECODE": "1",
-                   "PDD_SUPERVISION_TOKEN": token,
-                   "TMPDIR": str(writable_roots[0].resolve()),
-                   "TEMP": str(writable_roots[0].resolve()),
-                   "TMP": str(writable_roots[0].resolve())},
+        env=sandbox_environment,
         start_new_session=True,
     )
     timed_out = False
