@@ -6,7 +6,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .classifier import classify
@@ -314,6 +314,7 @@ def build_canonical_report(
         unit
         for unit in manifest.managed_units
         if not wanted
+        or _module_identity(unit.unit_id.prompt_relpath) in wanted
         or unit.unit_id.prompt_relpath.stem.rsplit("_", 1)[0] in wanted
         or unit.unit_id.prompt_relpath.as_posix() in wanted
     )
@@ -344,3 +345,9 @@ def build_canonical_report(
             for verdict in verdicts
         ],
     }
+
+
+def _module_identity(prompt_path: PurePosixPath) -> str:
+    """Return the prompt-root-relative, language-stripped module identity."""
+    relative = prompt_path.relative_to("prompts")
+    return relative.with_suffix("").as_posix().rsplit("_", 1)[0]

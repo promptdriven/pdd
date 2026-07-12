@@ -9,6 +9,7 @@ import ast
 import configparser
 import json
 import os
+import platform
 import shlex
 import subprocess
 import sys
@@ -328,6 +329,7 @@ def _transitive_support_blobs(
     included: set[PurePosixPath],
     test_artifacts: tuple[PurePosixPath, ...] = (),
     code_under_test_paths: frozenset[PurePosixPath] = frozenset(),
+    fail_on_dynamic: bool = False,
 ) -> tuple[tuple[PurePosixPath, bytes], ...]:
     # pylint: disable=too-many-arguments
     """Resolve local Python imports from protected runner support paths."""
@@ -343,13 +345,15 @@ def _transitive_support_blobs(
         source = read_git_blob(root, ref, path)
         if source is None or path.suffix != ".py":
             continue
-        discovered, _dynamic = _local_module_paths(
+        discovered, dynamic = _local_module_paths(
             root,
             ref,
             path,
             source,
             code_under_test_paths=code_under_test_paths,
         )
+        if dynamic and fail_on_dynamic:
+            raise ValueError(f"unresolved dynamic product dependency: {path}")
         discovered -= visited
         paths.update(discovered)
         remaining.extend(discovered)
@@ -459,7 +463,7 @@ def _support_digest(
     )
     closure = _pytest_support_closure(root, ref, tests, product)
     product_closure = _transitive_support_blobs(
-        root, ref, pending=product, included=set(product)
+        root, ref, pending=product, included=set(product), fail_on_dynamic=True
     )
     closure = tuple(sorted(set(closure + product_closure)))
     digest = hashlib.sha256()
@@ -524,6 +528,8 @@ def runner_identity_digest(
     """Bind evidence to protected adapters, configs, and exact artifact scopes."""
     payload = {
         "tool_version": TRUSTED_RUNNER_VERSION,
+        "python_runtime": _measured_python_runtime(),
+        "checker_artifact_digest": _checker_artifact_digest(),
         "pytest_command": [
             "<measured-python-runtime>",
             "-m",
@@ -565,6 +571,25 @@ def runner_identity_digest(
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _measured_python_runtime() -> dict[str, str]:
+    """Return stable runtime properties without installation-specific paths."""
+    return {
+        "implementation": platform.python_implementation(),
+        "version": platform.python_version(),
+        "abi": getattr(sys.implementation, "cache_tag", ""),
+        "platform": sys.platform,
+        "machine": platform.machine(),
+    }
+
+
+def _checker_artifact_digest() -> str:
+    """Hash the protected runner implementation that derives outcomes."""
+    digest = hashlib.sha256()
+    for path in sorted((_CHECKER_PYTEST_PROBE, Path(__file__))):
+        digest.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
 
 
 def _changed_paths(
@@ -683,7 +708,9 @@ def _trusted_collection_runner(
 ) -> tuple[Path, Path]:
     """Create a process-separated checker and candidate collection worker."""
     worker = directory / "collection_worker.py"
-    worker_output = directory / f"collection-{os.urandom(16).hex()}.json"
+    result_dir = directory / f"results-{os.urandom(16).hex()}"
+    result_dir.mkdir(mode=0o700)
+    worker_output = result_dir / f"collection-{os.urandom(16).hex()}.json"
     worker_output.touch(mode=0o600)
     worker.write_text(
         "\n".join(
@@ -732,7 +759,9 @@ def _trusted_execution_runner(
 ) -> tuple[Path, Path]:
     """Create a checker that never imports candidate code or pytest."""
     worker = directory / "execution_worker.py"
-    worker_junit = directory / f"execution-{os.urandom(16).hex()}.xml"
+    result_dir = directory / f"results-{os.urandom(16).hex()}"
+    result_dir.mkdir(mode=0o700)
+    worker_junit = result_dir / f"execution-{os.urandom(16).hex()}.xml"
     worker_junit.touch(mode=0o600)
     worker.write_text(
         "\n".join((

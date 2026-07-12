@@ -2124,6 +2124,17 @@ def sync_orchestration(
             "operations_completed": [],
             "errors": [f"Path construction failed: {str(e)}"]
         }
+
+    try:
+        from .sync_core.finalize import preflight_legacy_mutation
+        preflight_legacy_mutation(pdd_files)
+    except RuntimeError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "operations_completed": [],
+            "errors": [str(exc)],
+        }
     
     # Shared state for animation (passed to App)
     current_function_name_ref = ["initializing"]

@@ -633,11 +633,25 @@ class TransactionManager:
                     item["installed"] = True
                     changed.append(PurePosixPath(str(item["relpath"])))
                     self._write_journal(transaction_dir, payload)
-            except TransactionError:
-                self._restore_entries(transaction_dir, entries)
+                for item in entries:
+                    if not isinstance(item, dict):
+                        raise TransactionError("transaction entry is malformed")
+                    relpath = PurePosixPath(str(item["relpath"]))
+                    desired = FileState(
+                        True, str(item["desired_digest"]),
+                        str(item["desired_mode"]), "regular",
+                    )
+                    if self._destination_state(relpath) != desired:
+                        raise TransactionConflict(f"destination changed: {relpath}")
+            except TransactionError as exc:
+                try:
+                    self._restore_entries(transaction_dir, entries)
+                except TransactionConflict:
+                    self._write_journal(transaction_dir, payload)
+                    raise
                 payload["phase"] = TransactionPhase.ROLLED_BACK.value
                 self._write_journal(transaction_dir, payload)
-                raise
+                raise exc
             payload["phase"] = TransactionPhase.COMMITTED.value
             self._write_journal(transaction_dir, payload)
         return TransactionResult(

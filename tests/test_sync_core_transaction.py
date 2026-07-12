@@ -152,7 +152,7 @@ def test_recovery_race_cannot_false_commit(tmp_path, monkeypatch) -> None:
             target.write_text("external = True\n")
 
     monkeypatch.setattr(manager, "_install_entry", raced_install)
-    with pytest.raises(TransactionConflict, match="destination changed"):
+    with pytest.raises(TransactionConflict, match="rollback conflict"):
         manager.recover("tx-recovery-race")
     assert target.read_text() == "external = True\n"
     assert manager.incomplete() == ("tx-recovery-race",)

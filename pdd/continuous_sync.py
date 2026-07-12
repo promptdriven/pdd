@@ -194,10 +194,14 @@ def canonical_sync_enabled(root: Path) -> bool:
             ),
             None,
         )
-        has_repository_directory = bool(
-            repository_marker is not None and repository_marker.is_dir()
+        has_repository_marker = bool(
+            repository_marker is not None
+            and (
+                repository_marker.is_dir()
+                or _valid_gitdir_file(repository_marker)
+            )
         )
-        if not has_worktree_policy and not has_repository_directory:
+        if not has_worktree_policy and not has_repository_marker:
             return False
     root = _git_root_from_marker(candidate)
     if root is None:
@@ -211,6 +215,22 @@ def canonical_sync_enabled(root: Path) -> bool:
     if not active and os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
         raise ValueError(f"explicit protected sync {reason}")
     return active
+
+
+def _valid_gitdir_file(marker: Path) -> bool:
+    """Return whether a file-form linked-worktree marker names a live gitdir."""
+    if not marker.is_file():
+        return False
+    try:
+        prefix, value = marker.read_text(encoding="utf-8").strip().split(":", 1)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    if prefix.casefold() != "gitdir":
+        return False
+    gitdir = Path(value.strip())
+    if not gitdir.is_absolute():
+        gitdir = marker.parent / gitdir
+    return gitdir.is_dir()
 
 
 def _prompts_dir_for(prompt_path: Path) -> Path:
