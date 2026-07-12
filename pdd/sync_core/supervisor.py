@@ -45,7 +45,10 @@ def _linked_libraries(path: Path) -> tuple[Path, ...]:
         for value in candidates:
             candidate = Path(value)
             if candidate.is_absolute() and candidate.is_file():
-                libraries.add(candidate.resolve())
+                # Keep the loader-visible spelling.  Resolving /lib -> /usr/lib
+                # changes the destination inside the tmpfs namespace and makes
+                # an otherwise mounted ELF interpreter appear missing.
+                libraries.add(candidate)
     return tuple(sorted(libraries))
 
 
