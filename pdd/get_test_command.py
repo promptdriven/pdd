@@ -44,10 +44,16 @@ _MAX_GLOB_SEGMENTS = 256
 _MAX_RAW_GLOBS = 4096
 
 # Upper bound on the size of a workspace-declaration file we will read/parse. A
-# larger manifest is treated as hostile and contributes no globs, so a modest
-# git blob cannot force hundreds of megabytes of parsing/allocation before the
-# other budgets apply.
-_MAX_MANIFEST_BYTES = 5 * 1024 * 1024
+# larger manifest is treated as hostile and contributes no globs. These caps are
+# small on purpose: parsing a JSON/YAML array of N short entries materializes N
+# Python objects *before* the ``_MAX_RAW_GLOBS`` count guard can run, so an
+# under-cap-but-huge-cardinality manifest could otherwise peak at hundreds of MB
+# and OOM a worker. Real manifests are tiny (a handful of workspace globs), so
+# these bounds keep peak parse memory well under ~100 MB with generous headroom.
+# ``pnpm-workspace.yaml`` gets the smaller cap because YAML parsing amplifies more
+# per input byte and a real pnpm workspace file is only a few KB.
+_MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+_MAX_PNPM_YAML_BYTES = 256 * 1024
 
 # Upper bound on the length (chars) of a single raw glob string. Real globs are
 # a few dozen characters; a much longer one is hostile. This bounds not just the
@@ -68,9 +74,10 @@ _MAX_GLOB_LENGTH = 4096
 _MAX_MATCH_CELLS = 2_000_000
 
 
-def _read_manifest_text(path: Path) -> Optional[str]:
+def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
     """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
-    missing, not a regular file, too large, unreadable, or not valid UTF-8.
+    missing, not a regular file, larger than ``max_bytes``, unreadable, or not
+    valid UTF-8.
 
     The file must resolve to a *regular* file: a manifest that is a symlink to a
     character device or FIFO (e.g. ``/dev/zero``) reports ``st_size == 0`` yet
@@ -80,11 +87,11 @@ def _read_manifest_text(path: Path) -> Optional[str]:
         st = path.stat()  # follows symlinks; the *target* must be a regular file
         if not stat.S_ISREG(st.st_mode):
             return None
-        if st.st_size > _MAX_MANIFEST_BYTES:
+        if st.st_size > max_bytes:
             return None
         with open(path, "rb") as handle:
-            data = handle.read(_MAX_MANIFEST_BYTES + 1)
-        if len(data) > _MAX_MANIFEST_BYTES:
+            data = handle.read(max_bytes + 1)
+        if len(data) > max_bytes:
             return None  # grew past the cap between stat and read
         return data.decode("utf-8")
     except (OSError, UnicodeError):
@@ -228,7 +235,7 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
             import yaml  # optional dependency
         except ImportError:
             return []  # cannot parse pnpm config → membership unproven (fail closed)
-        text = _read_manifest_text(pnpm_path)  # None if missing/dangling/oversized/bad-utf8
+        text = _read_manifest_text(pnpm_path, _MAX_PNPM_YAML_BYTES)  # None if missing/dangling/oversized/bad-utf8
         if text is None:
             return []
         try:
@@ -283,8 +290,14 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
 def _string_globs(value) -> list:
     """Return ``value`` as a list of string globs, or ``[]`` if it is not a list
     of strings. A single non-string entry makes the whole declaration malformed
-    (fail closed) so a JSON/YAML ``true``/number cannot be coerced into a glob."""
+    (fail closed) so a JSON/YAML ``true``/number cannot be coerced into a glob.
+
+    A declaration with more than ``_MAX_RAW_GLOBS`` entries is rejected up front
+    (before validating/copying the list) so a huge but under-byte-cap manifest
+    fails membership closed without a second full-list traversal/copy."""
     if not isinstance(value, list):
+        return []
+    if len(value) > _MAX_RAW_GLOBS:
         return []
     if not all(isinstance(item, str) for item in value):
         return []
