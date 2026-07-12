@@ -1970,6 +1970,16 @@ def _architecture_module_choices(
         for module in modules:
             if not isinstance(module, dict):
                 continue
+            # Exclude rows with an unsafe architecture FILENAME (as the bare branch and
+            # resolution do), so an invalid row cannot inflate the count and falsely block
+            # a valid mapping.
+            filename_value_q = module.get("filename")
+            if (
+                isinstance(filename_value_q, str)
+                and filename_value_q.strip()
+                and _safe_architecture_prompt_filename(filename_value_q) is None
+            ):
+                continue
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
@@ -2470,14 +2480,35 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if arch_path:
             try:
                 with open(arch_path, "r", encoding="utf-8") as _arch_handle:
-                    arch_modules = extract_modules(json.load(_arch_handle))
+                    _arch_data = json.load(_arch_handle)
             except FileNotFoundError:
                 # Raced away between discovery and open — treat as no registry.
+                _arch_data = _ARCH_MODULES_UNSET
                 arch_modules = None
             except (json.JSONDecodeError, ValueError, TypeError, OSError) as _arch_err:
                 # Present but unreadable/malformed: fail closed rather than downgrade to
                 # an empty registry and resolve at convention fallback paths.
                 raise MalformedArchitectureError(arch_path, _arch_err) from _arch_err
+            else:
+                # A present architecture.json must be a SUPPORTED shape: a bare module
+                # list or an object. A dict MAY omit ``modules`` (a legitimately empty
+                # registry), but a non-list ``modules`` value or a top-level scalar is
+                # malformed schema — fail closed instead of silently treating valid JSON
+                # of the wrong shape as an empty registry and resolving at fallback paths.
+                _valid_shape = isinstance(_arch_data, list) or (
+                    isinstance(_arch_data, dict)
+                    and (
+                        "modules" not in _arch_data
+                        or isinstance(_arch_data.get("modules"), list)
+                    )
+                )
+                if not _valid_shape:
+                    raise MalformedArchitectureError(
+                        arch_path,
+                        f"unsupported architecture schema (top-level "
+                        f"{type(_arch_data).__name__})",
+                    )
+                arch_modules = extract_modules(_arch_data)
         prompt_ownership_roots: Tuple[Path, ...] = (prompts_root_anchor,)
         if arch_path:
             prompt_ownership_roots = _architecture_prompt_roots(
