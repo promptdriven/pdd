@@ -12,6 +12,7 @@ import pytest
 
 from pdd.sync_core.supervisor import (
     SupervisorLimits,
+    _linked_libraries,
     _limited_command,
     _live_processes,
     _sandbox_command,
@@ -48,6 +49,24 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_memory_bytes <= 4 * 1024 * 1024 * 1024
     assert 0 < limits.max_cpu_seconds <= 600
     assert 0 < limits.max_processes <= 256
+
+
+def test_linked_libraries_keeps_loader_alias_and_resolved_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "libm-real.so"
+    target.write_bytes(b"library")
+    alias = tmp_path / "libm.so.6"
+    alias.symlink_to(target)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [], 0, f"libm.so.6 => {alias} (0x0000)\n", ""
+        ),
+    )
+
+    assert _linked_libraries(tmp_path / "python") == (target, alias)
 
 
 @pytest.mark.skipif(
