@@ -137,3 +137,37 @@ def test_unique_module_uses_the_same_compatible_true_update_contract(tmp_path: P
         "prompts/unique_TypeScript.prompt",
         "src/unique.ts",
     ]
+
+
+@pytest.mark.parametrize(
+    ("prompt_path", "code_path"),
+    [
+        # code path escapes the worktree via traversal
+        ("prompts/unique_TypeScript.prompt", "../../../etc/passwd"),
+        # prompt path escapes the worktree via traversal
+        ("../../outside/unique_TypeScript.prompt", "src/unique.ts"),
+        # absolute path outside the worktree
+        ("prompts/unique_TypeScript.prompt", "/etc/hosts"),
+    ],
+)
+def test_preflight_fails_closed_on_path_escaping_worktree(
+    tmp_path: Path, prompt_path: str, code_path: str
+) -> None:
+    """A repo `.pddrc`/architecture.json must not drive `pdd update` outside the
+    isolated worktree (issue #2004 follow-up / Codex review PR #1998, CWE-022).
+
+    Step 8.5 promises heals are contained to the worktree; an escaping prompt or
+    code path must fail closed (marked failed, no subprocess launched) rather
+    than let `pdd update --git` write beyond the worktree.
+    """
+    drift = _drift(prompt_path=prompt_path, code_path=code_path)
+
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), patch(
+        "pdd.agentic_change_orchestrator.subprocess.run"
+    ) as run:
+        healed, failed, healed_prompts = _preflight_drift_heal(tmp_path, quiet=True)
+
+    assert healed == []
+    assert failed == ["hackathon_event_detail_page"]
+    assert healed_prompts == []
+    run.assert_not_called()

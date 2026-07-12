@@ -1898,6 +1898,21 @@ def _preflight_drift_heal(
         if not prompt_path or not code_path:
             failed.append(drift.basename)
             continue
+        # Fail closed against a `.pddrc` / architecture.json that resolves a
+        # drift path OUTSIDE the isolated worktree — via `..` traversal, an
+        # absolute path elsewhere, or a symlink escape. Step 8.5 promises heals
+        # are "contained to the worktree and can't touch the user's main tree";
+        # `pdd update --git <path>` would otherwise honor an escaping path and
+        # write beyond it. The paths originate from repo-controlled config that
+        # is issue-influenced in the agentic flow, so this is a trust boundary
+        # (CWE-022; Codex review, PR #1998).
+        from pdd.content_selector import _validated_project_path
+        if (
+            _validated_project_path(prompt_path, root=worktree_path) is None
+            or _validated_project_path(code_path, root=worktree_path) is None
+        ):
+            failed.append(drift.basename)
+            continue
         try:
             # Use sys.executable + -m pdd so the heal subprocess uses the
             # same Python venv as the orchestrator. A bare ["pdd", ...]
