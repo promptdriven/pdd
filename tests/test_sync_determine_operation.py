@@ -3925,6 +3925,19 @@ def test_contained_architecture_code_path_rejects_nonportable_components(
 
 @pytest.mark.parametrize(
     "noncanonical",
+    ["./foo_Python.prompt", "a//foo_Python.prompt", "a/./foo_Python.prompt", "foo_Python.prompt/", "."],
+)
+def test_safe_architecture_prompt_filename_rejects_noncanonical(noncanonical):
+    """A non-canonical architecture prompt filename (dot segments, duplicate/trailing
+    separators, or no components) is rejected so an alias cannot pass as a valid name and
+    a regenerated implementation cannot accept it while satisfying R1-R15 (R10)."""
+    import sync_determine_operation as sync_determine_module
+
+    assert sync_determine_module._safe_architecture_prompt_filename(noncanonical) is None
+
+
+@pytest.mark.parametrize(
+    "noncanonical",
     [".", "./foo.py", "src/./foo.py", "src//foo.py", "src/foo/", "foo/."],
 )
 def test_contained_architecture_code_path_rejects_noncanonical(tmp_path, noncanonical):
