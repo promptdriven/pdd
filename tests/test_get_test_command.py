@@ -905,6 +905,15 @@ class TestWorkspaceMembershipHardening:
         with pytest.raises(_BraceBudgetError):
             _expand_braces("x{" + ",".join(["a"] * 200000) + "}")
 
+    def test_long_prefix_brace_glob_fails_closed_by_bytes(self):
+        """A long-prefix glob with a few braces (under the count budget) must fail
+        closed on the length cap, not multiply into gigabytes of strings."""
+        import time
+        glob = "x" * 2_000_000 + "{a,b}{c,d}{e,f}{g,h}{i,j}"
+        start = time.monotonic()
+        assert _package_matches_workspace(("x",), [glob]) is False
+        assert time.monotonic() - start < 5.0  # must not blow up
+
     def test_pnpm_yaml_recursion_bomb_fails_closed(self, tmp_path):
         """Deeply nested YAML must fail closed rather than raising RecursionError."""
         pytest.importorskip("yaml")
@@ -1048,6 +1057,28 @@ class TestWorkspaceMembershipHardening:
         )
         assert _workspace_globs_for(anc) == []
 
+    @pytest.mark.skipif(not os.path.exists("/dev/zero"), reason="needs /dev/zero")
+    def test_manifest_symlinked_to_device_fails_closed(self, tmp_path):
+        """A manifest that is a symlink to a device (st_size 0, streams forever)
+        must fail closed instead of hanging on read."""
+        import time
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").symlink_to("/dev/zero")
+        start = time.monotonic()
+        assert _workspace_globs_for(anc) == []
+        assert time.monotonic() - start < 5.0
+
+    def test_manifest_symlinked_to_regular_file_is_read(self, tmp_path):
+        """A manifest that is a symlink to a genuine regular file is still read."""
+        anc = tmp_path / "a"
+        anc.mkdir()
+        real = anc / "real.yaml"
+        real.write_text("packages:\n  - 'packages/*'\n")
+        (anc / "pnpm-workspace.yaml").symlink_to(real)
+        pytest.importorskip("yaml")
+        assert _workspace_globs_for(anc) == ["packages/*"]
+
     def test_malformed_lerna_does_not_grant_default_glob(self, tmp_path):
         """A parse-failing lerna.json must not fall through to the `packages/*` default."""
         repo = tmp_path / "repo"
@@ -1088,6 +1119,48 @@ class TestFixErrorLoopPlaceholderSafety:
         # tokenizer back to the exact resolved path — no injected `;`/`touch` token.
         argv = shlex.split(tc.command)
         assert str(test_file.resolve()) in argv, (tc.command, argv)
+        assert "touch" not in argv, argv
+
+    def test_run_non_python_initial_verification_does_not_reinject(self, tmp_path):
+        """`_run_non_python_initial_verification` must execute the command as-is.
+
+        Directly exercises the fix_error_loop boundary: the command handed to
+        subprocess.run must still round-trip to the resolved path (no `{file}`/
+        `{test}` re-substitution splicing an injected `;touch` token).
+        """
+        import shlex
+        from unittest.mock import patch
+        from pdd.fix_error_loop import _run_non_python_initial_verification
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        evil = repo / "{test};touch PWN"
+        evil.mkdir()
+        test_file = evil / "a.test.ts"
+        test_file.write_text("describe('x', () => {})")
+        code_file = evil / "a.ts"
+        code_file.write_text("export const x = 1;")
+
+        captured = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def _fake_run(command, **kwargs):
+            captured["command"] = command
+            captured["shell"] = kwargs.get("shell")
+            return _Proc()
+
+        with patch("pdd.fix_error_loop.subprocess.run", side_effect=_fake_run):
+            _run_non_python_initial_verification(str(test_file), str(code_file))
+
+        cmd = captured["command"]
+        argv = shlex.split(cmd)
+        assert str(test_file.resolve()) in argv, (cmd, argv)
         assert "touch" not in argv, argv
 
 
