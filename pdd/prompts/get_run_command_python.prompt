@@ -22,7 +22,11 @@
      - Accepts a file path.
      - Extracts the extension.
      - Calls `get_run_command` to get the template.
-     - Replaces the `{file}` placeholder in the template with the actual `file_path`.
+     - Replaces the `{file}` placeholder in the template with the **shell-quoted**
+       `file_path` (`shlex.quote`). Callers execute the returned command with
+       `bash -lc` / `shell=True`, so an unquoted path with spaces or shell
+       metacharacters (`$()`, `;`, …) MUST NOT be spliced in raw — it would be
+       re-split or executed via command substitution (a command-injection vector).
      - Returns the executable command string or empty string if no command found.
 
 % Data Source

@@ -332,6 +332,45 @@ def _split_top_level_commas(body: str, limit: int) -> list:
     return parts
 
 
+def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]]:
+    """Return ``(start, end)`` of the first *expandable* ``{...}`` group — one whose
+    body splits into two or more top-level options — or ``None`` when the pattern
+    holds no real alternation.
+
+    The scan runs left-to-right and, on hitting a *single-option* brace (``{foo}``,
+    not a real alternation), does two things before giving up on it: it descends
+    into that brace's body to find a nested alternation (so ``{a{b,c}}`` still
+    expands its inner ``{b,c}``), and, failing that, it skips *past* the group and
+    keeps scanning the rest of the pattern (so a later ``{a,b}`` in
+    ``{foo}/{a,b}`` is still found). ``end`` indexes the matching ``}``.
+    ``_split_top_level_commas`` may raise ``_BraceBudgetError`` for a comma bomb.
+    """
+    i, n = 0, len(pattern)
+    while i < n:
+        if pattern[i] != "{":
+            i += 1
+            continue
+        depth, end = 0, -1
+        for j in range(i, n):
+            if pattern[j] == "{":
+                depth += 1
+            elif pattern[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end == -1:
+            return None  # unbalanced from here on → nothing expandable
+        body = pattern[i + 1:end]
+        if len(_split_top_level_commas(body, limit)) >= 2:
+            return (i, end)
+        inner = _find_expandable_brace(body, limit)  # descend into the singleton
+        if inner is not None:
+            return (i + 1 + inner[0], i + 1 + inner[1])
+        i = end + 1  # fully literal group → skip past and keep scanning
+    return None
+
+
 def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
     concrete patterns. Unbalanced or single-option braces are left literal.
@@ -361,26 +400,12 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
         if len(worklist) > budget[0] + 1:
             raise _BraceBudgetError
         pat = worklist.pop()
-        start = pat.find("{")
-        if start == -1:
-            _emit(pat)
+        span = _find_expandable_brace(pat, budget[0] + 1)
+        if span is None:
+            _emit(pat)  # no real alternation remains → terminal (literal braces)
             continue
-        depth, end = 0, -1
-        for i in range(start, len(pat)):
-            if pat[i] == "{":
-                depth += 1
-            elif pat[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i
-                    break
-        if end == -1:
-            _emit(pat)  # unbalanced → treat literally
-            continue
+        start, end = span
         options = _split_top_level_commas(pat[start + 1:end], budget[0] + 1)
-        if len(options) < 2:
-            _emit(pat)  # not a real alternation → literal
-            continue
         prefix, suffix = pat[:start], pat[end + 1:]
         for option in options:
             worklist.append(prefix + option + suffix)
