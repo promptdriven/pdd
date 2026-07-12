@@ -78,3 +78,12 @@ def test_malformed_expectations_fail_closed(tmp_path, mutation) -> None:
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError):
         load_expectations(path)
+
+
+def test_protected_expectations_require_independent_seven_night_minimum(tmp_path) -> None:
+    payload = _payload()
+    payload["minimum_nightly_streak"] = 1
+    path = tmp_path / "expectations.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="seven"):
+        load_expectations(path)

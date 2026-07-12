@@ -1,6 +1,8 @@
 """Tests for stable repository identity and protected path handling."""
 
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import PurePosixPath
 
 import pytest
@@ -21,6 +23,27 @@ def test_repository_identity_is_initialized_once(tmp_path) -> None:
     assert identity.persistent is True
     assert read_repository_identity(tmp_path) == identity
     assert initialize_repository_identity(tmp_path, "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa") == identity
+
+
+def test_concurrent_repository_identity_initialization_returns_single_winner(
+    tmp_path, monkeypatch
+) -> None:
+    barrier = Barrier(2)
+    real_replace = os.replace
+
+    def racing_replace(source, destination):
+        barrier.wait(timeout=5)
+        real_replace(source, destination)
+
+    monkeypatch.setattr("pdd.sync_core.identity.os.replace", racing_replace)
+    requested = (
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0",
+        "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(lambda value: initialize_repository_identity(tmp_path, value), requested))
+    persisted = read_repository_identity(tmp_path, require_persistent=True)
+    assert results == (persisted, persisted)
 
 
 def test_legacy_identity_is_report_only(tmp_path) -> None:

@@ -63,6 +63,49 @@ def test_external_edit_after_prepare_is_conflict_without_writes(tmp_path) -> Non
     assert not (tmp_path / ".pdd/evidence/widget.json").exists()
 
 
+def test_external_edit_after_first_install_prevents_commit(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src/widget.py"
+    target.write_text("value = 1\n")
+    manager = TransactionManager(tmp_path)
+    manager.prepare("tx-post-install-race", _writes())
+
+    def race(event):
+        if event == "after_install:0":
+            target.write_text("external = True\n")
+
+    with pytest.raises(TransactionConflict, match="destination changed"):
+        manager.commit("tx-post-install-race", crash_hook=race)
+    assert target.read_text() == "external = True\n"
+
+
+def test_rollback_preserves_external_edit_after_install(tmp_path, monkeypatch) -> None:
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src/widget.py"
+    target.write_text("value = 1\n")
+    manager = TransactionManager(tmp_path)
+    manager.prepare("tx-rollback-race", _writes())
+    original_install = manager._install_entry
+    calls = 0
+
+    def failing_install(transaction_dir, entry):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise TransactionError("later install failed")
+        original_install(transaction_dir, entry)
+
+    monkeypatch.setattr(manager, "_install_entry", failing_install)
+
+    def race(event):
+        if event == "after_install:0":
+            target.write_text("external = True\n")
+
+    with pytest.raises(TransactionConflict, match="rollback conflict"):
+        manager.commit("tx-rollback-race", crash_hook=race)
+    assert target.read_text() == "external = True\n"
+
+
 @pytest.mark.parametrize("crash_event", ["after_committing", "after_install:0", "after_install:1"])
 def test_process_death_recovers_committing_transaction(tmp_path, crash_event) -> None:
     (tmp_path / "src").mkdir()

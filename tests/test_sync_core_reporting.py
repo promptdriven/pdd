@@ -336,6 +336,35 @@ def test_repository_identity_does_not_activate_enforcement_without_policy(
     assert canonical_sync_enabled(root) is False
 
 
+def test_committed_policy_stays_active_when_worktree_policy_is_deleted(tmp_path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / ".pdd/sync-policy.json").unlink()
+    assert canonical_sync_enabled(root) is True
+
+
+def test_scoped_canonical_compatibility_uses_selected_counts_and_qualified_names(
+    tmp_path, monkeypatch
+) -> None:
+    canonical = {
+        "ok": False,
+        "counts": {"managed_units": 2, "trusted_in_sync": 1, "drifted": 0,
+                   "unbaselined": 0, "corrupt": 0, "unknown": 0,
+                   "conflict": 0, "failed": 0, "invalid": 0},
+        "units": [{"subject": "prompts/commands/foo_python.prompt",
+                   "baseline": "CURRENT", "semantic": "PASS", "in_sync": True,
+                   "reason": "trusted", "changed_roles": []}],
+    }
+    monkeypatch.setattr(
+        "pdd.continuous_sync.build_canonical_report", lambda *_args, **_kwargs: canonical
+    )
+    report = build_compatibility_report(
+        consumer="reconcile", root=tmp_path, modules=("commands/foo",)
+    )
+    assert report["ok"] is True
+    assert report["summary"]["total"] == 1
+    assert report["units"][0]["basename"] == "commands/foo"
+
+
 @pytest.mark.parametrize("protected_ref", ["missing-ref", "HEAD"])
 def test_explicit_protected_mode_invalid_trust_input_fails_closed(
     tmp_path, monkeypatch, protected_ref

@@ -867,6 +867,56 @@ def test_candidate_controller_globals_cannot_forge_collection_pass(tmp_path: Pat
     assert executions[0].outcome is not EvidenceOutcome.PASS
 
 
+def test_candidate_cannot_forge_worker_outputs_discovered_from_script_path(
+    tmp_path: Path,
+) -> None:
+    content = (
+        "import os, sys\nfrom pathlib import Path\n"
+        "directory = Path(sys.argv[0]).resolve().parent\n"
+        "if Path(sys.argv[0]).name == 'collection_worker.py':\n"
+        "    (directory / 'candidate-node-ids.json').write_text("
+        "'[\"tests/test_widget.py::test_widget\"]')\n"
+        "    os._exit(0)\n"
+        "if Path(sys.argv[0]).name == 'execution_worker.py':\n"
+        "    (directory / 'candidate-junit.xml').write_text("
+        "'<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>')\n"
+        "    os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_runner_identity_binds_transitive_product_dependency(tmp_path: Path) -> None:
+    root, _commit = _repository(
+        tmp_path, "import product\ndef test_widget(): assert product.value == 1\n"
+    )
+    (root / "product.py").write_text("from helper import value\n")
+    (root / "helper.py").write_text("value = 1\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "product closure")
+    before = _git(root, "rev-parse", "HEAD")
+    profile = _profile(root, before, (PurePosixPath("product.py"),))
+    before_digest = runner_identity_digest(profile, root=root, ref=before)
+    (root / "helper.py").write_text("value = 2\n")
+    _git(root, "add", "helper.py")
+    _git(root, "commit", "-q", "-m", "change indirect helper")
+    after = _git(root, "rev-parse", "HEAD")
+    assert runner_identity_digest(profile, root=root, ref=after) != before_digest
+
+
+def test_runner_identity_is_stable_across_interpreter_prefixes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    profile = _profile(root, commit)
+    monkeypatch.setattr("pdd.sync_core.runner.sys.executable", "/venv-a/bin/python")
+    first = runner_identity_digest(profile, root=root, ref=commit)
+    monkeypatch.setattr("pdd.sync_core.runner.sys.executable", "/venv-b/bin/python")
+    assert runner_identity_digest(profile, root=root, ref=commit) == first
+
+
 def test_pytest_plugin_guard_ignores_non_pytest_preview_prose(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path, "def test_widget(): assert True\n")
     (root / "setup.cfg").write_text(

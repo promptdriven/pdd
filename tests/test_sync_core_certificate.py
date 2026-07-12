@@ -27,7 +27,31 @@ from pdd.sync_core.certificate import (
     _NightlyVerificationPolicy,
     _nightly_lineage,
     _nightly_streak,
+    _predicate,
+    RemoteCertificateSigner,
 )
+
+
+def test_global_predicate_cannot_downgrade_seven_night_minimum(monkeypatch) -> None:
+    monkeypatch.setattr("pdd.sync_core.certificate._scan_predicate", lambda *_a, **_k: True)
+    counts = {}
+    lifecycle = LifecycleResult(0, 0, 0, 0, 0, 0)
+    extra = {"nightly_streak": 1, "required_nightly_streak": 1}
+    assert _predicate(counts, lifecycle, extra, require_measurement=False) is False
+
+
+def test_remote_certificate_signer_has_protected_timeout(monkeypatch) -> None:
+    def stalled(_command, **kwargs):
+        assert kwargs["timeout"] > 0
+        raise subprocess.TimeoutExpired("protected-certificate-sign", kwargs["timeout"])
+
+    monkeypatch.setattr("pdd.sync_core.certificate.subprocess.run", stalled)
+    signer = RemoteCertificateSigner(
+        "trusted-ci", AttestationSigner("trusted-ci", b"r" * 32).public_key_bytes(),
+        ("protected-certificate-sign",),
+    )
+    with pytest.raises(ValueError, match="timed out"):
+        signer.sign_bytes(b"certificate")
 
 
 CHECKER = CheckerIdentity(

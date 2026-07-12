@@ -100,6 +100,25 @@ def test_remote_attestation_authority_signature_is_verified(monkeypatch) -> None
     assert evidence.attestation_id == request.attestation_id
 
 
+def test_remote_attestation_signer_has_protected_timeout(monkeypatch) -> None:
+    def stalled(_command, **kwargs):
+        assert kwargs["timeout"] > 0
+        raise subprocess.TimeoutExpired("protected-attestation-sign", kwargs["timeout"])
+
+    monkeypatch.setattr("pdd.sync_core.trust.subprocess.run", stalled)
+    signer = RemoteAttestationSigner(
+        SIGNER.issuer, SIGNER.public_key_bytes(), ("protected-attestation-sign",)
+    )
+    with pytest.raises(AttestationError, match="timed out"):
+        signer.issue(
+            AttestationRequest(
+                "remote-attestation", _binding(),
+                (ObligationEvidence("test", EvidenceOutcome.PASS),),
+                "remote-nonce", NOW,
+            )
+        )
+
+
 def test_attestation_environment_forbids_local_private_key(monkeypatch) -> None:
     monkeypatch.setenv("PDD_ATTESTATION_SIGNING_KEY", "candidate-secret")
     with pytest.raises(ValueError, match="local attestation signing keys are forbidden"):
