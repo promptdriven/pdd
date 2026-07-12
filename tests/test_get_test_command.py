@@ -442,6 +442,55 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_pnpm_exclusion_pattern_excludes_matching_package(self, tmp_path):
+        """A pnpm `!` exclusion must remove a package from workspace membership.
+
+        With `packages: ['packages/**', '!**/test/**']`, a package under
+        `packages/app/test/fixture` matches the positive glob but is explicitly
+        excluded, so it must NOT inherit the workspace-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - 'packages/**'\n  - '!**/test/**'\n"
+        )
+        pkg = repo / "packages" / "app" / "test" / "fixture"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")  # own manifest, excluded from ws
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_brace_expansion_in_workspace_glob_matches_member(self, tmp_path):
+        """npm/Yarn brace-expansion globs must be honored, not matched literally.
+
+        `workspaces: ['packages/{app,lib}']` makes `packages/app` a member, which
+        must inherit the workspace-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/{app,lib}"]}')
+        pkg = repo / "packages" / "app"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")  # member, no own config
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command, result.command
+
     def test_non_git_project_stops_at_package_json_boundary(self, tmp_path):
         """Without a .git ancestor, stop at the nearest package.json.
 
