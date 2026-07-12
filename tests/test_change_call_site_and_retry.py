@@ -255,6 +255,7 @@ class TestDeterministicChangeJudges:
     """Unit coverage for release-gate judges used by the real LLM tests."""
 
     def test_change_prompt_requires_call_site_safety_in_final_prompt(self) -> None:
+        """The final prompt contract must carry call-site adaptations forward."""
         template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
 
         assert "final modified_prompt itself" in template
@@ -356,7 +357,8 @@ class TestCallSiteEnumeration:
         judgment = _judge_call_site_names(modified_prompt)
         assert judgment.passed, (
             f"LLM did not enumerate all 4 call sites. "
-            f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f}"
+            f"Judge: {judgment.reasoning} | Model: {model}, cost: ${cost:.4f} | "
+            f"Output excerpt: {modified_prompt[:1000]}"
         )
 
 
