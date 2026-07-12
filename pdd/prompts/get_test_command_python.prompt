@@ -42,7 +42,7 @@ R11 (MUST): Target the test path literally. Invoke Jest with `--runTestsByPath` 
 
 R12 (MUST): Shell-quote the appended absolute test path for every runner, because callers execute `command` with `shell=True`; an unquoted path with spaces or shell metacharacters would be re-split or reinterpreted. (This is a POSIX-shell command string, matching how all pdd callers run verify commands.)
 
-R13 (MUST): For a detected TS runner, return a `TestCommand` whose `cwd` is the config directory. For CSV commands, substitute the `{file}` placeholder with the input file string and return `cwd=None`. Infer the language via `get_language` when not provided. Gracefully handle a missing CSV by proceeding to the next resolution step.
+R13 (MUST): For a detected TS runner, return a `TestCommand` whose `cwd` is the config directory. For CSV commands, substitute the `{file}` placeholder with the **shell-quoted** input file string (callers execute with `shell=True`, so an unquoted path with spaces or shell metacharacters such as `$()`/`;` would be re-split or injected) and return `cwd=None`. Infer the language via `get_language` when not provided. Gracefully handle a missing CSV by proceeding to the next resolution step.
 
 # Dependencies
 <agentic_langtest>

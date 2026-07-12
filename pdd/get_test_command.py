@@ -649,7 +649,11 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         found = _find_runner_here(search_dir, is_spec, repo_root)
         if found is not None:
             return found
-        pkg_here = (search_dir / "package.json").exists()
+        # Lexical presence: a ``package.json`` that is a *dangling* symlink still
+        # marks a JS project boundary. ``Path.exists()`` returns False for it, which
+        # would let the walk slip past an independent package and adopt an unrelated
+        # ancestor's config — so use ``os.path.lexists`` and fail closed (stop).
+        pkg_here = os.path.lexists(str(search_dir / "package.json"))
         # Extend the workspace ceiling from a proven member manifest here — or when
         # we have reached the current ceiling, so a nested workspace root that lacks
         # its own package.json can still chain outward.
@@ -758,7 +762,11 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)))
+            # Shell-quote the substituted path: callers run this command string with
+            # ``shell=True``, so an unquoted path with spaces or shell metacharacters
+            # (e.g. ``/repo/$(touch PWN)/a.test.ts``) would be re-split or executed
+            # via command substitution — a command-injection vector.
+            return TestCommand(command=csv_cmd.replace('{file}', shlex.quote(str(test_file))))
 
     # 3. Smart detection
     if resolved_language:

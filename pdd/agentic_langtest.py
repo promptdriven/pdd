@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import os
+import shlex
 from pathlib import Path
 
 
@@ -54,11 +55,17 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     if lang in lang_formats:
         csv_cmd = lang_formats[lang].get('run_test_command', '').strip()
         if csv_cmd:
-            return csv_cmd.replace('{file}', unit_test_file)
+            # Shell-quote the substituted path: this command is executed with
+            # ``shell=True`` by pdd callers, so an unquoted path with spaces or
+            # shell metacharacters (e.g. ``$()``/``;``) would be re-split or run
+            # via command substitution — a command-injection vector.
+            return csv_cmd.replace('{file}', shlex.quote(unit_test_file))
 
     # 2. Hardcoded Python fallback
     if lang == "python":
-        return f'{os.sys.executable} -m pytest "{unit_test_file}" -q'
+        # ``shlex.quote`` (not bare double quotes): ``"$(...)"`` is still expanded
+        # by the shell inside double quotes, so double quotes do not stop injection.
+        return f'{os.sys.executable} -m pytest {shlex.quote(unit_test_file)} -q'
 
     # 3. No command available — triggers agentic fallback
     return None
