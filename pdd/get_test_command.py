@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 import csv
+import json
 import re
 import shlex
 
@@ -30,6 +31,36 @@ class TestCommand:
     cwd: Optional[Path] = None
 
 
+def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
+    """Return True if ``package_dir`` (which holds a ``package.json``) is a member
+    of an ancestor JS workspace, so its runner config may live at the workspace
+    root rather than in the leaf package.
+
+    Detects the common workspace declarations — a ``workspaces`` field in an
+    ancestor ``package.json``, or a ``pnpm-workspace.yaml`` / ``lerna.json`` — and
+    never looks above the repository root (``.git``).
+    """
+    ancestor = package_dir.parent
+    for _ in range(80):
+        if (ancestor / "pnpm-workspace.yaml").exists() or (ancestor / "lerna.json").exists():
+            return True
+        ancestor_manifest = ancestor / "package.json"
+        if ancestor_manifest.exists():
+            try:
+                manifest = json.loads(ancestor_manifest.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                manifest = {}
+            if manifest.get("workspaces"):
+                return True
+        if (ancestor / ".git").exists():
+            break
+        parent = ancestor.parent
+        if parent == ancestor:
+            break
+        ancestor = parent
+    return False
+
+
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """Detect Playwright, Jest, or Vitest config by walking up from the test file.
 
@@ -37,18 +68,20 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     Returns (command, config_directory) tuple if a config is found, otherwise None.
     The config_directory is where the test runner config lives — callers must use it as cwd.
 
-    The walk continues up to the repository root (the nearest ancestor containing
-    ``.git``) rather than stopping after a fixed number of parents: in
-    Next.js/monorepo layouts a colocated test can live many directories below its
-    runner config (e.g. a page test under
-    ``frontend/src/app/hackathon/[eventId]/team/__tests__/`` and the config at
-    ``frontend/jest.config.js``), so a shallow cap would miss the config and fall
-    back to a non-test runner. The nearest ancestor config wins. The repository
-    root — not the nearest ``package.json`` — is the boundary: a workspace leaf
-    package has its own ``package.json`` yet inherits Jest/Vitest/Playwright
-    configuration from the workspace root, so stopping at the leaf manifest would
-    miss it. The search never escapes above the repository root, and a hard
-    iteration cap guards against pathological paths.
+    The nearest ancestor config wins. The upward walk stops at the JS project
+    boundary — the nearest ``package.json`` — rather than after a fixed number of
+    parents, so a colocated test many directories below its runner config (e.g. a
+    page test under ``frontend/src/app/hackathon/[eventId]/team/__tests__/`` and
+    the config at ``frontend/jest.config.js``) still finds it. Two refinements
+    keep that boundary correct in monorepos:
+
+    * A *workspace leaf* package has its own ``package.json`` yet inherits its
+      runner config from the workspace root, so when the leaf belongs to an
+      ancestor workspace (``workspaces`` field / ``pnpm-workspace.yaml`` /
+      ``lerna.json``) the walk continues *through* the leaf to the workspace root.
+    * An *independent* package must not adopt an unrelated ancestor's config, so
+      the walk stops at its ``package.json`` and never crosses the repository root
+      (``.git``). A hard iteration cap guards against pathological paths.
 
     Jest is invoked with ``--runTestsByPath`` so the resolved absolute path is
     matched literally (see ``get_test_command_for_file`` for how the path is
@@ -59,10 +92,6 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
-    # Walk up until a config is found or we reach the repository root (a directory
-    # holding ``.git``). Continue *through* intermediate ``package.json`` files so
-    # a config that lives at the workspace root is still discovered. A hard
-    # iteration cap guards against pathological paths.
     for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
@@ -71,8 +100,12 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
             return ("npx jest --no-coverage --runTestsByPath", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
             return ("npx vitest run", search_dir)
-        # Stop at the repository root; the config would have been found by now.
-        # ``.git`` is a directory in a normal clone and a file in a worktree.
+        # Stop at the JS project boundary (nearest package.json), but cross it when
+        # this package is a member of an ancestor workspace whose config lives at
+        # the workspace root.
+        if (search_dir / "package.json").exists() and not _belongs_to_ancestor_workspace(search_dir):
+            break
+        # Never escape the repository, even absent an in-project config.
         if (search_dir / ".git").exists():
             break
         parent = search_dir.parent
