@@ -16,6 +16,7 @@ REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
+    "pdd/sync_core/signer_process.py",
     "pdd/sync_core/supervisor.py",
     "tests/test_sync_core_descriptor_store.py",
 }

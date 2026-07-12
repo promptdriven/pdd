@@ -5871,6 +5871,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "pdd/sync_core/signer_process.py",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "pdd/sync_core/snapshot.py",
       "role": "human-maintained"
     },
