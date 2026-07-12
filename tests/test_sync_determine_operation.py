@@ -8497,3 +8497,156 @@ def test_pdd_sync_cli_refuses_escaping_pddrc_output(tmp_path, monkeypatch):
     # Whatever the CLI reports, it must NOT have materialized an out-of-tree target.
     assert not outside.exists(), f"CLI dry-run created out-of-tree {outside}"
     assert not (tmp_path.parent / "escape_cli").exists()
+
+
+# --- Additional tests appended ---
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestEstimateOperationCost:
+    """Tests for estimate_operation_cost pricing map."""
+
+    def test_known_operations_return_positive_cost(self):
+        from sync_determine_operation import estimate_operation_cost
+        for op in ('generate', 'auto-deps', 'example', 'crash', 'verify', 'test', 'test_extend', 'fix', 'update'):
+            assert estimate_operation_cost(op) > 0.0, f"{op} should have positive cost"
+
+    def test_no_op_operations_return_zero_cost(self):
+        from sync_determine_operation import estimate_operation_cost
+        for op in ('nothing', 'all_synced', 'error', 'fail_and_request_manual_merge'):
+            assert estimate_operation_cost(op) == 0.0
+
+    def test_unknown_operation_returns_zero(self):
+        from sync_determine_operation import estimate_operation_cost
+        assert estimate_operation_cost('bogus_never_defined_op') == 0.0
+
+    def test_generate_costs_more_than_update(self):
+        from sync_determine_operation import estimate_operation_cost
+        assert estimate_operation_cost('generate') > estimate_operation_cost('update')
+
+
+class TestCheckForDependencies:
+    """Tests for check_for_dependencies content scanning."""
+
+    def test_detects_include_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("some prompt <include>foo.py</include> more") is True
+
+    def test_detects_web_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("look up <web>https://example.com</web>") is True
+
+    def test_detects_shell_xml_tag(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("run <shell>ls -la</shell>") is True
+
+    def test_detects_explicit_mention_case_insensitive(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("This prompt REQUIRES DEPENDENCIES to work.") is True
+        assert check_for_dependencies("Use auto-deps to resolve.") is True
+        assert check_for_dependencies("include dependencies here") is True
+
+    def test_no_dependencies_in_plain_prompt(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("Just write a simple add function.") is False
+
+    def test_empty_string_no_deps(self):
+        from sync_determine_operation import check_for_dependencies
+        assert check_for_dependencies("") is False
+
+
+class TestSyncDecisionDataclass:
+    """SyncDecision default values and construction."""
+
+    def test_defaults(self):
+        d = SyncDecision(operation='nothing', reason='r')
+        assert d.confidence == 1.0
+        assert d.estimated_cost == 0.0
+        assert d.details is None
+        assert d.prerequisites is None
+
+    def test_full_construction(self):
+        d = SyncDecision(
+            operation='generate', reason='r', confidence=0.5,
+            estimated_cost=0.25, details={'k': 'v'}, prerequisites=['test']
+        )
+        assert d.confidence == 0.5
+        assert d.estimated_cost == 0.25
+        assert d.details == {'k': 'v'}
+        assert d.prerequisites == ['test']
+
+
+class TestFingerprintAndRunReportOptionals:
+    """Verify optional fields on Fingerprint/RunReport."""
+
+    def test_fingerprint_optional_fields_default_none(self):
+        fp = Fingerprint(
+            pdd_version="1.0", timestamp="t", command="generate",
+            prompt_hash=None, code_hash=None, example_hash=None, test_hash=None,
+        )
+        assert fp.test_files is None
+        assert fp.include_deps is None
+
+    def test_run_report_optional_fields_default_none(self):
+        rr = RunReport(
+            timestamp="t", exit_code=0, tests_passed=0, tests_failed=0, coverage=0.0
+        )
+        assert rr.test_hash is None
+        assert rr.test_files is None
+
+
+class TestReadFingerprintAndRunReportMissing:
+    """Missing metadata files return None."""
+
+    def test_read_fingerprint_missing_returns_none(self, pdd_test_environment):
+        assert read_fingerprint("nonexistent_module_xyz", "python") is None
+
+    def test_read_run_report_missing_returns_none(self, pdd_test_environment):
+        assert read_run_report("nonexistent_module_xyz", "python") is None
+
+    def test_read_run_report_invalid_json_returns_none(self, pdd_test_environment):
+        rr_path = get_meta_dir() / "bad_python_run.json"
+        rr_path.write_text("{ not valid json ")
+        assert read_run_report("bad", "python") is None
+
+
+class TestCalculateSha256EdgeCases:
+    """calculate_sha256 additional edge cases."""
+
+    def test_empty_file_returns_known_hash(self, tmp_path):
+        f = tmp_path / "empty.txt"
+        f.write_text("")
+        # SHA256 of empty string
+        assert calculate_sha256(f) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+    def test_directory_path_returns_none(self, tmp_path):
+        # Passing a directory should not raise; returns None (IOError branch)
+        assert calculate_sha256(tmp_path) is None
+
+
+class TestSyncLockReleaseWithoutAcquire:
+    """SyncLock.release is safe when nothing was acquired."""
+
+    def test_release_without_acquire_is_noop(self, pdd_test_environment):
+        lock = SyncLock(BASENAME, LANGUAGE)
+        # Should not raise
+        lock.release()
+        assert not (get_locks_dir() / f"{BASENAME}_{LANGUAGE}.lock").exists()
+
+
+class TestReadOnlySkipsLock:
+    """read_only=True should bypass SyncLock just like log_mode."""
+
+    @patch('sync_determine_operation.construct_paths')
+    def test_read_only_skips_lock(self, mock_construct, pdd_test_environment):
+        with patch('sync_determine_operation.SyncLock') as mock_lock:
+            sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE, read_only=True)
+            mock_lock.assert_not_called()
