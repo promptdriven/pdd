@@ -8,7 +8,16 @@ import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, TestCommand
+from pdd.get_test_command import (
+    get_test_command_for_file,
+    _detect_ts_test_runner,
+    TestCommand,
+    _workspace_globs_for,
+    _belongs_to_ancestor_workspace,
+    _package_matches_workspace,
+    _expand_braces,
+    _BraceBudgetError,
+)
 
 
 class TestGetTestCommandForFilePython:
@@ -548,6 +557,173 @@ class TestTypeScriptTestRunnerDetection:
         # exact resolved path (no re-splitting on the space).
         argv = shlex.split(result.command)
         assert str(test_file.resolve()) in argv, (result.command, argv)
+
+
+class TestWorkspaceMembershipHardening:
+    """Round-4 review hardening: nested workspace roots, source precedence,
+    malformed manifests, brace-expansion budget, and symlink containment."""
+
+    def test_nested_intermediate_manifest_does_not_stop_walk(self, tmp_path):
+        """A member below an independent intermediate manifest still reaches root.
+
+        Root declares ``vendor/container/packages/*``; ``vendor/container`` has its
+        own (independent) ``package.json`` that does *not* match that glob, and the
+        member is ``vendor/container/packages/app``. The walk must cross the
+        intermediate manifest and still find the workspace-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": ["vendor/container/packages/*"]}'
+        )
+        container = repo / "vendor" / "container"
+        container.mkdir(parents=True)
+        (container / "package.json").write_text("{}")  # independent intermediate
+        leaf = container / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")  # the member
+        test_dir = leaf / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "widget.test.ts"
+        test_file.write_text("describe('w', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == repo.resolve()
+
+    def test_pnpm_yaml_is_authoritative_over_stale_package_json(self, tmp_path):
+        """pnpm ignores package.json ``workspaces``; a stale field must not add members.
+
+        The root has a stale ``workspaces: ["packages/*"]`` but the authoritative
+        ``pnpm-workspace.yaml`` lists only ``apps/*``. A leaf under ``packages/``
+        must NOT be a member (and must not adopt the root Jest config), while a
+        leaf under ``apps/`` must be.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - 'apps/*'\n")
+
+        stale = repo / "packages" / "tool"
+        stale.mkdir(parents=True)
+        (stale / "package.json").write_text("{}")
+        assert _belongs_to_ancestor_workspace(stale) is False
+
+        member = repo / "apps" / "web"
+        member.mkdir(parents=True)
+        (member / "package.json").write_text("{}")
+        assert _belongs_to_ancestor_workspace(member) is True
+
+        # And end-to-end: the stale packages/ leaf must not adopt root Jest.
+        test_file = stale / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_pnpm_yaml_without_parser_fails_closed(self, tmp_path, monkeypatch):
+        """If PyYAML is unavailable, a pnpm workspace yields no globs (fail closed)."""
+        import builtins
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "yaml":
+                raise ImportError("no yaml")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+        # Even the package.json field must be ignored when pnpm manages the repo.
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        assert _workspace_globs_for(repo) == []
+
+    def test_non_dict_package_json_does_not_crash(self, tmp_path):
+        """A package.json whose top level is a JSON array must not raise."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "package.json").write_text("[]")
+        assert _workspace_globs_for(anc) == []
+
+    def test_non_dict_lerna_json_does_not_crash(self, tmp_path):
+        """A lerna.json whose top level is a JSON array must not raise."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "lerna.json").write_text("[]")
+        assert _workspace_globs_for(anc) == []
+
+    def test_malformed_manifest_membership_is_unproven_not_crashing(self, tmp_path):
+        """An ancestor with a non-object package.json yields no membership crash."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('"just a string"')  # valid JSON, non-object
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        # Must not raise; membership unproven → independent leaf → no root Jest.
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_brace_bomb_raises_budget_error(self):
+        """A pathological brace pattern must not materialize an exponential list."""
+        with pytest.raises(_BraceBudgetError):
+            _expand_braces("x" + "{a,b}" * 40)
+
+    def test_brace_bomb_membership_fails_closed(self):
+        """Membership fails closed (False) on a brace-bomb glob rather than hanging."""
+        bomb = "x" + "{a,b}" * 40
+        assert _package_matches_workspace(("a",), [bomb]) is False
+        # A brace bomb in an exclusion must not force a member out silently either;
+        # it simply fails membership closed.
+        assert _package_matches_workspace(("packages", "app"), ["packages/*", "!" + bomb]) is False
+
+    def test_normal_brace_within_budget_still_matches(self):
+        """Ordinary brace alternations are unaffected by the budget."""
+        assert _package_matches_workspace(("packages", "app"), ["packages/{app,lib}"]) is True
+        assert _package_matches_workspace(("packages", "web"), ["packages/{app,lib}"]) is False
+
+    def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
+        """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        outside = tmp_path / "outside"
+        (outside / "tests").mkdir(parents=True)
+        (outside / "jest.config.js").write_text("module.exports = {};")
+        (outside / "tests" / "foo.test.ts").write_text("describe('x', () => {})")
+        # repo/tests -> outside/tests (escapes the repository)
+        (repo / "tests").symlink_to(outside / "tests", target_is_directory=True)
+
+        result = _detect_ts_test_runner(repo / "tests" / "foo.test.ts")
+        assert result is None
+
+    def test_symlink_within_repo_still_detected(self, tmp_path):
+        """A symlink that stays inside the repo must still find the repo's config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        real = repo / "real" / "tests"
+        real.mkdir(parents=True)
+        (real / "foo.test.ts").write_text("describe('x', () => {})")
+        link = repo / "linked"
+        link.symlink_to(repo / "real", target_is_directory=True)
+
+        cmd, returned_dir = _detect_ts_test_runner(link / "tests" / "foo.test.ts")
+        assert "npx jest" in cmd
+        assert returned_dir == repo.resolve()
 
 
 class TestPlaywrightDetection:
