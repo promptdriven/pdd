@@ -778,6 +778,7 @@ def _trusted_collection_runner(
                 "if _ROOT not in sys.path:",
                 "    sys.path.insert(0, _ROOT)",
                 "_STATUS = pytest.main(" + json.dumps(pytest_args) + ", plugins=[_MODULE])",
+                "sys.stdout.flush(); sys.stderr.flush()",
                 "os._exit(80 + int(_STATUS))",
                 "",
             )
@@ -814,6 +815,7 @@ def _trusted_execution_runner(
             f"sys.path.insert(0, {json.dumps(str(root))})",
             "_STATUS = pytest.main(" +
             json.dumps(pytest_args + [f"--junitxml={worker_junit}"]) + ")",
+            "sys.stdout.flush(); sys.stderr.flush()",
             "os._exit(80 + int(_STATUS))", "",
         )), encoding="utf-8",
     )
