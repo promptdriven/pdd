@@ -15,6 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+import sysconfig
 
 
 @dataclass(frozen=True)
@@ -28,15 +29,89 @@ class SupervisorLimits:
     max_processes: int = 128
 
 
+def _linked_libraries(path: Path) -> tuple[Path, ...]:
+    """Resolve the ELF loader closure for one executable or extension."""
+    if not sys.platform.startswith("linux"):
+        return ()
+    result = subprocess.run(
+        ["ldd", str(path)], capture_output=True, text=True, check=False
+    )
+    libraries: set[Path] = set()
+    for line in result.stdout.splitlines():
+        fields = line.strip().split()
+        candidates = (
+            fields[2:3] if len(fields) >= 3 and fields[1:2] == ["=>"] else fields[:1]
+        )
+        for value in candidates:
+            candidate = Path(value)
+            if candidate.is_absolute() and candidate.is_file():
+                libraries.add(candidate.resolve())
+    return tuple(sorted(libraries))
+
+
+def _runtime_directories() -> tuple[tuple[str, Path], ...]:
+    """Return Python directories whose complete readable contents are mounted."""
+    locations = sysconfig.get_paths()
+    labels = {
+        "stdlib": locations.get("stdlib"),
+        "platstdlib": locations.get("platstdlib"),
+        "purelib": locations.get("purelib"),
+        "platlib": locations.get("platlib"),
+    }
+    seen: set[Path] = set()
+    result = []
+    for label, value in labels.items():
+        if not value:
+            continue
+        path = Path(value).resolve()
+        if path.is_dir() and path not in seen:
+            seen.add(path)
+            result.append((f"python-runtime/{label}", path))
+    return tuple(result)
+
+
+def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
+    """Return every regular file exposed by the sandbox with logical names."""
+    entries: dict[str, Path] = {}
+    native: set[Path] = {Path(sys.executable).resolve()}
+    for label, directory in _runtime_directories():
+        for path in sorted(directory.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                entries[f"{label}/{path.relative_to(directory).as_posix()}"] = path
+                if path.suffix in {".so", ".dylib"}:
+                    native.add(path)
+    sandbox_commands = {
+        "bwrap": shutil.which("bwrap"),
+        "setpriv": shutil.which("setpriv"),
+        "sudo": shutil.which("sudo"),
+        "mount": shutil.which("mount"),
+        "umount": shutil.which("umount"),
+    }
+    for name, value in sandbox_commands.items():
+        if value:
+            path = Path(value).resolve()
+            entries[f"sandbox/{name}"] = path
+            native.add(path)
+    entries["interpreter/python"] = Path(sys.executable).resolve()
+    for path in sorted(native):
+        for library in _linked_libraries(path):
+            entries.setdefault(f"native/{library.name}", library)
+    return tuple(sorted(entries.items()))
+
+
 def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
-    """Return the minimal host trees needed to start the configured interpreter."""
-    roots = {cwd.resolve(), Path(sys.prefix)}
-    executable = shutil.which(command[0]) or command[0]
-    roots.add(Path(executable).parent)
-    for candidate in ("/bin", "/usr", "/lib", "/lib64"):
-        path = Path(candidate)
-        if path.exists():
-            roots.add(path)
+    """Return the measured runtime closure plus the checker working directory."""
+    roots: set[Path] = {cwd.resolve()}
+    directories = tuple(directory for _label, directory in _runtime_directories())
+    roots.update(directories)
+    executable = Path(shutil.which(command[0]) or command[0]).resolve()
+    roots.add(executable)
+    for _label, path in released_runtime_closure_paths():
+        if path.name in {"bwrap", "sudo", "mount", "umount"} or any(
+            path.is_relative_to(directory) for directory in directories
+        ):
+            continue
+        roots.add(path)
     return tuple(sorted(roots, key=lambda item: (len(item.parts), str(item))))
 
 

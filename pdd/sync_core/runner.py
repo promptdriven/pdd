@@ -38,7 +38,7 @@ from .types import (
     VerificationObligation,
     VerificationProfile,
 )
-from .supervisor import run_supervised
+from .supervisor import released_runtime_closure_paths, run_supervised
 
 
 TRUSTED_RUNNER_VERSION = "pdd-trusted-runner-v2"
@@ -469,15 +469,14 @@ def _support_digest(
         root, ref, pending=product, included=set(product), fail_on_dynamic=True
     )
     if product:
-        # Product code is an arbitrary Python runtime. Measuring every committed
-        # Python module is the only static closure that remains complete under
-        # loader aliasing and reflection without executing candidate code.
-        repository_python = tuple(
+        # Product code can read every committed artifact in its exact-head
+        # checkout, not only importable Python source.
+        repository_artifacts = tuple(
             (path, blob)
-            for path in _git_python_paths(root, ref)
+            for path in _git_paths(root, ref)
             if (blob := read_git_blob(root, ref, path)) is not None
         )
-        product_closure = tuple(sorted(set(product_closure + repository_python)))
+        product_closure = tuple(sorted(set(product_closure + repository_artifacts)))
     closure = tuple(sorted(set(closure + product_closure)))
     digest = hashlib.sha256()
     for path, content in closure:
@@ -542,6 +541,7 @@ def runner_identity_digest(
     payload = {
         "tool_version": TRUSTED_RUNNER_VERSION,
         "python_runtime": _measured_python_runtime(),
+        "released_runtime_digest": _released_runtime_closure_digest(),
         "checker_artifact_digest": _checker_artifact_digest(),
         "pytest_command": [
             "<measured-python-runtime>",
@@ -622,15 +622,34 @@ def _checker_artifact_digest() -> str:
     return digest.hexdigest()
 
 
-def _git_python_paths(root: Path, ref: str) -> tuple[PurePosixPath, ...]:
-    """Return every committed Python path at an exact ref."""
+def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
+    """Return the complete, logically named runtime exposed to protected pytest."""
+    paths = list(released_runtime_closure_paths())
+    paths.extend((
+        ("checker/pdd/sync_core/runner.py", Path(__file__)),
+        ("checker/pdd/sync_core/pytest_probe.py", _CHECKER_PYTEST_PROBE),
+    ))
+    return tuple(sorted(paths, key=lambda item: item[0]))
+
+
+def _released_runtime_closure_digest() -> str:
+    """Hash the released runtime by logical name, never installation prefix."""
+    digest = hashlib.sha256()
+    for name, path in _released_runtime_closure_paths():
+        if not path.is_file() or path.is_symlink():
+            raise RuntimeError(f"released runtime entry is not a regular file: {name}")
+        digest.update(name.encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def _git_paths(root: Path, ref: str) -> tuple[PurePosixPath, ...]:
+    """Return every committed regular path at an exact ref."""
     result = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", ref], cwd=root,
         capture_output=True, text=True, check=True,
     )
     return tuple(
         PurePosixPath(value) for value in result.stdout.splitlines()
-        if value.endswith(".py")
     )
 
 
@@ -746,91 +765,59 @@ def _trusted_collection_runner(
     directory: Path,
     root: Path,
     pytest_args: list[str],
-    collection_output: Path,
-) -> tuple[Path, Path]:
-    """Create a process-separated checker and candidate collection worker."""
+ ) -> Path:
+    """Create a worker that cannot see an authoritative result channel."""
     worker = directory / "collection_worker.py"
-    result_dir = directory.parent / f"results-{os.urandom(16).hex()}"
-    result_dir.mkdir(mode=0o700)
-    worker_output = result_dir / f"collection-{os.urandom(16).hex()}.json"
-    worker_output.touch(mode=0o600)
     worker.write_text(
         "\n".join(
             (
-                "import importlib.util",
-                "import os",
-                "import sys",
+                "import os, subprocess, sys",
                 "",
                 f"_ROOT = {json.dumps(str(root))}",
-                f"_PROBE = {json.dumps(str(_CHECKER_PYTEST_PROBE))}",
                 "",
                 "os.chdir(_ROOT)",
-                "_SPEC = importlib.util.spec_from_file_location(",
-                "    '_pdd_checker_pytest_probe_abs', _PROBE",
-                ")",
-                "if _SPEC is None or _SPEC.loader is None:",
-                "    raise ImportError('checker pytest probe is unavailable')",
-                "_MODULE = importlib.util.module_from_spec(_SPEC)",
-                "_SPEC.loader.exec_module(_MODULE)",
-                f"_MODULE._OUTPUT_PATH = {json.dumps(str(worker_output))}",
-                "",
-                "import pytest",
                 "if _ROOT not in sys.path:",
                 "    sys.path.insert(0, _ROOT)",
-                "_STATUS = pytest.main(" + json.dumps(pytest_args) + ", plugins=[_MODULE])",
+                "_STATUS = subprocess.run([sys.executable, '-m', 'pytest'] + "
+                + json.dumps(pytest_args) + ").returncode",
                 "sys.stdout.flush(); sys.stderr.flush()",
-                "os._exit(80 + int(_STATUS))",
+                "os._exit(_STATUS if _STATUS in (0, 5) else 125)",
                 "",
             )
         ),
         encoding="utf-8",
     )
-    checker = directory / "run_collection.py"
-    checker.write_text(
-        "\n".join((
-            "import pathlib, subprocess, sys",
-            f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
-            f"source = pathlib.Path({json.dumps(str(worker_output))})",
-            "if result.returncode not in (80, 85): raise SystemExit(1)",
-            "if not source.stat().st_size: raise SystemExit(1)",
-            f"pathlib.Path({json.dumps(str(collection_output))}).write_bytes(source.read_bytes())",
-            "",)), encoding="utf-8",
-    )
-    return checker, worker_output
+    return worker
 
 
 def _trusted_execution_runner(
-    directory: Path, root: Path, pytest_args: list[str], junit: Path
-) -> tuple[Path, Path]:
-    """Create a checker that never imports candidate code or pytest."""
+    directory: Path, root: Path, pytest_args: list[str]
+) -> Path:
+    """Create a worker whose raw pytest status is normalized outside the sandbox."""
     worker = directory / "execution_worker.py"
-    result_dir = directory.parent / f"results-{os.urandom(16).hex()}"
-    result_dir.mkdir(mode=0o700)
-    worker_junit = result_dir / f"execution-{os.urandom(16).hex()}.xml"
-    worker_junit.touch(mode=0o600)
     worker.write_text(
         "\n".join((
-            "import os, sys", "import pytest",
+            "import os, subprocess, sys",
             f"os.chdir({json.dumps(str(root))})",
             f"sys.path.insert(0, {json.dumps(str(root))})",
-            "_STATUS = pytest.main(" +
-            json.dumps(pytest_args + [f"--junitxml={worker_junit}"]) + ")",
+            "_STATUS = subprocess.run([sys.executable, '-m', 'pytest'] + "
+            + json.dumps(pytest_args) + ").returncode",
             "sys.stdout.flush(); sys.stderr.flush()",
-            "os._exit(80 + int(_STATUS))", "",
+            "os._exit(_STATUS if 0 <= _STATUS <= 5 else 125)", "",
         )), encoding="utf-8",
     )
-    checker = directory / "run_execution.py"
-    checker.write_text(
-        "\n".join((
-            "import pathlib, subprocess, sys",
-            f"result = subprocess.run([sys.executable, {json.dumps(str(worker))}])",
-            f"source = pathlib.Path({json.dumps(str(worker_junit))})",
-            "if not source.stat().st_size: raise SystemExit(1)",
-            f"pathlib.Path({json.dumps(str(junit))}).write_bytes(source.read_bytes())",
-            "raise SystemExit(result.returncode - 80 if 80 <= result.returncode <= 85 else 1)",
-            "",)), encoding="utf-8",
-    )
-    return checker, worker_junit
+    return worker
+
+
+def _pytest_exit_outcome(returncode: int, output: str) -> tuple[EvidenceOutcome, str]:
+    """Normalize the worker's whitelisted pytest status outside candidate control."""
+    if returncode == 0:
+        return EvidenceOutcome.PASS, "protected pytest completed without failures"
+    if returncode == 1:
+        return EvidenceOutcome.FAIL, "protected pytest reported test failures"
+    if returncode == 5:
+        return EvidenceOutcome.NOT_COLLECTED, "protected pytest collected no tests"
+    return EvidenceOutcome.ERROR, "protected pytest failed: " + output[-500:]
 
 
 def _run_test_node(
@@ -855,15 +842,11 @@ def _run_test_node(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        junit = temporary / f"authoritative-{os.urandom(16).hex()}.xml"
-        junit.touch(mode=0o600)
-        controller, worker_junit = _trusted_execution_runner(
-            controllers, root, command[3:], junit
-        )
+        worker = _trusted_execution_runner(controllers, root, command[3:])
         result, surviving = _managed_subprocess(
-            [sys.executable, str(controller)], cwd=controllers,
+            [sys.executable, str(worker)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
-            writable_roots=(home.parent,), writable_files=(junit, worker_junit),
+            writable_roots=(home.parent,),
             readable_roots=(root,),
         )
         if result.returncode == 124:
@@ -878,11 +861,8 @@ def _run_test_node(
                 node_id, EvidenceOutcome.ERROR, command_digest,
                 "validator left a surviving process-group descendant",
             )
-        outcome, detail = _junit_outcome(
-            junit,
-            result.returncode,
-            result.stdout + "\n" + result.stderr,
-            1,
+        outcome, detail = _pytest_exit_outcome(
+            result.returncode, result.stdout + "\n" + result.stderr
         )
         return RunnerExecution(node_id, outcome, command_digest, detail)
 
@@ -900,8 +880,6 @@ def _collect_node_ids(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        collection_output = temporary / f"authoritative-{os.urandom(16).hex()}.json"
-        collection_output.touch(mode=0o600)
         pytest_args = [
             "--collect-only",
             "-q",
@@ -911,10 +889,8 @@ def _collect_node_ids(
             "no:cacheprovider",
             path.as_posix(),
         ]
-        runner, worker_output = _trusted_collection_runner(
-            controllers, root, pytest_args, collection_output
-        )
-        command = [sys.executable, str(runner)]
+        worker = _trusted_collection_runner(controllers, root, pytest_args)
+        command = [sys.executable, str(worker)]
         digest = hashlib.sha256(
             json.dumps(
                 {
@@ -930,7 +906,6 @@ def _collect_node_ids(
         result, surviving = _managed_subprocess(
             command, cwd=controllers, timeout=timeout_seconds,
             env=_pytest_environment(home), writable_roots=(home.parent,),
-            writable_files=(collection_output, worker_output),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:
@@ -950,20 +925,17 @@ def _collect_node_ids(
                     "collection left a surviving process-group descendant",
                 ), (),
             )
-        try:
-            payload = json.loads(collection_output.read_text(encoding="utf-8"))
-            if not isinstance(payload, list) or not all(
-                isinstance(item, str) for item in payload
-            ):
-                raise ValueError("node ID payload is malformed")
-            node_ids = tuple(sorted(payload))
-        except (OSError, ValueError, json.JSONDecodeError):
+        node_ids = tuple(sorted(
+            line for line in result.stdout.splitlines()
+            if "::" in line and not line.startswith("=")
+        ))
+        if not node_ids and result.returncode == 0:
             return (
                 RunnerExecution(
                     path.as_posix(),
                     EvidenceOutcome.COLLECTION_ERROR,
                     digest,
-                    "protected collection probe produced no valid node IDs: "
+                    "protected collection produced no valid node IDs: "
                     + (result.stderr or result.stdout)[-500:],
                 ),
                 (),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -28,25 +29,29 @@ def descendants(root):
         for pid in children.get(pending.pop(), ()):
             if pid not in found: found.add(pid); pending.append(pid)
     return found
+def cleanup():
+    deadline = time.monotonic() + .4
+    while time.monotonic() < deadline:
+        pids = descendants(os.getpid())
+        if child is not None and child.poll() is None: pids.add(child.pid)
+        if not pids: return
+        for pid in pids:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+        time.sleep(.01)
 def stop(_signum, _frame):
-    if child is not None:
-        deadline = time.monotonic() + .4
-        while time.monotonic() < deadline:
-            pids = descendants(os.getpid()) | {child.pid}
-            if not pids: break
-            for pid in pids:
-                try: os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError: pass
-            time.sleep(.01)
-        try: child.wait(timeout=.1)
-        except (subprocess.TimeoutExpired, ChildProcessError): pass
+    cleanup()
     raise SystemExit(124)
 signal.signal(signal.SIGTERM, stop)
 child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, start_new_session=True)
-stdout, stderr = child.communicate(sys.stdin.buffer.read())
-sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
-raise SystemExit(child.returncode)
+try:
+    stdout, stderr = child.communicate(sys.stdin.buffer.read())
+    sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
+    status = child.returncode
+finally:
+    cleanup()
+raise SystemExit(status)
 """
 
 
@@ -66,17 +71,16 @@ def _marked_processes(token: str) -> set[int]:
             if marker in values:
                 found.add(int(entry.name))
         return found
-    result = subprocess.run(
-        ["ps", "eww", "-axo", "pid=,command="],
-        capture_output=True, text=True, check=False,
-    )
+    result = subprocess.run(["ps", "eww", "-axo", "pid=,command="],
+                            capture_output=True, text=True, check=False)
     text_marker = marker.decode()
     for line in result.stdout.splitlines():
-        if text_marker not in line:
+        raw_pid, _separator, command_line = line.strip().partition(" ")
+        if text_marker not in command_line:
             continue
         try:
-            found.add(int(line.strip().split(None, 1)[0]))
-        except (ValueError, IndexError):
+            found.add(int(raw_pid))
+        except ValueError:
             continue
     return found
 
@@ -100,14 +104,41 @@ def _terminate_marked(token: str, leader: int, timeout: float = 0.5) -> None:
         pass
 
 
+def _linux_contained_command(command: tuple[str, ...]) -> tuple[str, ...]:
+    """Place the signer behind a PID namespace whose init owns all descendants."""
+    bwrap = shutil.which("bwrap")
+    if bwrap is None:
+        raise RuntimeError("protected Linux signer requires bubblewrap PID containment")
+    return (
+        bwrap, "--unshare-pid", "--die-with-parent", "--new-session",
+        "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+        "--tmpfs", "/tmp", "--", sys.executable, "-c", _LINUX_CONTAINMENT,
+        *command,
+    )
+
+
+def _kill_bounded(process: subprocess.Popen[bytes], token: str) -> None:
+    """Hard-kill the containment leader and inherited escapees within a bound."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    _terminate_marked(token, process.pid)
+    try:
+        process.wait(timeout=0.5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=0.5)
+
+
 def run_signer(
     command: tuple[str, ...], payload: bytes, *, timeout: float
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a signer in a new process group and reap the complete group on timeout."""
     token = uuid.uuid4().hex
-    contained_command = command
-    if sys.platform.startswith("linux"):
-        contained_command = (sys.executable, "-c", _LINUX_CONTAINMENT, *command)
+    contained_command = (
+        _linux_contained_command(command) if sys.platform.startswith("linux") else command
+    )
     process = subprocess.Popen(  # pylint: disable=consider-using-with
         contained_command,
         stdin=subprocess.PIPE,
@@ -121,20 +152,13 @@ def run_signer(
     except subprocess.TimeoutExpired as exc:
         if sys.platform.startswith("linux"):
             process.terminate()
-        else:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            _terminate_marked(token, process.pid)
-        try:
-            stdout, stderr = process.communicate(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            if process.stdout is not None:
-                process.stdout.close()
-            if process.stderr is not None:
-                process.stderr.close()
-            process.wait(timeout=0.5)
+                stdout, stderr = process.communicate(timeout=0.4)
+            except subprocess.TimeoutExpired:
+                _kill_bounded(process, token)
+                stdout, stderr = b"", b""
+        else:
+            _kill_bounded(process, token)
             stdout, stderr = b"", b""
         raise subprocess.TimeoutExpired(
             command, timeout, output=stdout, stderr=stderr

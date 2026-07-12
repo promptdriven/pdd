@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -200,7 +201,7 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
 )
 @pytest.mark.parametrize("adapter", ["attestation", "certificate"])
 def test_remote_signer_normal_return_reaps_detached_descendant(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
+    tmp_path: Path, adapter: str
 ) -> None:
     marker = tmp_path / f"{adapter}.normal-return-leak"
     child = (
