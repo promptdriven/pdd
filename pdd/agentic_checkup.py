@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
+from filelock import FileLock
 from rich.console import Console
 
 from .agentic_common import post_pr_comment, post_step_comment
@@ -131,7 +132,6 @@ class _HostedAgenticArtifactReservation:
     public_path: Path
     private_path: Path
     lock_path: Path
-    owner_path: Path
     invocation_id: str
     identity_digest: str
     pr_number: int
@@ -140,18 +140,6 @@ class _HostedAgenticArtifactReservation:
         """Remove invocation-private state while retaining the public blocker."""
         try:
             self.private_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            with _hosted_artifact_lock(self.lock_path):
-                try:
-                    owner = json.loads(self.owner_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    owner = None
-                if isinstance(owner, dict) and owner.get(
-                    "invocation_id"
-                ) == self.invocation_id:
-                    self.owner_path.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -165,15 +153,9 @@ class _HostedAgenticArtifactReservation:
 @contextmanager
 def _hosted_artifact_lock(lock_path: Path) -> Iterator[None]:
     """Serialize public-slot compare-and-swap operations across processes."""
-    import fcntl  # pylint: disable=import-outside-toplevel
-
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    with FileLock(str(lock_path)):
+        yield
 
 
 def _atomic_publish_hosted_payload(path: Path, payload: Dict[str, Any]) -> None:
@@ -210,8 +192,9 @@ def _prepare_hosted_agentic_artifact(
     This runs before validation/network early returns. A retry can therefore
     never expose a passing artifact from an earlier invocation as the current
     result when the new invocation fails before the review loop starts. The
-    placeholder carries a nonce used for locked compare-and-swap publication,
-    so overlapping runs cannot finalize or overwrite one another's verdicts.
+    placeholder itself carries the nonce used for locked compare-and-swap
+    publication. Ownership and invalidation are therefore one atomic record:
+    a crash cannot publish a new owner while leaving an earlier PASS visible.
     """
     if not artifact_path:
         return None
@@ -222,11 +205,45 @@ def _prepare_hosted_agentic_artifact(
         f"{safe_owner}\0{safe_repo}\0{pr_number}".encode("utf-8")
     ).hexdigest()
     private_path: Optional[Path] = None
-    lock_path: Optional[Path] = None
-    owner_path: Optional[Path] = None
-    invocation_id = ""
+    invocation_id = secrets.token_hex(16)
+    lock_path = path.with_name(f".{path.name}.lock")
+    claimed_public_slot = False
+    blocking_payload = {
+        "schema_version": "pdd.checkup.agentic.v1",
+        "invocation_id": invocation_id,
+        "owner": "",
+        "repo": "",
+        "pr_number": pr_number,
+        "status": "error",
+        "authority": "canonical_unknown_agentic_fallback_blocking",
+        "layer1": {
+            "status": "unknown",
+            "blockers": [
+                "Current hosted checkup invocation has not produced a verdict."
+            ],
+        },
+        "verdict": {
+            "decision": "block",
+            "reason": "Current hosted checkup invocation has not produced a verdict.",
+        },
+    }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Claim and invalidate the public slot before reserving private storage.
+        # If private reservation subsequently fails, this current blocker stays
+        # visible instead of exposing a pass from an earlier invocation.
+        with _hosted_artifact_lock(lock_path):
+            _atomic_publish_hosted_payload(path, blocking_payload)
+            claimed_public_slot = True
+        public_payload = json.loads(path.read_text(encoding="utf-8"))
+        if not (
+            isinstance(public_payload, dict)
+            and public_payload.get("invocation_id") == invocation_id
+            and public_payload.get("status") != "passed"
+            and isinstance(public_payload.get("verdict"), dict)
+            and public_payload["verdict"].get("decision") == "block"
+        ):
+            raise ValueError("hosted public placeholder failed readback")
         reserved = tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -237,9 +254,6 @@ def _prepare_hosted_agentic_artifact(
         )  # pylint: disable=consider-using-with -- path survives this scope
         reserved.close()
         private_path = Path(reserved.name)
-        invocation_id = secrets.token_hex(16)
-        lock_path = path.with_name(f".{path.name}.lock")
-        owner_path = path.with_name(f".{path.name}.owner.json")
         written_path = write_final_gate_fallback_artifact(
             artifact_path=str(private_path),
             pr_owner="",
@@ -269,87 +283,46 @@ def _prepare_hosted_agentic_artifact(
             public_path=path,
             private_path=private_path,
             lock_path=lock_path,
-            owner_path=owner_path,
             invocation_id=invocation_id,
             identity_digest=identity_digest,
             pr_number=pr_number,
         )
-        with _hosted_artifact_lock(lock_path):
-            _atomic_publish_hosted_payload(
-                owner_path, {"invocation_id": invocation_id}
-            )
-            _atomic_publish_hosted_payload(
-                path,
-                {
-                    "schema_version": "pdd.checkup.agentic.v1",
-                    "owner": "",
-                    "repo": "",
-                    "pr_number": pr_number,
-                    "status": "error",
-                    "authority": "canonical_unknown_agentic_fallback_blocking",
-                    "layer1": {
-                        "status": "unknown",
-                        "blockers": [
-                            "Current hosted checkup invocation has not produced a verdict."
-                        ],
-                    },
-                    "verdict": {
-                        "decision": "block",
-                        "reason": (
-                            "Current hosted checkup invocation has not produced a verdict."
-                        ),
-                    },
-                },
-            )
         return reservation
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        if lock_path is not None and owner_path is not None and invocation_id:
-            try:
-                with _hosted_artifact_lock(lock_path):
+        try:
+            with _hosted_artifact_lock(lock_path):
+                try:
+                    current = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    current = None
+                current_id = (
+                    current.get("invocation_id")
+                    if isinstance(current, dict)
+                    else None
+                )
+                # Retain our already-published blocker. If the claim itself
+                # failed, replace/remove any nonce-less stale PASS. Never touch
+                # a different invocation's demonstrably current placeholder.
+                if current_id != invocation_id and current_id is None:
+                    failure_payload = dict(blocking_payload)
+                    failure_payload["layer1"] = {
+                        "status": "unknown",
+                        "blockers": ["Hosted artifact provenance setup failed."],
+                    }
+                    failure_payload["verdict"] = {
+                        "decision": "block",
+                        "reason": "Hosted artifact provenance setup failed.",
+                    }
                     try:
-                        owner = json.loads(owner_path.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
-                        owner = None
-                    owner_id = (
-                        owner.get("invocation_id") if isinstance(owner, dict) else None
-                    )
-                    # When no other live invocation owns the slot, removal is
-                    # the only fail-closed outcome: a pre-existing public file
-                    # could be a stale PASS. Preserve the path only when a
-                    # different invocation demonstrably owns it.
-                    if owner_id in (None, invocation_id):
-                        try:
-                            _atomic_publish_hosted_payload(
-                                path,
-                                {
-                                    "schema_version": "pdd.checkup.agentic.v1",
-                                    "owner": "",
-                                    "repo": "",
-                                    "pr_number": pr_number,
-                                    "status": "error",
-                                    "authority": (
-                                        "canonical_unknown_agentic_fallback_blocking"
-                                    ),
-                                    "layer1": {
-                                        "status": "unknown",
-                                        "blockers": [
-                                            "Hosted artifact provenance setup failed."
-                                        ],
-                                    },
-                                    "verdict": {
-                                        "decision": "block",
-                                        "reason": (
-                                            "Hosted artifact provenance setup failed."
-                                        ),
-                                    },
-                                },
-                            )
-                        except OSError:
-                            path.unlink(missing_ok=True)
-                        if owner_id == invocation_id:
-                            owner_path.unlink(missing_ok=True)
-            except (OSError, TypeError, json.JSONDecodeError):
-                pass
+                        _atomic_publish_hosted_payload(path, failure_payload)
+                    except OSError:
+                        path.unlink(missing_ok=True)
+                elif claimed_public_slot and current_id == invocation_id:
+                    # The single atomic ownership/blocking record is already
+                    # the desired fail-closed result.
+                    pass
+        except (OSError, TypeError, json.JSONDecodeError):
+            pass
         try:
             if private_path is not None:
                 private_path.unlink(missing_ok=True)
@@ -403,13 +376,12 @@ def _publish_hosted_agentic_artifact(
         ):
             raise ValueError("hosted artifact PR identity mismatch")
         with _hosted_artifact_lock(reservation.lock_path):
-            owner = json.loads(reservation.owner_path.read_text(encoding="utf-8"))
-            if not isinstance(owner, dict) or owner.get(
+            current = json.loads(reservation.public_path.read_text(encoding="utf-8"))
+            if not isinstance(current, dict) or current.get(
                 "invocation_id"
             ) != reservation.invocation_id:
                 return None
             os.replace(str(reservation.private_path), str(reservation.public_path))
-            reservation.owner_path.unlink(missing_ok=True)
         return str(reservation.public_path)
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
@@ -467,17 +439,6 @@ def _finalize_hosted_agentic_artifact(
             raise ValueError("hosted agentic artifact must be a JSON object")
         if payload.get("schema_version") != "pdd.checkup.agentic.v1":
             raise ValueError("unexpected hosted agentic artifact schema")
-
-        layer1 = payload.get("layer1")
-        if not isinstance(layer1, dict):
-            layer1 = {}
-            payload["layer1"] = layer1
-        layer1["status"] = "pass" if canonical_passed else "fail"
-        layer1["blockers"] = (
-            []
-            if canonical_passed
-            else ["Canonical final gate did not produce a shippable verdict."]
-        )
 
         verdict = payload.get("verdict")
         if not isinstance(verdict, dict):

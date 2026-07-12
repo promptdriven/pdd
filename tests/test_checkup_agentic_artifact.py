@@ -109,6 +109,11 @@ def test_normalize_findings_clean_fenced_json_does_not_parse_summary_severity():
     assert _normalize_findings(raw, "codex") == []
 
 
+def test_normalize_findings_clean_plain_text_does_not_mine_negated_severity():
+    raw = "No actionable issues found. No critical findings."
+    assert _normalize_findings(raw, "codex") == []
+
+
 def test_normalize_findings_caps_free_text():
     huge = "critical " + ("x" * (FINDING_TEXT_MAX_CHARS + 500))
     findings = _normalize_findings(huge, "codex")
@@ -201,6 +206,25 @@ def test_build_artifact_schema_version_constant_R1():
     assert art.schema_version == AGENTIC_V1_SCHEMA
     dumped = art.model_dump()
     assert "schema_version" in dumped and "schema" not in dumped
+
+
+def test_build_artifact_accepts_canonical_clean_plain_text_with_severity_word():
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            raw_outputs=[
+                (
+                    "review:codex:round1",
+                    "No actionable issues found. No critical findings.",
+                )
+            ]
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "pass"},
+    )
+    assert art.status == "passed"
+    assert art.findings == []
+    assert art.verdict.decision == "pass"
 
 
 @pytest.mark.parametrize(
@@ -744,6 +768,32 @@ def test_build_artifact_status_vocab_matches_spec():
         final_gate_report={"layer1_status": "unknown"},
     )
     assert nh.status == "needs_human"
+
+
+@pytest.mark.parametrize(
+    "reviewer_status,fresh_final_status,expected",
+    [
+        ({"codex": "timeout"}, "clean", "timeout"),
+        ({"codex": "clean"}, "timeout", "timeout"),
+        ({"codex": "error"}, "clean", "error"),
+        ({"codex": "clean"}, "error", "error"),
+    ],
+)
+def test_build_artifact_preserves_timeout_and_error_statuses(
+    reviewer_status, fresh_final_status, expected
+):
+    art = build_agentic_v1_artifact(
+        loop_state=_state(
+            reviewer_status=reviewer_status,
+            fresh_final_status=fresh_final_status,
+            stop_reason="review infrastructure failure",
+        ),
+        config=_config(),
+        context=_context(),
+        final_gate_report={"layer1_status": "unknown"},
+    )
+    assert art.status == expected
+    assert art.verdict.decision == "block"
 
 
 def test_build_artifact_open_medium_finding_is_blocking_under_default_policy():

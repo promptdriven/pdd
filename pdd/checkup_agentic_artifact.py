@@ -297,6 +297,19 @@ def _normalize_findings(
     if not str(raw).strip():
         return []
     try:
+        # The canonical parser has the authoritative plain-text clean rules.
+        # Honor that classification before the compatibility severity miner so
+        # prose such as "No critical findings" cannot become a fake blocker.
+        try:
+            from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+                _parse_review_output,
+            )
+
+            canonical = _parse_review_output(str(raw), reviewer_name, 0)
+        except (ImportError, TypeError, ValueError):
+            canonical = None
+        if canonical is not None and canonical.status == "clean":
+            return []
         try:
             # Use the review loop's canonical extractor so the mirror accepts
             # exactly the same bare, embedded, and fenced JSON shapes as the
@@ -620,7 +633,14 @@ def _map_fix_status(fixer_result: Any, push_status: Any) -> str:
     return "skipped"
 
 
-def _map_status(*, passed: bool, budget_exhausted: bool, needs_human: bool) -> str:
+def _map_status(
+    *,
+    passed: bool,
+    budget_exhausted: bool,
+    needs_human: bool,
+    timed_out: bool,
+    errored: bool,
+) -> str:
     """Map the review outcome onto the spec top-level ``status`` vocabulary.
 
     Spec values: ``passed | failed | needs_human | error | timeout |
@@ -630,6 +650,10 @@ def _map_status(*, passed: bool, budget_exhausted: bool, needs_human: bool) -> s
         return "passed"
     if budget_exhausted:
         return "budget_exhausted"
+    if timed_out:
+        return "timeout"
+    if errored:
+        return "error"
     if needs_human:
         return "needs_human"
     return "failed"
@@ -950,8 +974,14 @@ def _build_agentic_v1_artifact(
         bool(reviewer_states & {"failed", "degraded", "missing", "error"})
         and not remaining_open
     )
+    timed_out = fresh_status == "timeout" or "timeout" in reviewer_states
+    errored = fresh_status == "error" or "error" in reviewer_states
     status = _map_status(
-        passed=passed, budget_exhausted=budget_exhausted, needs_human=needs_human
+        passed=passed,
+        budget_exhausted=budget_exhausted,
+        needs_human=needs_human,
+        timed_out=timed_out,
+        errored=errored,
     )
 
     # --- authority (R6) ---------------------------------------------------

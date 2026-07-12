@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -823,7 +824,7 @@ class TestRunAgenticCheckup:
         assert secret_owner not in reservation.identity_digest
         reservation.cleanup()
 
-    def test_hosted_early_return_cleans_private_and_owner_files(
+    def test_hosted_early_return_cleans_private_files(
         self, tmp_path, monkeypatch
     ):
         public = tmp_path / "agentic.json"
@@ -843,6 +844,64 @@ class TestRunAgenticCheckup:
         assert json.loads(public.read_text(encoding="utf-8"))["status"] != "passed"
         assert not list(tmp_path.glob("*.invocation.tmp"))
         assert not list(tmp_path.glob("*.owner.json"))
+
+    def test_private_reservation_failure_leaves_current_public_blocker(
+        self, tmp_path
+    ):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        real_named_temp = tempfile.NamedTemporaryFile
+
+        def fail_private_reservation(*args, **kwargs):
+            if kwargs.get("suffix") == ".invocation.tmp":
+                raise OSError("private reservation failed")
+            return real_named_temp(*args, **kwargs)
+
+        with patch(
+            "pdd.agentic_checkup.tempfile.NamedTemporaryFile",
+            side_effect=fail_private_reservation,
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["status"] != "passed"
+        assert payload["verdict"]["decision"] == "block"
+        assert payload.get("invocation_id")
+
+    def test_temp_creation_failure_removes_stale_public_pass(self, tmp_path):
+        path = tmp_path / "agentic.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "pdd.checkup.agentic.v1",
+                    "status": "passed",
+                    "authority": "canonical_pass_agentic_mirror_clean",
+                    "verdict": {"decision": "pass"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Disk-full/permission failures can prevent even the atomic public
+        # tombstone temp from being created. Removal is then the only safe
+        # outcome; the earlier PASS must not remain consumable.
+        with patch(
+            "pdd.agentic_checkup.tempfile.NamedTemporaryFile",
+            side_effect=OSError("no temporary storage"),
+        ):
+            assert _prepare_hosted_agentic_artifact(str(path)) is None
+
+        assert not path.exists()
 
     def test_prepare_hosted_artifact_failure_replaces_stale_pass_with_blocker(
         self, tmp_path
@@ -934,9 +993,8 @@ class TestRunAgenticCheckup:
         # The older invocation finishes after the newer invocation claimed the
         # public slot. Its PASS must be discarded by the invocation-ID CAS.
         assert _publish_hosted_agentic_artifact(older, canonical_passed=True) is None
-        owner_payload = json.loads(newer.owner_path.read_text(encoding="utf-8"))
-        assert owner_payload["invocation_id"] == newer.invocation_id
         public_payload = json.loads(path.read_text(encoding="utf-8"))
+        assert public_payload["invocation_id"] == newer.invocation_id
         assert public_payload["status"] != "passed"
         assert public_payload["verdict"]["decision"] == "block"
 
@@ -962,7 +1020,10 @@ class TestRunAgenticCheckup:
         ) == str(path)
 
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert payload["layer1"]["status"] == "fail"
+        # Layer 1 really passed; only the complete two-layer canonical gate
+        # failed. Finalization must preserve that diagnostic distinction.
+        assert payload["layer1"]["status"] == "pass"
+        assert payload["layer1"]["blockers"] == []
         assert payload["status"] == "failed"
         assert payload["authority"] == "canonical_fail_agentic_not_authoritative"
         assert payload["verdict"]["decision"] == "block"
