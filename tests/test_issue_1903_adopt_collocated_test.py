@@ -1613,3 +1613,36 @@ def test_find_collocated_test_rejects_symlink_escape(tmp_path, monkeypatch):
     monkeypatch.chdir(repo)
 
     assert find_collocated_test(code) is None
+
+
+def test_pdd_created_tests_lock_is_gitignored_but_manifest_tracked():
+    """The transient ownership-manifest lock must never be stageable.
+
+    Codex review (PR #1998): `record_pdd_created_test` opens
+    `.pdd/meta/pdd_created_tests.json.lock` (O_CREAT) and does NOT unlink it
+    (advisory flock is fd-bound; unlinking would break mutual exclusion). If it
+    is stageable, durable sync's `git add -A` stages a `.lock` the allowlist then
+    rejects (not the ownership manifest, not a module-prefixed `.json`), failing
+    an otherwise-successful greenfield module. The lock must be gitignored while
+    the manifest itself stays tracked.
+    """
+    import subprocess
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+
+    def _ignored(rel: str) -> bool:
+        return (
+            subprocess.run(
+                ["git", "check-ignore", "-q", rel],
+                cwd=repo_root,
+            ).returncode
+            == 0
+        )
+
+    assert _ignored(".pdd/meta/pdd_created_tests.json.lock"), (
+        "the ownership-manifest lock file must be gitignored"
+    )
+    assert not _ignored(".pdd/meta/pdd_created_tests.json"), (
+        "the ownership manifest itself must remain tracked"
+    )
