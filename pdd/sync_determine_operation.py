@@ -2100,20 +2100,21 @@ def _architecture_module_choices(
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
-            # Validate the RAW filepath (not a stripped copy): a trailing-space or
-            # otherwise noncanonical value that resolution rejects must not be
-            # canonicalized here and then counted as a valid output.
-            if _contained_architecture_code_path(architecture_path.parent, filepath_value) is None:
-                continue
-            # Use the SAME context-relative basename and anchor as final resolution, so a
-            # context-prefixed qualified basename (stripped during resolution) is counted
-            # consistently instead of evading detection under the raw prefix.
+            # Cheap pure-string checks FIRST — use the SAME context-relative basename and
+            # anchor as final resolution, so a context-prefixed qualified basename (stripped
+            # during resolution) is counted consistently instead of evading detection under
+            # the raw prefix — then pay the filesystem containment resolve only for the rows
+            # that already match, not every registry row.
             if not _module_filepath_matches_basename(
                 filepath_value, basename,
                 context_name=context_name, pddrc_anchor=architecture_path.parent,
             ):
                 continue
             if lang_ext_q and PurePosixPath(filepath_value).suffix.lstrip(".").lower() != lang_ext_q:
+                continue
+            # Validate the RAW filepath (not a stripped copy): a trailing-space or
+            # otherwise noncanonical value that resolution rejects must not be counted.
+            if _contained_architecture_code_path(architecture_path.parent, filepath_value) is None:
                 continue
             qualified.add(PurePosixPath(filepath_value).as_posix())
         return sorted(qualified)
@@ -2589,15 +2590,27 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # basename prefix instead of duplicating it in example/test templates).
         prompts_root_anchor = prompts_root if prompts_root.is_absolute() else prompts_root.resolve()
 
+        # When an absolute custom prompt root lies OUTSIDE any project (searching up from it
+        # finds neither architecture.json nor .pddrc), config/architecture discovery would
+        # start from that external root and silently miss the caller's project. Anchor
+        # config lookups at the project (CWD) instead in that case; a nested subproject
+        # prompt root (which DOES find its own config up-tree) still anchors at itself.
+        config_anchor = prompts_root_anchor
+        if (
+            _find_pddrc_file(prompts_root_anchor) is None
+            and _find_architecture_json(prompts_root_anchor) is None
+        ):
+            config_anchor = Path.cwd()
+
         resolved_context_name = _resolve_context_name_for_basename(
-            basename, context_override, pddrc_anchor=prompts_root_anchor
+            basename, context_override, pddrc_anchor=config_anchor
         )
         construct_paths_basename = _relative_basename_for_context(
-            basename, resolved_context_name, prompts_root_anchor
+            basename, resolved_context_name, config_anchor
         )
 
         # Issue #225: Check architecture.json for filepath FIRST
-        arch_path = _find_architecture_json(prompts_root_anchor)
+        arch_path = _find_architecture_json(config_anchor)
         # Parse the architecture ONCE and thread this immutable snapshot through
         # ambiguity detection, prompt discovery, and code-path selection. Reading it
         # separately per phase lets an atomic rewrite of architecture.json between
@@ -2686,7 +2699,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # prompts_dir passed by sync_main, or a context prefix) are stripped so they
             # are not duplicated.
             relative_basename = _relative_basename_for_context(
-                basename, resolved_context_name, prompts_root_anchor
+                basename, resolved_context_name, config_anchor
             )
             rel_dir_parts = Path(relative_basename).parts[:-1]
             root_parts = prompts_root.parts
@@ -2700,7 +2713,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 prompt_path = str(prompts_root.joinpath(*effective_dir_parts, prompt_filename))
             else:
                 prompt_path = str(prompts_root / prompt_filename)
-            pddrc_path = _find_pddrc_file(prompts_root_anchor)
+            pddrc_path = _find_pddrc_file(config_anchor)
             if pddrc_path:
                 try:
                     config = _load_pddrc_config(pddrc_path)

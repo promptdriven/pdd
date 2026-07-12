@@ -2364,6 +2364,25 @@ def test_get_pdd_file_paths_path_qualified_two_suffix_aligned_outputs_raise_ambi
         get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
 
 
+def test_get_pdd_file_paths_external_absolute_prompt_root_finds_project_architecture(tmp_path, monkeypatch):
+    """An absolute custom prompt root OUTSIDE any project must not make architecture/config
+    discovery start from that external root and silently miss the caller's project's
+    authoritative mapping — config discovery falls back to the project (CWD)."""
+    project = tmp_path / "project"
+    (project / ".pdd" / "meta").mkdir(parents=True)
+    (project / ".pdd" / "locks").mkdir(parents=True)
+    (project / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "widget_Python.prompt", "filepath": "src/widget.py"}]}),
+        encoding="utf-8",
+    )
+    external = tmp_path / "external_prompts"  # OUTSIDE the project; no config up-tree.
+    external.mkdir()
+    monkeypatch.chdir(project)
+
+    paths = get_pdd_file_paths("widget", "python", prompts_dir=str(external.resolve()))
+    assert paths["code"].as_posix().endswith("src/widget.py")
+
+
 @pytest.mark.parametrize("bad_content", ["{ not valid json ", "42", "\"a string\"", "{\"modules\": \"notalist\"}", "{\"modules\": [{\"filename\": \"x\"}, 42]}"])
 def test_get_pdd_file_paths_malformed_architecture_json_fails_closed(tmp_path, monkeypatch, bad_content):
     """A present-but-malformed architecture.json — unparseable JSON, a top-level scalar,
