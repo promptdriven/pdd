@@ -111,6 +111,12 @@ jobs:
           assert not (root / "outside").exists()
           PY
 
+      - name: Verify protected pytest smoke
+        run: >
+          pytest -q
+          tests/test_sync_core_runner.py::test_passing_collected_test_is_pass
+          --timeout=60
+
       - name: Run focused protected-runner tests
         run: >
           pytest -q

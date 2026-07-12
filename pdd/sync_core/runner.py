@@ -988,7 +988,10 @@ def _collect_node_ids(
             detail = "zero protected node IDs collected"
         elif result.returncode != 0:
             outcome = EvidenceOutcome.COLLECTION_ERROR
+            diagnostic = (result.stderr or result.stdout).strip()[-1000:]
             detail = "protected sandbox rejected pytest collection"
+            if diagnostic:
+                detail += f": {diagnostic}"
         else:
             outcome = EvidenceOutcome.PASS
             detail = f"{len(node_ids)} protected node IDs collected"
