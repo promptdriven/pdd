@@ -2044,6 +2044,7 @@ class TestSyncOneModule:
             "output: frontend/src/app/__test__/foo.test.tsx\n"
             "pre_line_count: 100\n"
             "post_line_count: 5\n"
+            "adopted: true\n"
         )
         # Both attempts exhaust on the same churn signature (coverage-losing).
         mock_popen.side_effect = [
@@ -2085,6 +2086,40 @@ class TestSyncOneModule:
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_not_adopted_provenance_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """Issue #1903 §B.4 provenance: even a co-located path in an issue-driven
+        run keeps the strict hard-fail when the child stamped `adopted: false`
+        (a user-pinned path, or a greenfield test PDD created — NOT adopted from
+        a human's existing co-located test)."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: frontend/src/app/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: false\n"  # NOT adopted from a human test
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner.project_root = tmp_path
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "adopted:false must keep the hard-fail"
+        assert "test churn threshold exceeded" in error.lower(), error
+        assert runner.module_states["foo"].needs_review is None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
     def test_test_churn_global_sync_no_issue_url_still_hard_fails(
         self, mock_find, mock_popen, mock_cost, mock_unlink
     ):
@@ -2100,6 +2135,7 @@ class TestSyncOneModule:
             "output: frontend/src/app/__test__/foo.test.tsx\n"  # co-located, but...
             "pre_line_count: 100\n"
             "post_line_count: 5\n"
+            "adopted: true\n"
         )
         mock_popen.side_effect = [
             _make_mock_popen(stderr_text=churn_error, exit_code=1),
@@ -2139,6 +2175,7 @@ class TestSyncOneModule:
             "output: tests/test_foo.py\n"  # PDD-owned shadow, not co-located
             "pre_line_count: 100\n"
             "post_line_count: 5\n"
+            "adopted: true\n"
         )
         mock_popen.side_effect = [
             _make_mock_popen(stderr_text=churn_error, exit_code=1),
@@ -2177,6 +2214,7 @@ class TestSyncOneModule:
             "ratio: 0.82\nthreshold: 0.40\n"
             f"output: {abs_test}\n"
             "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
         )
         mock_popen.side_effect = [
             _make_mock_popen(stderr_text=churn_error, exit_code=1),
@@ -2208,6 +2246,7 @@ class TestSyncOneModule:
             "ratio: 0.82\nthreshold: 0.40\n"
             "output: /etc/evil/foo.test.tsx\n"
             "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
         )
         mock_popen.side_effect = [
             _make_mock_popen(stderr_text=churn_error, exit_code=1),
@@ -2222,6 +2261,29 @@ class TestSyncOneModule:
         success, cost, error = runner._sync_one_module("foo")
         assert success is False, "out-of-root absolute path must keep the hard-fail"
         assert runner.module_states["foo"].needs_review is None
+
+    def test_churn_field_extraction_scoped_to_block(self):
+        """The output:/adopted: fields must be read from the churn block, not an
+        unrelated earlier diagnostic line; conflicting values fail closed."""
+        from pdd.agentic_sync_runner import (
+            _extract_test_churn_output_path,
+            _extract_test_churn_adopted,
+        )
+        stdout = "output: src/generated.test.ts\nadopted: true\n"  # unrelated earlier
+        stderr = (
+            "=== test churn threshold exceeded ===\n"
+            "output: frontend/src/__test__/foo.test.tsx\n"
+            "adopted: false\n"
+        )
+        assert _extract_test_churn_output_path(stdout, stderr) == \
+            "frontend/src/__test__/foo.test.tsx"
+        assert _extract_test_churn_adopted(stdout, stderr) is False
+        # Conflicting output: within the block -> fail closed to None.
+        conflict = (
+            "=== test churn threshold exceeded ===\n"
+            "output: a/x.test.ts\noutput: b/y.test.ts\n"
+        )
+        assert _extract_test_churn_output_path("", conflict) is None
 
     def test_adopted_classifier_rejects_unsafe_and_shadow_paths(self):
         """Issue #1903 §B.4: the never-block classifier must reject absolute
@@ -2262,6 +2324,7 @@ class TestSyncOneModule:
             "ratio: 0.82\nthreshold: 0.40\n"
             "output: tests/foo.test.ts\n"  # `.test.` but under the tests/ shadow
             "pre_line_count: 100\npost_line_count: 5\n"
+            "adopted: true\n"
         )
         mock_popen.side_effect = [
             _make_mock_popen(stderr_text=churn_error, exit_code=1),

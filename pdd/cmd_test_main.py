@@ -15,7 +15,11 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
-from .content_selector import configured_test_output_pinned, resolve_test_output_path
+from .content_selector import (
+    configured_test_output_pinned,
+    resolve_test_output_path,
+    was_test_adopted,
+)
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
@@ -150,11 +154,21 @@ def cmd_test_main(
         )
     )
     derived_output = output_file_paths.get("output")
+    # Issue #1903 §B.4 provenance: capture whether this test is an ADOPTED human
+    # co-located test (unpinned) at RESOLUTION time — before generation
+    # overwrites the file and makes greenfield-created vs human-adopted
+    # indistinguishable. Threaded into the churn gate so the never-block only
+    # relieves a genuine adopted-human test.
+    test_was_adopted_human = False
     if derived_output:
         adopted_output = str(
             resolve_test_output_path(
                 code_file, derived_output, user_pinned=user_pinned_test_path
             )
+        )
+        test_was_adopted_human = was_test_adopted(
+            code_file, adopted_output, derived_output,
+            user_pinned=user_pinned_test_path,
         )
         output_file_paths["output"] = adopted_output
         # Issue #1903: the write/churn steps read `output` (adopted above), but the
@@ -262,6 +276,7 @@ def cmd_test_main(
                     prompt_name=Path(prompt_file).name,
                     output_path=str(output_test_path),
                     prompt_content=prompt_content_for_churn,
+                    adopted_human=test_was_adopted_human,
                 )
             except TestChurnError as churn_err:
                 churn_err.total_cost = float(total_cost or 0.0)
@@ -328,6 +343,7 @@ def cmd_test_main(
                         "- Add new tests for the prompt change without removing "
                         "accumulated regression tests."
                     ),
+                    adopted_human=test_was_adopted_human,
                 )
             if not agentic_success and existing_test_content:
                 # Agent itself failed — restore the pre-existing test file
@@ -655,6 +671,7 @@ def cmd_test_main(
                 prompt_name=Path(prompt_file).name,
                 output_path=str(final_output_path),
                 prompt_content=input_strings.get("prompt_file", ""),
+                adopted_human=test_was_adopted_human,
             )
 
         with open(str(final_output_path), write_mode, encoding="utf-8") as f:

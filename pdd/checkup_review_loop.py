@@ -1384,7 +1384,8 @@ def run_checkup_review_loop(
                     # dead configured fixer fails), and role independence is only
                     # relaxed when there is truly no independent fixer left.
                     if (
-                        fixer
+                        not config.review_only
+                        and fixer
                         and fixer == failed_primary_reviewer
                         and fallback != fixer
                         and _actionable_findings(state, fallback_review.findings)

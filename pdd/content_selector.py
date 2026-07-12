@@ -596,39 +596,45 @@ def find_collocated_test(code_file: str | Path) -> Optional[Path]:
     exists (0 matches OR >1 match -> ``None``) so an ambiguous project is
     never silently retargeted. Never raises: any error yields ``None``.
     """
+    matches = _collocated_test_matches(code_file)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _collocated_test_matches(code_file: str | Path) -> list[Path]:
+    """All distinct EXISTING co-located tests for *code_file* (validated, in-root).
+
+    The shared match set behind :func:`find_collocated_test`. Cardinality
+    matters to callers: ZERO matches is greenfield-eligible, but an AMBIGUOUS
+    (>1) project must NOT be treated as greenfield (that would fork a third
+    test) — see :func:`resolve_test_output_path`. Never raises: any error yields
+    ``[]``.
+    """
     try:
         root_resolved = Path.cwd().resolve()
         module_path = _validated_project_path(code_file, root=root_resolved)
         if module_path is None:
-            return None
+            return []
         suffix = module_path.suffix.lower()
         if suffix in _JS_TS_EXTENSIONS:
             raw_candidates = _collocated_js_ts_candidates(module_path)
         elif suffix in _PYTHON_EXTENSIONS:
             raw_candidates = _sibling_test_paths(module_path)
         else:
-            return None
+            return []
 
         seen: set[Path] = set()
         matches: list[Path] = []
         for candidate in raw_candidates:
             resolved = _validated_project_path(candidate, root=root_resolved)
             if resolved is None or not resolved.is_file():
-                # Skip only the bad candidate (including traversal/symlink
-                # escapes) and keep evaluating the rest.
                 continue
-            if resolved == module_path:
-                continue
-            if resolved in seen:
+            if resolved == module_path or resolved in seen:
                 continue
             seen.add(resolved)
             matches.append(resolved)
-
-        if len(matches) == 1:
-            return matches[0]
-        return None
+        return matches
     except Exception:  # pylint: disable=broad-except
-        return None
+        return []
 
 
 # JS/TS test-runner config markers for greenfield discovery (issue #1903 §A).
@@ -749,6 +755,8 @@ _JS_RUNNER_DISCOVERY_KEYS = (
     "testPathIgnorePatterns",
     "roots",
     "rootDir",
+    "root",
+    "dir",
     "include",
     "exclude",
     "projects",
@@ -758,11 +766,14 @@ _JS_RUNNER_DISCOVERY_RE = re.compile(
     r"\b(?:" + "|".join(_JS_RUNNER_DISCOVERY_KEYS) + r")\b"
 )
 # Composition/delegation a static text scan cannot resolve: a config that
-# imports/requires/spreads/extends a base, applies a preset, or is a function
-# could set discovery elsewhere. Presence of any of these makes the config
-# unresolvable -> refuse (issue #1903 review round 2, delegating jest.config.js).
+# imports/requires/spreads/extends a base, applies a preset, is a function, or
+# whose export is a CALL expression (``module.exports = buildConfig()``,
+# ``export default defineConfig(...)``, ``createJestConfig(...)``) could set
+# discovery elsewhere. Any of these makes the config unresolvable -> refuse
+# (issue #1903 review rounds 2-3, delegating/wrapper jest.config.js).
 _JS_RUNNER_UNRESOLVABLE_RE = re.compile(
-    r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\.|=>|\bfunction\b"
+    r"\brequire\s*\(|\bimport\b|\bpreset\b|\bextends\b|\.\.\."
+    r"|=>|\bfunction\b|=\s*[A-Za-z_$][\w$.]*\s*\("
 )
 _JS_RUNNER_CONFIG_FILE_STEMS = ("jest.config", "vitest.config", "vite.config")
 
@@ -1135,26 +1146,27 @@ def _candidate_is_collected(
     match_globs = _as_str_list(config.get("testMatch"))
     test_regexes = _as_str_list(config.get("testRegex"))
     if not match_globs and not test_regexes:
-        # DEFAULT discovery. jest's default ``testMatch`` collects
-        # ``.[jt]s?(x)`` — js/jsx/ts/tsx — but NOT ``.mjs``/``.cjs``; reject a
-        # default candidate the runner would ignore (issue #1903 review). No
-        # other constraint declared -> no verdict for a collectible extension.
-        if candidate.suffix.lower() in (".mjs", ".cjs"):
-            return False
+        # DEFAULT discovery: no explicit collection constraint -> no verdict; the
+        # caller applies the dialect-aware default-extension gate and default
+        # convention.
         return None
 
-    # jest/micromatch apply ``testMatch`` patterns SEQUENTIALLY: a positive glob
-    # includes, a leading-``!`` glob EXCLUDES, and a LATER match overrides an
-    # earlier one (negative-then-positive re-includes, positive-then-negative
-    # excludes). Walk in order, tracking the running include state. An
-    # unevaluable pattern whose position could change the outcome -> conservative.
+    # EXPLICIT patterns are present (default discovery already returned above).
+    # From here NEVER return ``None`` (which would mark the candidate a
+    # default-convention fallback): an explicit-rule miss or an unevaluable rule
+    # must FAIL CLOSED to ``False`` so the caller refuses rather than emit an
+    # uncollected path (issue #1903 review round 3).
+    #
+    # jest/micromatch apply ``testMatch`` SEQUENTIALLY: a positive glob includes,
+    # a leading-``!`` glob EXCLUDES, and a LATER match overrides an earlier one
+    # (negative-then-positive re-includes, positive-then-negative excludes).
     included: Optional[bool] = None
     for glob in match_globs:
         g = _sub_root_dir(glob, root_dir)
         negated = g.startswith("!")
         matched = _glob_matches(g[1:] if negated else g, posix)
         if matched is None:
-            return None  # cannot evaluate this pattern in order -> conservative
+            return False  # cannot evaluate a rule whose position matters -> closed
         if matched:
             included = not negated
     for rgx in test_regexes:
@@ -1162,8 +1174,50 @@ def _candidate_is_collected(
             if re.search(_sub_root_dir(rgx, root_dir), posix):
                 included = True
         except re.error:
-            return None
-    return included  # True (collected) / False (excluded) / None (no match)
+            return False  # unevaluable regex -> fail closed
+    return bool(included)  # True = collected; explicit miss / excluded -> False
+
+
+def _project_uses_vitest(module_path: Path, root_resolved: Path) -> bool:
+    """True when the detected runner is vitest (vs jest).
+
+    Walks module dir -> root looking for a ``vitest.config.*``/``vite.config.*``
+    file or a ``package.json`` that declares a ``vitest`` dependency / inline
+    ``vitest`` config block. Used only to widen the DEFAULT-discovery extension
+    set (vitest's default ``include`` collects ``.mjs``/``.cjs``; jest's does
+    not). Total — any error yields ``False`` (treat as jest, the stricter set).
+    """
+    try:
+        current = module_path.parent.resolve()
+    except (OSError, RuntimeError):
+        return False
+    root_s = str(root_resolved)
+    while True:
+        for stem in ("vitest.config", "vite.config"):
+            for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
+                if (current / f"{stem}{ext}").is_file():
+                    return True
+        pkg = current / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, Mapping):
+                if isinstance(data.get("vitest"), Mapping):
+                    return True
+                for dep_key in ("dependencies", "devDependencies",
+                                "peerDependencies", "optionalDependencies"):
+                    deps = data.get(dep_key)
+                    if isinstance(deps, Mapping) and "vitest" in deps:
+                        return True
+        if str(current) == root_s or not _contained_in_root(current, root_resolved):
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
 
 
 def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
@@ -1224,17 +1278,17 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             return None
         # DEFAULT-convention safety: when the config declares no explicit
         # ``testMatch``/``testRegex`` (so placement relies on the runner's
-        # default discovery), only a module whose extension the default collects
-        # (js/jsx/ts/tsx — NOT mjs/cjs, which jest's default ignores) is eligible.
+        # default discovery), only a module whose extension the DEFAULT collects
+        # is eligible. jest's default collects js/jsx/ts/tsx; vitest's default
+        # ``include`` ALSO collects mjs/cjs — so widen the set for a vitest
+        # project (issue #1903 review round 3).
         has_explicit_match = isinstance(config, Mapping) and (
             config.get("testMatch") is not None or config.get("testRegex") is not None
         )
-        if not has_explicit_match and module_path.suffix.lower() not in (
-            ".js",
-            ".jsx",
-            ".ts",
-            ".tsx",
-        ):
+        default_exts = (".js", ".jsx", ".ts", ".tsx")
+        if _project_uses_vitest(module_path, root_resolved):
+            default_exts = default_exts + (".mjs", ".cjs")
+        if not has_explicit_match and module_path.suffix.lower() not in default_exts:
             return None
         candidates = _greenfield_candidate_paths(module_path, config, config_dir)
 
@@ -1292,8 +1346,15 @@ def resolve_test_output_path(
     if user_pinned:
         return derived
     try:
-        sibling = find_collocated_test(code_file)
-        if sibling is None:
+        matches = _collocated_test_matches(code_file)
+        if len(matches) != 1:
+            # ZERO existing co-located tests -> greenfield-eligible. AMBIGUOUS
+            # (>1) is NOT greenfield: writing a first test there would fork a
+            # THIRD file next to the existing ones. Only true greenfield (zero)
+            # consults runner discovery; ambiguous falls back to the derived path
+            # (issue #1903 review round 3 — adoption never fires when >1 exists).
+            if matches:  # >1 existing co-located tests -> do not fork
+                return derived
             # Greenfield (issue #1903 §A): no existing co-located test. If the
             # project configures a JS/TS runner, write the FIRST test where the
             # runner actually collects it rather than the runner-blind derived
@@ -1306,6 +1367,8 @@ def resolve_test_output_path(
             if derived_resolved is not None and greenfield == derived_resolved:
                 return derived
             return greenfield
+        # Exactly one existing co-located test -> adopt it.
+        sibling = matches[0]
         root_resolved = Path.cwd().resolve()
         sibling_resolved = _validated_project_path(sibling, root=root_resolved)
         if sibling_resolved is None:
@@ -1322,6 +1385,39 @@ def resolve_test_output_path(
         return sibling_resolved
     except Exception:  # pylint: disable=broad-except
         return derived
+
+
+def was_test_adopted(
+    code_file: str | Path,
+    resolved_test_path: str | Path,
+    derived_test_path: str | Path,
+    *,
+    user_pinned: bool,
+) -> bool:
+    """True when *resolved_test_path* is an EXISTING co-located test PDD ADOPTED.
+
+    This is the structured provenance the issue #1903 §B.4 never-block requires:
+    it must fire ONLY for a co-located test PDD adopted from a HUMAN's existing
+    file — NOT a user-pinned path and NOT a greenfield test PDD is creating for
+    the first time. It is True only when ALL hold: the location was NOT
+    ``user_pinned``; a single existing co-located sibling was found at resolution
+    time (``find_collocated_test`` is not ``None`` — greenfield finds none yet);
+    and the resolved path actually differs from the derived default (adoption
+    genuinely happened, not a fall-through to the runner-blind shadow).
+
+    MUST be evaluated at PATH-RESOLUTION time (before generation overwrites the
+    file), because after generation the greenfield-created and human-adopted
+    cases both exist on disk and become indistinguishable by presence. Total —
+    any error yields ``False`` (conservative: no never-block).
+    """
+    try:
+        if user_pinned:
+            return False
+        if find_collocated_test(code_file) is None:
+            return False
+        return Path(resolved_test_path) != Path(derived_test_path)
+    except Exception:  # pylint: disable=broad-except
+        return False
 
 
 def _pins_test_output_location(config: Mapping[str, Any]) -> bool:
