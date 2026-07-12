@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shlex
+import stat
 
 from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
@@ -48,14 +49,35 @@ _MAX_RAW_GLOBS = 4096
 # other budgets apply.
 _MAX_MANIFEST_BYTES = 5 * 1024 * 1024
 
+# Upper bound on the length (chars) of a single raw glob string. Real globs are
+# a few dozen characters; a much longer one is hostile. This bounds not just the
+# result *count* of brace expansion but its total *bytes*: brace expansion copies
+# a glob's prefix/suffix per option, so without a length cap a long-prefix glob
+# with a few brace groups (still under the count budget) could multiply into
+# gigabytes of strings. Capping the raw glob length keeps expansion bounded in
+# both count and size.
+_MAX_GLOB_LENGTH = 4096
+
 
 def _read_manifest_text(path: Path) -> Optional[str]:
-    """Read ``path`` as UTF-8, or return ``None`` if it is missing, too large,
-    unreadable, or not valid UTF-8 (so callers fail closed)."""
+    """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
+    missing, not a regular file, too large, unreadable, or not valid UTF-8.
+
+    The file must resolve to a *regular* file: a manifest that is a symlink to a
+    character device or FIFO (e.g. ``/dev/zero``) reports ``st_size == 0`` yet
+    would stream forever, so a byte-capped read from a regular-file-only handle is
+    required — ``st_size`` alone is not trusted."""
     try:
-        if path.stat().st_size > _MAX_MANIFEST_BYTES:
+        st = path.stat()  # follows symlinks; the *target* must be a regular file
+        if not stat.S_ISREG(st.st_mode):
             return None
-        return path.read_text(encoding="utf-8")
+        if st.st_size > _MAX_MANIFEST_BYTES:
+            return None
+        with open(path, "rb") as handle:
+            data = handle.read(_MAX_MANIFEST_BYTES + 1)
+        if len(data) > _MAX_MANIFEST_BYTES:
+            return None  # grew past the cap between stat and read
+        return data.decode("utf-8")
     except (OSError, UnicodeError):
         return None
 
@@ -326,6 +348,10 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
             raw = str(raw).strip()
             if not raw:
                 continue
+            if len(raw) > _MAX_GLOB_LENGTH:
+                # An over-long glob would blow up expansion by bytes even under
+                # the count budget → membership unproven (fail closed).
+                raise _PatternBudgetError
             if raw.startswith("!"):
                 negatives.extend(_expand_braces(raw[1:], budget))
             else:
