@@ -2364,7 +2364,7 @@ def test_get_pdd_file_paths_path_qualified_two_suffix_aligned_outputs_raise_ambi
         get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
 
 
-@pytest.mark.parametrize("bad_content", ["{ not valid json ", "42", "\"a string\"", "{\"modules\": \"notalist\"}"])
+@pytest.mark.parametrize("bad_content", ["{ not valid json ", "42", "\"a string\"", "{\"modules\": \"notalist\"}", "{\"modules\": [{\"filename\": \"x\"}, 42]}"])
 def test_get_pdd_file_paths_malformed_architecture_json_fails_closed(tmp_path, monkeypatch, bad_content):
     """A present-but-malformed architecture.json — unparseable JSON, a top-level scalar,
     or a non-list ``modules`` — fails closed with a path-resolution error rather than

@@ -1406,24 +1406,23 @@ def _find_prompt_file(
     lang_lower = language.lower()
     matches = []
     unsafe_matches = []
+    # Filter by the cheap filename leaf FIRST, then pay the containment resolve only for
+    # the handful of leaf-matching candidates — not once per prompt in the whole tree.
+    expected_leaves = {
+        f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
+        for candidate_basename in basename_candidates
+    }
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
             continue
-        # Skip a candidate that escapes prompts_root through a symlink.
-        if not _prompt_candidate_within_root(candidate, resolved_prompts_root):
-            expected_leaves = {
-                f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
-                for candidate_basename in basename_candidates
-            }
-            if candidate.name.lower() in expected_leaves:
-                unsafe_matches.append(candidate)
+        if candidate.name.lower() not in expected_leaves:
             continue
-        candidate_lower = candidate.name.lower()
-        for candidate_basename in basename_candidates:
-            target_lower = f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
-            if candidate_lower == target_lower:
-                matches.append(candidate)
-                break
+        # A leaf-matching candidate that escapes prompts_root through a symlink is
+        # recorded as unsafe; an in-root match is used.
+        if not _prompt_candidate_within_root(candidate, resolved_prompts_root):
+            unsafe_matches.append(candidate)
+            continue
+        matches.append(candidate)
     if matches and context_prefix:
         matches = [
             m for m in matches
@@ -2507,6 +2506,17 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         arch_path,
                         f"unsupported architecture schema (top-level "
                         f"{type(_arch_data).__name__})",
+                    )
+                # Every module entry must be an object. extract_modules silently discards
+                # non-object entries, which would let a corrupted registry fall through to
+                # convention paths instead of failing closed.
+                _module_list = (
+                    _arch_data if isinstance(_arch_data, list)
+                    else _arch_data.get("modules", [])
+                )
+                if any(not isinstance(_entry, dict) for _entry in _module_list):
+                    raise MalformedArchitectureError(
+                        arch_path, "modules list contains a non-object entry"
                     )
                 arch_modules = extract_modules(_arch_data)
         prompt_ownership_roots: Tuple[Path, ...] = (prompts_root_anchor,)
