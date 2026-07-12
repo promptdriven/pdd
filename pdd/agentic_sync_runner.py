@@ -3129,6 +3129,11 @@ class AsyncSyncRunner:
                 f"threshold: {threshold}",
                 f"pre lines: {_extract_field('Pre lines')}",
                 f"post lines: {_extract_field('Post lines')}",
+                # Issue #1903 §B.4 provenance — preserve the child's adoption
+                # stamp in the FINAL recorded block too (round-5 lockstep), so a
+                # hard-failure recorded when the never-block does NOT apply still
+                # carries whether the churned test was an adopted human test.
+                f"adopted: {str(_extract_test_churn_adopted(stdout, stderr)).lower()}",
                 "",
                 "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
                 "directive to the prompt body.",

@@ -682,11 +682,18 @@ def _package_json_declares_js_runner(package_json: Path) -> bool:
                     or name.endswith("/vitest")
                 ):
                     return True
-    # A ``test`` (or ``test:*``) script that invokes a runner.
+    # A ``test`` / ``test:*`` script that INVOKES a runner as a command token —
+    # only these script keys, and only a real ``jest``/``vitest`` command token
+    # (not any substring, so ``"build": "echo no-jest"`` does not false-positive;
+    # issue #1903 review round 5).
     scripts = data.get("scripts")
     if isinstance(scripts, Mapping):
-        for cmd in scripts.values():
-            if isinstance(cmd, str) and ("jest" in cmd or "vitest" in cmd):
+        for key, cmd in scripts.items():
+            if not (isinstance(key, str) and (key == "test" or key.startswith("test:"))):
+                continue
+            if not isinstance(cmd, str):
+                continue
+            if re.search(r"(?:^|[\s;&|/])(?:jest|vitest)(?:$|[\s;&|@'\"])", cmd):
                 return True
     return False
 
@@ -873,8 +880,13 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
     refuse to guess). ``<rootDir>`` must already be substituted by the caller.
     """
     out = ["^"]
-    # Each open group pushes its trailing regex quantifier ("", "?", "*", "+").
+    # Parallel stacks per open group: the trailing regex quantifier ("", "?",
+    # "*", "+") and the group KIND. Kind matters because alternation differs by
+    # construct: BRACES ``{a,b}`` alternate on COMMA (pipe is literal), while
+    # EXTGLOBS ``@(a|b)`` / plain parens alternate on PIPE (comma is literal) —
+    # issue #1903 review round 5.
     group_quant: list[str] = []
+    group_kind: list[str] = []  # "brace" | "extglob" | "paren"
     i, n = 0, len(glob)
     while i < n:
         c = glob[i]
@@ -882,6 +894,7 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
             return None  # negation — refuse to guess
         if c in "?*+@" and glob[i + 1 : i + 2] == "(":
             group_quant.append({"?": "?", "*": "*", "+": "+", "@": ""}[c])
+            group_kind.append("extglob")
             out.append("(?:")
             i += 2
             continue
@@ -902,30 +915,40 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
             continue
         if c == "(":
             group_quant.append("")
+            group_kind.append("paren")
             out.append("(?:")
             i += 1
             continue
         if c == ")":
             out.append(")")
             out.append(group_quant.pop() if group_quant else "")
+            if group_kind:
+                group_kind.pop()
             i += 1
             continue
         if c == "|":
-            out.append("|" if group_quant else r"\|")
+            # Alternation only inside an extglob/paren group; elsewhere literal.
+            inside = group_kind and group_kind[-1] in ("extglob", "paren")
+            out.append("|" if inside else r"\|")
             i += 1
             continue
         if c == "{":
             group_quant.append("")
+            group_kind.append("brace")
             out.append("(?:")
             i += 1
             continue
         if c == "}":
             out.append(")")
             out.append(group_quant.pop() if group_quant else "")
+            if group_kind:
+                group_kind.pop()
             i += 1
             continue
         if c == ",":
-            out.append("|" if group_quant else ",")
+            # Alternation only inside a brace group; elsewhere literal.
+            inside_brace = group_kind and group_kind[-1] == "brace"
+            out.append("|" if inside_brace else ",")
             i += 1
             continue
         if c == "[":
@@ -966,6 +989,10 @@ except ImportError:  # pragma: no cover - stdlib fallback (no timeout, caps only
 _REGEX_MATCH_TIMEOUT_S = 0.1
 _REGEX_MAX_PATTERN_LEN = 4096
 _REGEX_MAX_TEXT_LEN = 2048
+# Aggregate-work caps for greenfield discovery (issue #1903 review round 5): a
+# hostile config with very many patterns/roots/candidates must not stall sync.
+_MAX_RUNNER_PATTERNS = 64
+_MAX_GREENFIELD_CANDIDATES = 48
 
 
 def _safe_regex_search(pattern: Optional[str], text: str) -> Optional[bool]:
@@ -1024,7 +1051,13 @@ def _resolve_config_roots(
     roots: list[Path] = []
     for r in _as_str_list(config.get("roots")):
         try:
-            roots.append((config_dir / _sub_root_dir(r, root_dir)).resolve())
+            # jest resolves a non-absolute ``roots`` entry against the EFFECTIVE
+            # rootDir (path.resolve(rootDir, entry)), NOT the config directory
+            # (issue #1903 review round 5). ``<rootDir>`` substitution yields an
+            # absolute path that is used as-is.
+            sub = _sub_root_dir(r, root_dir)
+            p = Path(sub)
+            roots.append((p if p.is_absolute() else (root_dir / sub)).resolve())
         except (OSError, RuntimeError, ValueError):
             continue
     return (roots or [root_dir]), root_dir
@@ -1181,11 +1214,21 @@ def _candidate_is_collected(
     # testMatch / testRegex collection patterns.
     match_globs = _as_str_list(config.get("testMatch"))
     test_regexes = _as_str_list(config.get("testRegex"))
-    if not match_globs and not test_regexes:
+    has_explicit = (
+        config.get("testMatch") is not None or config.get("testRegex") is not None
+    )
+    if not has_explicit:
         # DEFAULT discovery: no explicit collection constraint -> no verdict; the
         # caller applies the dialect-aware default-extension gate and default
         # convention.
         return None
+    # jest rejects configuring BOTH testMatch and testRegex -> fail closed.
+    if match_globs and test_regexes:
+        return False
+    # An EXPLICIT but empty collection set (``testMatch: []`` / ``testRegex: []``)
+    # matches NOTHING in jest -> not collected here (issue #1903 review round 5).
+    if not match_globs and not test_regexes:
+        return False
 
     # EXPLICIT patterns are present (default discovery already returned above).
     # From here NEVER return ``None`` (which would mark the candidate a
@@ -1345,6 +1388,18 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             for k in ("projects", "workspace", "include", "exclude")
         ):
             return None
+        # Bound AGGREGATE discovery work (issue #1903 review round 5): candidates
+        # x repo-controlled patterns, each with a ReDoS timeout, is O(P^2); a
+        # hostile config with a huge pattern/root count could still stall an
+        # issue-driven sync for minutes. Refuse when the declared pattern/root
+        # count is implausibly large rather than spend the budget.
+        if isinstance(config, Mapping):
+            declared_patterns = sum(
+                len(_as_str_list(config.get(k)))
+                for k in ("testMatch", "testRegex", "testPathIgnorePatterns", "roots")
+            )
+            if declared_patterns > _MAX_RUNNER_PATTERNS:
+                return None
         # DEFAULT-convention safety: when the config declares no explicit
         # ``testMatch``/``testRegex`` (so placement relies on the runner's
         # default discovery), only a module whose extension the DEFAULT collects
@@ -1366,7 +1421,9 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
             default_exts = default_exts + (".mjs", ".cjs")
         if not has_explicit_match and module_path.suffix.lower() not in default_exts:
             return None
-        candidates = _greenfield_candidate_paths(module_path, config, config_dir)
+        candidates = _greenfield_candidate_paths(module_path, config, config_dir)[
+            :_MAX_GREENFIELD_CANDIDATES
+        ]
 
         fallback_default: Optional[Path] = None
         for candidate in candidates:
