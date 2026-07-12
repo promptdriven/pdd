@@ -17,6 +17,8 @@ from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .content_selector import (
     configured_test_output_pinned,
+    find_collocated_test,
+    record_pdd_created_test,
     resolve_test_output_path,
     was_test_adopted,
 )
@@ -170,6 +172,17 @@ def cmd_test_main(
             code_file, adopted_output, derived_output,
             user_pinned=user_pinned_test_path,
         )
+        # Issue #1903 §B.4 ownership: when PDD is GREENFIELD-creating this test
+        # (no pre-existing co-located sibling, resolved to a runner-collected
+        # non-derived path that does not yet exist), record PDD ownership so a
+        # LATER run never mistakes this PDD-owned file for a human-adopted one.
+        if (
+            not user_pinned_test_path
+            and adopted_output != derived_output
+            and find_collocated_test(code_file) is None
+            and not Path(adopted_output).exists()
+        ):
+            record_pdd_created_test(adopted_output)
         output_file_paths["output"] = adopted_output
         # Issue #1903: the write/churn steps read `output` (adopted above), but the
         # native/cloud generation reads its destination from the separate

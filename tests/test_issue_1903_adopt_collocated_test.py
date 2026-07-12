@@ -571,6 +571,44 @@ class TestGreenfieldRunnerDiscovery:
         code = _write(tmp_path / "src/page.tsx")
         assert find_runner_collected_test_path(code) is None
 
+    def test_second_statement_mutation_config_refuses(self, tmp_path, monkeypatch):
+        # A whitelist (single plain-literal export) refuses a config that mutates
+        # the export in a SECOND statement (blacklist-evading, round 7).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js",
+               "module.exports = {}; module.exports['testMatch'] = ['qa/**/*.test.ts']\n")
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+        # A plain literal with only a NON-discovery key is still default.
+        _write(tmp_path / "jest.config.js", "module.exports = { testEnvironment: 'jsdom' }\n")
+        got = find_runner_collected_test_path(_write(tmp_path / "src/q.tsx"))
+        assert got is not None and Path(got).name == "q.test.tsx"
+
+    def test_ambiguous_config_sources_refuse(self, tmp_path, monkeypatch):
+        # An inline package.json jest block AND a vitest.config.ts at the same
+        # level -> ambiguous active runner -> refuse (round 7).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps({"jest": {}}))
+        _write(tmp_path / "vitest.config.ts", "export default { test: {} }\n")
+        assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_greenfield_ownership_not_reclassified_as_adopted(self, tmp_path, monkeypatch):
+        # Two-run provenance: PDD greenfield-creates a co-located test, records
+        # ownership; a LATER resolution must NOT call it human-adopted.
+        from pdd.content_selector import (
+            was_test_adopted, record_pdd_created_test, is_pdd_created_test,
+        )
+        monkeypatch.chdir(tmp_path)
+        code = _write(tmp_path / "src/foo.tsx")
+        gf = tmp_path / "src/__test__/foo.test.tsx"
+        derived = tmp_path / "tests/test_foo.tsx"
+        # Simulate run 1: PDD creates the greenfield test and records ownership.
+        _write(gf, "test('x', () => {})\n")
+        record_pdd_created_test(str(gf))
+        assert is_pdd_created_test(str(gf)) is True
+        # Run 2: the file now exists as a single co-located sibling, but ownership
+        # provenance keeps it OUT of the human-adopted never-block.
+        assert was_test_adopted(code, str(gf), str(derived), user_pinned=False) is False
+
     def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
         # A config that DYNAMICALLY builds discovery keys (join/computed) cannot
         # be proven a plain literal -> refuse.

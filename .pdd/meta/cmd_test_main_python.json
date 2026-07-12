@@ -2,15 +2,15 @@
   "pdd_version": "0.0.301.dev0",
   "timestamp": "2026-07-11T03:12:36.366278+00:00",
   "command": "test",
-  "prompt_hash": "dfbfda19b9b26fd4a75a76de0a51c3bf1589aae538056fa636760532662588a9",
-  "code_hash": "8e7e2af1f6cfaf8cb5dc5f3537a29d2de97965788ef508dd8fc8a71fa7ae7f9e",
+  "prompt_hash": "6e2483dda625c705e428017535968996872c5f5848f3147d2b855b21e4d921b5",
+  "code_hash": "01c0427c2e3999e4f4a7ddd6ded99606dba20f89055646212580d918a30841b7",
   "example_hash": "0774984ee29f70407429f1eff4a1b76287715b7ddd6adf2bc149e874c9b844bb",
   "test_hash": "d940dca46c808464348228dba68d1f88a884ff9ea0d827ce9c4e8ef27e78d643",
   "test_files": {
     "test_cmd_test_main.py": "d940dca46c808464348228dba68d1f88a884ff9ea0d827ce9c4e8ef27e78d643"
   },
   "include_deps": {
-    "README.md": "972e037b5ff21dddcd3f5e5c7ee3e870d90c46d356c70881338b0fbdded50fb9",
+    "README.md": "3222002a883ccb289fa3c6b402e79621ff18bf697de9fcc401fe5363af984b40",
     "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/cloud_function_call.py": "62ac7724ce2e3eddbba2b743bd7aa5790dbed34eae01e77e0252c4cc6358c95e",
