@@ -73,6 +73,16 @@ _MAX_GLOB_LENGTH = 4096
 # handful of short globs against a shallow path — far under this bound.
 _MAX_MATCH_CELLS = 2_000_000
 
+# Upper bound on the *aggregate* characters the brace scanner may examine across
+# one membership check. Brace expansion re-scans a pattern to locate the next
+# alternation, and a deeply nested singleton (`{`×400 … `}`×400) makes each of
+# up to ``_MAX_BRACE_EXPANSION`` worklist entries re-walk that long prefix — so a
+# tiny (<1 KB) manifest glob can stay within the byte/count/segment budgets yet
+# cost tens of seconds of pure scanning. Charging every scanned character against
+# this shared budget bounds that work and fails membership closed. Real globs
+# expand to a handful of short patterns — orders of magnitude under this bound.
+_MAX_BRACE_SCAN_WORK = 8_000_000
+
 
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
     """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
@@ -332,7 +342,8 @@ def _split_top_level_commas(body: str, limit: int) -> list:
     return parts
 
 
-def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]]:
+def _find_expandable_brace(pattern: str, limit: int,
+                           work: Optional[list] = None) -> Optional[Tuple[int, int]]:
     """Return ``(start, end)`` of the first *expandable* ``{...}`` group — one whose
     body splits into two or more top-level options — or ``None`` when the pattern
     holds no real alternation.
@@ -348,7 +359,14 @@ def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]
     not short-circuit the scan: only that one brace is skipped, so a later balanced
     alternation in ``{foo/{a,b}`` still expands. ``_split_top_level_commas`` may
     raise ``_BraceBudgetError`` for a comma bomb.
+
+    Every character examined is charged against the mutable ``work`` budget (shared
+    across the whole membership check). A deeply nested singleton makes this scan —
+    and the descent below — re-walk a long prefix repeatedly; the budget raises
+    ``_BraceBudgetError`` so such a pattern fails closed instead of burning CPU.
     """
+    if work is None:
+        work = [_MAX_BRACE_SCAN_WORK]
     i, n = 0, len(pattern)
     while i < n:
         if pattern[i] != "{":
@@ -356,6 +374,9 @@ def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]
             continue
         depth, end = 0, -1
         for j in range(i, n):
+            work[0] -= 1
+            if work[0] < 0:
+                raise _BraceBudgetError
             if pattern[j] == "{":
                 depth += 1
             elif pattern[j] == "}":
@@ -369,14 +390,15 @@ def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]
         body = pattern[i + 1:end]
         if len(_split_top_level_commas(body, limit)) >= 2:
             return (i, end)
-        inner = _find_expandable_brace(body, limit)  # descend into the singleton
+        inner = _find_expandable_brace(body, limit, work)  # descend into singleton
         if inner is not None:
             return (i + 1 + inner[0], i + 1 + inner[1])
         i = end + 1  # fully literal group → skip past and keep scanning
     return None
 
 
-def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
+def _expand_braces(pattern: str, budget: Optional[list] = None,
+                   work: Optional[list] = None) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
     concrete patterns. Unbalanced or single-option braces are left literal.
 
@@ -384,7 +406,10 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
     ``budget`` — a single-element mutable list holding the number of finished
     patterns still permitted. The caller passes one budget across every glob in a
     membership check, so total expansion is bounded regardless of how a manifest
-    splits work across many globs; the transient worklist is bounded too. Any
+    splits work across many globs; the transient worklist is bounded too. A
+    separate ``work`` budget bounds the *characters scanned* while locating the
+    next alternation (see ``_find_expandable_brace``), so a deeply nested singleton
+    cannot cost tens of seconds even while producing few finished patterns. Any
     bound exceeded raises ``_BraceBudgetError`` so the caller fails membership
     closed instead of materializing an exponential list — or overflowing the
     recursion stack — from an untrusted manifest (a ``{a,b}`` brace bomb,
@@ -392,6 +417,8 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
     """
     if budget is None:
         budget = [_MAX_BRACE_EXPANSION]
+    if work is None:
+        work = [_MAX_BRACE_SCAN_WORK]
 
     def _emit(value: str) -> None:
         budget[0] -= 1
@@ -405,7 +432,7 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
         if len(worklist) > budget[0] + 1:
             raise _BraceBudgetError
         pat = worklist.pop()
-        span = _find_expandable_brace(pat, budget[0] + 1)
+        span = _find_expandable_brace(pat, budget[0] + 1, work)
         if span is None:
             _emit(pat)  # no real alternation remains → terminal (literal braces)
             continue
@@ -418,19 +445,26 @@ def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
 
 
 def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
-                               cell_budget: Optional[list] = None) -> bool:
+                               cell_budget: Optional[list] = None,
+                               work_budget: Optional[list] = None) -> bool:
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
     semantics: at least one positive pattern matches and no ``!`` exclusion does.
 
     Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
     brace alternations are expanded before matching. All expansion for one
     membership check shares a single aggregate budget, so a declaration with many
-    globs cannot multiply past the budget.
+    globs cannot multiply past the budget. ``work_budget`` (the brace-scan budget)
+    is likewise shared across the whole discovery walk when the caller supplies
+    one, so pathological globs at several ancestors cannot each spend a full
+    budget's worth of scanning.
     """
     if len(globs) > _MAX_RAW_GLOBS:
         return False  # hostile declaration size → membership unproven (fail closed)
     try:
         budget = [_MAX_BRACE_EXPANSION]  # shared across every glob below
+        # Brace-scan budget (see _expand_braces). Shared across the whole walk when
+        # supplied; otherwise fresh per call for direct/standalone callers.
+        work = work_budget if work_budget is not None else [_MAX_BRACE_SCAN_WORK]
         # Aggregate DP-cell budget for matching. When the caller supplies one it is
         # shared across the *entire* discovery walk (so re-evaluating the same glob
         # set at each package boundary cannot sum to tens of millions of cells);
@@ -445,14 +479,22 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             raw = str(raw)
             if not raw:
                 continue
+            if "\\" in raw:
+                # A backslash escapes brace metacharacters in minimatch/brace
+                # expansion (e.g. `{foo\,bar,baz}` is two options, not three). This
+                # expander is not escape-aware, so an escaped glob would over-expand
+                # and could falsely prove membership — or, in an exclusion, fail to
+                # exclude. Rather than guess, treat the whole set as unparseable so
+                # membership is unproven (fail closed), never falsely proven.
+                raise _PatternBudgetError
             if len(raw) > _MAX_GLOB_LENGTH:
                 # An over-long glob would blow up expansion by bytes even under
                 # the count budget → membership unproven (fail closed).
                 raise _PatternBudgetError
             if raw.startswith("!"):
-                negatives.extend(_expand_braces(raw[1:], budget))
+                negatives.extend(_expand_braces(raw[1:], budget, work))
             else:
-                positives.extend(_expand_braces(raw, budget))
+                positives.extend(_expand_braces(raw, budget, work))
         if not any(_relative_matches_workspace_glob(rel_parts, p, cells) for p in positives):
             return False
         return not any(_relative_matches_workspace_glob(rel_parts, n, cells) for n in negatives)
@@ -464,7 +506,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
 
 
 def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
-                        cell_budget: Optional[list] = None) -> Optional[Path]:
+                        cell_budget: Optional[list] = None,
+                        work_budget: Optional[list] = None) -> Optional[Path]:
     """Return the ancestor workspace *root* that ``package_dir`` is a proven member
     of, or ``None`` when it is not a member of any ancestor workspace.
 
@@ -491,7 +534,8 @@ def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
                 rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
             except (ValueError, OSError, RuntimeError):
                 rel_parts = ()
-            if rel_parts and _package_matches_workspace(rel_parts, globs, cell_budget):
+            if rel_parts and _package_matches_workspace(
+                    rel_parts, globs, cell_budget, work_budget):
                 return ancestor
         if (ancestor / ".git").exists():
             break
@@ -716,6 +760,10 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     # Per-discovery aggregate DP-cell budget shared across every membership check
     # in this walk, so repeated matching at each package boundary is bounded.
     match_cells: list = [_MAX_MATCH_CELLS]
+    # Per-discovery aggregate brace-scan budget, shared the same way, so a repo with
+    # a pathological nested-brace glob at several ancestors cannot spend a full
+    # scan budget at each level.
+    brace_work: list = [_MAX_BRACE_SCAN_WORK]
     # Deepest ancestor-workspace root the original leaf must still reach; walk
     # *through* intermediate independent package.json manifests until then.
     ceiling: Optional[Path] = None
@@ -736,7 +784,8 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # its own package.json can still chain outward.
         member_root: Optional[Path] = None
         if pkg_here or (ceiling is not None and search_dir == ceiling):
-            member_root = _workspace_root_for(search_dir, ws_cache, match_cells)
+            member_root = _workspace_root_for(
+                search_dir, ws_cache, match_cells, brace_work)
             if member_root is not None and (ceiling is None or _is_strict_ancestor(member_root, ceiling)):
                 ceiling = member_root
         # Stop at the declaring workspace root, even when it has no package.json of

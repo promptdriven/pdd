@@ -786,6 +786,41 @@ class TestWorkspaceMembershipHardening:
             "packages/{ac}",
         ]
 
+    def test_backslash_escaped_glob_fails_membership_closed(self):
+        """A backslash escapes brace metacharacters in minimatch (``{foo\\,bar,baz}``
+        is two options, not three). This expander is not escape-aware, so rather
+        than over-expand ``\\,`` into a spurious ``bar`` member — or, in an
+        exclusion, silently fail to exclude — any backslash-bearing glob set fails
+        membership closed."""
+        # Positive glob: the escaped comma must NOT yield a spurious ``bar`` member.
+        assert _package_matches_workspace(
+            ("packages", "bar"), [r"packages/{foo\,bar,baz}"]) is False
+        # Exclusion glob with an escape: whole set fails closed (never falsely a
+        # member because the exclusion was misparsed).
+        assert _package_matches_workspace(
+            ("packages", "x"), ["packages/*", r"!packages/{a\,b}"]) is False
+        # A backslash anywhere in the set is enough to fail closed.
+        assert _package_matches_workspace(
+            ("packages", "app"), [r"packages/\{app\}"]) is False
+
+    def test_deeply_nested_singleton_with_alternations_is_time_bounded(self):
+        """A tiny (<1 KB) glob nesting a deep singleton before several alternations
+        stays within the byte/count/segment budgets yet would cost tens of seconds
+        of pure re-scanning. The aggregate brace-scan budget makes it fail closed
+        quickly instead of stalling runner discovery."""
+        pattern = "{" * 400 + "x" + "}" * 400 + "/{a,b}" * 10
+        assert len(pattern) < 1024
+        assert _package_matches_workspace(("never",), [pattern]) is False
+
+    def test_scan_budget_does_not_reject_large_legitimate_brace(self):
+        """A genuinely large alternation (hundreds of options) still expands and
+        matches — the scan budget only trips on pathological nested re-scanning,
+        not on ordinary breadth."""
+        globs = ["packages/{" + ",".join(f"p{i}" for i in range(500)) + "}"]
+        assert _package_matches_workspace(("packages", "p0"), globs) is True
+        assert _package_matches_workspace(("packages", "p499"), globs) is True
+        assert _package_matches_workspace(("packages", "p500"), globs) is False
+
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
         repo = tmp_path / "repo"
