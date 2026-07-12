@@ -2443,6 +2443,26 @@ def test_get_pdd_file_paths_context_prefixed_qualified_ambiguity_uses_stripped_b
         )
 
 
+def test_get_pdd_file_paths_qualified_foreign_named_suffix_row_no_false_ambiguity(tmp_path, monkeypatch):
+    """A row whose FILEPATH suffix-aligns with a path-qualified basename but whose PROMPT
+    filename names a DIFFERENT module must not count toward ambiguity; the uniquely named
+    row resolves without a false AmbiguousModuleError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "other_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("app/login/page", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("app/login/page.py")
+
+
 def test_get_pdd_file_paths_path_qualified_unsafe_filename_row_does_not_block(tmp_path, monkeypatch):
     """A row with an unsafe architecture FILENAME must not count toward path-qualified
     ambiguity and falsely block a valid mapping."""

@@ -2097,6 +2097,22 @@ def _architecture_module_choices(
                 and _safe_architecture_prompt_filename(filename_value_q) is None
             ):
                 continue
+            # Mirror selection eligibility: a row whose PROMPT filename names a DIFFERENT
+            # module (its leaf is a recognized prompt filename but not this module's) is not
+            # a candidate for this basename — only a filename that names this module, or a
+            # null/non-prompt filename (filepath-stem eligible), counts. Otherwise a
+            # coincidentally suffix-aligned foreign row raises a false AmbiguousModuleError
+            # before selection uniquely resolves the named row.
+            filename_leaf_q = PurePosixPath(
+                str(filename_value_q or "").replace("\\", "/")
+            ).name.lower()
+            target_prompt_leaf = f"{basename.split('/')[-1].lower()}_{language.lower()}.prompt"
+            if (
+                filename_leaf_q != target_prompt_leaf
+                and filename_value_q
+                and extract_module_from_include(filename_leaf_q)
+            ):
+                continue
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
@@ -2794,7 +2810,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 code_stem = code_path.stem
 
                 # Get configured directories from .pddrc if available
-                pddrc_path = _find_pddrc_file(prompts_root_anchor)
+                pddrc_path = _find_pddrc_file(config_anchor)
                 example_dir = "examples/"
                 test_dir = "tests/"
                 generate_dir = ""
@@ -2978,7 +2994,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     # Template paths are project-relative; anchor them at the
                     # subproject (the .pddrc directory) so a new module resolved from a
                     # parent/sibling CWD writes under the project, not the CWD.
-                    _new_pddrc = _find_pddrc_file(prompts_root_anchor)
+                    _new_pddrc = _find_pddrc_file(config_anchor)
                     if _new_pddrc is not None:
                         result = _anchor_output_paths_at_project(result, _new_pddrc.parent)
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
@@ -3088,7 +3104,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
                 dir_prefix, name_part = _extract_name_part(construct_paths_basename)
-                _pddrc_fallback = _find_pddrc_file(prompts_root_anchor)
+                _pddrc_fallback = _find_pddrc_file(config_anchor)
                 _subproject = _pddrc_fallback.parent if _pddrc_fallback else None
 
                 def _anchor_fallback(rel: str) -> Path:
@@ -3159,7 +3175,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Anchor project-relative template outputs at the subproject (as the
             # missing-prompt branch does) so an existing prompt resolved from a
             # parent/sibling CWD still writes code/example/test under the project.
-            _existing_pddrc = _find_pddrc_file(prompts_root_anchor)
+            _existing_pddrc = _find_pddrc_file(config_anchor)
             if _existing_pddrc is not None:
                 result = _anchor_output_paths_at_project(result, _existing_pddrc.parent)
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
