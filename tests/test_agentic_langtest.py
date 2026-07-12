@@ -42,6 +42,21 @@ def test_default_verify_cmd_for_python_uppercase():
     assert "pytest" in cmd
 
 
+def test_default_verify_cmd_for_shell_quotes_path_no_injection():
+    """The substituted test path must be shell-quoted (callers use shell=True), so
+    a path with $()/;/spaces cannot inject or re-split under the shell."""
+    import shlex
+    evil = "/repo/$(touch PWN)/a; b.py"
+    for lang in ("python", "javascript", "go"):
+        cmd = default_verify_cmd_for(lang, evil)
+        assert cmd is not None
+        argv = shlex.split(cmd)
+        # The malicious path survives as one intact token — never split into a
+        # `$(touch` / `PWN)` / `;` sequence the shell would act on.
+        assert evil in argv, (lang, cmd, argv)
+        assert "$(touch" not in argv, (lang, argv)
+
+
 def test_default_verify_cmd_for_javascript_returns_csv_command():
     """JavaScript returns a node command from CSV."""
     cmd = default_verify_cmd_for("javascript", "test.js")

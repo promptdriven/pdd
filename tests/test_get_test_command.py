@@ -198,15 +198,35 @@ class TestEdgeCases:
     @patch('pdd.get_test_command.default_verify_cmd_for')
     @patch('pdd.get_test_command.get_language')
     def test_path_with_spaces(self, mock_get_lang, mock_smart_detect, mock_load_csv):
-        """Test with file path containing spaces."""
+        """A CSV path with spaces must be shell-quoted (callers use shell=True)."""
         mock_load_csv.return_value = {
             '.py': {'extension': '.py', 'run_test_command': 'pytest {file}'}
         }
         mock_get_lang.return_value = 'python'
-        
+
         result = get_test_command_for_file('/my path/test file.py')
 
-        assert result.command == 'pytest /my path/test file.py'
+        # Quoted so a POSIX shell tokenizer recovers the exact path (no re-split).
+        assert result.command == "pytest '/my path/test file.py'"
+        assert shlex.split(result.command) == ['pytest', '/my path/test file.py']
+
+    @patch('pdd.get_test_command._load_language_format')
+    @patch('pdd.get_test_command.default_verify_cmd_for')
+    @patch('pdd.get_test_command.get_language')
+    def test_csv_path_with_shell_metacharacters_is_not_injected(self, mock_get_lang, mock_smart, mock_load_csv):
+        """A CSV-fallback path containing $()/;/spaces must not inject under shell=True."""
+        mock_load_csv.return_value = {
+            '.py': {'extension': '.py', 'run_test_command': 'pytest {file}'}
+        }
+        mock_get_lang.return_value = 'python'
+        evil = '/repo/$(touch PWN)/a; rm -rf x.py'
+
+        result = get_test_command_for_file(evil)
+
+        argv = shlex.split(result.command)
+        # The whole malicious path must survive as a single argument token.
+        assert argv == ['pytest', evil], (result.command, argv)
+        assert '$(touch' not in argv, argv
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -1105,6 +1125,40 @@ class TestWorkspaceMembershipHardening:
         result = get_test_command_for_file(str(test_file), language="typescript")
         assert result is not None
         assert "npx jest" not in result.command, result.command
+
+    def test_dangling_package_json_symlink_still_stops_walk(self, tmp_path):
+        """An independent package whose package.json is a dangling symlink must
+        still be a JS project boundary — the walk must not slip past it and adopt
+        an unrelated ancestor's config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")  # unrelated ancestor
+        leaf = repo / "packages" / "indep"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").symlink_to(tmp_path / "missing.json")  # dangling
+        test_file = leaf / "src" / "a.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+        assert _detect_ts_test_runner(test_file) is None
+
+    def test_member_with_dangling_package_json_still_inherits(self, tmp_path):
+        """A proven workspace member still inherits the root config even if its own
+        package.json is a dangling symlink (membership is by path, not manifest read)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        member = repo / "packages" / "app"
+        member.mkdir(parents=True)
+        (member / "package.json").symlink_to(tmp_path / "gone.json")  # dangling
+        test_file = member / "src" / "a.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('x', () => {})")
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == repo.resolve()
 
     def test_self_referential_symlink_path_is_refused(self, tmp_path):
         """A self-referential (looping) symlink path must fail closed, not raise."""
