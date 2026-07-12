@@ -83,6 +83,12 @@ _MAX_MATCH_CELLS = 2_000_000
 # expand to a handful of short patterns — orders of magnitude under this bound.
 _MAX_BRACE_SCAN_WORK = 8_000_000
 
+# Extglob prefixes (``?(``/``*(``/``+(``/``@(``/``!(``). minimatch expands these
+# but the per-segment ``fnmatch`` matcher treats them literally, so a workspace
+# glob using one fails membership closed rather than under-/over-matching. See
+# the guard in ``_package_matches_workspace``.
+_EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
+
 
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
     """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
@@ -479,10 +485,11 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             raw = str(raw)
             if not raw:
                 continue
-            if "\\" in raw or "[" in raw:
-                # Two constructs this matcher does not implement with minimatch
-                # parity, so a glob using either is treated as unparseable and the
-                # whole set fails membership closed (never falsely proven):
+            if "\\" in raw or "[" in raw or any(m in raw for m in _EXTGLOB_MARKERS):
+                # Three construct families this matcher does not implement with
+                # minimatch parity, so a glob using any of them is treated as
+                # unparseable and the whole set fails membership closed (never
+                # falsely proven):
                 #   * Backslash escapes of brace metacharacters (e.g. `{foo\,bar}`,
                 #     where `\,` is a literal comma → two options, not three) — the
                 #     brace expander is not escape-aware and would over-expand.
@@ -491,6 +498,10 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                 #     in fnmatch but negates in minimatch; POSIX classes are
                 #     unsupported), so an exclusion could fail to exclude and a
                 #     positive could over-match, either way a false member.
+                #   * Extglobs (`?(…)`, `*(…)`, `+(…)`, `@(…)`, `!(…)`) — `fnmatch`
+                #     treats them literally, so an extglob exclusion under-matches
+                #     (e.g. `!packages/@(foo|bar)` fails to exclude `packages/foo`)
+                #     and yields a false member.
                 # Failing closed only forgoes crossing a workspace boundary (the
                 # leaf still uses its nearest package.json); it never adopts a
                 # foreign config. Real workspace globs use `*`/`**`/`{,}` — not

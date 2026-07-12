@@ -824,6 +824,23 @@ class TestWorkspaceMembershipHardening:
         # glob metacharacter and still matches an ordinary `*` glob.
         assert _package_matches_workspace(("packages", "[eventId]"), ["packages/*"]) is True
 
+    def test_extglob_glob_fails_membership_closed(self):
+        """minimatch expands extglobs (``@(a|b)``, ``!(x)``, ``+(…)``, ``?(…)``,
+        ``*(…)``) but the per-segment ``fnmatch`` matcher treats them literally, so
+        an extglob exclusion under-matches into a false member. Any glob containing
+        an extglob prefix therefore fails membership closed."""
+        # Extglob exclusion must not fail to exclude `packages/foo`.
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/*", "!packages/@(foo|bar)"]) is False
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/*", "!packages/!(bar)"]) is False
+        # Extglob positives also fail closed rather than mismatch.
+        assert _package_matches_workspace(("packages", "foofoo"), ["packages/+(foo)"]) is False
+        # A bare `?` wildcard (no paren) is still supported and NOT an extglob.
+        assert _package_matches_workspace(("packages", "ab"), ["packages/a?"]) is True
+        # An `@`-scoped-style path with no `(` is not an extglob and still matches.
+        assert _package_matches_workspace(("@scope", "pkg"), ["@scope/*"]) is True
+
     def test_deeply_nested_singleton_with_alternations_is_time_bounded(self):
         """A tiny (<1 KB) glob nesting a deep singleton before several alternations
         stays within the byte/count/segment budgets yet would cost tens of seconds
