@@ -2198,10 +2198,15 @@ def _configured_output_string_is_unsafe(raw: Any) -> bool:
     drive markers, parent traversal, and non-portable components (Windows-invalid
     characters, reserved device names, NTFS ADS colons, trailing dot/space).
     ``{placeholder}`` template segments and a trailing slash (directory form) are
-    permitted. Empty/non-string values are treated as safe (a default applies).
+    permitted. A None/empty value is ABSENT (a default applies), but any OTHER
+    present non-string value (int, list, mapping, bool) is malformed and unsafe —
+    it would otherwise slip past this string validation and later raise inside
+    ``str``-only path handling, degrading to an uncontained convention fallback.
     """
-    if not isinstance(raw, str) or not raw:
+    if raw is None or raw == "":
         return False
+    if not isinstance(raw, str):
+        return True
     if "\\" in raw or _contains_disallowed_path_text(raw):
         return True
     if PureWindowsPath(raw).drive:
@@ -3694,13 +3699,23 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if candidate.name.lower() == target_lower and candidate.is_file():
                     fallback_prompt_path = candidate
                     break
-        return {
+        _outer_fallback = {
             'prompt': fallback_prompt_path,
             'code': Path(f"{dir_prefix}{name_part}{_dot(extension)}"),
             'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
+        # Even this last-resort fallback must be anchored under the governing root
+        # and contained — otherwise a parent/sibling CWD makes these relative
+        # basename paths resolve outside the project. Route it through the same
+        # finalizer; if resolution failed so early that the finalizer/governing
+        # root were never established, return the basename-derived paths as-is
+        # (they carry no traversal — basename is validated by R7/R9/R10).
+        try:
+            return _finalize_output_paths(_outer_fallback)
+        except NameError:
+            return _outer_fallback
 
 
 def calculate_sha256(file_path: Path) -> Optional[str]:

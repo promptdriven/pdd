@@ -8856,3 +8856,44 @@ def test_get_pdd_file_paths_rejects_control_component_pddrc_output(tmp_path, mon
     )
     with pytest.raises(UnsafeOutputPathError):
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-5 review hardening: a present NON-STRING .pddrc output value is malformed
+# and must fail closed — it must not slip past string validation, raise inside
+# str-only path handling, and degrade to an uncontained parent-CWD fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", ["123", "3.14", "[]", "{}", "true"])
+def test_get_pdd_file_paths_rejects_nonstring_pddrc_output(tmp_path, monkeypatch, bad_value):
+    """R16: a truthy non-string generate_output_path from a PARENT CWD must fail closed,
+    not fall through to an out-of-project convention path."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: ' + bad_value + '\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(parent)  # parent CWD is where the unsafe fallback would land
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths(
+            "widget", "python",
+            prompts_dir=str((project / "prompts").resolve()),
+            context_override="backend",
+        )
+
+
+def test_get_pdd_file_paths_rejects_nonstring_outputs_template_path(tmp_path, monkeypatch):
+    """R16: a non-string outputs.<artifact>.path template value is malformed -> fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      outputs:\n        example:\n          path: 123\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
