@@ -17,6 +17,8 @@ from pdd.get_test_command import (
     _package_matches_workspace,
     _expand_braces,
     _BraceBudgetError,
+    _PatternBudgetError,
+    _relative_matches_workspace_glob,
 )
 
 
@@ -724,6 +726,90 @@ class TestWorkspaceMembershipHardening:
         cmd, returned_dir = _detect_ts_test_runner(link / "tests" / "foo.test.ts")
         assert "npx jest" in cmd
         assert returned_dir == repo.resolve()
+
+    def test_symlink_to_foreign_checkout_is_refused(self, tmp_path):
+        """A symlink whose target is itself a git checkout must not be adopted.
+
+        `repo/link -> outside` where BOTH `repo/.git` and `outside/.git` exist.
+        The lexical repo root must anchor at `repo` (skipping the symlinked
+        component whose `.git` probe would follow the link), so `outside`'s Jest
+        config is refused rather than adopted.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / ".git").mkdir()
+        (outside / "jest.config.js").write_text("module.exports = {};")
+        (outside / "tests").mkdir()
+        (outside / "tests" / "foo.test.ts").write_text("describe('x', () => {})")
+        (repo / "link").symlink_to(outside, target_is_directory=True)
+
+        result = _detect_ts_test_runner(repo / "link" / "tests" / "foo.test.ts")
+        assert result is None
+
+    def test_many_double_star_segments_matches_in_polynomial_time(self):
+        """A wall of `**` segments must not backtrack exponentially or recurse."""
+        rel = tuple(["a"] * 20)
+        # 8 `**` followed by a non-matching literal previously took ~0.6s.
+        assert _relative_matches_workspace_glob(rel, "/".join(["**"] * 8) + "/zzz") is False
+        assert _relative_matches_workspace_glob(rel, "/".join(["**"] * 8) + "/a") is True
+
+    def test_double_star_wall_over_segment_budget_fails_closed(self):
+        """A pattern past the segment budget raises `_PatternBudgetError`."""
+        huge = "/".join(["**"] * 1000) + "/never"
+        with pytest.raises(_PatternBudgetError):
+            _relative_matches_workspace_glob(("a",), huge)
+        assert _package_matches_workspace(("a",), [huge]) is False
+
+    def test_deeply_nested_brace_bomb_does_not_recurse(self):
+        """1000 nested `{a,b}` groups must fail closed, not raise RecursionError."""
+        bomb = "x" + "{a,b}" * 1000
+        # Iterative expansion → budget error, never RecursionError.
+        with pytest.raises(_BraceBudgetError):
+            _expand_braces(bomb)
+        assert _package_matches_workspace(("a",), [bomb]) is False
+
+    def test_non_string_workspace_entry_fails_closed(self, tmp_path):
+        """A `true`/number entry in `workspaces` must not coerce into a glob."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": [true]}')
+        leaf = repo / "True"  # what str(True) would have matched
+        leaf.mkdir()
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        assert _workspace_globs_for(repo) == []
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_non_string_lerna_and_pnpm_entries_fail_closed(self, tmp_path):
+        """Non-string entries in lerna.json / pnpm-workspace.yaml yield no globs."""
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "lerna.json").write_text('{"packages": ["packages/*", 5]}')
+        assert _workspace_globs_for(anc) == []
+
+        pytest.importorskip("yaml")
+        anc2 = tmp_path / "b"
+        anc2.mkdir()
+        (anc2 / "pnpm-workspace.yaml").write_text("packages:\n  - true\n")
+        assert _workspace_globs_for(anc2) == []
+
+    def test_pnpm_yaml_invalid_utf8_fails_closed(self, tmp_path):
+        """Invalid UTF-8 in pnpm-workspace.yaml must not raise UnicodeDecodeError."""
+        pytest.importorskip("yaml")
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_bytes(b"packages:\n  - '\xff\xfe'\n")
+        assert _workspace_globs_for(anc) == []
 
 
 class TestPlaywrightDetection:
