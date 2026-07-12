@@ -28,8 +28,20 @@ from .get_language import get_language
 # than materializing an exponential list. See ``_expand_braces``.
 _MAX_BRACE_EXPANSION = 1024
 
+# Upper bound on the number of ``/``-separated segments in a single workspace
+# glob. Real globs have a handful; a manifest with thousands of segments (e.g.
+# a wall of ``**`` components) is hostile and fails membership closed rather
+# than driving the matcher into pathological cost. See
+# ``_relative_matches_workspace_glob``.
+_MAX_GLOB_SEGMENTS = 256
 
-class _BraceBudgetError(Exception):
+
+class _PatternBudgetError(Exception):
+    """Raised when an untrusted workspace pattern exceeds a safety budget
+    (brace expansion or segment count), so membership can fail closed."""
+
+
+class _BraceBudgetError(_PatternBudgetError):
     """Raised when a brace pattern would expand past ``_MAX_BRACE_EXPANSION``."""
 
 
@@ -52,24 +64,34 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
     path segment (with fnmatch inside the segment) and ``**`` matches zero or more
     segments. A trailing ``/*`` therefore matches direct children only, while
     ``**`` spans any depth.
+
+    Matching is an iterative ``O(len(rel) * len(pattern))`` dynamic program (no
+    recursion and no list slicing), so a hostile pattern with many ``**``
+    segments cannot drive it into exponential backtracking or ``RecursionError``.
+    A pattern longer than ``_MAX_GLOB_SEGMENTS`` raises ``_PatternBudgetError`` so
+    membership fails closed.
     """
     pat_parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
-    return _match_segments(list(rel_parts), pat_parts)
-
-
-def _match_segments(rel: list, pat: list) -> bool:
-    if not pat:
-        return not rel
-    head, rest = pat[0], pat[1:]
-    if head == "**":
-        # Zero or more segments.
-        for i in range(len(rel) + 1):
-            if _match_segments(rel[i:], rest):
-                return True
-        return False
-    if not rel:
-        return False
-    return fnmatch.fnmatch(rel[0], head) and _match_segments(rel[1:], rest)
+    if len(pat_parts) > _MAX_GLOB_SEGMENTS:
+        raise _PatternBudgetError
+    rel = list(rel_parts)
+    n, m = len(rel), len(pat_parts)
+    # dp[i][j] is True when rel[i:] matches pat_parts[j:].
+    dp = [[False] * (m + 1) for _ in range(n + 1)]
+    dp[n][m] = True
+    # rel exhausted: only trailing ``**`` segments can still match (each empty).
+    for j in range(m - 1, -1, -1):
+        dp[n][j] = pat_parts[j] == "**" and dp[n][j + 1]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            head = pat_parts[j]
+            if head == "**":
+                # ``**`` matches zero segments (advance pattern) or one-or-more
+                # (consume rel[i], stay on the same ``**``).
+                dp[i][j] = dp[i][j + 1] or dp[i + 1][j]
+            else:
+                dp[i][j] = fnmatch.fnmatch(rel[i], head) and dp[i + 1][j + 1]
+    return dp[0][0]
 
 
 def _workspace_globs_for(ancestor: Path) -> list:
@@ -87,7 +109,10 @@ def _workspace_globs_for(ancestor: Path) -> list:
 
     Every source is validated to be the expected JSON/YAML shape (a mapping);
     a manifest whose top level is a non-object (e.g. ``[]``) contributes no
-    globs instead of raising.
+    globs instead of raising. Each declared package glob must be a genuine
+    ``str`` — a list containing a non-string entry (e.g. ``[true]``, which would
+    otherwise coerce to the glob ``"True"``) is treated as malformed and
+    contributes no globs (fail closed).
     """
     pnpm_path = ancestor / "pnpm-workspace.yaml"
     if pnpm_path.exists():
@@ -97,12 +122,10 @@ def _workspace_globs_for(ancestor: Path) -> list:
             return []  # cannot parse pnpm config → membership unproven (fail closed)
         try:
             data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, OSError):
-            return []  # conservative: unparseable pnpm workspace
+        except (yaml.YAMLError, OSError, UnicodeError):
+            return []  # conservative: unparseable/invalid-encoding pnpm workspace
         if isinstance(data, dict):
-            pkgs = data.get("packages")
-            if isinstance(pkgs, list):
-                return [str(p) for p in pkgs]
+            return _string_globs(data.get("packages"))
         return []
 
     globs: list = []
@@ -116,8 +139,7 @@ def _workspace_globs_for(ancestor: Path) -> list:
             ws = manifest.get("workspaces")
             if isinstance(ws, dict):
                 ws = ws.get("packages")
-            if isinstance(ws, list):
-                globs.extend(str(p) for p in ws)
+            globs.extend(_string_globs(ws))
     lerna_path = ancestor / "lerna.json"
     if lerna_path.exists():
         try:
@@ -126,11 +148,22 @@ def _workspace_globs_for(ancestor: Path) -> list:
             lerna = {}
         if isinstance(lerna, dict):
             pkgs = lerna.get("packages")
-            if isinstance(pkgs, list):
-                globs.extend(str(p) for p in pkgs)
-            elif pkgs is None:
+            if pkgs is None:
                 globs.append("packages/*")  # lerna default
+            else:
+                globs.extend(_string_globs(pkgs))
     return globs
+
+
+def _string_globs(value) -> list:
+    """Return ``value`` as a list of string globs, or ``[]`` if it is not a list
+    of strings. A single non-string entry makes the whole declaration malformed
+    (fail closed) so a JSON/YAML ``true``/number cannot be coerced into a glob."""
+    if not isinstance(value, list):
+        return []
+    if not all(isinstance(item, str) for item in value):
+        return []
+    return list(value)
 
 
 def _split_top_level_commas(body: str) -> list:
@@ -152,48 +185,53 @@ def _split_top_level_commas(body: str) -> list:
     return parts
 
 
-def _expand_braces(pattern: str, _count: Optional[list] = None) -> list:
+def _expand_braces(pattern: str) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
     concrete patterns. Unbalanced or single-option braces are left literal.
 
-    Expansion is bounded: if the pattern would produce more than
-    ``_MAX_BRACE_EXPANSION`` concrete patterns, ``_BraceBudgetError`` is raised so
-    the caller can fail membership closed instead of materializing an exponential
-    list from an untrusted manifest (a ``{a,b}`` brace bomb). The depth-first walk
-    increments the shared counter at each terminal pattern, so it stops early
-    rather than after building the full Cartesian product.
+    Expansion is *iterative* (a worklist, not recursion) and bounded on both the
+    number of finished patterns and the transient worklist size. Either bound
+    exceeded raises ``_BraceBudgetError`` so the caller fails membership closed
+    instead of materializing an exponential list — or overflowing the recursion
+    stack — from an untrusted manifest (a ``{a,b}`` brace bomb, including one with
+    thousands of nested groups).
     """
-    if _count is None:
-        _count = [0]
-
-    def _emit(value: str) -> list:
-        _count[0] += 1
-        if _count[0] > _MAX_BRACE_EXPANSION:
+    out: list = []
+    worklist = [pattern]
+    while worklist:
+        if len(worklist) > _MAX_BRACE_EXPANSION:
             raise _BraceBudgetError
-        return [value]
-
-    start = pattern.find("{")
-    if start == -1:
-        return _emit(pattern)
-    depth, end = 0, -1
-    for i in range(start, len(pattern)):
-        if pattern[i] == "{":
-            depth += 1
-        elif pattern[i] == "}":
-            depth -= 1
-            if depth == 0:
-                end = i
-                break
-    if end == -1:
-        return _emit(pattern)  # unbalanced → treat literally
-    options = _split_top_level_commas(pattern[start + 1:end])
-    if len(options) < 2:
-        return _emit(pattern)  # not a real alternation → literal
-    prefix, suffix = pattern[:start], pattern[end + 1:]
-    expanded: list = []
-    for option in options:
-        expanded.extend(_expand_braces(prefix + option + suffix, _count))
-    return expanded
+        pat = worklist.pop()
+        start = pat.find("{")
+        if start == -1:
+            out.append(pat)
+            if len(out) > _MAX_BRACE_EXPANSION:
+                raise _BraceBudgetError
+            continue
+        depth, end = 0, -1
+        for i in range(start, len(pat)):
+            if pat[i] == "{":
+                depth += 1
+            elif pat[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        if end == -1:
+            out.append(pat)  # unbalanced → treat literally
+            if len(out) > _MAX_BRACE_EXPANSION:
+                raise _BraceBudgetError
+            continue
+        options = _split_top_level_commas(pat[start + 1:end])
+        if len(options) < 2:
+            out.append(pat)  # not a real alternation → literal
+            if len(out) > _MAX_BRACE_EXPANSION:
+                raise _BraceBudgetError
+            continue
+        prefix, suffix = pat[:start], pat[end + 1:]
+        for option in options:
+            worklist.append(prefix + option + suffix)
+    return out
 
 
 def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
@@ -203,8 +241,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
     Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
     brace alternations are expanded before matching.
     """
-    positives, negatives = [], []
     try:
+        positives, negatives = [], []
         for raw in globs:
             raw = str(raw).strip()
             if not raw:
@@ -213,13 +251,14 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
                 negatives.extend(_expand_braces(raw[1:]))
             else:
                 positives.extend(_expand_braces(raw))
-    except _BraceBudgetError:
-        # Pathological brace pattern from an untrusted manifest → cannot be
-        # evaluated safely, so membership is unproven (fail closed).
+        if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
+            return False
+        return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
+    except (_PatternBudgetError, RecursionError):
+        # Pathological pattern from an untrusted manifest (brace bomb, ``**``
+        # wall, or deep nesting) → cannot be evaluated safely, so membership is
+        # unproven (fail closed).
         return False
-    if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
-        return False
-    return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
 
 
 def _workspace_root_for(package_dir: Path) -> Optional[Path]:
@@ -285,16 +324,20 @@ def _is_strict_ancestor(ancestor: Path, descendant: Path) -> bool:
 
 
 def _lexical_repo_root(test_path: Path) -> Optional[Path]:
-    """Find the nearest ``.git`` ancestor of ``test_path`` *without* following
-    symlinks (lexical path), or ``None`` if there is no ``.git`` above it.
+    """Find the nearest ``.git`` ancestor of ``test_path`` on its *lexical*
+    (un-resolved, ``abspath``) parent chain, or ``None`` if there is none.
 
-    This anchors repository containment before ``resolve()`` is applied, so a
-    symlinked test directory that points outside the repository cannot smuggle
-    the walk into an out-of-repo runner config.
+    Only a *non-symlinked* directory may anchor the root: if ``directory`` is
+    itself a symlink, its ``.git`` probe would follow the link out of the tree
+    (e.g. ``repo/link -> /outside`` where ``/outside/.git`` exists), so such a
+    directory is skipped. Combined with the resolved-path containment check in
+    :func:`_detect_ts_test_runner`, this refuses both a symlinked test directory
+    that escapes a repository and one whose target is itself a foreign checkout —
+    without rejecting a symlink that stays inside the repository.
     """
     directory = Path(os.path.abspath(str(test_path))).parent
     for _ in range(200):
-        if (directory / ".git").exists():
+        if not os.path.islink(str(directory)) and (directory / ".git").exists():
             return directory
         parent = directory.parent
         if parent == directory:
