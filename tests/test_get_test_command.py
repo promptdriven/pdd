@@ -20,6 +20,10 @@ from pdd.get_test_command import (
     _PatternBudgetError,
     _relative_matches_workspace_glob,
     _lexical_repo_root,
+    _find_expandable_brace,
+    _MAX_BRACE_SCAN_WORK,
+    _MAX_MATCH_CELLS,
+    _MAX_BRACE_EXPANSION,
 )
 
 
@@ -858,6 +862,70 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("packages", "p0"), globs) is True
         assert _package_matches_workspace(("packages", "p499"), globs) is True
         assert _package_matches_workspace(("packages", "p500"), globs) is False
+
+    def test_long_non_brace_prefix_is_charged_against_scan_budget(self):
+        """The non-brace prefix a scan skips before the first ``{`` must be charged
+        against the work budget. Otherwise a long ``*`` run before an alternation is
+        re-walked free for every one of up to 1024 worklist entries, and at every
+        ancestor boundary of a deep walk — a multi-second stall within all other
+        budgets. Charging makes the deep-boundary case fail closed instead."""
+        prefix_len = 3990
+        pattern = "**/" + "*" * prefix_len + "{a,b}" * 10
+        work = [_MAX_BRACE_SCAN_WORK]
+        _find_expandable_brace(pattern, 2000, work)
+        # The whole prefix (plus a little) is charged, not a token amount.
+        assert (_MAX_BRACE_SCAN_WORK - work[0]) >= prefix_len
+        # A deep walk sharing one work budget across boundaries fails closed rather
+        # than re-spending it: 80 checks must not each cost a full budget.
+        cells = [_MAX_MATCH_CELLS]
+        shared_work = [_MAX_BRACE_SCAN_WORK]
+        expand = [_MAX_BRACE_EXPANSION]
+        results = [
+            _package_matches_workspace(
+                ("packages", "bbbbbbbbbb"), [pattern], cells, shared_work, expand)
+            for _ in range(80)
+        ]
+        # Shared budget is exhausted → the walk fails membership closed, not stalls.
+        assert all(r is False for r in results)
+
+    def test_brace_range_glob_fails_membership_closed(self):
+        """minimatch expands numeric/alphabetic brace ranges (``{1..3}``, ``{a..c}``,
+        zero-padded ``{01..03}``, stepped ``{1..9..2}``); this expander only does
+        comma alternation, so a range brace would be emitted literally and an
+        exclusion range would fail to exclude. Any glob containing ``..`` therefore
+        fails membership closed (no legitimate workspace path holds ``..``)."""
+        assert _package_matches_workspace(
+            ("packages", "1"), ["packages/**", "!packages/{1..3}"]) is False
+        assert _package_matches_workspace(("packages", "b"), ["packages/{a..c}"]) is False
+        assert _package_matches_workspace(("packages", "02"), ["packages/{01..03}"]) is False
+
+    def test_internal_dot_segment_is_not_collapsed(self):
+        """minimatch does not collapse an *internal* ``.`` segment, so
+        ``packages/./x`` must not be treated as ``packages/x`` and falsely prove
+        membership. A *leading* ``./`` is npm-normalized and still matches."""
+        # Internal `.` → the glob needs a literal `.` segment the path lacks.
+        assert _package_matches_workspace(("packages", "app"), ["packages/./*"]) is False
+        assert _package_matches_workspace(
+            ("packages", "app"), ["packages/**", "!packages/./app"]) is True
+        # Leading `./` normalization is preserved.
+        assert _package_matches_workspace(("packages", "app"), ["./packages/*"]) is True
+        # A genuine literal `.`-named segment still matches itself.
+        assert _package_matches_workspace(("packages", "."), ["packages/*"]) is False
+
+    def test_question_mark_against_astral_character_fails_membership_closed(self):
+        """``fnmatch`` counts a non-BMP (astral) character as one code point, but
+        minimatch (a JS regex) counts it as two UTF-16 code units, so a single ``?``
+        matches an emoji here where minimatch needs ``??``. When the leaf holds an
+        astral character, any ``?`` glob fails membership closed rather than falsely
+        match; ``*`` (which spans the whole segment) and BMP ``?`` are unaffected."""
+        emoji = "\U0001F600"
+        assert _package_matches_workspace(("packages", emoji), ["packages/?"]) is False
+        assert _package_matches_workspace(("packages", emoji), ["packages/??"]) is False
+        assert _package_matches_workspace(
+            ("packages", emoji), ["packages/*", "!packages/?"]) is False
+        # `*` still matches an astral segment; a BMP `?` still works normally.
+        assert _package_matches_workspace(("packages", emoji), ["packages/*"]) is True
+        assert _package_matches_workspace(("packages", "ab"), ["packages/a?"]) is True
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""

@@ -90,6 +90,38 @@ _MAX_BRACE_SCAN_WORK = 8_000_000
 _EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
 
 
+def _glob_beyond_supported_subset(raw: str, has_astral: bool) -> bool:
+    """Return True when ``raw`` uses a minimatch construct this matcher does not
+    implement with faithful parity, so the whole membership check must fail closed.
+
+    The supported glob language is exactly literal characters, ``*`` (one segment),
+    ``**`` (any depth), ``?`` (one character), and ``{a,b}`` brace alternation.
+    Everything below is rejected because ``fnmatch``/this expander would diverge —
+    over-matching a positive or under-matching an exclusion into a false member:
+
+      * ``\\``  — backslash escapes of brace metacharacters (expander is not
+        escape-aware; ``{foo\\,bar}`` is two options, not three).
+      * ``[``   — bracket character classes (``[^a]`` negates in minimatch but
+        ``^`` is literal in ``fnmatch``; POSIX ``[[:alpha:]]`` is unsupported).
+      * ``..``  — brace ranges (``{1..3}``, ``{a..c}``, ``{01..03}``, ``{1..9..2}``);
+        no legitimate workspace path holds ``..`` either.
+      * extglobs (``?(…)``/``*(…)``/``+(…)``/``@(…)``/``!(…)``) — ``fnmatch`` treats
+        them literally, so an extglob exclusion fails to exclude.
+      * ``?`` against an astral-character leaf — minimatch counts a non-BMP char as
+        two UTF-16 code units, so it needs ``??`` where ``fnmatch`` matches one ``?``.
+
+    Failing closed only forgoes crossing a workspace boundary (the leaf still uses
+    its nearest ``package.json``); it never adopts a foreign config. Real workspace
+    globs use ``*``/``**``/``{,}`` — not these — so legitimate declarations are
+    unaffected.
+    """
+    if "\\" in raw or "[" in raw or ".." in raw:
+        return True
+    if any(marker in raw for marker in _EXTGLOB_MARKERS):
+        return True
+    return has_astral and "?" in raw
+
+
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
     """Read ``path`` as UTF-8, or return ``None`` (so callers fail closed) if it is
     missing, not a regular file, larger than ``max_bytes``, unreadable, or not
@@ -161,7 +193,13 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     # Cheap guard before allocating the split list (a "slash wall" attack).
     if pattern.count("/") > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
-    pat_parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
+    # Drop empty segments (from ``//`` or a trailing ``/``) and a *leading* ``./``
+    # (npm normalizes a leading current-dir). An *internal* ``.`` segment is kept:
+    # minimatch does not collapse ``packages/./x``, so such a glob must not be
+    # treated as ``packages/x`` and falsely prove membership.
+    pat_parts = [p for p in pattern.strip("/").split("/") if p != ""]
+    while pat_parts and pat_parts[0] == ".":
+        pat_parts.pop(0)
     if len(pat_parts) > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
     rel = list(rel_parts)
@@ -375,6 +413,12 @@ def _find_expandable_brace(pattern: str, limit: int,
         work = [_MAX_BRACE_SCAN_WORK]
     i, n = 0, len(pattern)
     while i < n:
+        # Charge every examined position — including the non-brace prefix skipped
+        # below — so a long literal/``*`` run before the first brace (re-walked for
+        # each of up to _MAX_BRACE_EXPANSION worklist entries) is bounded, not free.
+        work[0] -= 1
+        if work[0] < 0:
+            raise _BraceBudgetError
         if pattern[i] != "{":
             i += 1
             continue
@@ -452,22 +496,25 @@ def _expand_braces(pattern: str, budget: Optional[list] = None,
 
 def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                                cell_budget: Optional[list] = None,
-                               work_budget: Optional[list] = None) -> bool:
+                               work_budget: Optional[list] = None,
+                               expand_budget: Optional[list] = None) -> bool:
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
     semantics: at least one positive pattern matches and no ``!`` exclusion does.
 
     Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
-    brace alternations are expanded before matching. All expansion for one
-    membership check shares a single aggregate budget, so a declaration with many
-    globs cannot multiply past the budget. ``work_budget`` (the brace-scan budget)
-    is likewise shared across the whole discovery walk when the caller supplies
-    one, so pathological globs at several ancestors cannot each spend a full
-    budget's worth of scanning.
+    brace alternations are expanded before matching. The brace-expansion count
+    (``expand_budget``), the brace-scan work (``work_budget``), and the DP-cell
+    count (``cell_budget``) are each shared across the whole discovery walk when
+    the caller supplies them, so pathological globs at several ancestors cannot
+    each spend a full budget's worth of expansion, scanning, or matching.
     """
     if len(globs) > _MAX_RAW_GLOBS:
         return False  # hostile declaration size → membership unproven (fail closed)
     try:
-        budget = [_MAX_BRACE_EXPANSION]  # shared across every glob below
+        # Brace-expansion count budget. Shared across the whole walk when supplied
+        # (so re-expanding globs at each ancestor cannot sum past the cap);
+        # otherwise fresh per call for direct/standalone callers.
+        budget = expand_budget if expand_budget is not None else [_MAX_BRACE_EXPANSION]
         # Brace-scan budget (see _expand_braces). Shared across the whole walk when
         # supplied; otherwise fresh per call for direct/standalone callers.
         work = work_budget if work_budget is not None else [_MAX_BRACE_SCAN_WORK]
@@ -477,6 +524,13 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # otherwise a fresh per-call budget is used (direct/standalone callers).
         cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
         positives, negatives = [], []
+        # minimatch (a JS regex) counts a string in UTF-16 code units, but Python
+        # `fnmatch` counts Unicode code points, so `?` (one unit) diverges from `?`
+        # (one code point) whenever a path segment holds a non-BMP / "astral"
+        # character (e.g. an emoji, two UTF-16 units): mine matches a single `?`
+        # where minimatch needs `??`. When the leaf has such a character, any `?`
+        # glob therefore fails membership closed.
+        has_astral = any(ord(ch) > 0xFFFF for part in rel_parts for ch in part)
         for raw in globs:
             # Do NOT strip surrounding whitespace: workspace tools treat it
             # literally, so `" packages/* "` is a package literally named with
@@ -485,27 +539,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             raw = str(raw)
             if not raw:
                 continue
-            if "\\" in raw or "[" in raw or any(m in raw for m in _EXTGLOB_MARKERS):
-                # Three construct families this matcher does not implement with
-                # minimatch parity, so a glob using any of them is treated as
-                # unparseable and the whole set fails membership closed (never
-                # falsely proven):
-                #   * Backslash escapes of brace metacharacters (e.g. `{foo\,bar}`,
-                #     where `\,` is a literal comma → two options, not three) — the
-                #     brace expander is not escape-aware and would over-expand.
-                #   * Bracket character classes (e.g. `[^a]`, `[[:alpha:]]`) — the
-                #     per-segment `fnmatch` diverges from minimatch (`^` is literal
-                #     in fnmatch but negates in minimatch; POSIX classes are
-                #     unsupported), so an exclusion could fail to exclude and a
-                #     positive could over-match, either way a false member.
-                #   * Extglobs (`?(…)`, `*(…)`, `+(…)`, `@(…)`, `!(…)`) — `fnmatch`
-                #     treats them literally, so an extglob exclusion under-matches
-                #     (e.g. `!packages/@(foo|bar)` fails to exclude `packages/foo`)
-                #     and yields a false member.
-                # Failing closed only forgoes crossing a workspace boundary (the
-                # leaf still uses its nearest package.json); it never adopts a
-                # foreign config. Real workspace globs use `*`/`**`/`{,}` — not
-                # these — so legitimate declarations are unaffected.
+            if _glob_beyond_supported_subset(raw, has_astral):
+                # Unsupported minimatch construct → membership unproven (fail closed).
                 raise _PatternBudgetError
             if len(raw) > _MAX_GLOB_LENGTH:
                 # An over-long glob would blow up expansion by bytes even under
@@ -527,7 +562,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
 
 def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
                         cell_budget: Optional[list] = None,
-                        work_budget: Optional[list] = None) -> Optional[Path]:
+                        work_budget: Optional[list] = None,
+                        expand_budget: Optional[list] = None) -> Optional[Path]:
     """Return the ancestor workspace *root* that ``package_dir`` is a proven member
     of, or ``None`` when it is not a member of any ancestor workspace.
 
@@ -555,7 +591,7 @@ def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
             except (ValueError, OSError, RuntimeError):
                 rel_parts = ()
             if rel_parts and _package_matches_workspace(
-                    rel_parts, globs, cell_budget, work_budget):
+                    rel_parts, globs, cell_budget, work_budget, expand_budget):
                 return ancestor
         if (ancestor / ".git").exists():
             break
@@ -784,6 +820,10 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     # a pathological nested-brace glob at several ancestors cannot spend a full
     # scan budget at each level.
     brace_work: list = [_MAX_BRACE_SCAN_WORK]
+    # Per-discovery aggregate brace-expansion *count* budget, shared the same way,
+    # so a glob that expands to many patterns re-evaluated at every ancestor cannot
+    # sum past the cap.
+    brace_expand: list = [_MAX_BRACE_EXPANSION]
     # Deepest ancestor-workspace root the original leaf must still reach; walk
     # *through* intermediate independent package.json manifests until then.
     ceiling: Optional[Path] = None
@@ -805,7 +845,7 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         member_root: Optional[Path] = None
         if pkg_here or (ceiling is not None and search_dir == ceiling):
             member_root = _workspace_root_for(
-                search_dir, ws_cache, match_cells, brace_work)
+                search_dir, ws_cache, match_cells, brace_work, brace_expand)
             if member_root is not None and (ceiling is None or _is_strict_ancestor(member_root, ceiling)):
                 ceiling = member_root
         # Stop at the declaring workspace root, even when it has no package.json of
