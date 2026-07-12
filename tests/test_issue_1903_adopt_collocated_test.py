@@ -306,7 +306,7 @@ class TestGreenfieldRunnerDiscovery:
         # A jest.config.js with NO discovery keys uses jest defaults, which
         # collect the co-located __test__/*.test.tsx we write.
         monkeypatch.chdir(tmp_path)
-        _write(tmp_path / "jest.config.js", "module.exports = { preset: 'ts-jest' };\n")
+        _write(tmp_path / "jest.config.js", "module.exports = {};\n")
         code = _write(tmp_path / "src/page.tsx")
         got = find_runner_collected_test_path(code)
         assert Path(got).resolve() == (tmp_path / "src/__test__/page.test.tsx").resolve()
@@ -405,6 +405,59 @@ class TestGreenfieldRunnerDiscovery:
         code = _write(tmp_path / "src/page.tsx")
         assert find_runner_collected_test_path(code) is None
 
+    def test_delegating_js_config_refuses(self, tmp_path, monkeypatch):
+        # A jest.config.js that require()s a base config could set discovery in a
+        # file we can't read -> refuse rather than assume defaults.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = require('./config/jest.base.js')\n")
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_preset_and_function_js_config_refuse(self, tmp_path, monkeypatch):
+        # preset / function configs can change discovery in ways we can't resolve.
+        monkeypatch.chdir(tmp_path)
+        for content in (
+            "module.exports = { preset: 'ts-jest' }\n",
+            "module.exports = () => ({})\n",
+            "import base from './base'\nexport default { ...base }\n",
+        ):
+            (tmp_path / "jest.config.js").write_text(content, encoding="utf-8")
+            code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
+            assert find_runner_collected_test_path(code) is None, content
+
+    def test_rootdir_only_derives_under_rootdir(self, tmp_path, monkeypatch):
+        # rootDir centralizes collection; a module outside it derives under rootDir.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps({"jest": {"rootDir": "test"}}))
+        code = _write(tmp_path / "src/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert got is not None
+        rel = Path(got).resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert rel.startswith("test/") and rel.endswith("page.test.tsx"), rel
+
+    def test_mjs_module_default_config_refuses(self, tmp_path, monkeypatch):
+        # jest's DEFAULT testMatch collects js/jsx/ts/tsx, NOT mjs/cjs.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = {}\n")
+        code = _write(tmp_path / "src/util.mjs")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_testmatch_negation_then_positive_reincludes(self, tmp_path, monkeypatch):
+        # Ordered semantics: a later positive re-includes a path an earlier
+        # negation excluded (module under __tests__/, re-included by the 2nd glob).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", json.dumps({"jest": {"testMatch": [
+            "!**/__fixtures__/**", "**/__tests__/**/*.tsx"]}}))
+        code = _write(tmp_path / "src/__tests__/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert got is not None and Path(got).name == "page.test.tsx"
+
+    def test_char_class_negation_matcher(self):
+        from pdd.content_selector import _glob_matches
+        # `[!_]` = "not underscore" (bash/micromatch), NOT "! or _".
+        assert _glob_matches("**/[!_]*.test.ts", "src/page.test.ts") is True
+        assert _glob_matches("**/[!_]*.test.ts", "src/_hidden.test.ts") is False
+
 
 # ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the
@@ -490,7 +543,7 @@ def _build_greenfield_jest_project(tmp_path: Path) -> tuple[Path, Path]:
     _write(tmp_path / ".pddrc", pddrc)
     # A plain jest.config.js (no discovery keys) uses jest defaults, which
     # collect the co-located __test__/*.test.tsx.
-    _write(tmp_path / "frontend/jest.config.js", "module.exports = { preset: 'ts-jest' };\n")
+    _write(tmp_path / "frontend/jest.config.js", "module.exports = {};\n")
     _write(tmp_path / "frontend/package.json", '{"devDependencies": {"jest": "^29"}}\n')
     code = _write(
         tmp_path / "frontend/src/app/contributions/page.tsx",

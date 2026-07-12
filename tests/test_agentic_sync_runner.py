@@ -2160,6 +2160,69 @@ class TestSyncOneModule:
         assert "test churn threshold exceeded" in error.lower(), error
         assert runner.module_states["foo"].needs_review is None
 
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_absolute_in_root_path_never_blocks(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """Production churn `output:` paths are ABSOLUTE (construct_paths). An
+        absolute co-located path INSIDE the worktree must still never-block (the
+        round-4 relative-path test missed this production shape)."""
+        monkeypatch.chdir(tmp_path)
+        abs_test = (tmp_path / "frontend/src/app/__test__/foo.test.tsx").as_posix()
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            f"output: {abs_test}\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner.project_root = tmp_path  # worktree root for containment
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is True, "absolute in-root adopted path must never-block"
+        assert error == ""
+        assert runner.module_states["foo"].needs_review is not None
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_absolute_out_of_root_path_hard_fails(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path, monkeypatch
+    ):
+        """An absolute path OUTSIDE the worktree (traversal/escape) keeps the
+        strict hard-fail — provenance of an out-of-tree path is untrusted."""
+        monkeypatch.chdir(tmp_path)
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: /etc/evil/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+            issue_url="https://github.com/o/r/issues/7",
+        )
+        runner.project_root = tmp_path
+        success, cost, error = runner._sync_one_module("foo")
+        assert success is False, "out-of-root absolute path must keep the hard-fail"
+        assert runner.module_states["foo"].needs_review is None
+
     def test_adopted_classifier_rejects_unsafe_and_shadow_paths(self):
         """Issue #1903 §B.4: the never-block classifier must reject absolute
         paths, traversal, and PDD-owned `tests/` shadows (JS or Python), and

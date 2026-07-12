@@ -2103,6 +2103,85 @@ class TestCheckupReviewLoopRuntime:
         assert state.same_role_review_fix is True
         assert state.role_independence == "degraded (codex unavailable)"
 
+    def test_issue_1941_independent_fixer_fallback_preferred_over_degrade(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: when an eligible INDEPENDENT fixer_fallback exists, the
+        loop must prefer it over collapsing to a same-family session. Config:
+        reviewer=codex, fixer=codex, reviewer_fallback=claude, fixer_fallback=gemini,
+        codex down. Claude reviews+reports; the dead codex fixer is tried, then the
+        independent gemini fallback fixer runs — role independence is NOT degraded.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if role == "gemini":
+                if "fix-" in label:
+                    return (
+                        True,
+                        '{"summary":"fixed","changed_files":["tests/test_flow.py"]}',
+                        0.2,
+                        role,
+                    )
+                return True, _json("clean"), 0.1, role
+            # claude: explicit reviewer_fallback review reports findings; verify clean.
+            if "verify" in label:
+                return True, _json("clean"), 0.1, role
+            if "review" in label:
+                return True, _json("findings", [finding]), 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                reviewer="codex",
+                fixer="codex",
+                reviewer_fallback="claude",
+                fixer_fallback="gemini",
+                allow_same_reviewer_fixer=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The dead configured fixer is tried, THEN the independent gemini fallback.
+        assert any("fix-codex-for-claude" in label for _, label in calls), calls
+        assert any("fix-gemini-for-claude" in label for _, label in calls), calls
+        # Never collapse to a same-family claude fixer when gemini is available.
+        assert not any(
+            role == "claude" and "fix-" in label for role, label in calls
+        ), calls
+        # Role independence is NOT degraded — an independent fixer ran.
+        assert "role-independence: independent" in report, report
+        assert "degraded (codex unavailable)" not in report, report
+        final_state = json.loads(
+            (tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+             / "final-state.json").read_text()
+        )
+        assert final_state["role_independence"] == "independent"
+        assert captured_state and captured_state[-1].role_independence == "independent"
+
     def test_issue_1941_both_families_alive_stays_independent(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
