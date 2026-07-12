@@ -417,6 +417,31 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_unrelated_package_under_workspace_root_is_not_a_member(self, tmp_path):
+        """A package that does not match the workspace globs is not a member.
+
+        The repo root declares ``workspaces: ["packages/*"]`` but the test lives
+        under ``vendor/tool`` (its own package.json). It must NOT adopt the
+        repo-root Jest config — membership requires a glob match, not merely the
+        presence of a workspaces declaration somewhere above.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        vendor = repo / "vendor" / "tool"
+        vendor.mkdir(parents=True)
+        (vendor / "package.json").write_text("{}")  # not under packages/*
+        test_file = vendor / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_non_git_project_stops_at_package_json_boundary(self, tmp_path):
         """Without a .git ancestor, stop at the nearest package.json.
 
