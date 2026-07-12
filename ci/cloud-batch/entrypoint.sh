@@ -217,7 +217,8 @@ elif [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTES
 fi
 
 if [ "${NEEDS_PDD_JWT}" = "1" ] && [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
-    JWT_MAX_ATTEMPTS=4
+    JWT_MAX_ATTEMPTS=6
+    JWT_QUOTA_BACKOFF_SECONDS=30
     JWT_ATTEMPT=0
     JWT_LAST_ERROR=""
     JWT_INITIAL_DELAY=$(( (TASK_INDEX * 7) % 30 + RANDOM % 5 ))
@@ -299,9 +300,15 @@ else:
 
         JWT_LAST_ERROR="${JWT_ERROR}"
         if [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; then
-            # Backoff 2/4/8s base + 0-2s jitter to scatter concurrent retries
-            # across sibling Cloud Batch tasks (avoids re-creating the herd).
-            JWT_BACKOFF=$((2 ** JWT_ATTEMPT + RANDOM % 3))
+            # Firebase quota exhaustion needs a longer cooldown than ordinary
+            # transport/parser transients. Keep jitter so overlapping release
+            # gates do not retry on the same boundary.
+            if [ "${JWT_ERROR}" = "QUOTA_EXCEEDED" ]; then
+                JWT_BACKOFF=$((JWT_QUOTA_BACKOFF_SECONDS + RANDOM % 6))
+            else
+                # Generic backoff: 2/4/8/16/32s base + 0-2s jitter.
+                JWT_BACKOFF=$((2 ** JWT_ATTEMPT + RANDOM % 3))
+            fi
             echo "WARNING: JWT exchange attempt ${JWT_ATTEMPT}/${JWT_MAX_ATTEMPTS} failed (${JWT_ERROR}); retrying in ${JWT_BACKOFF}s"
             sleep "${JWT_BACKOFF}"
         fi
