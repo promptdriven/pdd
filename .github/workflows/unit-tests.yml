@@ -117,6 +117,12 @@ jobs:
           tests/test_sync_core_runner.py::test_passing_collected_test_is_pass
           --timeout=60
 
+      - name: Verify protected signer containment smoke
+        run: >
+          pytest -q
+          tests/test_sync_core_trust.py::test_remote_signer_timeout_reaps_env_cleared_detached_descendant
+          --timeout=60
+
       - name: Run focused protected-runner tests
         run: >
           pytest -q

@@ -186,7 +186,7 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
     def short_run(command_value, payload, *, timeout):
         del timeout
         try:
-            return actual_run_signer(command_value, payload, timeout=0.1)
+            return actual_run_signer(command_value, payload, timeout=0.5)
         except subprocess.TimeoutExpired as exc:
             timed_out.append(exc)
             raise
