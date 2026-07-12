@@ -195,9 +195,10 @@ def run_signer(
                 process.terminate()
                 try:
                     stdout, stderr = process.communicate(timeout=0.4)
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as cleanup_exc:
                     _kill_bounded(process, token)
-                    stdout, stderr = b"", b""
+                    stdout = cleanup_exc.output or exc.output or b""
+                    stderr = cleanup_exc.stderr or exc.stderr or b""
             else:
                 _kill_bounded(process, token)
                 stdout, stderr = b"", b""
