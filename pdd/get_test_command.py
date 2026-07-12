@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 import csv
+import fnmatch
 import json
 import re
 import shlex
@@ -31,26 +32,98 @@ class TestCommand:
     cwd: Optional[Path] = None
 
 
+def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -> bool:
+    """Match a package's path segments against a single workspace glob pattern.
+
+    Supports the segment semantics workspace tools use: ``*`` matches exactly one
+    path segment (with fnmatch inside the segment) and ``**`` matches zero or more
+    segments. A trailing ``/*`` therefore matches direct children only, while
+    ``**`` spans any depth.
+    """
+    pat_parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
+    return _match_segments(list(rel_parts), pat_parts)
+
+
+def _match_segments(rel: list, pat: list) -> bool:
+    if not pat:
+        return not rel
+    head, rest = pat[0], pat[1:]
+    if head == "**":
+        # Zero or more segments.
+        for i in range(len(rel) + 1):
+            if _match_segments(rel[i:], rest):
+                return True
+        return False
+    if not rel:
+        return False
+    return fnmatch.fnmatch(rel[0], head) and _match_segments(rel[1:], rest)
+
+
+def _workspace_globs_for(ancestor: Path) -> list:
+    """Return the workspace package globs declared by ``ancestor`` (empty if none).
+
+    Reads npm/yarn ``workspaces`` (list or ``{"packages": [...]}``), ``lerna.json``
+    ``packages``, and ``pnpm-workspace.yaml`` ``packages``. pnpm requires a YAML
+    parser; if unavailable we conservatively return no globs so membership stays
+    unproven rather than falsely asserted.
+    """
+    globs: list = []
+    manifest_path = ancestor / "package.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            manifest = {}
+        ws = manifest.get("workspaces")
+        if isinstance(ws, dict):
+            ws = ws.get("packages")
+        if isinstance(ws, list):
+            globs.extend(str(p) for p in ws)
+    lerna_path = ancestor / "lerna.json"
+    if lerna_path.exists():
+        try:
+            lerna = json.loads(lerna_path.read_text(encoding="utf-8"))
+            pkgs = lerna.get("packages")
+            if isinstance(pkgs, list):
+                globs.extend(str(p) for p in pkgs)
+            elif pkgs is None:
+                globs.append("packages/*")  # lerna default
+        except (ValueError, OSError):
+            pass
+    pnpm_path = ancestor / "pnpm-workspace.yaml"
+    if pnpm_path.exists():
+        try:
+            import yaml  # optional dependency
+            data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8")) or {}
+            pkgs = data.get("packages")
+            if isinstance(pkgs, list):
+                globs.extend(str(p) for p in pkgs)
+        except Exception:
+            pass  # conservative: unparseable pnpm workspace → no membership claim
+    return globs
+
+
 def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
     """Return True if ``package_dir`` (which holds a ``package.json``) is a member
     of an ancestor JS workspace, so its runner config may live at the workspace
     root rather than in the leaf package.
 
-    Detects the common workspace declarations — a ``workspaces`` field in an
-    ancestor ``package.json``, or a ``pnpm-workspace.yaml`` / ``lerna.json`` — and
-    never looks above the repository root (``.git``).
+    Membership is proven, not assumed: an ancestor's declared workspace globs
+    (npm/yarn ``workspaces``, ``lerna.json`` ``packages``, ``pnpm-workspace.yaml``
+    ``packages``) must actually match ``package_dir`` relative to that ancestor.
+    An unrelated package (e.g. a vendored ``vendor/tool``) beneath a workspace
+    root is therefore not treated as a member. The search never looks above the
+    repository root (``.git``).
     """
     ancestor = package_dir.parent
     for _ in range(80):
-        if (ancestor / "pnpm-workspace.yaml").exists() or (ancestor / "lerna.json").exists():
-            return True
-        ancestor_manifest = ancestor / "package.json"
-        if ancestor_manifest.exists():
+        globs = _workspace_globs_for(ancestor)
+        if globs:
             try:
-                manifest = json.loads(ancestor_manifest.read_text(encoding="utf-8"))
-            except (ValueError, OSError):
-                manifest = {}
-            if manifest.get("workspaces"):
+                rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
+            except ValueError:
+                rel_parts = ()
+            if rel_parts and any(_relative_matches_workspace_glob(rel_parts, g) for g in globs):
                 return True
         if (ancestor / ".git").exists():
             break
