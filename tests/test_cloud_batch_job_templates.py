@@ -157,6 +157,17 @@ def test_cloud_batch_entrypoint_scopes_jwt_exchange_to_cloud_regression():
     assert "Skipping PDD JWT exchange" in entrypoint_text
 
 
+def test_cloud_batch_entrypoint_extends_quota_retry_horizon():
+    """Quota exhaustion must cool down longer than generic transient errors."""
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "JWT_MAX_ATTEMPTS=6" in entrypoint_text
+    assert "JWT_QUOTA_BACKOFF_SECONDS=30" in entrypoint_text
+    assert '"${JWT_ERROR}" = "QUOTA_EXCEEDED"' in entrypoint_text
+
+
 def test_cloud_batch_entrypoint_forces_pytest_shards_local_by_default():
     entrypoint_text = (
         REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
