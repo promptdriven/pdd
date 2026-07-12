@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import ast
 import configparser
+import concurrent.futures
 import json
 import os
 import platform
@@ -648,6 +649,25 @@ def _runtime_manifest(
     )
 
 
+def _hash_runtime_entry(entry: tuple[str, Path]) -> tuple[str, bytes] | None:
+    """Hash one measured runtime file without loading it wholly into memory."""
+    name, path = entry
+    if not path.is_file():
+        raise RuntimeError(f"released runtime entry is not a regular file: {name}")
+    file_digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                file_digest.update(chunk)
+    except PermissionError:
+        if sys.platform.startswith("linux"):
+            raise RuntimeError(f"released runtime entry is unreadable: {name}") from None
+        # macOS cannot execute the protected sandbox; do not make reporting
+        # unusable merely because a host-only outer helper is protected.
+        return None
+    return name, file_digest.digest()
+
+
 def _released_runtime_closure_digest() -> str:
     """Hash the released runtime by logical name, never installation prefix."""
     default_paths = _released_runtime_closure_paths is _default_runtime_closure_paths
@@ -658,19 +678,14 @@ def _released_runtime_closure_digest() -> str:
             return cached_digest
     entries = _released_runtime_closure_paths()
     manifest = _runtime_manifest(entries)
+    worker_count = min(32, (os.cpu_count() or 1) + 4)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+        hashed_entries = tuple(executor.map(_hash_runtime_entry, entries))
     digest = hashlib.sha256()
-    for name, path in entries:
-        if not path.is_file():
-            raise RuntimeError(f"released runtime entry is not a regular file: {name}")
-        try:
-            content = path.read_bytes()
-        except PermissionError:
-            if sys.platform.startswith("linux"):
-                raise RuntimeError(f"released runtime entry is unreadable: {name}") from None
-            # macOS cannot execute the protected sandbox; do not make reporting
-            # unusable merely because a host-only outer helper is protected.
-            continue
-        digest.update(name.encode("utf-8") + b"\0" + content + b"\0")
+    for hashed_entry in hashed_entries:
+        if hashed_entry is not None:
+            name, content_digest = hashed_entry
+            digest.update(name.encode("utf-8") + b"\0" + content_digest + b"\0")
     result = digest.hexdigest()
     if default_paths:
         _runtime_digest_cache["default"] = entries, manifest, result

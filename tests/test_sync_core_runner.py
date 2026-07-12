@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -1070,6 +1071,32 @@ def test_default_runtime_digest_cache_invalidates_changed_native_bytes(
     first = runner_module._released_runtime_closure_digest()
     native.write_bytes(b"native-v2")
     assert runner_module._released_runtime_closure_digest() != first
+
+
+def test_released_runtime_digest_hashes_entries_concurrently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries = []
+    for index in range(8):
+        path = tmp_path / f"runtime-{index}"
+        path.write_bytes(str(index).encode())
+        entries.append((path.name, path))
+    barrier = threading.Barrier(2)
+    thread_ids = set()
+    original = runner_module._hash_runtime_entry
+
+    def observed(entry):
+        thread_ids.add(threading.get_ident())
+        if len(thread_ids) <= 2:
+            barrier.wait(timeout=2)
+        return original(entry)
+
+    monkeypatch.setattr(runner_module, "_released_runtime_closure_paths", lambda: tuple(entries))
+    monkeypatch.setattr(runner_module, "_hash_runtime_entry", observed)
+
+    runner_module._released_runtime_closure_digest()
+
+    assert len(thread_ids) > 1
 
 
 def test_released_runtime_digest_binds_runtime_and_sandbox_bytes_prefix_portably(
