@@ -1591,7 +1591,7 @@ def _get_filepath_from_architecture(
             # ``owners`` were obtained by contained directory walks above. Map
             # the prompt's validated root-relative identity across trusted roots
             # so aliases such as ``prompts -> pdd/prompts`` compare correctly.
-            # Keep this lexical: resolving caller-influenced ``prompt_path``
+            # Keep the prompt side lexical: resolving caller-influenced ``prompt_path``
             # here would turn it into a filesystem sink.
             try:
                 relative_prompt = prompt_path.relative_to(prompts_root)
@@ -1599,11 +1599,30 @@ def _get_filepath_from_architecture(
                 return _OWNERSHIP_INELIGIBLE
             if relative_prompt.is_absolute() or ".." in relative_prompt.parts:
                 return _OWNERSHIP_INELIGIBLE
+            # Project ONLY across roots that ALIAS the resolving prompt root (resolve to
+            # the same directory) — never across sibling context roots. Otherwise a
+            # uniquely-named SIBLING prompt sitting at the same relative path under a
+            # different root is misread as the resolved prompt's proven owner and lends
+            # its shared code target across contexts. Resolving the ROOT directories (not
+            # the caller-influenced prompt) is safe.
+            try:
+                prompts_root_key = os.path.normcase(str(prompts_root.resolve(strict=False)))
+            except (OSError, RuntimeError):
+                return _OWNERSHIP_INELIGIBLE
+            alias_roots = []
+            for root in roots:
+                try:
+                    if os.path.normcase(str(Path(root).resolve(strict=False))) == prompts_root_key:
+                        alias_roots.append(root)
+                except (OSError, RuntimeError):
+                    continue
+            if not alias_roots:
+                alias_roots = [prompts_root]
             expected_keys = {
                 os.path.normcase(
                     os.path.abspath(os.path.normpath(root.joinpath(relative_prompt)))
                 )
-                for root in roots
+                for root in alias_roots
             }
             owner_keys = {
                 os.path.normcase(os.path.abspath(os.path.normpath(owner)))
