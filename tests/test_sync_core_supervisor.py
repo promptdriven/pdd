@@ -89,20 +89,26 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     loader_destination = tmp_path / "loader" / "libc.so.6"
     loader_destination.parent.mkdir()
     loader_destination.symlink_to(loader_source)
+    workdir = tmp_path / "work"
+    workdir.mkdir()
 
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(sys, "executable", str(executable_destination))
+    sandbox_tools = {
+        "bwrap": "/usr/bin/bwrap",
+        "sudo": "/usr/bin/sudo",
+        "setpriv": "/usr/bin/setpriv",
+    }
     monkeypatch.setattr(
         shutil,
         "which",
-        lambda name: {"bwrap": "/usr/bin/bwrap", "sudo": "/usr/bin/sudo",
-                      "setpriv": "/usr/bin/setpriv"}.get(name),
+        sandbox_tools.get,
     )
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
     )
-    monkeypatch.setattr("pdd.sync_core.supervisor._runtime_directories", lambda: ())
+    monkeypatch.setattr("pdd.sync_core.supervisor._runtime_directories", tuple)
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.released_runtime_closure_paths",
         lambda: (
@@ -112,7 +118,7 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     )
 
     argv, _profile = _sandbox_command(
-        [str(executable_destination), "-c", "pass"], (tmp_path,), cwd=tmp_path
+        [str(executable_destination), "-c", "pass"], (workdir,), cwd=workdir
     )
     bwrap = json.loads(argv[-2])
     sources = json.loads(argv[-1])

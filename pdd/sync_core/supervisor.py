@@ -291,13 +291,12 @@ def _sandbox_command(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
-        elevated = bool(shutil.which("sudo")) and subprocess.run(
-            ["sudo", "-n", "true"], capture_output=True, check=False,
-        ).returncode == 0
-        if not elevated:
+        if not (bool(shutil.which("sudo")) and subprocess.run(
+                ["sudo", "-n", "true"], capture_output=True, check=False,
+        ).returncode == 0):
             raise RuntimeError("protected sandbox requires privileged bind staging")
-        setpriv = shutil.which("setpriv") if elevated else None
-        if elevated and setpriv is None:
+        setpriv = shutil.which("setpriv")
+        if setpriv is None:
             raise RuntimeError("protected sandbox requires setpriv for post-mount uid drop")
         workdir = (cwd or Path.cwd()).resolve()
         argv = ["bwrap", "--unshare-ipc", "--unshare-pid", "--unshare-net",
@@ -305,9 +304,10 @@ def _sandbox_command(
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
-        def bind(option: str, source: Path) -> None:
+        def bind(option: str, source: Path, destination: Path | None = None) -> None:
+            destination = destination or source
             missing = []
-            parent = source.parent
+            parent = destination.parent
             while parent != Path("/") and parent not in destination_dirs:
                 missing.append(parent)
                 parent = parent.parent
@@ -315,16 +315,19 @@ def _sandbox_command(
                 argv.extend(("--dir", str(directory)))
                 destination_dirs.add(directory)
             sources.append(source)
-            argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
-            if source.is_dir():
-                destination_dirs.add(source)
+            argv.extend((option, f"@FD:{len(sources) - 1}@", str(destination)))
+            if destination.is_dir():
+                destination_dirs.add(destination)
         for item in _runtime_roots(command, workdir):
-            bind("--ro-bind", item)
+            # A host bind follows symlinks, but the process command and ELF
+            # loader retain their original spellings in the new namespace.
+            bind("--ro-bind", item.resolve(), item)
         # ``setpriv`` executes after the namespace root is installed, so bind
         # it and its ELF closure directly even when PATH resolution differs.
         if setpriv is not None:
-            for item in (Path(setpriv).resolve(), *_linked_libraries(Path(setpriv))):
-                bind("--ro-bind", item)
+            setpriv_path = Path(setpriv)
+            for item in (setpriv_path, *_linked_libraries(setpriv_path)):
+                bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
         argv.extend(("--dev", "/dev"))
