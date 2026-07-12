@@ -2393,6 +2393,45 @@ def test_filepath_matches_context_handles_windows_drive_config():
     ) is not True
 
 
+@pytest.mark.parametrize("bad_filename", [123, 4.5, True, ["x"], {"k": "v"}])
+def test_get_pdd_file_paths_non_string_filename_uses_filepath(tmp_path, monkeypatch, bad_filename):
+    """A non-string architecture filename (number, bool, list, object) is treated as
+    ABSENT, so the module resolves by its filepath stem instead of a stringified name
+    or an AttributeError swallowed into a wrong default (R13)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  api:\n    paths: [\"src/**\", \"prompts/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "foo_Python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": bad_filename, "filepath": "src/foo.py"}]}),
+        encoding="utf-8",
+    )
+
+    paths = get_pdd_file_paths("foo", "python", prompts_dir="prompts", context_override="api")
+    assert paths["code"].as_posix().endswith("src/foo.py")
+
+
+def test_filepath_matches_context_normalizes_dot_slash_glob():
+    """A ``./frontend/**`` context glob is normalized so it matches the normalized
+    project-relative architecture filepath instead of silently missing (territory
+    detection for R5/R6)."""
+    import sync_determine_operation as sync_determine_module
+
+    ctx = {"paths": ["./frontend/**"]}
+    assert sync_determine_module._filepath_matches_context(
+        "frontend/foo.py", ctx, Path("/proj"), repo_root_output_matches=False
+    ) is True
+    assert sync_determine_module._filepath_matches_context(
+        "backend/foo.py", ctx, Path("/proj"), repo_root_output_matches=False
+    ) is not True
+
+
 @pytest.mark.parametrize("bad_language", ["CON", "aux.txt", "lpt1", "foo bar", "foo."])
 def test_get_pdd_file_paths_rejects_nonportable_language(tmp_path, monkeypatch, bad_language):
     """A reserved-device / whitespace / trailing-dot language component fails closed

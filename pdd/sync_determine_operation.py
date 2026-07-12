@@ -894,7 +894,10 @@ def _filepath_matches_context(
         # project root so sibling-territory detection still fires on Windows instead of
         # silently treating ``C:/proj/frontend`` as a relative literal that matches nothing.
         if not pure.is_absolute() and not PureWindowsPath(value).drive:
-            return v
+            # Normalize a relative value (strip leading ``./``, collapse ``//``) so a
+            # ``./frontend/**`` glob compares equal to the normalized project-relative
+            # architecture filepath instead of silently missing.
+            return pure.as_posix()
         if root_posix is None:
             return None
         try:
