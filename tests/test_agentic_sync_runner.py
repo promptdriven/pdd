@@ -2482,6 +2482,44 @@ class TestSyncOneModule:
 
         assert resumed.module_states["foo"].needs_review == note
 
+    def test_concurrent_state_saves_do_not_corrupt_or_drop_review(self, tmp_path):
+        """Round 9: many concurrent _save_state calls are serialized under a
+        dedicated save lock, so the state file is always valid JSON and a
+        needs-review flag is never lost to a torn/stale write."""
+        import json as _json
+        import threading
+        issue = "https://github.com/o/r/issues/7"
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True, issue_url=issue,
+        )
+        runner.project_root = tmp_path
+        note = "`foo`: adopted test kept for review"
+        runner.module_states["foo"].status = "success"
+        runner.module_states["foo"].needs_review = note
+
+        barrier = threading.Barrier(24)
+        errors = []
+
+        def _save():
+            barrier.wait()
+            try:
+                runner._save_state()
+            except Exception as exc:  # pragma: no cover - surfaced via assert
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_save) for _ in range(24)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert errors == []
+        # The file is complete/uncorrupted and still carries the flag.
+        data = _json.loads(runner._state_file_path().read_text(encoding="utf-8"))
+        assert data["modules"]["foo"]["needs_review"] == note
+        assert data["modules"]["foo"]["status"] == "success"
+
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
     @patch("pdd.agentic_sync_runner.subprocess.Popen")

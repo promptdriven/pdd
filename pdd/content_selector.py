@@ -14,6 +14,7 @@ import os
 import re
 import textwrap
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -1007,11 +1008,23 @@ def _micromatch_to_regex(glob: str) -> Optional[str]:
             i += 2
             continue
         if c == "*":
-            if glob[i : i + 3] == "**/":
+            # ``**`` is a GLOBSTAR (crosses ``/``) ONLY when it is a whole path
+            # segment — preceded by ``/`` or start AND followed by ``/`` or end
+            # (round 9). micromatch treats ``**`` embedded in a segment (``qa**/``,
+            # ``**bar``, ``foo**``) as a plain single-segment ``*``, so translating
+            # every ``**`` to ``.*`` over-matches paths jest rejects (an uncollected
+            # green). ``[^/]*`` keeps embedded stars segment-local.
+            is_double = glob[i : i + 2] == "**"
+            at_seg_start = i == 0 or glob[i - 1] == "/"
+            after_double = glob[i + 2 : i + 3]
+            if is_double and at_seg_start and after_double == "/":
                 out.append("(?:.*/)?")
                 i += 3
-            elif glob[i : i + 2] == "**":
-                out.append(".*")
+            elif is_double and at_seg_start and after_double == "":
+                out.append(".*")  # trailing whole-segment ``**`` -> match subtree
+                i += 2
+            elif is_double:
+                out.append("[^/]*")  # embedded ``**`` == single-segment ``*``
                 i += 2
             else:
                 out.append("[^/]*")
@@ -1588,6 +1601,41 @@ def find_runner_collected_test_path(code_file: str | Path) -> Optional[Path]:
         return None
 
 
+def _existing_collocated_is_collected(
+    module_path: Path, sibling: Path, root_resolved: Path
+) -> Optional[bool]:
+    """Would the configured runner COLLECT an EXISTING co-located *sibling*?
+
+    Adoption (issue #1903 §B) must not blindly retarget onto a co-located file the
+    project's runner does not actually collect — e.g. a stale
+    ``src/__test__/page.test.ts`` under a Jest ``testMatch: ["qa/**/*.spec.ts"]``
+    — which would just preserve the false-green on an EXCLUDED file (review round
+    9). Returns ``True`` (collected), ``False`` (a configured runner PROVABLY
+    excludes it), or ``None`` (no evaluable JS/TS runner config — Python, no
+    runner, or an opaque/composed config we cannot resolve) in which case the
+    caller keeps the default adopt-by-convention behavior. Never raises.
+    """
+    try:
+        if module_path.suffix.lower() not in _JS_TS_EXTENSIONS:
+            return None
+        if not _project_uses_js_test_runner(module_path, root_resolved):
+            return None
+        config, config_dir, opaque_custom = _collect_js_runner_config(
+            module_path, root_resolved
+        )
+        if opaque_custom or not isinstance(config, Mapping):
+            return None  # cannot parse -> cannot prove exclusion -> adopt
+        if any(
+            config.get(k) is not None
+            for k in ("projects", "workspace", "include", "exclude")
+        ):
+            return None  # composed discovery we do not resolve -> adopt
+        deadline = time.monotonic() + _DISCOVERY_TOTAL_BUDGET_S
+        return _candidate_is_collected(sibling, config, config_dir, deadline)
+    except Exception:  # pylint: disable=broad-except
+        return None
+
+
 def resolve_test_output_path(
     code_file: str | Path,
     derived_test_path: str | Path,
@@ -1657,6 +1705,26 @@ def resolve_test_output_path(
         derived_resolved = _validated_project_path(derived, root=root_resolved)
         if derived_resolved is not None and sibling_resolved == derived_resolved:
             return derived
+        # Round 9: only adopt a sibling the runner ACTUALLY collects. When a
+        # configured JS/TS runner PROVABLY excludes it (custom testMatch/roots the
+        # sibling does not match), adopting it would perpetuate the false-green on
+        # an excluded file. Redirect to the runner-collected location instead
+        # (greenfield discovery); if none can be proven, fall back to the derived
+        # default rather than certify the excluded file.
+        module_path = _validated_project_path(code_file, root=root_resolved)
+        if (
+            module_path is not None
+            and _existing_collocated_is_collected(
+                module_path, sibling_resolved, root_resolved
+            )
+            is False
+        ):
+            greenfield = find_runner_collected_test_path(code_file)
+            if greenfield is not None and greenfield != sibling_resolved:
+                if derived_resolved is not None and greenfield == derived_resolved:
+                    return derived
+                return greenfield
+            return derived
         return sibling_resolved
     except Exception:  # pylint: disable=broad-except
         return derived
@@ -1688,9 +1756,24 @@ def was_test_adopted(
     try:
         if user_pinned:
             return False
-        if find_collocated_test(code_file) is None:
+        sibling = find_collocated_test(code_file)
+        if sibling is None:
             return False
         if Path(resolved_test_path) == Path(derived_test_path):
+            return False
+        # Round 9: adoption means the resolved path IS that existing human
+        # sibling — NOT a greenfield/runner-collected redirect AWAY from a sibling
+        # the runner excludes (``resolve_test_output_path`` now redirects such
+        # excluded siblings). A redirect target is a fresh PDD-created file, not a
+        # human test, so it must never reach the never-block.
+        root_resolved = Path.cwd().resolve()
+        resolved_here = _validated_project_path(resolved_test_path, root=root_resolved)
+        sibling_here = _validated_project_path(sibling, root=root_resolved)
+        if (
+            resolved_here is None
+            or sibling_here is None
+            or resolved_here != sibling_here
+        ):
             return False
         # Ownership provenance (issue #1903 review round 7): a test PDD itself
         # GREENFIELD-created on a prior run must NOT be reclassified as
@@ -1714,6 +1797,39 @@ _PDD_CREATED_TESTS_MANIFEST = Path(".pdd") / "meta" / "pdd_created_tests.json"
 # Legacy location (round 7) read as a fallback so ownership recorded before the
 # move is not lost on the first post-upgrade run.
 _PDD_CREATED_TESTS_MANIFEST_LEGACY = Path(".pdd") / "pdd_created_tests.json"
+
+
+@contextmanager
+def _interprocess_lock(lock_path: Path):
+    """Best-effort EXCLUSIVE interprocess lock over *lock_path* (round 9).
+
+    Uses ``fcntl.flock`` where available (POSIX) so concurrent ``pdd sync``
+    children serialize their manifest read-modify-write. On a platform without
+    ``fcntl`` (e.g. Windows) it degrades to a no-op — the atomic ``os.replace``
+    still prevents a torn file, only losing strict last-writer-wins ordering.
+    """
+    fd = None
+    try:
+        try:
+            import fcntl  # POSIX only
+        except ImportError:
+            fcntl = None  # type: ignore[assignment]
+        if fcntl is not None:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if fd is not None:
+            try:
+                import fcntl  # noqa: F811
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except Exception:  # pylint: disable=broad-except
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _pdd_created_tests_manifest_path() -> Path:
@@ -1748,21 +1864,41 @@ def record_pdd_created_test(test_path: str | Path) -> None:
 
     Callers invoke this ONLY when PDD writes a brand-new greenfield test (no
     pre-existing human file), so :func:`was_test_adopted` can later exclude it
-    from the human-adopted never-block. Total — any error is swallowed.
+    from the human-adopted never-block.
+
+    Parallel agentic-sync CHILD PROCESSES can record concurrently, so the whole
+    read-modify-write runs under an interprocess EXCLUSIVE file lock and commits
+    via a temp file + atomic ``os.replace`` (round 9): an unlocked RMW would let
+    two children read the same set and clobber each other's additions, dropping an
+    ownership record so a later run misreads a PDD-owned test as human-adopted.
+    Total — any error is swallowed.
     """
     rel = _test_repo_relative(test_path)
     if rel is None:
         return
+    manifest = _pdd_created_tests_manifest_path()
     try:
-        existing = _load_pdd_created_tests()
-        if rel in existing:
-            return
-        existing.add(rel)
-        manifest = _pdd_created_tests_manifest_path()
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(
-            json.dumps(sorted(existing), indent=2) + "\n", encoding="utf-8"
-        )
+    except OSError:
+        return
+    lock_path = manifest.with_suffix(manifest.suffix + ".lock")
+    try:
+        with _interprocess_lock(lock_path):
+            existing = _load_pdd_created_tests()  # merges legacy under the lock
+            if rel in existing:
+                return
+            existing.add(rel)
+            payload = json.dumps(sorted(existing), indent=2) + "\n"
+            tmp = manifest.with_suffix(manifest.suffix + f".tmp.{os.getpid()}")
+            try:
+                tmp.write_text(payload, encoding="utf-8")
+                os.replace(tmp, manifest)  # atomic within the same directory
+            finally:
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError:
+                    pass
     except (OSError, ValueError):
         pass
 

@@ -1576,6 +1576,11 @@ class AsyncSyncRunner:
         self.budget_exhausted: bool = False
         self.comment_id: Optional[int] = None
         self.lock = threading.Lock()
+        # Serializes the ENTIRE snapshot->serialize->os.replace of _save_state
+        # (round 9) so a stale save cannot finish AFTER a newer one and overwrite
+        # it (which could resurrect a module as pending or drop its needs-review
+        # note on resume). Distinct from self.lock, which only guards the snapshot.
+        self._save_lock = threading.Lock()
 
         # Track child process groups for cleanup on interrupt
         self._child_pgids: set = set()
@@ -1640,7 +1645,14 @@ class AsyncSyncRunner:
                 pass
 
     def _save_state(self) -> None:
-        """Atomically persist current state to disk."""
+        """Atomically persist current state to disk.
+
+        The whole snapshot->write->replace runs under ``self._save_lock`` (round
+        9) so concurrent saves are fully serialized: the save that acquires the
+        lock LAST both snapshots and writes last, so an earlier stale save can
+        never land on top of a newer one (which could drop a needs-review note or
+        resurrect a module as pending on resume).
+        """
         if not self.issue_url:
             return
 
@@ -1650,6 +1662,10 @@ class AsyncSyncRunner:
         except OSError:
             return
 
+        with self._save_lock:
+            self._write_state_locked(state_path)
+
+    def _write_state_locked(self, state_path: Path) -> None:
         modules_data: Dict[str, Dict[str, Any]] = {}
         with self.lock:
             for basename in self.basenames:
