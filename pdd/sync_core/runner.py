@@ -828,7 +828,7 @@ def _trusted_collection_runner(
                 "",
                 "os.chdir(_ROOT)",
                 "_ENV = os.environ.copy()",
-                "_ENV['PYTHONPATH'] = _CONTROLLER",
+                "_ENV['PYTHONPATH'] = _CONTROLLER + os.pathsep + _ROOT",
                 "_STATUS = subprocess.run([sys.executable, '-P', '-m', 'pytest'] + "
                 + json.dumps(pytest_args) + ", env=_ENV).returncode",
                 "sys.stdout.flush(); sys.stderr.flush()",

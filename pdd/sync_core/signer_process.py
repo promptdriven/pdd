@@ -42,6 +42,9 @@ def cleanup():
         time.sleep(.01)
 def stop(_signum, _frame):
     cleanup()
+    if child is not None:
+        stdout, stderr = child.communicate()
+        sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
     raise SystemExit(124)
 signal.signal(signal.SIGTERM, stop)
 ready_path = os.environ.pop('PDD_SIGNER_READY_PATH', '')
@@ -108,7 +111,9 @@ def _terminate_marked(token: str, leader: int, timeout: float = 0.5) -> None:
         pass
 
 
-def _linux_contained_command(command: tuple[str, ...]) -> tuple[str, ...]:
+def _linux_contained_command(
+    command: tuple[str, ...], writable_root: Path
+) -> tuple[str, ...]:
     """Place the signer behind a PID namespace whose init owns all descendants."""
     bwrap = shutil.which("bwrap")
     if bwrap is None:
@@ -121,6 +126,7 @@ def _linux_contained_command(command: tuple[str, ...]) -> tuple[str, ...]:
     return (*prefix,
         bwrap, "--unshare-pid", "--die-with-parent", "--new-session",
         "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+        "--bind", str(writable_root), str(writable_root),
         "--tmpfs", "/tmp", "--", sys.executable, "-c", _LINUX_CONTAINMENT,
         *command,
     )
@@ -158,13 +164,14 @@ def run_signer(
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a signer in a new process group and reap the complete group on timeout."""
     token = uuid.uuid4().hex
-    contained_command = (
-        _linux_contained_command(command) if sys.platform.startswith("linux") else command
-    )
     # The Linux signer scope replaces /tmp, so keep the checker-owned marker
     # under its home directory, which the signer PID namespace bind-mounts.
     with tempfile.TemporaryDirectory(prefix="pdd-signer-", dir=Path.home()) as directory:
         ready_path = Path(directory) / "started"
+        contained_command = (
+            _linux_contained_command(command, Path(directory))
+            if sys.platform.startswith("linux") else command
+        )
         environment = os.environ | {"PDD_SIGNER_PROCESS_TOKEN": token}
         if sys.platform.startswith("linux"):
             environment["PDD_SIGNER_READY_PATH"] = str(ready_path)

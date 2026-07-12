@@ -28,6 +28,7 @@ from pdd.sync_core import (
 from pdd.sync_core.trust import ValidationEvidence
 from pdd.sync_core.finalize import attestation_signer_from_environment
 from pdd.sync_core.signer_process import run_signer
+import pdd.sync_core.signer_process as signer_process_module
 from pdd.sync_core.certificate import RemoteCertificateSigner
 import pdd.sync_core.certificate as certificate_module
 import pdd.sync_core.trust as trust_module
@@ -140,6 +141,24 @@ def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
     assert time.monotonic() - started < 1.5
 
 
+def test_linux_signer_containment_binds_only_ready_root_writable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        signer_process_module.shutil,
+        "which",
+        lambda name: "/usr/bin/bwrap" if name == "bwrap" else None,
+    )
+
+    command = signer_process_module._linux_contained_command(("signer",), tmp_path)
+
+    assert command[command.index("--ro-bind") + 1:command.index("--ro-bind") + 3] == (
+        "/", "/"
+    )
+    bind_index = command.index("--bind")
+    assert command[bind_index + 1:bind_index + 3] == (str(tmp_path), str(tmp_path))
+
+
 @pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="requires Linux stable process identity"
 )
@@ -147,26 +166,29 @@ def test_signer_timeout_is_bounded_with_detached_pipe_holder() -> None:
 def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
 ) -> None:
-    pid_file = tmp_path / f"{adapter}.pid"
     marker = tmp_path / f"{adapter}.survived"
     detached = (
         "import os,sys,time; "
-        "open(sys.argv[1], 'w').write(str(os.getpid())); "
-        "time.sleep(1); open(sys.argv[2], 'w').write('survived'); time.sleep(30)"
+        "time.sleep(1); open(sys.argv[1], 'w').write('survived'); time.sleep(30)"
     )
     parent = (
         "import os,subprocess,sys,time; env=dict(os.environ); "
         "env.pop('PDD_SIGNER_PROCESS_TOKEN', None); "
-        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2], sys.argv[3]], "
+        "child=subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]], "
         "env=env, start_new_session=True, stdout=subprocess.DEVNULL, "
-        "stderr=subprocess.DEVNULL); time.sleep(30)"
+        "stderr=subprocess.DEVNULL); print(child.pid, flush=True); time.sleep(30)"
     )
-    command = (sys.executable, "-c", parent, detached, str(pid_file), str(marker))
+    command = (sys.executable, "-c", parent, detached, str(marker))
     actual_run_signer = run_signer
+    timed_out: list[subprocess.TimeoutExpired] = []
 
     def short_run(command_value, payload, *, timeout):
         del timeout
-        return actual_run_signer(command_value, payload, timeout=0.1)
+        try:
+            return actual_run_signer(command_value, payload, timeout=0.1)
+        except subprocess.TimeoutExpired as exc:
+            timed_out.append(exc)
+            raise
 
     if adapter == "attestation":
         monkeypatch.setattr(trust_module, "run_signer", short_run)
@@ -185,10 +207,8 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
         with pytest.raises(ValueError, match="timed out"):
             signer.sign_bytes(b"payload")
 
-    deadline = time.monotonic() + 1
-    while not pid_file.exists() and time.monotonic() < deadline:
-        time.sleep(0.01)
-    pid = int(pid_file.read_text(encoding="utf-8"))
+    assert timed_out and timed_out[0].output
+    pid = int(timed_out[0].output.strip())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
     time.sleep(1.1)

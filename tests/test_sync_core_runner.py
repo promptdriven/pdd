@@ -627,7 +627,7 @@ def test_collection_worker_uses_trusted_plugin_path(tmp_path: Path) -> None:
 
     assert "_CONTROLLER =" in source
     assert str(controller) in source
-    assert "_ENV['PYTHONPATH'] = _CONTROLLER" in source
+    assert "_ENV['PYTHONPATH'] = _CONTROLLER + os.pathsep + _ROOT" in source
     assert "[sys.executable, '-P', '-m', 'pytest']" in source
 
 
