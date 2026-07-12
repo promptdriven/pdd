@@ -162,7 +162,7 @@ def _segment_matches(name: str, pattern_segment: str) -> bool:
     return fnmatch.fnmatch(name, pattern_segment)
 
 
-def _workspace_globs_for(ancestor: Path) -> list:
+def _workspace_globs_for(ancestor: Path, cache: Optional[dict] = None) -> list:
     """Return the workspace package globs declared by ``ancestor`` (empty if none).
 
     Reads npm/yarn ``workspaces`` (list or ``{"packages": [...]}``), ``lerna.json``
@@ -181,14 +181,38 @@ def _workspace_globs_for(ancestor: Path) -> list:
     ``str`` — a list containing a non-string entry (e.g. ``[true]``, which would
     otherwise coerce to the glob ``"True"``) is treated as malformed and
     contributes no globs (fail closed).
+
+    Results are memoized in ``cache`` (keyed by the canonical ancestor path) for
+    the duration of one discovery walk so an ancestor manifest is parsed at most
+    once even when the walk revisits it via ``_workspace_root_for``.
     """
+    if cache is not None:
+        try:
+            key = os.path.realpath(str(ancestor))
+        except (OSError, RuntimeError):
+            key = str(ancestor)
+        if key in cache:
+            return cache[key]
+        result = _workspace_globs_uncached(ancestor)
+        cache[key] = result
+        return result
+    return _workspace_globs_uncached(ancestor)
+
+
+def _workspace_globs_uncached(ancestor: Path) -> list:
+    """See :func:`_workspace_globs_for`; this performs the actual filesystem read."""
+    # ``pnpm-workspace.yaml`` is authoritative when *present at all* — even as a
+    # dangling or unreadable symlink. ``Path.exists()`` returns False for a
+    # dangling symlink, so use lexical presence; a present-but-unreadable pnpm
+    # config yields no globs (fail closed) and must NOT fall through to a stale
+    # ``package.json`` ``workspaces`` field.
     pnpm_path = ancestor / "pnpm-workspace.yaml"
-    if pnpm_path.exists():
+    if pnpm_path.exists() or pnpm_path.is_symlink():
         try:
             import yaml  # optional dependency
         except ImportError:
             return []  # cannot parse pnpm config → membership unproven (fail closed)
-        text = _read_manifest_text(pnpm_path)  # None if missing/oversized/bad-utf8
+        text = _read_manifest_text(pnpm_path)  # None if missing/dangling/oversized/bad-utf8
         if text is None:
             return []
         try:
@@ -366,7 +390,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
         return False
 
 
-def _workspace_root_for(package_dir: Path) -> Optional[Path]:
+def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None) -> Optional[Path]:
     """Return the ancestor workspace *root* that ``package_dir`` is a proven member
     of, or ``None`` when it is not a member of any ancestor workspace.
 
@@ -387,11 +411,11 @@ def _workspace_root_for(package_dir: Path) -> Optional[Path]:
     """
     ancestor = package_dir.parent
     for _ in range(80):
-        globs = _workspace_globs_for(ancestor)
+        globs = _workspace_globs_for(ancestor, cache)
         if globs:
             try:
                 rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
-            except ValueError:
+            except (ValueError, OSError, RuntimeError):
                 rel_parts = ()
             if rel_parts and _package_matches_workspace(rel_parts, globs):
                 return ancestor
@@ -415,7 +439,7 @@ def _is_within(child: Path, parent: Path) -> bool:
     try:
         child.resolve().relative_to(parent.resolve())
         return True
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         return False
 
 
@@ -423,7 +447,7 @@ def _is_strict_ancestor(ancestor: Path, descendant: Path) -> bool:
     """True if ``ancestor`` is a strict (proper) ancestor of ``descendant``."""
     try:
         rel = descendant.resolve().relative_to(ancestor.resolve())
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         return False
     return len(rel.parts) > 0
 
@@ -508,7 +532,7 @@ def _resolved_repo_root(test_path: Path) -> Optional[Path]:
     symlink escaping the repository."""
     try:
         directory = test_path.resolve().parent
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     for _ in range(4096):
         if (directory / ".git").exists():
@@ -598,7 +622,12 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         return None
 
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
-    search_dir = test_path.resolve().parent
+    try:
+        search_dir = test_path.resolve().parent
+    except (OSError, RuntimeError):
+        # A self-referential (looping) or otherwise unresolvable symlink path →
+        # refuse smart-runner discovery rather than crash the caller.
+        return None
     # Repository containment: anchor the repo root lexically (before symlinks are
     # resolved). If the resolved test path escapes that root, refuse to adopt any
     # out-of-repo runner config.
@@ -607,6 +636,9 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     # file that is itself a symlink escaping the repository — reliable even where
     # the lexical anchor is unset because of a harmless system symlink above it.
     repo_root = _resolved_repo_root(test_path)
+    # Per-discovery cache so each ancestor manifest is parsed at most once even as
+    # the walk revisits ancestors through _workspace_root_for (bounds O(n^2) reads).
+    ws_cache: dict = {}
     # Deepest ancestor-workspace root the original leaf must still reach; walk
     # *through* intermediate independent package.json manifests until then.
     ceiling: Optional[Path] = None
@@ -623,7 +655,7 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # its own package.json can still chain outward.
         member_root: Optional[Path] = None
         if pkg_here or (ceiling is not None and search_dir == ceiling):
-            member_root = _workspace_root_for(search_dir)
+            member_root = _workspace_root_for(search_dir, ws_cache)
             if member_root is not None and (ceiling is None or _is_strict_ancestor(member_root, ceiling)):
                 ceiling = member_root
         # Stop at the declaring workspace root, even when it has no package.json of
