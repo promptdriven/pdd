@@ -1646,3 +1646,38 @@ def test_pdd_created_tests_lock_is_gitignored_but_manifest_tracked():
     assert not _ignored(".pdd/meta/pdd_created_tests.json"), (
         "the ownership manifest itself must remain tracked"
     )
+
+
+def test_safe_regex_search_fails_closed_without_timeout_engine(monkeypatch):
+    """Without the wall-clock-timeout regex engine, untrusted patterns must not run.
+
+    Codex review (PR #1998): repo-controlled testRegex/testMatch are ReDoS
+    vectors. The length caps do not bound a SHORT catastrophic pattern, so when
+    the timeout-capable `regex` package is unavailable the fallback must fail
+    closed (return None) rather than evaluate the pattern with unbounded stdlib
+    `re`.
+    """
+    import pdd.content_selector as cs
+
+    monkeypatch.setattr(cs, "_HAVE_REDOS_REGEX", False)
+    # Even a trivially-matching pattern is not evaluated on the fallback path.
+    assert cs._safe_regex_search("a", "a") is None
+
+
+def test_safe_regex_search_times_out_on_catastrophic_pattern():
+    """A catastrophic short pattern fails closed (None) quickly, never hangs."""
+    import time
+    import pdd.content_selector as cs
+
+    if not cs._HAVE_REDOS_REGEX:
+        import pytest as _pytest
+        _pytest.skip("timeout-capable regex engine not installed")
+
+    evil = "(a+)+$"
+    text = "a" * 2000 + "!"  # forces catastrophic backtracking, non-matching tail
+    start = time.monotonic()
+    result = cs._safe_regex_search(evil, text)
+    elapsed = time.monotonic() - start
+
+    assert result is None  # fail closed on timeout
+    assert elapsed < 2.0, f"ReDoS not bounded: took {elapsed:.2f}s"

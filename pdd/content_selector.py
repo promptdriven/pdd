@@ -1130,12 +1130,19 @@ def _safe_regex_search(pattern: Optional[str], text: str) -> Optional[bool]:
         return None
     if len(pattern) > _REGEX_MAX_PATTERN_LEN or len(text) > _REGEX_MAX_TEXT_LEN:
         return None
+    if not _HAVE_REDOS_REGEX:
+        # No wall-clock-timeout engine available. A SHORT catastrophic pattern
+        # (e.g. ``(a+)+$``) well under the length caps can still backtrack
+        # exponentially in text length, so the caps alone do NOT bound stdlib
+        # ``re``. Repo-controlled patterns are hosted/issue-influenced, so fail
+        # closed rather than evaluate an untrusted regex without a timeout
+        # (ReDoS; Codex review, PR #1998). ``regex`` is declared directly in
+        # pyproject so this fallback is not reached in a normal install.
+        return None
     try:
-        if _HAVE_REDOS_REGEX:
-            return _redos_regex.search(
-                pattern, text, timeout=_REGEX_MATCH_TIMEOUT_S
-            ) is not None
-        return re.search(pattern, text) is not None
+        return _redos_regex.search(
+            pattern, text, timeout=_REGEX_MATCH_TIMEOUT_S
+        ) is not None
     except (re.error, ValueError, RecursionError, TimeoutError):
         return None
     except Exception:  # pylint: disable=broad-except  (regex.TimeoutError etc.)
