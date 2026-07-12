@@ -21,6 +21,7 @@ the very pollution this fix routes around (the provenance is read from the raw
 false green — see the round-4 blocker.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -31,12 +32,14 @@ sys.path.insert(0, str(project_root))
 import pytest
 
 from pdd.content_selector import (
+    _micromatch_to_regex,
     _pins_test_output_location,
     _validated_project_path,
     configured_test_output_pinned,
     find_collocated_test,
     find_runner_collected_test_path,
     resolve_test_output_path,
+    was_test_adopted,
 )
 from pdd.sync_determine_operation import (
     get_pdd_file_paths,
@@ -158,6 +161,36 @@ class TestResolveTestOutputPath:
         derived = tmp_path / "tests" / "test_foo.go"
         got = resolve_test_output_path(code, derived, user_pinned=False)
         assert Path(got) == derived
+
+    def test_excluded_sibling_is_not_adopted(self, tmp_path, monkeypatch):
+        # Round 9: an existing co-located sibling the runner PROVABLY does not
+        # collect (a PARSEABLE custom testMatch that excludes it) must NOT be
+        # adopted — that would preserve the false-green on an excluded file.
+        # Redirect away from the stale excluded sibling.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^30"}}\n')
+        _write(tmp_path / "jest.config.json",
+               json.dumps({"testMatch": ["<rootDir>/qa/**/*.spec.ts"]}))
+        code = _write(tmp_path / "src/page.ts")
+        stale = _write(tmp_path / "src/__test__/page.test.ts")  # NOT under qa/
+        derived = tmp_path / "tests" / "test_page.ts"
+        got = resolve_test_output_path(code, derived, user_pinned=False)
+        assert Path(got).resolve() != stale.resolve(), \
+            "must not adopt a runner-excluded sibling"
+        # And was_test_adopted must NOT claim adoption for the redirect target.
+        assert was_test_adopted(code, str(got), str(derived), user_pinned=False) is False
+
+    def test_collected_sibling_still_adopted(self, tmp_path, monkeypatch):
+        # Control: when the runner (default jest) DOES collect the co-located
+        # sibling, adoption still fires as before.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json", '{"devDependencies": {"jest": "^30"}}\n')
+        code = _write(tmp_path / "src/page.tsx")
+        real = _write(tmp_path / "src/__test__/page.test.tsx")
+        derived = tmp_path / "tests" / "test_page.tsx"
+        got = resolve_test_output_path(code, derived, user_pinned=False)
+        assert Path(got).resolve() == real.resolve()
+        assert was_test_adopted(code, str(got), str(derived), user_pinned=False) is True
 
 
 # ---------------------------------------------------------------------------
@@ -609,6 +642,27 @@ class TestGreenfieldRunnerDiscovery:
         # provenance keeps it OUT of the human-adopted never-block.
         assert was_test_adopted(code, str(gf), str(derived), user_pinned=False) is False
 
+    def test_concurrent_ownership_records_are_not_lost(self, tmp_path, monkeypatch):
+        # Round 9: parallel children recording greenfield ownership must not
+        # clobber each other (locked, atomic RMW). Every recorded path survives.
+        import threading
+        from pdd.content_selector import record_pdd_created_test, is_pdd_created_test
+        monkeypatch.chdir(tmp_path)
+        paths = [f"src/mod{i}/__test__/mod{i}.test.tsx" for i in range(40)]
+        barrier = threading.Barrier(len(paths))
+
+        def _rec(p):
+            barrier.wait()  # maximize contention on the shared manifest
+            record_pdd_created_test(p)
+
+        threads = [threading.Thread(target=_rec, args=(p,)) for p in paths]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        missing = [p for p in paths if not is_pdd_created_test(p)]
+        assert missing == [], f"lost ownership records under contention: {missing}"
+
     def test_dynamic_config_construction_refuses(self, tmp_path, monkeypatch):
         # A config that DYNAMICALLY builds discovery keys (join/computed) cannot
         # be proven a plain literal -> refuse.
@@ -633,6 +687,19 @@ class TestGreenfieldRunnerDiscovery:
         _write(tmp_path / "vitest.config.ts",
                "export default { test: { include: ['x/**/*.spec.ts'] } }\n")
         assert find_runner_collected_test_path(_write(tmp_path / "src/p.tsx")) is None
+
+    def test_globstar_only_crosses_separators_at_segment_boundary(self):
+        # Round 9: `**` is a globstar (crosses `/`) ONLY as a whole segment.
+        # Embedded `**` (`qa**/`, `**bar`) is a single-segment `*` in micromatch;
+        # translating it to `.*` would certify paths jest rejects.
+        def matches(glob, path):
+            rx = _micromatch_to_regex(glob)
+            return bool(rx) and bool(re.match(rx + r"$", path))
+        assert matches("**/qa/x.test.ts", "qa/x.test.ts")
+        assert matches("**/a/b.ts", "x/y/a/b.ts")
+        assert matches("qa**/page.test.ts", "qafoo/page.test.ts")   # single-segment
+        assert not matches("qa**/page.test.ts", "qa/x/page.test.ts")  # must NOT cross /
+        assert not matches("**bar/x.ts", "a/bar/x.ts")               # embedded, no cross
 
     def test_oversized_raw_pattern_is_bounded(self, tmp_path, monkeypatch):
         # A multi-megabyte raw testMatch glob must be rejected BEFORE translation
