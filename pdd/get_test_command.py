@@ -233,9 +233,13 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
             return []
         try:
             data = yaml.safe_load(text)
-        except (yaml.YAMLError, RecursionError):
-            # Unparseable or deeply-nested (recursion-bomb) pnpm workspace →
-            # membership unproven (fail closed).
+        except (yaml.YAMLError, ValueError, TypeError, RecursionError, OverflowError):
+            # Any construction failure on untrusted YAML → membership unproven
+            # (fail closed). ``yaml.YAMLError`` does NOT cover errors raised by
+            # scalar constructors: e.g. a malformed timestamp such as
+            # ``2020-99-99`` makes PyYAML raise a bare ``ValueError``
+            # ("month must be in 1..12"), and huge integers can raise
+            # ``OverflowError`` — none of which are ``yaml.YAMLError`` subclasses.
             return []
         if isinstance(data, dict):
             return _string_globs(data.get("packages"))
