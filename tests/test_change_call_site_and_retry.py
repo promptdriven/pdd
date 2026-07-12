@@ -254,6 +254,13 @@ pipeline.
 class TestDeterministicChangeJudges:
     """Unit coverage for release-gate judges used by the real LLM tests."""
 
+    def test_change_prompt_requires_call_site_safety_in_final_prompt(self) -> None:
+        template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
+
+        assert "final modified_prompt itself" in template
+        assert "name every affected call site" in template
+        assert "how each caller must adapt" in template
+
     def test_change_prompt_requires_retry_safety_in_final_prompt(self) -> None:
         template = Path("pdd/prompts/change_LLM.prompt").read_text(encoding="utf-8")
 
