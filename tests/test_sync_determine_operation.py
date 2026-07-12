@@ -3909,6 +3909,17 @@ def test_contained_architecture_code_path_rejects_nonportable_components(
     assert _contained_architecture_code_path(tmp_path, architecture_filepath) is None
 
 
+@pytest.mark.parametrize(
+    "noncanonical",
+    [".", "./foo.py", "src/./foo.py", "src//foo.py", "src/foo/", "foo/."],
+)
+def test_contained_architecture_code_path_rejects_noncanonical(tmp_path, noncanonical):
+    """A non-canonical architecture output filepath (dot segments, duplicate/trailing
+    separators, or no components) is rejected so it cannot count as a valid distinct
+    output (R10 extended to output filepaths)."""
+    assert _contained_architecture_code_path(tmp_path, noncanonical) is None
+
+
 def test_get_pdd_file_paths_unsafe_duplicate_does_not_shadow_valid_arch_row(
     tmp_path,
     monkeypatch,
