@@ -107,7 +107,7 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
     executable = Path(shutil.which(command[0]) or command[0]).resolve()
     roots.add(executable)
     for _label, path in released_runtime_closure_paths():
-        if path.name in {"bwrap", "sudo", "mount", "umount"} or any(
+        if path.name in {"bwrap", "setpriv", "sudo", "mount", "umount"} or any(
             path.is_relative_to(directory) for directory in directories
         ):
             continue
@@ -290,6 +290,11 @@ def _sandbox_command(
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
         for item in _runtime_roots(command, workdir):
             bind("--ro-bind", item)
+        # ``setpriv`` executes after the namespace root is installed, so bind
+        # it and its ELF closure directly even when PATH resolution differs.
+        if setpriv is not None:
+            for item in (Path(setpriv).resolve(), *_linked_libraries(Path(setpriv))):
+                bind("--ro-bind", item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
         argv.extend(("--dev", "/dev"))
