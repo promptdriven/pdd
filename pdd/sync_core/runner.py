@@ -52,6 +52,7 @@ PYTEST_PROTECTED_FLAGS = (
     "--strict-config", "--strict-markers", "-ra", "-p", "no:cacheprovider"
 )
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
+_RUNTIME_DIGEST_CACHE: tuple[tuple[tuple[str, str, int, int], ...], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -634,8 +635,16 @@ def _released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
 
 def _released_runtime_closure_digest() -> str:
     """Hash the released runtime by logical name, never installation prefix."""
+    global _RUNTIME_DIGEST_CACHE
+    entries = _released_runtime_closure_paths()
+    manifest = tuple(
+        (name, str(path), path.stat().st_mtime_ns, path.stat().st_size)
+        for name, path in entries
+    )
+    if _RUNTIME_DIGEST_CACHE is not None and _RUNTIME_DIGEST_CACHE[0] == manifest:
+        return _RUNTIME_DIGEST_CACHE[1]
     digest = hashlib.sha256()
-    for name, path in _released_runtime_closure_paths():
+    for name, path in entries:
         if not path.is_file():
             raise RuntimeError(f"released runtime entry is not a regular file: {name}")
         try:
@@ -647,7 +656,9 @@ def _released_runtime_closure_digest() -> str:
             # unusable merely because a host-only outer helper is protected.
             continue
         digest.update(name.encode("utf-8") + b"\0" + content + b"\0")
-    return digest.hexdigest()
+    result = digest.hexdigest()
+    _RUNTIME_DIGEST_CACHE = manifest, result
+    return result
 
 
 def _git_paths(root: Path, ref: str) -> tuple[PurePosixPath, ...]:
