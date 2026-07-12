@@ -2444,6 +2444,73 @@ def test_get_pdd_file_paths_path_qualified_unsafe_filename_row_does_not_block(tm
     assert paths["code"].as_posix().endswith("app/login/page.py")
 
 
+def test_get_pdd_file_paths_trailing_space_output_does_not_block_valid_row(tmp_path, monkeypatch):
+    """A trailing-space (noncanonical) output row — which resolution rejects — must not be
+    canonicalized in ambiguity counting and falsely conflict with a valid distinct row."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_Python.prompt").write_text("% widget\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "widget_Python.prompt", "filepath": "src/foo.py "},  # trailing space
+            {"filename": "widget_Python.prompt", "filepath": "src/bar.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    # The trailing-space row is unsafe (excluded), so only ONE valid output remains.
+    paths = get_pdd_file_paths("widget", "python", prompts_dir="prompts")
+    assert paths["code"].as_posix().endswith("src/bar.py")
+
+
+def test_get_pdd_file_paths_malformed_pddrc_denies_heuristic_borrow(tmp_path, monkeypatch):
+    """When the .pddrc defining context territory is present but UNPARSEABLE, a heuristic
+    (non-proven) architecture borrow cannot be confined and is denied (fail closed) rather
+    than falling open to permit a sibling-context target."""
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text("% backend\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text("contexts: {[ not valid yaml", encoding="utf-8")
+    # Non-prompt filename -> heuristic (filepath-stem) borrow targeting a sibling path.
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [{"filename": "credits.tsx", "filepath": "frontend/credits.py"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    paths = get_pdd_file_paths(
+        "credits", "python",
+        prompts_dir=str((tmp_path / "prompts" / "backend").resolve()),
+        context_override="backend",
+    )
+    assert not paths["code"].as_posix().endswith("frontend/credits.py")
+
+
+def test_get_pdd_file_paths_unaligned_escaping_symlink_does_not_block_qualified_creation(tmp_path, monkeypatch):
+    """An escaping same-leaf symlink under an UNRELATED directory must not hard-fail a
+    path-qualified new-module creation whose basename it does not align with."""
+    (tmp_path / "prompts" / "unrelated").mkdir(parents=True)
+    external = tmp_path / "external_page.prompt"
+    external.write_text("% external\n", encoding="utf-8")
+    try:
+        (tmp_path / "prompts" / "unrelated" / "page_Python.prompt").symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unsupported")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+
+    # New path-qualified module backend/foo/page; the unrelated escaping symlink (leaf
+    # 'page') must not hard-fail it.
+    paths = get_pdd_file_paths(
+        "backend/foo/page", "python", prompts_dir=str((tmp_path / "prompts").resolve()),
+    )
+    assert paths["prompt"].name.lower() == "page_python.prompt"
+
+
 def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_path, monkeypatch):
     """A bare basename that architecture.json maps to two DISTINCT valid outputs MUST
     raise AmbiguousModuleError before any prompt/fallback resolution (positive R11)."""

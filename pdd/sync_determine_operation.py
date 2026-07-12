@@ -999,6 +999,8 @@ def _filepath_matches_context(
 
 
 _TERRITORY_CONFIG_UNSET: Any = object()
+# Distinct from ``None`` (no .pddrc at all): a .pddrc was found but could not be parsed.
+_TERRITORY_MALFORMED: Any = object()
 
 
 def _filepath_owned_by_other_context(
@@ -1474,6 +1476,25 @@ def _find_prompt_file(
                     candidate, prompts_root, context_prefix
                 )
             ]
+        if "/" in basename and relevant_unsafe:
+            # An escaping same-leaf symlink under an UNRELATED directory must not hard-fail
+            # a path-qualified creation: restrict the hard failure to unsafe candidates that
+            # actually align with the requested basename's directory suffix, exactly as the
+            # safe matches above are aligned.
+            _bn_variants = {tuple(p.lower() for p in Path(basename).parts)}
+            _rel_bn = _relative_basename_for_context(basename, context_name, resolved_prompts_root)
+            if _rel_bn != basename:
+                _bn_variants.add(tuple(p.lower() for p in Path(_rel_bn).parts))
+
+            def _unsafe_aligns(cand: Path) -> bool:
+                leaf = extract_module_from_include(cand.name) or cand.stem
+                parts = tuple(p.lower() for p in cand.parent.parts + (leaf,))
+                return any(
+                    len(bp) <= len(parts) and tuple(parts[-len(bp):]) == bp
+                    for bp in _bn_variants
+                )
+
+            relevant_unsafe = [c for c in relevant_unsafe if _unsafe_aligns(c)]
         if relevant_unsafe:
             raise UnsafePromptPathError(relevant_unsafe[0], resolved_prompts_root)
 
@@ -1546,7 +1567,11 @@ def _get_filepath_from_architecture(
                 territory_config = _load_pddrc_config(territory_pddrc)
                 territory_project_root = territory_pddrc.parent
             except (ValueError, KeyError, TypeError):
-                territory_config = None
+                # Present but unparseable: mark it so a heuristic borrow (which needs
+                # territory to be confined) is denied rather than falling open to the
+                # permissive "no territory" behavior.
+                territory_config = _TERRITORY_MALFORMED
+                territory_project_root = territory_pddrc.parent
 
         # Issue #1677: a path-qualified basename (e.g. `foo/page`) must only match a
         # module whose filepath aligns with its directory. Otherwise an exact match on
@@ -1720,9 +1745,18 @@ def _get_filepath_from_architecture(
                 project_root=territory_project_root,
             )
             ownership = _belongs_to_resolved_prompt(module)
-            allowed = ownership != _OWNERSHIP_INELIGIBLE and (
-                context_owned or ownership == _OWNERSHIP_PROVEN
-            )
+            if ownership == _OWNERSHIP_INELIGIBLE:
+                borrow_ownership_cache[cache_key] = False
+                return False
+            # A heuristic (non-proven) borrow is only safe if it can be confined to the
+            # resolving context's territory. When the .pddrc defining that territory is
+            # present but UNPARSEABLE, confinement cannot be verified — deny the heuristic
+            # borrow (fail closed) instead of falling open to the permissive default. A
+            # proven, explicit prompt->code mapping is still honored.
+            if territory_config is _TERRITORY_MALFORMED and ownership != _OWNERSHIP_PROVEN:
+                borrow_ownership_cache[cache_key] = False
+                return False
+            allowed = context_owned or ownership == _OWNERSHIP_PROVEN
             borrow_ownership_cache[cache_key] = allowed
             return allowed
 
@@ -1983,20 +2017,22 @@ def _architecture_module_choices(
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
-            filepath_q = filepath_value.strip()
+            # Validate the RAW filepath (not a stripped copy): a trailing-space or
+            # otherwise noncanonical value that resolution rejects must not be
+            # canonicalized here and then counted as a valid output.
+            if _contained_architecture_code_path(architecture_path.parent, filepath_value) is None:
+                continue
             # Use the SAME context-relative basename and anchor as final resolution, so a
             # context-prefixed qualified basename (stripped during resolution) is counted
             # consistently instead of evading detection under the raw prefix.
             if not _module_filepath_matches_basename(
-                filepath_q, basename,
+                filepath_value, basename,
                 context_name=context_name, pddrc_anchor=architecture_path.parent,
             ):
                 continue
-            if lang_ext_q and PurePosixPath(filepath_q).suffix.lstrip(".").lower() != lang_ext_q:
+            if lang_ext_q and PurePosixPath(filepath_value).suffix.lstrip(".").lower() != lang_ext_q:
                 continue
-            if _contained_architecture_code_path(architecture_path.parent, filepath_q) is None:
-                continue
-            qualified.add(PurePosixPath(filepath_q).as_posix())
+            qualified.add(PurePosixPath(filepath_value).as_posix())
         return sorted(qualified)
 
     target_filename = f"{basename}_{language}.prompt".lower()
@@ -2048,7 +2084,9 @@ def _architecture_module_choices(
         # must not count toward ambiguity: otherwise a valid ``foo -> src/foo.py`` plus a
         # same-filename ``foo -> ../../outside/foo.py`` read as two targets and raise
         # AmbiguousModuleError, blocking the valid module.
-        if _contained_architecture_code_path(architecture_path.parent, filepath) is None:
+        # Validate the RAW filepath so a trailing-space / noncanonical value (which
+        # resolution rejects) is not canonicalized by the earlier strip and counted.
+        if _contained_architecture_code_path(architecture_path.parent, filepath_value) is None:
             continue
         distinct.add(Path(filepath).as_posix())
 
