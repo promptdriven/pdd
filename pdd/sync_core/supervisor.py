@@ -314,6 +314,8 @@ def _sandbox_command(
                 destination_dirs.add(directory)
             sources.append(source)
             argv.extend((option, f"@FD:{len(sources) - 1}@", str(source)))
+            if source.is_dir():
+                destination_dirs.add(source)
         for item in _runtime_roots(command, workdir):
             bind("--ro-bind", item)
         # ``setpriv`` executes after the namespace root is installed, so bind

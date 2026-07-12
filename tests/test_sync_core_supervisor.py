@@ -47,6 +47,32 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
 
 
+def test_sandbox_directory_bind_provides_parent_for_nested_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nested = tmp_path / "candidate-venv" / "bin"
+    nested.mkdir(parents=True)
+    interpreter = nested / "python"
+    interpreter.write_text("python", encoding="utf-8")
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    argv, _profile = _sandbox_command([str(interpreter)], (tmp_path,), cwd=tmp_path)
+    bwrap = json.loads(argv[-2])
+    directory_targets = {
+        bwrap[index + 1] for index, value in enumerate(bwrap[:-1])
+        if value == "--dir"
+    }
+    assert str(nested) not in directory_targets
+
+
 def test_protected_runner_declares_finite_resource_limits() -> None:
     limits = SupervisorLimits()
     assert 0 < limits.max_output_bytes <= 16 * 1024 * 1024
