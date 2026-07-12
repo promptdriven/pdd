@@ -2335,6 +2335,28 @@ def test_get_pdd_file_paths_bare_basename_two_valid_outputs_raise_ambiguous(tmp_
         get_pdd_file_paths("page", "python", prompts_dir="prompts")
 
 
+def test_get_pdd_file_paths_case_variant_stem_outputs_raise_ambiguous(tmp_path, monkeypatch):
+    """Two case-variant filepath-stem outputs for a bare basename are BOTH counted
+    (case-insensitively, matching resolution) and raise AmbiguousModuleError; a
+    case-sensitive count would undercount and let the module silently fall through."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "A.tsx", "filepath": "a/foo.py"},
+            {"filename": "B.tsx", "filepath": "b/Foo.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("foo", "python", prompts_dir="prompts")
+
+
 def test_get_pdd_file_paths_non_string_filepath_does_not_block_valid_module(tmp_path, monkeypatch):
     """A malformed row with a non-string filepath is ignored, not stringified into a
     bogus distinct output that would falsely raise AmbiguousModuleError for a valid row."""

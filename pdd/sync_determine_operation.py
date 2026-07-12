@@ -340,8 +340,13 @@ def _resolve_prompt_path_from_architecture(
     )
     if not contained:
         return None
-    if resolved_joined and (
-        basename is None or _prompt_candidate_aligns_basename(resolved_joined, basename)
+    if (
+        resolved_joined
+        and (basename is None or _prompt_candidate_aligns_basename(resolved_joined, basename))
+        and (
+            not context_prefix
+            or _prompt_path_has_context_prefix(resolved_joined, prompts_root, context_prefix)
+        )
     ):
         return resolved_joined
 
@@ -387,6 +392,14 @@ def _resolve_prompt_path_from_architecture(
                 raise UnsafePromptPathError(relevant_unsafe[0], resolved_root)
 
     if basename is not None and not _prompt_candidate_aligns_basename(joined, basename):
+        return None
+    # A context prefix scopes EVERY architecture-hint return, not only the recursive
+    # matches: a flat/lexical join that lacks the resolving context's prefix must not
+    # be returned (it would pair a wrong-context prompt with the requested context's
+    # code). Fall through to the caller's context-anchored construction instead.
+    if context_prefix and not _prompt_path_has_context_prefix(
+        joined, prompts_root, context_prefix
+    ):
         return None
     return joined
 
@@ -1918,7 +1931,11 @@ def _architecture_module_choices(
             # is identified by its filepath stem instead. Gate on the language
             # extension so a same-stem file in another language is not conflated.
             suffix = Path(filepath).suffix.lstrip(".").lower()
-            matched = bool(Path(filepath).stem == basename and lang_ext and suffix == lang_ext)
+            matched = bool(
+                Path(filepath).stem.lower() == basename.lower()
+                and lang_ext
+                and suffix == lang_ext
+            )
         if not matched:
             continue
         # Only NOW — for the handful of filename/stem matches, not every module — pay
