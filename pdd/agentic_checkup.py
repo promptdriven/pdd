@@ -1935,8 +1935,12 @@ def run_agentic_checkup(
             pr_content=final_gate_pr_content,
             layer1_step5_evidence=layer1_step5_evidence_for_review,
             # This is the known Layer 1 result, not the complete two-layer ship
-            # verdict. The outer finalizer publishes complete-gate authority.
-            final_gate_canonical_status="pass",
+            # verdict. Concrete failed/error Step 5 evidence still owns the
+            # provisional status until its seeded finding is positively fixed.
+            # The outer finalizer publishes complete-gate authority.
+            final_gate_canonical_status=(
+                "pass" if not layer1_step5_evidence_for_review else ""
+            ),
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),
