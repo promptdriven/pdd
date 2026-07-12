@@ -35,6 +35,13 @@ _MAX_BRACE_EXPANSION = 1024
 # ``_relative_matches_workspace_glob``.
 _MAX_GLOB_SEGMENTS = 256
 
+# Upper bound on the number of raw glob entries evaluated for a single package's
+# membership. A declaration with more entries than this is treated as hostile
+# and fails membership closed. Combined with ``_MAX_BRACE_EXPANSION`` (which is
+# an *aggregate* budget shared across every glob in one membership check), this
+# bounds total brace expansion regardless of how the manifest splits the work.
+_MAX_RAW_GLOBS = 4096
+
 
 class _PatternBudgetError(Exception):
     """Raised when an untrusted workspace pattern exceeds a safety budget
@@ -68,9 +75,20 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
     Matching is an iterative ``O(len(rel) * len(pattern))`` dynamic program (no
     recursion and no list slicing), so a hostile pattern with many ``**``
     segments cannot drive it into exponential backtracking or ``RecursionError``.
-    A pattern longer than ``_MAX_GLOB_SEGMENTS`` raises ``_PatternBudgetError`` so
-    membership fails closed.
+    The segment count is bounded *before* the pattern is split (a cheap
+    ``count('/')`` check), and a pattern past ``_MAX_GLOB_SEGMENTS`` raises
+    ``_PatternBudgetError`` so membership fails closed without materializing a
+    huge segment list.
+
+    Dot semantics follow npm/minimatch's default (``dot: false``): a wildcard
+    segment (``*``/``**`` or an fnmatch pattern) does NOT match a path segment
+    that begins with ``.`` unless the *pattern* segment also begins with ``.``.
+    So ``packages/*`` does not match ``packages/.shadow``, but ``packages/.*``
+    does.
     """
+    # Cheap guard before allocating the split list (a "slash wall" attack).
+    if pattern.count("/") > _MAX_GLOB_SEGMENTS:
+        raise _PatternBudgetError
     pat_parts = [p for p in pattern.strip("/").split("/") if p not in ("", ".")]
     if len(pat_parts) > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
@@ -83,15 +101,26 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
     for j in range(m - 1, -1, -1):
         dp[n][j] = pat_parts[j] == "**" and dp[n][j + 1]
     for i in range(n - 1, -1, -1):
+        seg_is_dot = rel[i].startswith(".")
         for j in range(m - 1, -1, -1):
             head = pat_parts[j]
             if head == "**":
                 # ``**`` matches zero segments (advance pattern) or one-or-more
-                # (consume rel[i], stay on the same ``**``).
-                dp[i][j] = dp[i][j + 1] or dp[i + 1][j]
+                # (consume rel[i], stay on the same ``**``). Under dot:false a
+                # leading-dot segment is not consumed by ``**``.
+                dp[i][j] = dp[i][j + 1] or (not seg_is_dot and dp[i + 1][j])
             else:
-                dp[i][j] = fnmatch.fnmatch(rel[i], head) and dp[i + 1][j + 1]
+                dp[i][j] = _segment_matches(rel[i], head) and dp[i + 1][j + 1]
     return dp[0][0]
+
+
+def _segment_matches(name: str, pattern_segment: str) -> bool:
+    """fnmatch a single path segment with minimatch ``dot:false`` semantics: a
+    wildcard pattern segment does not match a ``name`` that begins with ``.``
+    unless the pattern segment itself begins with ``.``."""
+    if name.startswith(".") and not pattern_segment.startswith("."):
+        return False
+    return fnmatch.fnmatch(name, pattern_segment)
 
 
 def _workspace_globs_for(ancestor: Path) -> list:
@@ -122,8 +151,10 @@ def _workspace_globs_for(ancestor: Path) -> list:
             return []  # cannot parse pnpm config → membership unproven (fail closed)
         try:
             data = yaml.safe_load(pnpm_path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, OSError, UnicodeError):
-            return []  # conservative: unparseable/invalid-encoding pnpm workspace
+        except (yaml.YAMLError, OSError, UnicodeError, RecursionError):
+            # Unparseable, invalid-encoding, or deeply-nested (recursion-bomb)
+            # pnpm workspace → membership unproven (fail closed).
+            return []
         if isinstance(data, dict):
             return _string_globs(data.get("packages"))
         return []
@@ -166,8 +197,13 @@ def _string_globs(value) -> list:
     return list(value)
 
 
-def _split_top_level_commas(body: str) -> list:
-    """Split a brace body on commas that are not inside a nested brace group."""
+def _split_top_level_commas(body: str, limit: int) -> list:
+    """Split a brace body on commas that are not inside a nested brace group.
+
+    Raises ``_BraceBudgetError`` once more than ``limit`` top-level options would
+    be produced, so a brace body with millions of commas cannot materialize a
+    huge list before the caller's budget is consulted.
+    """
     parts, depth, current = [], 0, []
     for char in body:
         if char == "{":
@@ -179,34 +215,48 @@ def _split_top_level_commas(body: str) -> list:
         elif char == "," and depth == 0:
             parts.append("".join(current))
             current = []
+            if len(parts) > limit:
+                raise _BraceBudgetError
         else:
             current.append(char)
     parts.append("".join(current))
+    if len(parts) > limit:
+        raise _BraceBudgetError
     return parts
 
 
-def _expand_braces(pattern: str) -> list:
+def _expand_braces(pattern: str, budget: Optional[list] = None) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
     concrete patterns. Unbalanced or single-option braces are left literal.
 
-    Expansion is *iterative* (a worklist, not recursion) and bounded on both the
-    number of finished patterns and the transient worklist size. Either bound
-    exceeded raises ``_BraceBudgetError`` so the caller fails membership closed
-    instead of materializing an exponential list — or overflowing the recursion
-    stack — from an untrusted manifest (a ``{a,b}`` brace bomb, including one with
-    thousands of nested groups).
+    Expansion is *iterative* (a worklist, not recursion) and bounded by a shared
+    ``budget`` — a single-element mutable list holding the number of finished
+    patterns still permitted. The caller passes one budget across every glob in a
+    membership check, so total expansion is bounded regardless of how a manifest
+    splits work across many globs; the transient worklist is bounded too. Any
+    bound exceeded raises ``_BraceBudgetError`` so the caller fails membership
+    closed instead of materializing an exponential list — or overflowing the
+    recursion stack — from an untrusted manifest (a ``{a,b}`` brace bomb,
+    including one with thousands of nested groups or millions of comma options).
     """
+    if budget is None:
+        budget = [_MAX_BRACE_EXPANSION]
+
+    def _emit(value: str) -> None:
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise _BraceBudgetError
+        out.append(value)
+
     out: list = []
     worklist = [pattern]
     while worklist:
-        if len(worklist) > _MAX_BRACE_EXPANSION:
+        if len(worklist) > budget[0] + 1:
             raise _BraceBudgetError
         pat = worklist.pop()
         start = pat.find("{")
         if start == -1:
-            out.append(pat)
-            if len(out) > _MAX_BRACE_EXPANSION:
-                raise _BraceBudgetError
+            _emit(pat)
             continue
         depth, end = 0, -1
         for i in range(start, len(pat)):
@@ -218,15 +268,11 @@ def _expand_braces(pattern: str) -> list:
                     end = i
                     break
         if end == -1:
-            out.append(pat)  # unbalanced → treat literally
-            if len(out) > _MAX_BRACE_EXPANSION:
-                raise _BraceBudgetError
+            _emit(pat)  # unbalanced → treat literally
             continue
-        options = _split_top_level_commas(pat[start + 1:end])
+        options = _split_top_level_commas(pat[start + 1:end], budget[0] + 1)
         if len(options) < 2:
-            out.append(pat)  # not a real alternation → literal
-            if len(out) > _MAX_BRACE_EXPANSION:
-                raise _BraceBudgetError
+            _emit(pat)  # not a real alternation → literal
             continue
         prefix, suffix = pat[:start], pat[end + 1:]
         for option in options:
@@ -239,18 +285,23 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list) -> bool:
     semantics: at least one positive pattern matches and no ``!`` exclusion does.
 
     Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
-    brace alternations are expanded before matching.
+    brace alternations are expanded before matching. All expansion for one
+    membership check shares a single aggregate budget, so a declaration with many
+    globs cannot multiply past the budget.
     """
+    if len(globs) > _MAX_RAW_GLOBS:
+        return False  # hostile declaration size → membership unproven (fail closed)
     try:
+        budget = [_MAX_BRACE_EXPANSION]  # shared across every glob below
         positives, negatives = [], []
         for raw in globs:
             raw = str(raw).strip()
             if not raw:
                 continue
             if raw.startswith("!"):
-                negatives.extend(_expand_braces(raw[1:]))
+                negatives.extend(_expand_braces(raw[1:], budget))
             else:
-                positives.extend(_expand_braces(raw))
+                positives.extend(_expand_braces(raw, budget))
         if not any(_relative_matches_workspace_glob(rel_parts, p) for p in positives):
             return False
         return not any(_relative_matches_workspace_glob(rel_parts, n) for n in negatives)
@@ -323,21 +374,61 @@ def _is_strict_ancestor(ancestor: Path, descendant: Path) -> bool:
     return len(rel.parts) > 0
 
 
-def _lexical_repo_root(test_path: Path) -> Optional[Path]:
-    """Find the nearest ``.git`` ancestor of ``test_path`` on its *lexical*
-    (un-resolved, ``abspath``) parent chain, or ``None`` if there is none.
+def _lexical_strict_ancestor(ancestor: Path, descendant: Path) -> bool:
+    """True if ``ancestor`` is a strict ancestor of ``descendant`` comparing the
+    paths *lexically* (no symlink resolution)."""
+    try:
+        rel = Path(descendant).relative_to(Path(ancestor))
+    except ValueError:
+        return False
+    return len(rel.parts) > 0
 
-    Only a *non-symlinked* directory may anchor the root: if ``directory`` is
-    itself a symlink, its ``.git`` probe would follow the link out of the tree
-    (e.g. ``repo/link -> /outside`` where ``/outside/.git`` exists), so such a
-    directory is skipped. Combined with the resolved-path containment check in
-    :func:`_detect_ts_test_runner`, this refuses both a symlinked test directory
-    that escapes a repository and one whose target is itself a foreign checkout —
-    without rejecting a symlink that stays inside the repository.
+
+def _lexical_repo_root(test_path: Path) -> Optional[Path]:
+    """Find the repository root that lexically contains ``test_path``, or ``None``.
+
+    The root is the nearest ``.git`` ancestor that lies at or above the *deepest
+    symlinked directory* on the test file's lexical (``abspath``) path. Anchoring
+    above the deepest symlink is what makes containment correct in the presence
+    of symlinks:
+
+    * A symlinked test directory escaping the repo (``repo/tests -> /outside``,
+      only ``repo/.git``) anchors at ``repo``; the resolved path then escapes
+      ``repo`` and is refused by :func:`_detect_ts_test_runner`.
+    * A symlink whose target is itself a foreign checkout
+      (``repo/link -> /outside`` where ``/outside/foreign/.git`` exists, test at
+      ``repo/link/foreign/...``) still anchors at ``repo`` — the foreign
+      ``.git`` sits *below* the symlink and is ignored — so the foreign config
+      is refused.
+    * A symlink that stays inside the repository still anchors at ``repo`` and
+      the resolved path stays within it, so detection proceeds normally.
+
+    Harmless system symlinks above the repository (e.g. macOS ``/var`` →
+    ``/private/var``) are the deepest symlink only when there is no repo-internal
+    symlink, in which case no ``.git`` lies above them and this returns ``None``
+    (containment simply not required — the ordinary ``.git`` stop in the walk
+    governs). The walk runs to the filesystem root (no artificial depth cap), so
+    a deeply nested but legitimate repository is still anchored.
     """
-    directory = Path(os.path.abspath(str(test_path))).parent
-    for _ in range(200):
-        if not os.path.islink(str(directory)) and (directory / ".git").exists():
+    lex = Path(os.path.abspath(str(test_path)))
+    # Deepest lexical directory on the path that is a symlink.
+    deepest_link: Optional[Path] = None
+    parts = lex.parts
+    if parts:
+        cursor = Path(parts[0])
+        for part in parts[1:]:
+            cursor = cursor / part
+            try:
+                if os.path.islink(str(cursor)):
+                    deepest_link = cursor
+            except OSError:
+                pass
+    directory = lex.parent
+    for _ in range(4096):  # generous bound; real paths hit the fs root far sooner
+        above_deepest_link = (
+            deepest_link is None or _lexical_strict_ancestor(directory, deepest_link)
+        )
+        if above_deepest_link and (directory / ".git").exists():
             return directory
         parent = directory.parent
         if parent == directory:

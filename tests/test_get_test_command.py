@@ -19,6 +19,7 @@ from pdd.get_test_command import (
     _BraceBudgetError,
     _PatternBudgetError,
     _relative_matches_workspace_glob,
+    _lexical_repo_root,
 )
 
 
@@ -810,6 +811,113 @@ class TestWorkspaceMembershipHardening:
         anc.mkdir()
         (anc / "pnpm-workspace.yaml").write_bytes(b"packages:\n  - '\xff\xfe'\n")
         assert _workspace_globs_for(anc) == []
+
+    def test_symlink_to_nested_foreign_checkout_is_refused(self, tmp_path):
+        """A symlinked component whose target holds a *nested* foreign checkout.
+
+        `repo/link -> outside`, `repo/.git`, `outside/foreign/.git`,
+        `outside/foreign/jest.config.js`, test at `repo/link/foreign/foo.test.ts`.
+        The `.git` probe must not follow the `link` symlink to anchor at the
+        foreign checkout; containment anchors at `repo` and refuses.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        outside = tmp_path / "outside"
+        (outside / "foreign").mkdir(parents=True)
+        (outside / "foreign" / ".git").mkdir()
+        (outside / "foreign" / "jest.config.js").write_text("module.exports = {};")
+        (outside / "foreign" / "foo.test.ts").write_text("describe('x', () => {})")
+        (repo / "link").symlink_to(outside, target_is_directory=True)
+
+        result = _detect_ts_test_runner(repo / "link" / "foreign" / "foo.test.ts")
+        assert result is None
+
+    def test_deep_path_ending_in_escape_symlink_is_refused(self, tmp_path):
+        """A deep (>200-segment) in-repo path ending in an escaping symlink.
+
+        `_lexical_repo_root` must walk to the real repo root (no artificial depth
+        cap) and anchor there, so the just-outside config is refused rather than
+        adopted because containment was silently skipped.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "jest.config.js").write_text("module.exports = {};")
+        (outside / "foo.test.ts").write_text("describe('x', () => {})")
+        deep = repo
+        for _ in range(205):
+            deep = deep / "a"
+        deep.mkdir(parents=True)
+        (deep / "esc").symlink_to(outside, target_is_directory=True)
+
+        assert _lexical_repo_root(deep / "esc" / "foo.test.ts") == repo.resolve()
+        assert _detect_ts_test_runner(deep / "esc" / "foo.test.ts") is None
+
+    def test_dotfile_segment_not_matched_by_wildcard(self):
+        """minimatch dot:false — a wildcard must not match a leading-dot segment."""
+        assert _package_matches_workspace(("packages", ".shadow"), ["packages/*"]) is False
+        assert _package_matches_workspace((".shadow", "pkg"), ["**"]) is False
+        assert _package_matches_workspace((".shadow", "pkg"), ["**/pkg"]) is False
+        # An explicit dot pattern DOES match.
+        assert _package_matches_workspace(("packages", ".shadow"), ["packages/.*"]) is True
+        assert _package_matches_workspace(("packages", ".shadow"), ["packages/.shadow"]) is True
+        # Ordinary (non-dot) segments are unaffected.
+        assert _package_matches_workspace(("packages", "app"), ["packages/*"]) is True
+        assert _package_matches_workspace(("a", "b", "c"), ["**"]) is True
+
+    def test_dotfile_package_does_not_adopt_workspace_config(self, tmp_path):
+        """A `.shadow` package under `packages/*` must not inherit the root config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / ".shadow"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_aggregate_brace_budget_across_many_globs_fails_closed(self):
+        """The brace budget is aggregate: thousands of expanding globs fail closed."""
+        many = ["packages/{a,b}"] * 3000
+        assert _package_matches_workspace(("packages", "a"), many) is False
+
+    def test_raw_glob_count_cap_fails_closed(self):
+        """A declaration with an absurd number of raw globs fails closed."""
+        assert _package_matches_workspace(("packages", "a"), ["packages/*"] * 5000) is False
+
+    def test_moderate_glob_declaration_still_matches(self):
+        """A realistic (dozens) declaration is unaffected by the budgets."""
+        globs = ["packages/x{}".format(i) for i in range(49)] + ["packages/*"]
+        assert _package_matches_workspace(("packages", "app"), globs) is True
+
+    def test_comma_bomb_brace_fails_closed(self):
+        """A single brace with a huge number of comma options fails closed."""
+        with pytest.raises(_BraceBudgetError):
+            _expand_braces("x{" + ",".join(["a"] * 200000) + "}")
+
+    def test_pnpm_yaml_recursion_bomb_fails_closed(self, tmp_path):
+        """Deeply nested YAML must fail closed rather than raising RecursionError."""
+        pytest.importorskip("yaml")
+        anc = tmp_path / "a"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text("packages: " + "[" * 3000 + "]" * 3000 + "\n")
+        assert _workspace_globs_for(anc) == []
+
+    def test_slash_wall_glob_fails_closed(self):
+        """A glob with thousands of `/` segments fails closed via the segment cap."""
+        with pytest.raises(_PatternBudgetError):
+            _relative_matches_workspace_glob(("a",), "/".join(["x"] * 1000))
+        assert _package_matches_workspace(("a",), ["/".join(["x"] * 1000)]) is False
 
 
 class TestPlaywrightDetection:
