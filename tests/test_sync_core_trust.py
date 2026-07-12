@@ -208,7 +208,9 @@ def test_remote_signer_timeout_reaps_env_cleared_detached_descendant(
         with pytest.raises(ValueError, match="timed out"):
             signer.sign_bytes(b"payload")
 
-    assert timed_out and timed_out[0].output
+    assert timed_out and timed_out[0].output, (
+        timed_out[0].stderr if timed_out else "signer did not time out"
+    )
     pid = int(timed_out[0].output.strip())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)

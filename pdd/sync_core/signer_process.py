@@ -149,7 +149,12 @@ def _wait_for_signer_start(
     """Wait briefly for the containment init to launch the signer child."""
     deadline = time.monotonic() + 0.5
     while not ready_path.exists():
-        if process.poll() is not None or time.monotonic() >= deadline:
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise subprocess.TimeoutExpired(
+                command, timeout, output=stdout, stderr=stderr
+            )
+        if time.monotonic() >= deadline:
             _kill_bounded(process, token)
             raise subprocess.TimeoutExpired(command, timeout)
         time.sleep(0.005)
