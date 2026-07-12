@@ -891,6 +891,12 @@ def _js_config_text_has_custom_discovery(config_file: Path) -> bool:
         text = config_file.read_text(encoding="utf-8", errors="ignore")
     except (OSError, ValueError):
         return True  # unreadable opaque config -> cannot prove default -> refuse
+    # Check discovery keys against the ORIGINAL text (round 8): string-stripping
+    # would erase a QUOTED property key like ``"testMatch"``, so a discovery key
+    # anywhere in the raw text — quoted or not — forces refusal (a discovery word
+    # inside a string VALUE only over-refuses, which is safe).
+    if _JS_RUNNER_DISCOVERY_RE.search(text):
+        return True
     return not _js_config_is_trivial_default_literal(text)
 
 
@@ -937,25 +943,30 @@ def _collect_js_runner_config(
                     pass
         pkg = current / "package.json"
         pkg_block = _jest_config_from_package_json(pkg) if pkg.is_file() else None
-        js_config_file: Optional[Path] = None
+        # Collect EVERY JS/TS config file at this level (round 8) — e.g. both a
+        # ``jest.config.js`` AND a ``vitest.config.ts`` — so two distinct runner
+        # config files count as two sources rather than the loop silently keeping
+        # only the first and missing the ambiguity.
+        js_config_files: list[Path] = []
         for stem in _JS_RUNNER_CONFIG_FILE_STEMS:
             for ext in (".js", ".ts", ".mjs", ".cjs", ".mts", ".cts"):
                 jsfile = current / f"{stem}{ext}"
                 if jsfile.is_file():
-                    js_config_file = jsfile
-                    break
-            if js_config_file is not None:
-                break
+                    js_config_files.append(jsfile)
 
-        sources = [s for s in (json_config, pkg_block, js_config_file) if s is not None]
-        if len(sources) > 1:
+        source_count = (
+            (1 if json_config is not None else 0)
+            + (1 if pkg_block is not None else 0)
+            + len(js_config_files)
+        )
+        if source_count > 1:
             return {}, current, True  # ambiguous active runner -> refuse
         if json_config is not None:
             return json_config, current, False
         if pkg_block is not None:
             return pkg_block, current, False
-        if js_config_file is not None:
-            return {}, current, _js_config_text_has_custom_discovery(js_config_file)
+        if js_config_files:
+            return {}, current, _js_config_text_has_custom_discovery(js_config_files[0])
 
         if str(current) == root_s or not _contained_in_root(current, root_resolved):
             break
@@ -1125,6 +1136,11 @@ def _glob_matches(glob: str, posix_path: str) -> Optional[bool]:
     the ReDoS timeout, or ``None`` when it is not (negation, compile failure, or
     a timeout) so the caller stays conservative rather than guessing.
     """
+    # Reject an oversized RAW glob BEFORE translation (round 8): a multi-megabyte
+    # repo-controlled pattern would otherwise be fully scanned/expanded by
+    # ``_micromatch_to_regex`` outside the regex timeout and aggregate deadline.
+    if glob is None or len(glob) > _REGEX_MAX_PATTERN_LEN:
+        return None
     return _safe_regex_search(_micromatch_to_regex(glob), posix_path)
 
 
@@ -1173,6 +1189,8 @@ def _testmatch_literal_dir(glob: str, root_dir: Path) -> Optional[Path]:
     pattern has no fixed directory anchor. Used to derive a collected write
     location for a centralized (non-co-located) test layout (issue #1903 §A).
     """
+    if glob is None or len(glob) > _REGEX_MAX_PATTERN_LEN:
+        return None  # round 8: bound preprocessing of an oversized raw pattern
     sub = _sub_root_dir(glob, root_dir)
     idx = next((i for i, c in enumerate(sub) if c in _GLOB_WILDCARD_CHARS), len(sub))
     slash = sub.rfind("/", 0, idx)
@@ -1223,9 +1241,13 @@ def _greenfield_candidate_paths(
     """
     stem = module_path.stem
     ext = module_path.suffix
-    hint = " ".join(
+    # Bound the hint scan (round 8): only a fixed number of patterns, each a
+    # bounded prefix, so a hostile multi-megabyte ``testMatch`` cannot turn this
+    # substring probe into unbounded preprocessing work.
+    _hint_pats = (
         _as_str_list(config.get("testMatch")) + _as_str_list(config.get("testRegex"))
-    ).lower()
+    )[:_MAX_RUNNER_PATTERNS]
+    hint = " ".join(p[:_REGEX_MAX_PATTERN_LEN] for p in _hint_pats).lower()
 
     if "spec" in hint and "test" not in hint:
         infixes = [".spec", ".test"]
@@ -1682,10 +1704,16 @@ def was_test_adopted(
 
 # Manifest of tests PDD GREENFIELD-created itself (issue #1903 review round 7),
 # so a later run never mistakes a PDD-owned co-located test for a human-adopted
-# one when deciding the churn never-block. Repo-relative POSIX paths, committed
-# with the project so it persists across the issue-driven runner's fresh
-# worktrees.
-_PDD_CREATED_TESTS_MANIFEST = Path(".pdd") / "pdd_created_tests.json"
+# one when deciding the churn never-block. Repo-relative POSIX paths. Lives under
+# ``.pdd/meta/`` — PDD's TRACKED sync-metadata directory (committed alongside the
+# per-module fingerprints) — NOT the top-level ``.pdd/`` which projects routinely
+# gitignore. This durability matters: a fresh checkout or the durable runner's
+# fresh module worktree must still see PDD's ownership, else a PDD-created test
+# is re-read as human-adopted and can improperly reach the never-block (round 8).
+_PDD_CREATED_TESTS_MANIFEST = Path(".pdd") / "meta" / "pdd_created_tests.json"
+# Legacy location (round 7) read as a fallback so ownership recorded before the
+# move is not lost on the first post-upgrade run.
+_PDD_CREATED_TESTS_MANIFEST_LEGACY = Path(".pdd") / "pdd_created_tests.json"
 
 
 def _pdd_created_tests_manifest_path() -> Path:
@@ -1693,13 +1721,15 @@ def _pdd_created_tests_manifest_path() -> Path:
 
 
 def _load_pdd_created_tests() -> set:
-    try:
-        data = json.loads(_pdd_created_tests_manifest_path().read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return {str(p) for p in data if isinstance(p, str)}
-    except (OSError, ValueError):
-        pass
-    return set()
+    result: set = set()
+    for rel in (_PDD_CREATED_TESTS_MANIFEST, _PDD_CREATED_TESTS_MANIFEST_LEGACY):
+        try:
+            data = json.loads((Path.cwd() / rel).read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                result.update(str(p) for p in data if isinstance(p, str))
+        except (OSError, ValueError):
+            continue
+    return result
 
 
 def _test_repo_relative(test_path: str | Path) -> Optional[str]:
