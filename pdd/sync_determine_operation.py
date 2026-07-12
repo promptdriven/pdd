@@ -1918,6 +1918,7 @@ def _architecture_module_choices(
     basename: str,
     language: str,
     modules: Any = _ARCH_MODULES_UNSET,
+    context_name: Optional[str] = None,
 ) -> List[str]:
     """Return the distinct canonical output files a BARE basename maps to.
 
@@ -1983,7 +1984,13 @@ def _architecture_module_choices(
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
             filepath_q = filepath_value.strip()
-            if not _module_filepath_matches_basename(filepath_q, basename):
+            # Use the SAME context-relative basename and anchor as final resolution, so a
+            # context-prefixed qualified basename (stripped during resolution) is counted
+            # consistently instead of evading detection under the raw prefix.
+            if not _module_filepath_matches_basename(
+                filepath_q, basename,
+                context_name=context_name, pddrc_anchor=architecture_path.parent,
+            ):
                 continue
             if lang_ext_q and PurePosixPath(filepath_q).suffix.lstrip(".").lower() != lang_ext_q:
                 continue
@@ -2533,7 +2540,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # first-match-wins or written to a generic `<generate_output_path>/page.tsx`.
         if arch_path:
             ambiguous_choices = _architecture_module_choices(
-                arch_path, basename, language, modules=arch_modules
+                arch_path, basename, language, modules=arch_modules,
+                context_name=resolved_context_name,
             )
             if len(ambiguous_choices) > 1:
                 raise AmbiguousModuleError(basename, language, ambiguous_choices)

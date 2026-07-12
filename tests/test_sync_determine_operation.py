@@ -2395,6 +2395,35 @@ def test_get_pdd_file_paths_empty_registry_dict_is_not_malformed(tmp_path, monke
     assert paths["code"].name == "widget.py"
 
 
+def test_get_pdd_file_paths_context_prefixed_qualified_ambiguity_uses_stripped_basename(tmp_path, monkeypatch):
+    """Path-qualified ambiguity detection uses the SAME context-relative basename as
+    final resolution: a context-prefixed qualified basename whose STRIPPED form
+    suffix-aligns with two distinct outputs must raise, not evade under the raw prefix."""
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"**\"]\n    defaults:\n      prompts_dir: \"prompts/backend\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "app/login/page_Python.prompt", "filepath": "app/login/page.py"},
+            {"filename": "src/app/login/page_Python.prompt", "filepath": "src/app/login/page.py"},
+        ]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths(
+            "backend/login/page", "python",
+            prompts_dir="prompts/backend", context_override="backend",
+        )
+
+
 def test_get_pdd_file_paths_path_qualified_unsafe_filename_row_does_not_block(tmp_path, monkeypatch):
     """A row with an unsafe architecture FILENAME must not count toward path-qualified
     ambiguity and falsely block a valid mapping."""
