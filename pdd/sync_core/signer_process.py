@@ -109,7 +109,12 @@ def _linux_contained_command(command: tuple[str, ...]) -> tuple[str, ...]:
     bwrap = shutil.which("bwrap")
     if bwrap is None:
         raise RuntimeError("protected Linux signer requires bubblewrap PID containment")
-    return (
+    sudo = shutil.which("sudo")
+    elevated = bool(sudo) and subprocess.run(
+        [sudo, "-n", "true"], capture_output=True, check=False
+    ).returncode == 0
+    prefix = (sudo, "-n", "-E") if elevated and sudo is not None else ()
+    return (*prefix,
         bwrap, "--unshare-pid", "--die-with-parent", "--new-session",
         "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
         "--tmpfs", "/tmp", "--", sys.executable, "-c", _LINUX_CONTAINMENT,

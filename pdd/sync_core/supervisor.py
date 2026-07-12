@@ -61,6 +61,7 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
         "platstdlib": locations.get("platstdlib"),
         "purelib": locations.get("purelib"),
         "platlib": locations.get("platlib"),
+        "prefix-lib": str(Path(sys.prefix) / "lib"),
     }
     seen: set[Path] = set()
     result = []
