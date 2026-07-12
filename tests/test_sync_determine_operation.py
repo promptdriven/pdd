@@ -5609,3 +5609,27 @@ def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
     assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
         prompt.read_bytes()
     ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<include path="dep.txt"/>',
+        '<include-many>dep.txt</include-many>',
+    ],
+)
+def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
+    tmp_path, monkeypatch, markup
+):
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(markup, encoding="utf-8")
+    (tmp_path / "dep.txt").write_text("dependency", encoding="utf-8")
+
+    first = calculate_prompt_hash(prompt, hash_version=1)
+    persisted = extract_include_deps(prompt, version=1)
+    reloaded = json.loads(json.dumps(persisted))
+    second = calculate_prompt_hash(prompt, reloaded, hash_version=1)
+
+    assert persisted == {}
+    assert second == first

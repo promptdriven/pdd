@@ -269,20 +269,18 @@ def test_manifest_output_alias_resolves_generated_code_relative_include(tmp_path
     )
 
 
-def test_parent_prefixed_repository_path_stays_inside_checkout(tmp_path) -> None:
+def test_parent_prefixed_repository_path_is_rejected_even_with_same_tail(tmp_path) -> None:
     prompt = tmp_path / "prompts/frontend/components/widget.prompt"
     dependency = tmp_path / "frontend/src/context/AuthContext.tsx"
     prompt.parent.mkdir(parents=True)
     dependency.parent.mkdir(parents=True)
     prompt.write_text("<include>../../frontend/src/context/AuthContext.tsx</include>")
     dependency.write_text("export const AuthContext = {};\n")
-    closure = build_include_closure(
-        PurePosixPath("prompts/frontend/components/widget.prompt"),
-        PathPolicy(tmp_path),
-    )
-    assert closure.artifacts[0].relpath == PurePosixPath(
-        "frontend/src/context/AuthContext.tsx"
-    )
+    with pytest.raises(IncludeGraphError, match="escapes repository"):
+        build_include_closure(
+            PurePosixPath("prompts/frontend/components/widget.prompt"),
+            PathPolicy(tmp_path),
+        )
 
 
 def test_unresolved_external_package_forces_nondeterministic_closure(tmp_path) -> None:

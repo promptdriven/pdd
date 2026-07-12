@@ -20,6 +20,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import (
+    _config_loads_plugin,
     _has_dynamic_pytest_plugins,
     _local_module_paths,
     pytest_validator_config_digest,
@@ -832,3 +833,58 @@ def test_candidate_leader_exit_cannot_forge_collection_pass(tmp_path: Path) -> N
     root, commit = _repository(tmp_path, content)
     _envelope, executions = _run(root, commit, commit)
     assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_candidate_controller_globals_cannot_forge_execution_pass(tmp_path: Path) -> None:
+    content = (
+        "import os, sys\n"
+        "main = sys.modules['__main__']\n"
+        "for arg in getattr(main, '_ARGS', ()):\n"
+        "    if arg.startswith('--junitxml='):\n"
+        "        open(arg.split('=', 1)[1], 'w').write("
+        "'<testsuite tests=\"1\" failures=\"0\" errors=\"0\" skipped=\"0\"/>')\n"
+        "        os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_candidate_controller_globals_cannot_forge_collection_pass(tmp_path: Path) -> None:
+    content = (
+        "import os, sys\n"
+        "main = sys.modules['__main__']\n"
+        "module = getattr(main, '_MODULE', None)\n"
+        "output = getattr(module, '_OUTPUT_PATH', None)\n"
+        "if output:\n"
+        "    open(output, 'w').write('[\"tests/test_widget.py::test_widget\"]')\n"
+        "    os._exit(0)\n"
+        "def test_widget(): assert False\n"
+    )
+    root, commit = _repository(tmp_path, content)
+    _envelope, executions = _run(root, commit, commit)
+    assert executions[0].outcome is not EvidenceOutcome.PASS
+
+
+def test_pytest_plugin_guard_ignores_non_pytest_preview_prose(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "setup.cfg").write_text(
+        "[metadata]\ndescription = a -preview build\n", encoding="utf-8"
+    )
+    _git(root, "add", "setup.cfg")
+    _git(root, "commit", "-q", "-m", "config prose")
+    assert not _config_loads_plugin(root, _git(root, "rev-parse", "HEAD"))
+
+
+@pytest.mark.parametrize("option", ["-p local_plugin", "-plocal_plugin", "-p=local_plugin"])
+def test_pytest_plugin_guard_rejects_structured_pytest_addopts(
+    tmp_path: Path, option: str
+) -> None:
+    root, _commit = _repository(tmp_path, "def test_widget(): assert True\n")
+    (root / "setup.cfg").write_text(
+        f"[tool:pytest]\naddopts = {option}\n", encoding="utf-8"
+    )
+    _git(root, "add", "setup.cfg")
+    _git(root, "commit", "-q", "-m", "pytest plugin")
+    assert _config_loads_plugin(root, _git(root, "rev-parse", "HEAD"))
