@@ -458,6 +458,47 @@ class TestGreenfieldRunnerDiscovery:
         assert _glob_matches("**/[!_]*.test.ts", "src/page.test.ts") is True
         assert _glob_matches("**/[!_]*.test.ts", "src/_hidden.test.ts") is False
 
+    def test_ambiguous_existing_tests_not_greenfield(self, tmp_path, monkeypatch):
+        # TWO existing co-located tests -> ambiguous -> resolve must NOT greenfield
+        # (would fork a third file). Falls back to the derived path.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "jest.config.js", "module.exports = {}\n")
+        code = _write(tmp_path / "src/page.tsx")
+        _write(tmp_path / "src/page.test.tsx")
+        _write(tmp_path / "src/__tests__/page.test.tsx")
+        shadow = tmp_path / "tests" / "test_page.tsx"
+        assert resolve_test_output_path(code, shadow, user_pinned=False) == shadow
+
+    def test_explicit_testmatch_no_match_refuses(self, tmp_path, monkeypatch):
+        # An explicit testMatch that matches NO co-located candidate must fail
+        # closed (refuse), not fall through to an uncollected default path.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["<rootDir>/qa/**/*-test.ts"]}}))
+        code = _write(tmp_path / "src/page.ts")
+        assert find_runner_collected_test_path(code) is None
+
+    def test_vitest_dir_and_call_config_refuse(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        for content in (
+            "export default { test: { dir: './tests' } }\n",   # vitest dir
+            "export default { test: { root: './src' } }\n",    # vitest root
+            "module.exports = buildConfig()\n",                # call-expr export
+        ):
+            (tmp_path / "vitest.config.ts").write_text(content, encoding="utf-8")
+            code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
+            assert find_runner_collected_test_path(code) is None, content
+
+    def test_vitest_default_collects_mjs(self, tmp_path, monkeypatch):
+        # vitest's default include collects .mjs -> a plain vitest project
+        # co-locates an .mjs module (jest would not; dialect-aware).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "vitest.config.ts", "export default { test: {} }\n")
+        _write(tmp_path / "package.json", '{"devDependencies": {"vitest": "^1"}}\n')
+        code = _write(tmp_path / "src/util.mjs")
+        got = find_runner_collected_test_path(code)
+        assert got is not None and Path(got).name == "util.test.mjs"
+
 
 # ---------------------------------------------------------------------------
 # 3) get_pdd_file_paths integration — mirror the investigator repro using the

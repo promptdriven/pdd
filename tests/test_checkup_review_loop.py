@@ -2182,6 +2182,51 @@ class TestCheckupReviewLoopRuntime:
         assert final_state["role_independence"] == "independent"
         assert captured_state and captured_state[-1].role_independence == "independent"
 
+    def test_issue_1941_review_only_never_auto_degrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1941: review-only mode runs NO fixer, so the explicit-fallback
+        auto-degrade must NOT fire (else the report falsely claims a same-role
+        fix that never happened). reviewer=fixer=codex, reviewer_fallback=claude,
+        review_only=True, codex down."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed: 401", 0.0, ""
+            if "review" in kwargs["label"]:
+                return True, _json("findings", [finding]), 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                reviewer="codex",
+                fixer="codex",
+                reviewer_fallback="claude",
+                allow_same_reviewer_fixer=True,
+                review_only=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # No fixer is ever invoked in review-only mode.
+        assert not any("fix-" in label for _, label in calls), calls
+        # And the run must NOT be falsely disclosed as a degraded same-role fix.
+        assert "same-role-review-fix: true" not in report, report
+        assert "degraded (codex unavailable)" not in report, report
+
     def test_issue_1941_both_families_alive_stays_independent(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

@@ -316,13 +316,64 @@ _TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 _TEST_CHURN_NEEDS_REVIEW_MARKER = "PDD_TEST_CHURN_NEEDS_REVIEW"
 
 
-def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
-    """Pull the ``output: <test path>`` line out of a test-churn failure block."""
+def _test_churn_block_region(stdout: str, stderr: str) -> str:
+    """Return the captured text FROM the last test-churn header onward.
+
+    Both the ``TestChurnError`` message (``Test churn threshold exceeded for``)
+    and the structured block (``=== test churn threshold exceeded ===``) mark a
+    churn block; the ``output:``/``adopted:`` fields belong to it. Scoping field
+    extraction to the region after the LAST such header prevents an UNRELATED
+    earlier ``output:``/``adopted:`` diagnostic line (elsewhere in child stdout)
+    from being misread as the churned test (issue #1903 review round 3).
+    """
     combined = (stdout or "") + "\n" + (stderr or "")
-    match = re.search(r"^output:\s*(.+)$", combined, re.MULTILINE)
-    if match:
-        return match.group(1).strip() or None
-    return None
+    last = -1
+    for header in (
+        "=== test churn threshold exceeded ===",
+        "Test churn threshold exceeded for ",
+    ):
+        idx = combined.rfind(header)
+        if idx > last:
+            last = idx
+    return combined[last:] if last >= 0 else ""
+
+
+def _extract_test_churn_output_path(stdout: str, stderr: str) -> Optional[str]:
+    """Pull the ``output: <test path>`` line out of THE test-churn block.
+
+    Scoped to the churn block (see :func:`_test_churn_block_region`) and fails
+    CLOSED: if the block carries conflicting ``output:`` values, return ``None``
+    so the never-block does not act on the wrong file.
+    """
+    region = _test_churn_block_region(stdout, stderr)
+    values = [
+        m.group(1).strip()
+        for m in re.finditer(r"^output:\s*(.+)$", region, re.MULTILINE)
+        if m.group(1).strip()
+    ]
+    if not values:
+        return None
+    return values[0] if len(set(values)) == 1 else None
+
+
+def _extract_test_churn_adopted(stdout: str, stderr: str) -> bool:
+    """Read the ``adopted: true|false`` provenance from THE test-churn block.
+
+    Issue #1903 §B.4: the child sync stamps whether the churned test was ADOPTED
+    from an existing human co-located test (unpinned), determined at path
+    resolution before generation. Only a UNANIMOUS ``true`` permits the
+    never-block; a missing marker, a ``false``, or conflicting values read as
+    ``False`` (conservative — keep the strict hard-fail). Scoped to the churn
+    block so an unrelated earlier ``adopted:`` line cannot leak in.
+    """
+    region = _test_churn_block_region(stdout, stderr)
+    values = [
+        m.group(1).lower()
+        for m in re.finditer(
+            r"^adopted:\s*(true|false)\s*$", region, re.MULTILINE | re.IGNORECASE
+        )
+    ]
+    return bool(values) and all(v == "true" for v in values)
 
 
 def _is_adopted_collocated_test_path(
@@ -992,6 +1043,11 @@ def build_test_churn_hard_failure_from_error(
         f"threshold: {getattr(exc, 'threshold', '<unknown>')}",
         f"pre lines: {getattr(exc, 'pre_line_count', '<unknown>')}",
         f"post lines: {getattr(exc, 'post_line_count', '<unknown>')}",
+        # Issue #1903 §B.4 provenance — whether this test was ADOPTED from an
+        # existing human co-located test (unpinned). The issue-driven never-block
+        # requires it to be true (in addition to the in-repo co-located
+        # classifier + issue scope).
+        f"adopted: {str(bool(getattr(exc, 'adopted_human', False))).lower()}",
         "",
         "To allow this rewrite, add a `BREAKING-CHANGE: rewrite tests`",
         "directive to the prompt body.",
@@ -2740,7 +2796,8 @@ class AsyncSyncRunner:
             churned_test_path = _extract_test_churn_output_path(
                 last_stdout, last_stderr
             )
-            # Two guards, BOTH required, so the relief never escapes its scope:
+            churn_was_adopted = _extract_test_churn_adopted(last_stdout, last_stderr)
+            # THREE guards, ALL required, so the relief never escapes its scope:
             #   (1) issue-driven workflow only — ``self.issue_url`` is set only
             #       when this runner backs a GitHub issue → PR sync (agentic_sync
             #       / durable_sync_runner). Project-wide ``pdd sync`` builds this
@@ -2748,10 +2805,21 @@ class AsyncSyncRunner:
             #       keep the strict hard-fail (there is no PR to flag "needs
             #       review" against — relaxing it there would silently bypass the
             #       gate).
-            #   (2) adopted co-located test only — a PDD-owned ``tests/`` shadow
-            #       keeps the strict hard-fail (see ``_is_adopted_collocated_test_path``).
-            if self.issue_url and _is_adopted_collocated_test_path(
-                churned_test_path, project_root=self.project_root
+            #   (2) structured adoption provenance — the child stamped
+            #       ``adopted: true`` because the churned test was ADOPTED from an
+            #       existing human co-located test (unpinned), decided at path
+            #       resolution BEFORE generation (``_extract_test_churn_adopted``).
+            #       A user-pinned path, a greenfield test PDD created, or an older
+            #       child (no marker) reads False -> strict hard-fail.
+            #   (3) in-repo co-located shape — the path is a co-located test
+            #       inside the worktree, not a ``tests/`` shadow or traversal
+            #       (see ``_is_adopted_collocated_test_path``).
+            if (
+                self.issue_url
+                and churn_was_adopted
+                and _is_adopted_collocated_test_path(
+                    churned_test_path, project_root=self.project_root
+                )
             ):
                 note = self._register_test_churn_needs_review(
                     basename, churned_test_path

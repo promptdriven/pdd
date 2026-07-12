@@ -303,6 +303,7 @@ class TestChurnError(click.UsageError):
         total_cost: float = 0.0,
         model_name: str = "unknown",
         repair_directive: Optional[str] = None,
+        adopted_human: bool = False,
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -312,6 +313,12 @@ class TestChurnError(click.UsageError):
         self.post_line_count = int(post_line_count)
         self.total_cost = float(total_cost or 0.0)
         self.model_name = model_name or "unknown"
+        # Issue #1903 §B.4 provenance: True only when this test was ADOPTED from
+        # an existing HUMAN co-located test (unpinned), determined at path
+        # resolution BEFORE generation. The issue-driven never-block requires it;
+        # a False value keeps the strict hard-fail. Serialized into the block so
+        # the (subprocess-boundary) parent runner can read it.
+        self.adopted_human = bool(adopted_human)
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
         super().__init__(
@@ -320,7 +327,8 @@ class TestChurnError(click.UsageError):
             f"threshold: {self.threshold:.2f}\n"
             f"output: {output_display}\n"
             f"pre_line_count: {self.pre_line_count}\n"
-            f"post_line_count: {self.post_line_count}"
+            f"post_line_count: {self.post_line_count}\n"
+            f"adopted: {str(self.adopted_human).lower()}"
         )
 
     @property
@@ -3187,8 +3195,15 @@ def _verify_test_churn(
     prompt_name: str,
     output_path: Optional[str],
     prompt_content: Optional[str],
+    adopted_human: bool = False,
 ) -> None:
-    """Fail when rewriting an existing test file exceeds the churn threshold."""
+    """Fail when rewriting an existing test file exceeds the churn threshold.
+
+    *adopted_human* records whether this test was adopted from an existing HUMAN
+    co-located test (unpinned) — provenance the issue #1903 §B.4 never-block
+    requires, computed by the caller at path-resolution time. It only annotates
+    the raised error; the gate decision here is unchanged.
+    """
     if (
         not existing_code
         or not existing_code.strip()
@@ -3209,6 +3224,7 @@ def _verify_test_churn(
             threshold=threshold,
             pre_line_count=len(existing_code.splitlines()),
             post_line_count=len(generated_code.splitlines()),
+            adopted_human=adopted_human,
         )
 
 def _should_wire_generated_exports(output_path: str) -> bool:
