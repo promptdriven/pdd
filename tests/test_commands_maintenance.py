@@ -59,6 +59,22 @@ def test_sync_returns_tuple_on_success(mock_sync_main, mock_auto_update, runner)
     mock_sync_main.assert_called_once()
 
 
+@patch("pdd.core.cli.auto_update")
+@patch("pdd.commands.maintenance.sync_main")
+@patch(
+    "pdd.sync_core.finalize.preflight_legacy_mutation",
+    side_effect=RuntimeError("protected canonical sync"),
+)
+def test_sync_cli_preflights_before_dispatch_and_suppresses_state_writes(
+    mock_preflight, mock_sync_main, mock_auto_update, runner
+):
+    result = runner.invoke(cli.cli, ["--quiet", "sync", "test_module"])
+    assert result.exit_code != 0
+    mock_preflight.assert_called_once()
+    mock_sync_main.assert_not_called()
+    assert result.exception is not None
+
+
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.maintenance.sync_main')
 def test_sync_compress_flag_forwarded_to_sync_main(
