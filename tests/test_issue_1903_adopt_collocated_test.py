@@ -523,6 +523,54 @@ class TestGreenfieldRunnerDiscovery:
             code = _write(tmp_path / f"src/m{abs(hash(content))}.tsx")
             assert find_runner_collected_test_path(code) is None, content
 
+    def test_bare_roots_resolved_against_rootdir(self, tmp_path, monkeypatch):
+        # roots:["src"] with rootDir:"frontend" -> collected root is
+        # frontend/src (jest resolves roots against effective rootDir). A module
+        # under frontend/src co-locates; the wrong base would exclude it.
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"rootDir": "frontend", "roots": ["src"]}}))
+        code = _write(tmp_path / "frontend/src/a/page.tsx")
+        got = find_runner_collected_test_path(code)
+        assert got is not None
+        rel = Path(got).resolve().relative_to(tmp_path.resolve()).as_posix()
+        assert rel.startswith("frontend/src/") and rel.endswith("page.test.tsx"), rel
+
+    def test_explicit_empty_and_both_configs_refuse(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        # testMatch: [] matches nothing in jest -> refuse.
+        _write(tmp_path / "package.json", json.dumps({"jest": {"testMatch": []}}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/a.tsx")) is None
+        # Both testMatch AND testRegex configured -> jest rejects -> refuse.
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["**/*.test.tsx"], "testRegex": ".*"}}))
+        assert find_runner_collected_test_path(_write(tmp_path / "src/b.tsx")) is None
+
+    def test_script_substring_is_not_a_runner(self, tmp_path):
+        from pdd.content_selector import _package_json_declares_js_runner
+        _write(tmp_path / "p1.json", json.dumps({"scripts": {"build": "echo no-jest"}}))
+        assert _package_json_declares_js_runner(tmp_path / "p1.json") is False
+        _write(tmp_path / "p2.json", json.dumps({"scripts": {"test": "jest --ci"}}))
+        assert _package_json_declares_js_runner(tmp_path / "p2.json") is True
+        _write(tmp_path / "p3.json", json.dumps({"scripts": {"test:unit": "vitest run"}}))
+        assert _package_json_declares_js_runner(tmp_path / "p3.json") is True
+
+    def test_extglob_comma_is_literal_brace_comma_alternates(self):
+        from pdd.content_selector import _glob_matches
+        # extglob @(foo,bar): "foo,bar" is a LITERAL alternative (pipe alternates).
+        assert _glob_matches("**/@(foo,bar).test.ts", "x/foo.test.ts") is False
+        assert _glob_matches("**/@(foo|bar).test.ts", "x/foo.test.ts") is True
+        # brace {foo,bar}: comma alternates.
+        assert _glob_matches("**/{foo,bar}.test.ts", "x/foo.test.ts") is True
+
+    def test_excessive_pattern_count_refuses(self, tmp_path, monkeypatch):
+        # A hostile config with a huge pattern count fails closed (DoS bound).
+        monkeypatch.chdir(tmp_path)
+        _write(tmp_path / "package.json",
+               json.dumps({"jest": {"testMatch": ["**/*.test.tsx"] * 200}}))
+        code = _write(tmp_path / "src/page.tsx")
+        assert find_runner_collected_test_path(code) is None
+
     def test_runner_pattern_matching_is_redos_bounded(self):
         # A catastrophic-backtracking testMatch pattern must not stall: the
         # bounded matcher fails closed (None) rather than hanging.

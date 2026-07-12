@@ -2262,6 +2262,23 @@ class TestSyncOneModule:
         assert success is False, "out-of-root absolute path must keep the hard-fail"
         assert runner.module_states["foo"].needs_review is None
 
+    def test_runner_churn_block_renders_adopted_field(self):
+        """Issue #1903 §B.4 lockstep: the runner's OWN structured churn block (the
+        one recorded when the never-block does NOT apply) must also carry the
+        `adopted:` provenance line, not just the standalone builder."""
+        runner = AsyncSyncRunner(
+            basenames=["foo"], dep_graph={"foo": []}, sync_options={},
+            github_info=None, quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\nthreshold: 0.40\n"
+            "output: frontend/src/__test__/foo.test.tsx\n"
+            "pre_line_count: 100\npost_line_count: 5\nadopted: false\n"
+        )
+        block = runner._build_test_churn_hard_failure("foo", "summary", "", stderr)
+        assert "adopted: false" in block, block
+
     def test_churn_field_extraction_scoped_to_block(self):
         """The output:/adopted: fields must be read from the churn block, not an
         unrelated earlier diagnostic line; conflicting values fail closed."""
