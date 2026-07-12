@@ -13,6 +13,7 @@ import pytest
 from pdd import cli
 from pdd.continuous_sync import SyncUnit, _find_matching_artifact, classify_unit
 from pdd.sync_determine_operation import (
+    _architecture_artifact_paths,
     calculate_current_hashes,
     calculate_prompt_hash,
     get_pdd_file_paths,
@@ -891,8 +892,10 @@ def test_live_include_is_validated_once_before_dependency_read(
     assert outside_reads == 0
 
 
-def test_unresolved_live_include_never_reads_ancestor_fallback(tmp_path: Path) -> None:
-    """A validated unresolved include fails closed without ancestor lookup."""
+def test_unresolved_live_include_preserves_v1_skip_without_ancestor_read(
+    tmp_path: Path,
+) -> None:
+    """Safe report resolution preserves v1 missing-dependency semantics."""
     project = tmp_path / "workspace" / "project"
     prompts = project / "prompts"
     prompts.mkdir(parents=True)
@@ -912,7 +915,7 @@ def test_unresolved_live_include_never_reads_ancestor_fallback(tmp_path: Path) -
     with patch.object(Path, "read_bytes", observing):
         hashes = calculate_current_hashes({"prompt": prompt}, dependency_root=project)
 
-    assert hashes["prompt_hash"] is None
+    assert hashes["prompt_hash"] == hashlib.sha256(prompt.read_bytes()).hexdigest()
     assert reads == 0
 
 
@@ -978,6 +981,183 @@ def test_report_caches_config_ownership_and_caps_contexts(
         catch_exceptions=False,
     )
     assert json.loads(second.output)["failures"][0]["failure"] == "invalid_pddrc"
+
+
+def test_metadata_only_report_reuses_parsed_config(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Metadata inference and classification share the report config cache."""
+    project = tmp_path / "project"
+    meta = project / ".pdd" / "meta"
+    meta.mkdir(parents=True)
+    for name in ("alpha", "beta"):
+        (meta / f"{name}_python.json").write_text("{}", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    from pdd import continuous_sync
+    original = continuous_sync._load_pddrc_config
+    loads = 0
+
+    def observing(path):
+        nonlocal loads
+        loads += 1
+        return original(path)
+
+    monkeypatch.setattr(continuous_sync, "_load_pddrc_config", observing)
+
+    result = CliRunner().invoke(
+        cli.cli,
+        ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert json.loads(result.output)["summary"]["total"] == 2
+    assert loads == 1
+
+
+def test_duplicate_prompt_roots_cannot_bypass_context_cap_without_prompts(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Context validation runs before duplicate prompt roots are collapsed."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".pddrc").write_text(
+        "contexts:\n"
+        "  one: {defaults: {prompts_dir: prompts}}\n"
+        "  two: {defaults: {prompts_dir: prompts}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    monkeypatch.setattr("pdd.continuous_sync.MAX_CONFIG_CONTEXTS", 1)
+
+    result = CliRunner().invoke(
+        cli.cli,
+        ["--no-core-dump", "sync", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert json.loads(result.output)["failures"][0]["failure"] == "invalid_pddrc"
+
+
+def test_architecture_artifact_construction_performs_no_discovery(
+    tmp_path: Path,
+) -> None:
+    """Architecture path construction is pure until report validation."""
+    project = tmp_path / "project"
+
+    with patch.object(Path, "exists", side_effect=AssertionError("exists called")), \
+         patch.object(Path, "glob", side_effect=AssertionError("glob called")):
+        paths = _architecture_artifact_paths(
+            project, Path("src/widget.py"), "widget", "py"
+        )
+
+    assert paths["test_files"] == [project / "tests" / "test_widget.py"]
+
+
+def test_architecture_test_output_is_validated_before_discovery(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Outside architecture test directories are rejected before scandir."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    (project / "architecture.json").write_text(
+        json.dumps([{"filename": prompt.name, "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    outside = tmp_path / "outside-tests"
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n"
+        "      prompts_dir: prompts\n"
+        f"      test_output_path: {outside}\n",
+        encoding="utf-8",
+    )
+    original_scandir = __import__("os").scandir
+
+    def guarded_scandir(path):
+        assert Path(path) != outside
+        return original_scandir(path)
+
+    monkeypatch.setattr("pdd.continuous_sync.os.scandir", guarded_scandir)
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "unsafe_artifacts"
+
+
+def test_symlinked_architecture_test_output_is_validated_before_discovery(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Symlink-directed architecture test directories are never enumerated."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    prompts.mkdir(parents=True)
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    (project / "architecture.json").write_text(
+        json.dumps([{"filename": prompt.name, "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    outside = tmp_path / "outside-tests"
+    outside.mkdir()
+    linked = project / "linked-tests"
+    try:
+        linked.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    (project / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n"
+        "      prompts_dir: prompts\n"
+        "      test_output_path: linked-tests\n",
+        encoding="utf-8",
+    )
+    original_scandir = __import__("os").scandir
+
+    def guarded_scandir(path):
+        assert Path(path) != linked
+        return original_scandir(path)
+
+    monkeypatch.setattr("pdd.continuous_sync.os.scandir", guarded_scandir)
+
+    report = classify_unit(SyncUnit("widget", "python", prompt, prompts), project)
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "unsafe_artifacts"
+
+
+def test_architecture_test_discovery_uses_shared_budget(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Wide architecture test directories stop at the command budget."""
+    project = tmp_path / "project"
+    prompts = project / "prompts"
+    tests = project / "tests"
+    prompts.mkdir(parents=True)
+    tests.mkdir()
+    prompt = prompts / "widget_python.prompt"
+    prompt.write_text("widget\n", encoding="utf-8")
+    (project / "architecture.json").write_text(
+        json.dumps([{"filename": prompt.name, "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    for index in range(4):
+        (tests / f"test_widget_{index}.py").write_text("pass\n", encoding="utf-8")
+    monkeypatch.setattr("pdd.continuous_sync.MAX_REPAIR_DISCOVERY_ENTRIES", 2)
+    budget = {"repair_entries": 0}
+
+    report = classify_unit(
+        SyncUnit("widget", "python", prompt, prompts), project, budget
+    )
+
+    assert report["classification"] == "FAILURE"
+    assert report["failure"] == "path_resolution"
+    assert budget["report_entries"] == 3
 
 
 @pytest.mark.parametrize("include_kind", ["absolute", "symlink"])

@@ -478,20 +478,10 @@ def _configured_prompt_roots(
     """
     configured: List[Path] = []
     if pddrc_path is not None:
-        if not isinstance(config, dict):
-            raise ValueError(".pddrc must contain a mapping")
-        contexts = config.get("contexts", {})
-        if not isinstance(contexts, dict):
-            raise ValueError(".pddrc contexts must contain a mapping")
+        contexts = _validate_pddrc_structure(config)
         for context in contexts.values():
-            if not isinstance(context, dict):
-                raise ValueError(".pddrc context must contain a mapping")
             defaults = context.get("defaults", {})
-            if not isinstance(defaults, dict):
-                raise ValueError(".pddrc defaults must contain a mapping")
             raw_root = defaults.get("prompts_dir", "prompts")
-            if not isinstance(raw_root, str) or not raw_root.strip():
-                raise ValueError(".pddrc prompts_dir must be a non-empty string")
             root = Path(raw_root).expanduser()
             if not root.is_absolute():
                 root = pddrc_path.parent / root
@@ -642,12 +632,23 @@ def _existing_artifact_score(
     basename: str,
     language: str,
     prompt_root: Path,
+    pddrc_path: Path | None = None,
+    config: Dict[str, Any] | None = None,
+    budget: Optional[Dict[str, int]] = None,
 ) -> int:
     try:
         prompt_path = prompt_root / f"{Path(basename).name}_{language}.prompt"
         paths = _resolve_report_paths(
-            SyncUnit(basename, language, prompt_path, prompt_root),
+            SyncUnit(
+                basename,
+                language,
+                prompt_path,
+                prompt_root,
+                pddrc_path=pddrc_path,
+                config=config,
+            ),
             project_root(prompt_root),
+            budget,
         )
     except ValueError:
         return 0
@@ -665,14 +666,20 @@ def _infer_basename_from_artifacts(
     language: str,
     prompt_root: Path,
     budget: Dict[str, int],
+    pddrc_path: Path | None = None,
+    config: Dict[str, Any] | None = None,
 ) -> str:
     best = safe_basename
-    best_score = _existing_artifact_score(best, language, prompt_root)
+    best_score = _existing_artifact_score(
+        best, language, prompt_root, pddrc_path, config, budget
+    )
     for candidate in _slash_candidates(safe_basename):
         if budget["entries"] >= MAX_PROMPT_DISCOVERY_ENTRIES:
             break
         budget["entries"] += 1
-        score = _existing_artifact_score(candidate, language, prompt_root)
+        score = _existing_artifact_score(
+            candidate, language, prompt_root, pddrc_path, config, budget
+        )
         if score > best_score:
             best = candidate
             best_score = score
@@ -685,6 +692,8 @@ def _unit_from_metadata_identity(
     prompt_index: Dict[tuple[str, str], SyncUnit],
     requested_basename: Optional[str] = None,
     budget: Optional[Dict[str, int]] = None,
+    pddrc_path: Path | None = None,
+    config: Dict[str, Any] | None = None,
 ) -> SyncUnit:
     safe_basename, language = identity
     prompt_unit = prompt_index.get((safe_basename, language))
@@ -696,6 +705,8 @@ def _unit_from_metadata_identity(
         language,
         prompt_root,
         budget or {"entries": 0, "files": 0},
+        pddrc_path,
+        config,
     )
     prompt_path = _prompt_path_for_basename(prompt_root, basename, language)
     return SyncUnit(
@@ -703,6 +714,8 @@ def _unit_from_metadata_identity(
         language=language,
         prompt_path=prompt_path,
         prompts_dir=prompt_root,
+        pddrc_path=pddrc_path,
+        config=config,
     )
 
 
@@ -817,6 +830,8 @@ def _metadata_units(
     prompt_index: Dict[tuple[str, str], SyncUnit],
     wanted: set[str],
     budget: Dict[str, int],
+    pddrc_path: Path | None,
+    config: Dict[str, Any] | None,
 ) -> List[SyncUnit]:
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
@@ -829,6 +844,8 @@ def _metadata_units(
             prompt_index,
             requested_basename=_requested_basename_for_identity(identity, wanted),
             budget=budget,
+            pddrc_path=pddrc_path,
+            config=config,
         )
         _append_unique_unit(units, seen, unit)
     return units
@@ -873,6 +890,8 @@ def _discover_units_and_failures(
         _prompt_index(prompt_units),
         wanted,
         budget,
+        base / ".pddrc" if base / ".pddrc" in config_cache else None,
+        config_cache.get(base / ".pddrc"),
     )
     seen = {(unit.basename, unit.language, unit.prompt_path) for unit in units}
     if wanted:
@@ -1194,7 +1213,48 @@ def _configured_output_defaults(
     return defaults, context_name, pddrc_path, config
 
 
-def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
+def _bounded_report_test_files(
+    test_path: Path,
+    base: Path,
+    extension: str,
+    budget: Optional[Dict[str, int]],
+) -> List[Path]:
+    """Discover contained matching tests after validating every path component."""
+    if not _safe_architecture_candidate(test_path, base):
+        raise ValueError("configured test path is outside project or symlinked")
+    parent = test_path.parent
+    if not _safe_architecture_candidate(parent, base):
+        raise ValueError("configured test directory is outside project or symlinked")
+    shared_budget = budget if budget is not None else {}
+    matches: List[Path] = []
+    try:
+        entries = os.scandir(parent)
+        with entries:
+            for entry in entries:
+                shared_budget["report_entries"] = (
+                    shared_budget.get("report_entries", 0) + 1
+                )
+                if shared_budget["report_entries"] > MAX_REPAIR_DISCOVERY_ENTRIES:
+                    raise ValueError("report test discovery budget exhausted")
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if not entry.name.startswith(test_path.stem):
+                    continue
+                if Path(entry.name).suffix != f".{extension}":
+                    continue
+                matches.append(parent / entry.name)
+    except FileNotFoundError:
+        return [test_path]
+    except OSError as exc:
+        raise ValueError(f"report test discovery failed: {exc}") from exc
+    return sorted(matches) or [test_path]
+
+
+def _resolve_report_paths(
+    unit: SyncUnit,
+    base: Path,
+    command_budget: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     """Resolve report paths without creating directories or files."""
     extension = get_extension(unit.language)
     suffix = f".{extension}" if extension else ""
@@ -1276,15 +1336,22 @@ def _resolve_report_paths(unit: SyncUnit, base: Path) -> Dict[str, Any]:
                 if generated["test"].is_absolute()
                 else base / generated["test"]
             )
+    test_files = [test_path]
+    if architecture_paths is not None:
+        paths_are_safe = all(
+            _safe_architecture_candidate(artifact_path, base)
+            for artifact_path in (code_path, example_path, test_path)
+        )
+        if paths_are_safe:
+            test_files = _bounded_report_test_files(
+                test_path, base, extension, command_budget
+            )
     return {
         "prompt": unit.prompt_path,
         "code": code_path,
         "example": example_path,
         "test": test_path,
-        "test_files": (
-            architecture_paths["test_files"]
-            if architecture_paths is not None else [test_path]
-        ),
+        "test_files": test_files,
     }
 
 
@@ -1300,6 +1367,22 @@ def _artifact_path_violation(path: Path, root: Path) -> Optional[str]:
     # pylint: disable=too-many-return-statements
     root = root.resolve()
     candidate = path if path.is_absolute() else root / path
+    normalized = Path(os.path.abspath(os.path.normpath(os.fspath(candidate))))
+    try:
+        relative_parts = normalized.relative_to(root).parts
+    except ValueError:
+        return "resolves outside project"
+    cursor = root
+    for part in relative_parts:
+        cursor /= part
+        try:
+            component_mode = cursor.lstat().st_mode
+        except FileNotFoundError:
+            break
+        except (OSError, RuntimeError, ValueError):
+            return "is an invalid path"
+        if stat.S_ISLNK(component_mode):
+            return "is a symlink" if cursor == normalized else "contains a symlink"
     try:
         mode = candidate.lstat().st_mode
     except FileNotFoundError:
@@ -1598,7 +1681,7 @@ def classify_unit(
     # convenience, so derive the read-only project-relative location here.
     fp_path = base / ".pdd" / "meta" / f"{_safe_basename(unit.basename)}_{unit.language}.json"
     try:
-        paths = _resolve_report_paths(unit, base)
+        paths = _resolve_report_paths(unit, base, command_budget)
     except Exception as exc:  # surfaced in JSON report
         failure = (
             "unsafe_architecture"
