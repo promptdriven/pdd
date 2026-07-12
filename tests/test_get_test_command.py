@@ -968,6 +968,36 @@ class TestWorkspaceMembershipHardening:
         (anc / "pnpm-workspace.yaml").write_text("packages: " + "[" * 3000 + "]" * 3000 + "\n")
         assert _workspace_globs_for(anc) == []
 
+    def test_pnpm_yaml_malformed_timestamp_fails_closed(self, tmp_path):
+        """A malformed YAML timestamp scalar raises a bare ValueError from PyYAML's
+        constructor — not a yaml.YAMLError — and must fail closed, not crash."""
+        pytest.importorskip("yaml")
+        for body in ("packages: [2020-99-99]\n", "packages: 2020-13-45\n"):
+            anc = tmp_path / body[:12].replace(":", "_").replace(" ", "")
+            anc.mkdir()
+            (anc / "pnpm-workspace.yaml").write_text(body)
+            assert _workspace_globs_for(anc) == []
+            (anc / "pnpm-workspace.yaml").unlink()
+
+    def test_pnpm_malformed_timestamp_leaf_not_a_member(self, tmp_path):
+        """End-to-end: a pnpm YAML that fails to construct must not let a leaf adopt
+        the root Jest config (and must not crash discovery)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text("packages: [2020-99-99]\n")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+        pytest.importorskip("yaml")
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_slash_wall_glob_fails_closed(self):
         """A glob with thousands of `/` segments fails closed via the segment cap."""
         with pytest.raises(_PatternBudgetError):
