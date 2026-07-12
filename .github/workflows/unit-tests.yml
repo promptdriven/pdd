@@ -29,7 +29,8 @@ jobs:
     if: github.event.pull_request.draft != true
     name: Run Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The measured green broad suite takes ~30 minutes; retain bounded 50% headroom.
+    timeout-minutes: 45
 
     env:
       PDD_PATH: ${{ github.workspace }}/pdd
