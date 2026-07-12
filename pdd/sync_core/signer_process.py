@@ -7,13 +7,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
 
 
 _LINUX_CONTAINMENT = r"""
-import ctypes, os, signal, subprocess, sys, time
+import ctypes, os, pathlib, signal, subprocess, sys, time
 ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)
 child = None
 def descendants(root):
@@ -43,8 +44,11 @@ def stop(_signum, _frame):
     cleanup()
     raise SystemExit(124)
 signal.signal(signal.SIGTERM, stop)
+ready_path = os.environ.pop('PDD_SIGNER_READY_PATH', '')
 child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, start_new_session=True)
+if ready_path:
+    pathlib.Path(ready_path).touch(exist_ok=False)
 try:
     stdout, stderr = child.communicate(sys.stdin.buffer.read())
     sys.stdout.buffer.write(stdout); sys.stderr.buffer.write(stderr)
@@ -136,6 +140,19 @@ def _kill_bounded(process: subprocess.Popen[bytes], token: str) -> None:
         process.wait(timeout=0.5)
 
 
+def _wait_for_signer_start(
+    process: subprocess.Popen[bytes], ready_path: Path, command: tuple[str, ...],
+    timeout: float, token: str,
+) -> None:
+    """Wait briefly for the containment init to launch the signer child."""
+    deadline = time.monotonic() + 0.5
+    while not ready_path.exists():
+        if process.poll() is not None or time.monotonic() >= deadline:
+            _kill_bounded(process, token)
+            raise subprocess.TimeoutExpired(command, timeout)
+        time.sleep(0.005)
+
+
 def run_signer(
     command: tuple[str, ...], payload: bytes, *, timeout: float
 ) -> subprocess.CompletedProcess[bytes]:
@@ -144,28 +161,35 @@ def run_signer(
     contained_command = (
         _linux_contained_command(command) if sys.platform.startswith("linux") else command
     )
-    process = subprocess.Popen(  # pylint: disable=consider-using-with
-        contained_command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-        env=os.environ | {"PDD_SIGNER_PROCESS_TOKEN": token},
-    )
-    try:
-        stdout, stderr = process.communicate(payload, timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+    with tempfile.TemporaryDirectory(prefix="pdd-signer-") as directory:
+        ready_path = Path(directory) / "started"
+        environment = os.environ | {"PDD_SIGNER_PROCESS_TOKEN": token}
         if sys.platform.startswith("linux"):
-            process.terminate()
-            try:
-                stdout, stderr = process.communicate(timeout=0.4)
-            except subprocess.TimeoutExpired:
+            environment["PDD_SIGNER_READY_PATH"] = str(ready_path)
+        process = subprocess.Popen(  # pylint: disable=consider-using-with
+            contained_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            env=environment,
+        )
+        if sys.platform.startswith("linux"):
+            _wait_for_signer_start(process, ready_path, command, timeout, token)
+        try:
+            stdout, stderr = process.communicate(payload, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            if sys.platform.startswith("linux"):
+                process.terminate()
+                try:
+                    stdout, stderr = process.communicate(timeout=0.4)
+                except subprocess.TimeoutExpired:
+                    _kill_bounded(process, token)
+                    stdout, stderr = b"", b""
+            else:
                 _kill_bounded(process, token)
                 stdout, stderr = b"", b""
-        else:
-            _kill_bounded(process, token)
-            stdout, stderr = b"", b""
-        raise subprocess.TimeoutExpired(
-            command, timeout, output=stdout, stderr=stderr
-        ) from exc
+            raise subprocess.TimeoutExpired(
+                command, timeout, output=stdout, stderr=stderr
+            ) from exc
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)

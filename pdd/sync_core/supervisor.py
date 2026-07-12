@@ -31,7 +31,7 @@ class SupervisorLimits:
 
 
 def _linked_libraries(path: Path) -> tuple[Path, ...]:
-    """Resolve the ELF loader closure for one executable or extension."""
+    """Resolve loader-visible and physical paths for ELF dependencies."""
     if not sys.platform.startswith("linux"):
         return ()
     result = subprocess.run(
@@ -46,10 +46,12 @@ def _linked_libraries(path: Path) -> tuple[Path, ...]:
         for value in candidates:
             candidate = Path(value)
             if candidate.is_absolute() and candidate.is_file():
-                # Keep the loader-visible spelling.  Resolving /lib -> /usr/lib
-                # changes the destination inside the tmpfs namespace and makes
-                # an otherwise mounted ELF interpreter appear missing.
                 libraries.add(candidate)
+                # The dynamic loader may retain the /lib alias while the host
+                # mount operation follows it to /usr/lib.  Bind both spellings
+                # so the empty namespace contains the loader's lookup path and
+                # the resolved dependency used by the host mount.
+                libraries.add(candidate.resolve())
     return tuple(sorted(libraries))
 
 
@@ -101,7 +103,9 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     entries["interpreter/python"] = Path(sys.executable).resolve()
     for path in sorted(native):
         for library in _linked_libraries(path):
-            entries.setdefault(f"native/{library.name}", library)
+            entries.setdefault(
+                f"native/{library.as_posix().lstrip('/')}", library
+            )
     return tuple(sorted(entries.items()))
 
 
