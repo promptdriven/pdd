@@ -2,6 +2,7 @@
 
 import os
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,9 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
         "pdd.sync_core.supervisor.subprocess.run",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
     )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
     argv, profile = _sandbox_command(["/bin/true"], (tmp_path,))
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
@@ -50,6 +54,26 @@ def test_protected_runner_declares_finite_resource_limits() -> None:
     assert 0 < limits.max_memory_bytes <= 4 * 1024 * 1024 * 1024
     assert 0 < limits.max_cpu_seconds <= 600
     assert 0 < limits.max_processes <= 256
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux") or not shutil.which("bwrap"),
+    reason="requires Linux kernel namespace containment",
+)
+def test_sandboxed_python_imports_standard_library_after_command_construction(
+    tmp_path: Path,
+) -> None:
+    result, surviving = run_supervised(
+        [sys.executable, "-c", "import math; print(math.pi)"],
+        cwd=tmp_path,
+        timeout=10,
+        env=dict(os.environ),
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(math.pi)
+    assert surviving is False
 
 
 def test_linked_libraries_keeps_loader_alias_and_resolved_path(
