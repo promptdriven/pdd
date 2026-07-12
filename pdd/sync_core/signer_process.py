@@ -176,10 +176,17 @@ def run_signer(
             start_new_session=True,
             env=environment,
         )
+        try:
+            if process.stdin is not None:
+                process.stdin.write(payload)
+                process.stdin.close()
+                process.stdin = None
+        except BrokenPipeError:
+            pass
         if sys.platform.startswith("linux"):
             _wait_for_signer_start(process, ready_path, command, timeout, token)
         try:
-            stdout, stderr = process.communicate(payload, timeout=timeout)
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             if sys.platform.startswith("linux"):
                 process.terminate()

@@ -767,7 +767,7 @@ def _pytest_environment(home: Path) -> dict[str, str]:
     )
 
 
-def _trusted_probe_plugin(directory: Path) -> tuple[str, Path]:
+def _trusted_probe_plugin(directory: Path, output: Path) -> tuple[str, Path]:
     """Create a unique plugin shim that loads the checker-owned probe by path."""
     plugin_name = "pdd_checker_pytest_probe"
     plugin = directory / f"{plugin_name}.py"
@@ -782,6 +782,7 @@ def _trusted_probe_plugin(directory: Path) -> tuple[str, Path]:
                 "    raise ImportError('checker pytest probe is unavailable')",
                 "_MODULE = importlib.util.module_from_spec(_SPEC)",
                 "_SPEC.loader.exec_module(_MODULE)",
+                f"_MODULE._OUTPUT_PATH = {json.dumps(str(output))}",
                 "pytest_collection_modifyitems = _MODULE.pytest_collection_modifyitems",
                 "",
             )
@@ -877,12 +878,15 @@ def _run_test_node(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
-        worker = _trusted_execution_runner(controllers, root, command[3:])
+        junit = controllers / f"result-{os.urandom(16).hex()}.xml"
+        worker = _trusted_execution_runner(
+            controllers, root, [*command[3:], f"--junitxml={junit}"]
+        )
         result, surviving = _managed_subprocess(
             [sys.executable, str(worker)], cwd=controllers,
             timeout=timeout_seconds, env=_pytest_environment(home),
             writable_roots=(home.parent,),
-            readable_roots=(root,),
+            writable_files=(junit,), readable_roots=(root,),
         )
         if result.returncode == 124:
             return RunnerExecution(
@@ -896,9 +900,8 @@ def _run_test_node(
                 node_id, EvidenceOutcome.ERROR, command_digest,
                 "validator left a surviving process-group descendant",
             )
-        outcome, detail = _pytest_exit_outcome(
-            result.returncode, result.stdout + "\n" + result.stderr
-        )
+        output = result.stdout + "\n" + result.stderr
+        outcome, detail = _junit_outcome(junit, result.returncode, output, 1)
         return RunnerExecution(node_id, outcome, command_digest, detail)
 
 
@@ -915,6 +918,7 @@ def _collect_node_ids(
         controllers.mkdir(mode=0o700)
         home = temporary / "scratch" / "home"
         home.mkdir(mode=0o700, parents=True)
+        probe_output = controllers / f"nodes-{os.urandom(16).hex()}.json"
         pytest_args = [
             "--collect-only",
             "-q",
@@ -924,6 +928,8 @@ def _collect_node_ids(
             "no:cacheprovider",
             path.as_posix(),
         ]
+        plugin_name, _plugin_directory = _trusted_probe_plugin(controllers, probe_output)
+        pytest_args.extend(("-p", plugin_name))
         worker = _trusted_collection_runner(controllers, root, pytest_args)
         command = [sys.executable, str(worker)]
         digest = hashlib.sha256(
@@ -941,6 +947,7 @@ def _collect_node_ids(
         result, surviving = _managed_subprocess(
             command, cwd=controllers, timeout=timeout_seconds,
             env=_pytest_environment(home), writable_roots=(home.parent,),
+            writable_files=(probe_output,),
             readable_roots=(root, _CHECKER_PYTEST_PROBE),
         )
         if result.returncode == 124:
@@ -960,10 +967,11 @@ def _collect_node_ids(
                     "collection left a surviving process-group descendant",
                 ), (),
             )
-        node_ids = tuple(sorted(
-            line for line in result.stdout.splitlines()
-            if "::" in line and not line.startswith("=")
-        ))
+        try:
+            values = json.loads(probe_output.read_text(encoding="utf-8"))
+            node_ids = tuple(sorted(item for item in values if isinstance(item, str)))
+        except (OSError, json.JSONDecodeError):
+            node_ids = ()
         if not node_ids and result.returncode == 0:
             return (
                 RunnerExecution(

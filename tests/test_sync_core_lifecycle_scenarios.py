@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import pytest
+import pdd.sync_core.lifecycle as lifecycle_module
 
 from pdd.sync_core.certificate import LifecycleResult
 from pdd.sync_core.lifecycle import (
@@ -176,13 +177,11 @@ def test_lifecycle_measurement_rejects_synthesized_compatibility_fields() -> Non
 
 
 def test_lifecycle_commands_do_not_use_unsupervised_subprocess_run(monkeypatch) -> None:
-    from pdd.sync_core import lifecycle
-
     def forbidden(*_args, **_kwargs):
         pytest.fail("lifecycle command bypassed the shared sandbox supervisor")
 
-    monkeypatch.setattr(lifecycle.subprocess, "run", forbidden)
-    assert lifecycle._candidate_interpreter_identity(
+    monkeypatch.setattr(lifecycle_module.subprocess, "run", forbidden)
+    assert lifecycle_module._candidate_interpreter_identity(
         Path(sys.executable), {"PATH": os.environ.get("PATH", "")}
     ) is not None
 
@@ -355,14 +354,29 @@ def test_candidate_install_e2e_uses_locked_runtime_wheelhouse(tmp_path) -> None:
         f"{hashlib.sha256(runtime.read_bytes()).hexdigest()}\n",
         encoding="utf-8",
     )
-    installed = _install_candidate_wheel(
-        tmp_path,
-        tmp_path / "home",
-        candidate,
-        wheelhouse,
-        lock,
+    commands = []
+    actual_command = lifecycle_module._lifecycle_command
+
+    def traced_command(*args, **kwargs):
+        result = actual_command(*args, **kwargs)
+        commands.append(result)
+        return result
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(lifecycle_module, "_lifecycle_command", traced_command)
+    try:
+        installed = _install_candidate_wheel(
+            tmp_path,
+            tmp_path / "home",
+            candidate,
+            wheelhouse,
+            lock,
+        )
+    finally:
+        monkeypatch.undo()
+    assert installed is not None, "\n".join(
+        result.stderr for result in commands if result.stderr
     )
-    assert installed is not None
     candidate_python, dependency_digest = installed
     pyvenv = candidate_python.parents[1] / "pyvenv.cfg"
     assert "include-system-site-packages = false" in pyvenv.read_text(encoding="utf-8")
