@@ -393,6 +393,49 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_independent_leaf_package_does_not_adopt_repo_root_config(self, tmp_path):
+        """An independent package must not adopt an unrelated repo-root config.
+
+        The leaf has its own package.json and is NOT a workspace member (the repo
+        root declares no ``workspaces``), so the walk must stop at the leaf and
+        fall back to CSV rather than crossing to the repository-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")  # no "workspaces"
+        leaf = repo / "packages" / "independent"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")  # own project, no jest config
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_non_git_project_stops_at_package_json_boundary(self, tmp_path):
+        """Without a .git ancestor, stop at the nearest package.json.
+
+        A stray jest.config.js above an independent project's package.json must
+        not be adopted, and the walk must not run to the filesystem root.
+        """
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")  # stray
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text("{}")  # boundary, no .git, no config
+        test_file = project / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_playwright_bracketed_spec_path_is_regex_escaped(self, tmp_path):
         """Playwright positional args are regexes, so bracketed paths must escape.
 
