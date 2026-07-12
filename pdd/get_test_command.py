@@ -343,7 +343,11 @@ def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]
     expands its inner ``{b,c}``), and, failing that, it skips *past* the group and
     keeps scanning the rest of the pattern (so a later ``{a,b}`` in
     ``{foo}/{a,b}`` is still found). ``end`` indexes the matching ``}``.
-    ``_split_top_level_commas`` may raise ``_BraceBudgetError`` for a comma bomb.
+
+    An *unmatched* opening ``{`` (no matching ``}``) is likewise literal and does
+    not short-circuit the scan: only that one brace is skipped, so a later balanced
+    alternation in ``{foo/{a,b}`` still expands. ``_split_top_level_commas`` may
+    raise ``_BraceBudgetError`` for a comma bomb.
     """
     i, n = 0, len(pattern)
     while i < n:
@@ -360,7 +364,8 @@ def _find_expandable_brace(pattern: str, limit: int) -> Optional[Tuple[int, int]
                     end = j
                     break
         if end == -1:
-            return None  # unbalanced from here on → nothing expandable
+            i += 1  # unmatched '{' is literal; keep scanning for a later group
+            continue
         body = pattern[i + 1:end]
         if len(_split_top_level_commas(body, limit)) >= 2:
             return (i, end)

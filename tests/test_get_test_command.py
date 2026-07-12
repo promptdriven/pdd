@@ -760,6 +760,23 @@ class TestWorkspaceMembershipHardening:
         # ...but a sibling the exclusion does not name still is (negative control).
         assert _package_matches_workspace(("packages", "{foo}", "c"), globs) is True
 
+    def test_unbalanced_brace_does_not_short_circuit_later_alternation(self):
+        """An *unmatched* opening ``{`` is literal but MUST NOT stop expansion of a
+        later balanced alternation. Otherwise ``!packages/{foo/{a,b}`` never expands
+        its ``{a,b}``, the exclusion never matches, and the excluded package is
+        falsely proven a workspace member (bash: ``{foo/a`` and ``{foo/b``)."""
+        assert sorted(_expand_braces("packages/{foo/{a,b}")) == [
+            "packages/{foo/a",
+            "packages/{foo/b",
+        ]
+        globs = ["packages/**", "!packages/{foo/{a,b}"]
+        assert _package_matches_workspace(("packages", "{foo", "a"), globs) is False
+        assert _package_matches_workspace(("packages", "{foo", "b"), globs) is False
+        # A sibling the exclusion does not name is still a member (negative control).
+        assert _package_matches_workspace(("packages", "{foo", "c"), globs) is True
+        # A trailing unmatched brace with no later alternation stays fully literal.
+        assert _expand_braces("packages/foo{") == ["packages/foo{"]
+
     def test_nested_brace_inside_single_option_group_expands(self):
         """A nested alternation inside a single-option outer brace still expands
         (bash parity for ``{a{b,c}}`` → ``{ab} {ac}``), rather than being emitted
