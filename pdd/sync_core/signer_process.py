@@ -161,7 +161,9 @@ def run_signer(
     contained_command = (
         _linux_contained_command(command) if sys.platform.startswith("linux") else command
     )
-    with tempfile.TemporaryDirectory(prefix="pdd-signer-") as directory:
+    # The Linux signer scope replaces /tmp, so keep the checker-owned marker
+    # under its home directory, which the signer PID namespace bind-mounts.
+    with tempfile.TemporaryDirectory(prefix="pdd-signer-", dir=Path.home()) as directory:
         ready_path = Path(directory) / "started"
         environment = os.environ | {"PDD_SIGNER_PROCESS_TOKEN": token}
         if sys.platform.startswith("linux"):
