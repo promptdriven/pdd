@@ -139,7 +139,10 @@ def test_sandbox_binds_resolved_runtime_sources_at_original_destinations(
     workdir.mkdir()
 
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(sys, "executable", str(executable_destination))
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor._SUPERVISOR_EXECUTABLE",
+        executable_destination,
+    )
     sandbox_tools = {
         "bwrap": "/usr/bin/bwrap",
         "sudo": "/usr/bin/sudo",
