@@ -2,18 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from itertools import combinations
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional
 
 from .operation_log import (
     _safe_basename,
     get_fingerprint_path,
     infer_module_identity,
-    save_fingerprint,
 )
 from .sync_determine_operation import (
     Fingerprint,
@@ -22,6 +23,7 @@ from .sync_determine_operation import (
     get_pdd_file_paths,
     read_fingerprint,
 )
+from .sync_core import CanonicalReportOptions, build_canonical_report
 
 
 DRIFT_CLASSIFICATIONS = {
@@ -68,6 +70,167 @@ def project_root(start: Optional[Path] = None) -> Path:
     except OSError:
         pass
     return current
+
+
+def repository_root(start: Optional[Path] = None) -> Path:
+    """Return the enclosing Git repository root independently of `.pddrc`."""
+    current = (start or Path.cwd()).resolve()
+    if not current.is_dir():
+        current = current.parent
+    while not current.exists() and current.parent != current:
+        current = current.parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=current,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return current
+    return Path(result.stdout.strip()).resolve()
+
+
+def _git_root_from_marker(start: Path) -> Optional[Path]:
+    """Resolve the enclosing worktree root without spawning Git."""
+    candidate = start if start.is_dir() else start.parent
+    for parent in (candidate, *candidate.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _git_head_token(root: Path) -> str:
+    """Return a filesystem token that changes when checked-out HEAD changes."""
+    marker = root / ".git"
+    git_dir = marker
+    if marker.is_file():
+        value = marker.read_text(encoding="utf-8").strip()
+        if not value.startswith("gitdir:"):
+            return value
+        git_dir = Path(value.split(":", 1)[1].strip())
+        if not git_dir.is_absolute():
+            git_dir = (root / git_dir).resolve()
+    try:
+        value = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if value.startswith("ref:"):
+        ref_name = value.split(":", 1)[1].strip()
+        common_dir = git_dir
+        try:
+            common_value = (git_dir / "commondir").read_text(encoding="utf-8").strip()
+            common_dir = Path(common_value)
+            if not common_dir.is_absolute():
+                common_dir = (git_dir / common_dir).resolve()
+        except OSError:
+            pass
+        ref = common_dir / ref_name
+        try:
+            return f"{value}:{ref.read_text(encoding='utf-8').strip()}"
+        except OSError:
+            try:
+                packed = (common_dir / "packed-refs").read_text(encoding="utf-8")
+            except OSError:
+                packed = ""
+            suffix = f" {ref_name}"
+            for line in packed.splitlines():
+                if line.endswith(suffix):
+                    return f"{value}:{line.split(' ', 1)[0]}"
+    return value
+
+
+@lru_cache(maxsize=128)
+def _committed_canonical_policy(
+    root_value: str,
+    protected_ref: str,
+    head_token: str,
+) -> tuple[bool, str]:
+    """Read activation once per repository, protected ref, and checked-out HEAD."""
+    del head_token  # Included solely to invalidate the cache after HEAD movement.
+    root = Path(root_value)
+    policy = subprocess.run(
+        ["git", "show", f"{protected_ref}:.pdd/sync-policy.json"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if policy.returncode != 0:
+        return False, "policy cannot be resolved"
+    identity = subprocess.run(
+        ["git", "cat-file", "-e", f"{protected_ref}:.pdd/repository-id"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if identity.returncode != 0:
+        return False, "identity cannot be resolved"
+    try:
+        payload = json.loads(policy.stdout)
+    except json.JSONDecodeError:
+        return False, "policy is malformed"
+    if payload != {"schema_version": 1, "enforcement": "active"}:
+        return False, "policy is not active"
+    return True, ""
+
+
+def canonical_sync_enabled(root: Path) -> bool:
+    """Return whether protected committed policy activates canonical sync."""
+    protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
+    candidate = Path(root).resolve()
+    if not candidate.is_dir():
+        candidate = candidate.parent
+    if protected_ref is None:
+        ancestors = (candidate, *candidate.parents)
+        has_worktree_policy = any(
+            (parent / ".pdd/sync-policy.json").is_file() for parent in ancestors
+        )
+        repository_marker = next(
+            (
+                parent / ".git"
+                for parent in ancestors
+                if (parent / ".git").exists()
+            ),
+            None,
+        )
+        has_repository_marker = bool(
+            repository_marker is not None
+            and (
+                repository_marker.is_dir()
+                or _valid_gitdir_file(repository_marker)
+            )
+        )
+        if not has_worktree_policy and not has_repository_marker:
+            return False
+    root = _git_root_from_marker(candidate)
+    if root is None:
+        if protected_ref is not None:
+            raise ValueError("explicit protected sync repository cannot be resolved")
+        return False
+    protected_ref = protected_ref or "HEAD"
+    active, reason = _committed_canonical_policy(
+        str(root), protected_ref, _git_head_token(root)
+    )
+    if not active and os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") is not None:
+        raise ValueError(f"explicit protected sync {reason}")
+    return active
+
+
+def _valid_gitdir_file(marker: Path) -> bool:
+    """Return whether a file-form linked-worktree marker names a live gitdir."""
+    if not marker.is_file():
+        return False
+    try:
+        prefix, value = marker.read_text(encoding="utf-8").strip().split(":", 1)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return False
+    if prefix.casefold() != "gitdir":
+        return False
+    gitdir = Path(value.strip())
+    if not gitdir.is_absolute():
+        gitdir = marker.parent / gitdir
+    return gitdir.is_dir()
 
 
 def _prompts_dir_for(prompt_path: Path) -> Path:
@@ -281,13 +444,16 @@ def discover_units(
             units.append(unit)
         return units
 
-    if not metadata_identities:
-        return prompt_units
-
     units: List[SyncUnit] = []
     seen: set[tuple[str, str, Path]] = set()
     for identity in metadata_identities:
         unit = _unit_from_metadata_identity(identity, prompt_root, prompt_index)
+        dedupe_key = (unit.basename, unit.language, unit.prompt_path)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        units.append(unit)
+    for unit in prompt_units:
         dedupe_key = (unit.basename, unit.language, unit.prompt_path)
         if dedupe_key in seen:
             continue
@@ -663,32 +829,6 @@ def _append_ledger(
     return str(ledger_path) if wrote else None
 
 
-def _heal_units(
-    units: List[SyncUnit],
-    classified: List[Dict[str, Any]],
-) -> List[str]:
-    healed: List[str] = []
-    by_key = {(unit.basename, unit.language): unit for unit in units}
-    for item in classified:
-        if item["classification"] not in DRIFT_CLASSIFICATIONS:
-            continue
-        unit = by_key.get((item["basename"], item["language"]))
-        if unit is None:
-            continue
-        paths = get_pdd_file_paths(
-            unit.basename,
-            unit.language,
-            prompts_dir=str(unit.prompts_dir),
-        )
-        fingerprint = read_fingerprint(unit.basename, unit.language, paths=paths)
-        operation = "fix"
-        if fingerprint and fingerprint.command in {"verify", "test", "fix", "update"}:
-            operation = fingerprint.command
-        save_fingerprint(unit.basename, unit.language, operation, paths, 0.0, "reconcile")
-        healed.append(unit.basename)
-    return healed
-
-
 def build_report(
     *,
     consumer: str,
@@ -698,16 +838,25 @@ def build_report(
     ledger: bool = False,
 ) -> Dict[str, Any]:
     """Build a shared continuous-sync JSON report."""
+    if heal:
+        raise ValueError(
+            "blind fingerprint healing is disabled; use an explicit repair or "
+            "reviewed baseline workflow"
+        )
     base = project_root(root)
+    if canonical_sync_enabled(base):
+        if ledger:
+            raise ValueError(
+                "canonical read-only reporting cannot append a repository ledger"
+            )
+        return _canonical_compatibility_report(base, consumer, modules)
     units = discover_units(base, modules=modules)
     classified = [classify_unit(unit, base) for unit in units]
-    healed = _heal_units(units, classified) if heal else []
-    if healed:
-        classified = [classify_unit(unit, base) for unit in units]
     summary = _build_summary(classified)
     ledger_path = _append_ledger(base, consumer, classified) if ledger else None
     ok = (
-        summary["metadata_stale"] == 0
+        summary["total"] > 0
+        and summary["metadata_stale"] == 0
         and summary["conflicts"] == 0
         and summary["unbaselined"] == 0
         and summary["failures"] == 0
@@ -739,8 +888,97 @@ def build_report(
             for unit in classified
             if unit["classification"] == FAILURE_CLASSIFICATION
         ],
-        "healed": healed,
+        "healed": [],
     }
     if ledger_path:
         report["ledger_path"] = ledger_path
     return report
+
+
+def _canonical_compatibility_report(
+    root: Path,
+    consumer: str,
+    modules: Optional[Iterable[str]],
+) -> Dict[str, Any]:
+    """Project the trusted canonical report into the legacy consumer schema."""
+    canonical = build_canonical_report(
+        root,
+        CanonicalReportOptions(modules=tuple(modules or ())),
+    )
+    projected = []
+    for unit in canonical["units"]:
+        baseline = unit["baseline"]
+        semantic = unit["semantic"]
+        if unit["in_sync"]:
+            classification = "IN_SYNC"
+        elif baseline == "UNBASELINED":
+            classification = UNBASELINED_CLASSIFICATION
+        elif semantic == "CONFLICT":
+            classification = CONFLICT_CLASSIFICATION
+        elif baseline == "DRIFTED":
+            classification = "DERIVED_CHANGED"
+        else:
+            classification = FAILURE_CLASSIFICATION
+        projected.append(
+            {
+                "basename": PurePosixPath(unit["subject"]).relative_to(
+                    "prompts"
+                ).with_suffix("").as_posix().rsplit("_", 1)[0],
+                "language": Path(unit["subject"]).stem.rsplit("_", 1)[-1],
+                "classification": classification,
+                "operation": "none",
+                "reason": unit["reason"],
+                "changed_files": unit["changed_roles"],
+                "metadata_valid": baseline not in {"UNBASELINED", "CORRUPT"},
+                "subject": unit["subject"],
+            }
+        )
+    summary = _build_summary(projected)
+    summary["metadata_stale"] = len([
+        item for item in projected if item["classification"] in DRIFT_CLASSIFICATIONS
+    ])
+    summary["conflicts"] = len([
+        item for item in projected if item["classification"] == CONFLICT_CLASSIFICATION
+    ])
+    summary["unbaselined"] = len([
+        item for item in projected if item["classification"] == UNBASELINED_CLASSIFICATION
+    ])
+    summary["failures"] = len([
+        item for item in projected if item["classification"] == FAILURE_CLASSIFICATION
+    ])
+    summary["synced"] = len([
+        item for item in projected if item["classification"] == "IN_SYNC"
+    ])
+    summary["total"] = len(projected)
+    return {
+        "ok": bool(projected) and all(
+            item["classification"] == "IN_SYNC" for item in projected
+        ),
+        "consumer": consumer,
+        "project_root": str(root),
+        "summary": summary,
+        "metadata_stale": summary["metadata_stale"],
+        "units": projected,
+        "drift": [
+            unit
+            for unit in projected
+            if unit["classification"] in DRIFT_CLASSIFICATIONS
+        ],
+        "conflicts": [
+            unit
+            for unit in projected
+            if unit["classification"] == CONFLICT_CLASSIFICATION
+        ],
+        "unbaselined": [
+            unit
+            for unit in projected
+            if unit["classification"] == UNBASELINED_CLASSIFICATION
+        ],
+        "failures": [
+            unit
+            for unit in projected
+            if unit["classification"] == FAILURE_CLASSIFICATION
+        ],
+        "healed": [],
+        "canonical": canonical,
+    }
