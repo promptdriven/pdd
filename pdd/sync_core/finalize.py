@@ -21,7 +21,7 @@ from .evidence_store import (
 )
 from .fingerprint_store import FingerprintStore, encode_fingerprint
 from .git_io import resolve_git_commit
-from .manifest import build_unit_manifest, require_valid_manifest
+from .manifest import build_unit_manifest
 from .path_policy import PathPolicy
 from .runner import (
     TRUSTED_RUNNER_VERSION,
