@@ -321,6 +321,27 @@ def test_reverse_dep_traverses_complete_include_closure(tmp_path, monkeypatch):
     assert result >= {"nested/inner", "nested/outer"}
 
 
+def test_reverse_dep_closure_traverses_included_artifacts(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    docs_dir = tmp_path / "docs"
+    source_dir = tmp_path / "pdd"
+    prompt_dir.mkdir()
+    docs_dir.mkdir()
+    source_dir.mkdir()
+    (source_dir / "leaf.py").write_text("leaf = True\n", encoding="utf-8")
+    (docs_dir / "inner.md").write_text(
+        "<include>pdd/leaf.py</include>", encoding="utf-8"
+    )
+    (prompt_dir / "outer_python.prompt").write_text(
+        "<include>docs/inner.md</include>", encoding="utf-8"
+    )
+
+    assert "outer" in module._reverse_dep_basenames(["pdd/leaf.py"])
+
+
 @pytest.mark.timeout(1)
 def test_reverse_dep_include_cycle_terminates_deterministically(tmp_path, monkeypatch):
     module = _load_module()
