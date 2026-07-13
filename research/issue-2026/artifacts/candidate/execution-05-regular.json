@@ -1,0 +1,87 @@
+{
+  "after": {
+    "commit": "3d4a0c82eeb22b2f3f8b97dbe94289123cc66a6c",
+    "files": {
+      ".pddrc": "0eeaa7e6e6881b1e420f0472ffa643a453e58e68bea6bd1aa364bed721f608bf",
+      "architecture.json": "678cea76276a6e0bbcad731a0ec7179c247d90024c2b327b27b376566fce5da9",
+      "prompts/greeter_python.prompt": "1aa68d69c9999ba9ee1868047ba9df56108744ec7e0d9e6cc40fac62621a8af2",
+      "prompts/textutil_python.prompt": "6d645662492a1089365df78629fe4eaef5a6c980494464378444f443925976e6"
+    },
+    "fixture_harness_sha256": "9b047448d6dc4e7a7389c2fb7106582d6824adcaa67c4976314101bac6852274",
+    "generated_files": [
+      {
+        "path": ".pdd/core_dumps/pdd-core-20260713T212252Z.json",
+        "sha256": "a9b105d2cc90b5b703319eb6d365aa69e0688449a95a59f70de686d333dfccf3"
+      },
+      {
+        "path": ".pdd/core_dumps/pdd-core-20260713T212256Z.json",
+        "sha256": "aff54bf772634043928ae970b78ee2a9c19a6284e95f65f8301f75544788a33e"
+      }
+    ],
+    "status": "?? .pdd/",
+    "tree": "29f3d82202e1d648b20449db8efc2a8d0c78288d"
+  },
+  "before": {
+    "commit": "3d4a0c82eeb22b2f3f8b97dbe94289123cc66a6c",
+    "files": {
+      ".pddrc": "0eeaa7e6e6881b1e420f0472ffa643a453e58e68bea6bd1aa364bed721f608bf",
+      "architecture.json": "678cea76276a6e0bbcad731a0ec7179c247d90024c2b327b27b376566fce5da9",
+      "prompts/greeter_python.prompt": "1aa68d69c9999ba9ee1868047ba9df56108744ec7e0d9e6cc40fac62621a8af2",
+      "prompts/textutil_python.prompt": "6d645662492a1089365df78629fe4eaef5a6c980494464378444f443925976e6"
+    },
+    "fixture_harness_sha256": "9b047448d6dc4e7a7389c2fb7106582d6824adcaa67c4976314101bac6852274",
+    "generated_files": [],
+    "status": "",
+    "tree": "29f3d82202e1d648b20449db8efc2a8d0c78288d"
+  },
+  "checkout": "/private/tmp/pdd-2026-candidate",
+  "commands": [
+    {
+      "command": [
+        "/opt/anaconda3/bin/python",
+        "-m",
+        "pdd",
+        "--force",
+        "--local",
+        "sync",
+        "textutil",
+        "--dry-run",
+        "--no-steer"
+      ],
+      "elapsed_seconds": 3.395098,
+      "returncode": 0,
+      "stderr": "\u001b[92m14:22:50 - LiteLLM:WARNING\u001b[0m: get_model_cost_map.py:271 - LiteLLM: Failed to fetch remote model cost map from https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json: [Errno 8] nodename nor servname provided, or not known. Falling back to local backup.\nINFO: get_pdd_file_paths called: basename=textutil, language=python, prompts_dir=/Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/prompts\nINFO: Checking prompt_path=/Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/prompts/textutil_python.prompt, exists=True\n",
+      "stdout": "\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 PDD Sync Dry Run \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Displaying sync analysis for textutil \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\n--- Log for language: python ---\nNo sync log found for 'textutil' in language 'python'.\n\n--- Command Execution Summary ---\n  \u2713 Step 1 (sync): Cost: $0.000000\n  Context compression: off; fallback policy: full\nTotal Estimated Cost: $0.000000\n-------------------------------------\n\ud83d\udce6 Debug snapshot saved to /Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/.pdd/core_dumps/pdd-core-20260713T212252Z.json \n(attach when reporting bugs)\n"
+    },
+    {
+      "command": [
+        "/opt/anaconda3/bin/python",
+        "-m",
+        "pdd",
+        "--force",
+        "--local",
+        "sync",
+        "greeter",
+        "--dry-run",
+        "--no-steer"
+      ],
+      "elapsed_seconds": 3.548165,
+      "returncode": 0,
+      "stderr": "\u001b[92m14:22:54 - LiteLLM:WARNING\u001b[0m: get_model_cost_map.py:271 - LiteLLM: Failed to fetch remote model cost map from https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json: [Errno 8] nodename nor servname provided, or not known. Falling back to local backup.\nINFO: get_pdd_file_paths called: basename=greeter, language=python, prompts_dir=/Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/prompts\nINFO: Checking prompt_path=/Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/prompts/greeter_python.prompt, exists=True\n",
+      "stdout": "\u256d\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 PDD Sync Dry Run \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256e\n\u2502 Displaying sync analysis for greeter \u2502\n\u2570\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u256f\n\n--- Log for language: python ---\nNo sync log found for 'greeter' in language 'python'.\n\n--- Command Execution Summary ---\n  \u2713 Step 1 (sync): Cost: $0.000000\n  Context compression: off; fallback policy: full\nTotal Estimated Cost: $0.000000\n-------------------------------------\n\ud83d\udce6 Debug snapshot saved to /Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/candidate-f680c761-controlled/execution-05-regular/sandbox/project/.pdd/core_dumps/pdd-core-20260713T212256Z.json \n(attach when reporting bugs)\n"
+    }
+  ],
+  "logs": {
+    "TRIPWIRE.log": "",
+    "claude_calls.log": "",
+    "gh_calls.log": "",
+    "gh_writes.log": "",
+    "pdd_calls.log": ""
+  },
+  "manifest": [
+    "textutil",
+    "greeter"
+  ],
+  "mode": "regular",
+  "worktree_diff": ""
+}

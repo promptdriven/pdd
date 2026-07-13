@@ -1,0 +1,1 @@
+{"number": 7, "title": "Sync the greeter feature", "state": "open", "html_url": "https://github.com/e2e-org/greeter-proj/issues/7", "user": {"login": "e2e-user"}, "labels": [], "body": "The greeter feature needs to be synchronized.\n\nFILES_MODIFIED:\n- prompts/greeter_python.prompt\n- prompts/textutil_python.prompt\n"}

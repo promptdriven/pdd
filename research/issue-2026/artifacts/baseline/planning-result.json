@@ -1,0 +1,61 @@
+{
+  "after": {
+    "commit": "77df338ea548220bb80a2ec949b779f6b6f2224b",
+    "files": {
+      ".pddrc": "0eeaa7e6e6881b1e420f0472ffa643a453e58e68bea6bd1aa364bed721f608bf",
+      "architecture.json": "678cea76276a6e0bbcad731a0ec7179c247d90024c2b327b27b376566fce5da9",
+      "prompts/greeter_python.prompt": "cf1ca5d8bfc7e4bd0feed57fa80485d12007276462f0f8f4ac6fbf65f27ac5f6",
+      "prompts/textutil_python.prompt": "6d645662492a1089365df78629fe4eaef5a6c980494464378444f443925976e6"
+    },
+    "fixture_harness_sha256": "a8adc991a2796b06a4f8ef59c531eab632350784ca7961d1282d4fa8424b38fe",
+    "generated_files": [
+      {
+        "path": ".pdd/core_dumps/pdd-core-20260713T212325Z.json",
+        "sha256": "a0605c997beb53d11b81d49437c124f3f753134694a4c6b57a11601db8d87994"
+      }
+    ],
+    "status": "?? .pdd/",
+    "tree": "430920c8ace9e57c22b060ae8925c22fdf3f13a2"
+  },
+  "before": {
+    "commit": "77df338ea548220bb80a2ec949b779f6b6f2224b",
+    "files": {
+      ".pddrc": "0eeaa7e6e6881b1e420f0472ffa643a453e58e68bea6bd1aa364bed721f608bf",
+      "architecture.json": "678cea76276a6e0bbcad731a0ec7179c247d90024c2b327b27b376566fce5da9",
+      "prompts/greeter_python.prompt": "cf1ca5d8bfc7e4bd0feed57fa80485d12007276462f0f8f4ac6fbf65f27ac5f6",
+      "prompts/textutil_python.prompt": "6d645662492a1089365df78629fe4eaef5a6c980494464378444f443925976e6"
+    },
+    "fixture_harness_sha256": "a8adc991a2796b06a4f8ef59c531eab632350784ca7961d1282d4fa8424b38fe",
+    "generated_files": [],
+    "status": "",
+    "tree": "430920c8ace9e57c22b060ae8925c22fdf3f13a2"
+  },
+  "checkout": "/private/tmp/pdd-2026-baseline",
+  "checkout_commit": "263b4925f1a53b3f1cfe8a15274d2a18af842c17",
+  "logs": {
+    "TRIPWIRE.log": "",
+    "claude_calls.log": "",
+    "gh_calls.log": "argv: api repos/e2e-org/greeter-proj/issues/7\n",
+    "gh_writes.log": "",
+    "pdd_calls.log": "pdd --force --local sync greeter --dry-run --agentic --no-steer\n"
+  },
+  "result": {
+    "command": [
+      "/opt/anaconda3/bin/python",
+      "-m",
+      "pdd",
+      "--force",
+      "--local",
+      "sync",
+      "https://github.com/e2e-org/greeter-proj/issues/7",
+      "--no-steer",
+      "--dry-run",
+      "--no-github-state"
+    ],
+    "elapsed_seconds": 7.764036,
+    "returncode": 0,
+    "stderr": "\u001b[92m14:23:19 - LiteLLM:WARNING\u001b[0m: get_model_cost_map.py:271 - LiteLLM: Failed to fetch remote model cost map from https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json: [Errno 8] nodename nor servname provided, or not known. Falling back to local backup.\n",
+    "stdout": "Fetching issue #7 from e2e-org/greeter-proj...\nDetected modules from branch diff: ['greeter']\nModules to sync: ['greeter']\nWarning: /Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/baseline-263b4925-controlled/planning-agentic-issue/sandbox/project/architecture.json: module 'greeter' depends on 'textutil' (via \n'textutil_python.prompt'), which is not in the sync target set; edge omitted from schedule\nDependency graph: {'greeter': []}\nRunning dry-run validation for each module...\n  \u2713 greeter \u2192 cwd: .\nAll modules passed dry-run validation\nChecking fingerprints for already-synced modules...\nDry run complete: 1 module(s) would sync: greeter\nStatus: Success\nMessage: Dry run complete: 1 module(s) would sync: greeter\nCost: $0.0000\n\n--- Command Execution Summary ---\n  \u2713 Step 1 (sync): Cost: $0.000000\n  Context compression: off; fallback policy: full\nTotal Estimated Cost: $0.000000\n-------------------------------------\n\ud83d\udce6 Debug snapshot saved to /Users/sohnitagirisa/pdd-issue-2026-artifacts/2026-07-13/baseline-263b4925-controlled/planning-agentic-issue/sandbox/project/.pdd/core_dumps/pdd-core-20260713T212325Z.json \n(attach when reporting bugs)\n"
+  },
+  "worktree_diff": ""
+}
