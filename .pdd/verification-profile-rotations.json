@@ -17,6 +17,15 @@
       "policy_path": ".pdd/verification-profiles.json",
       "from_policy_sha256": "ffd867088a7c9a92840130ffd9db9eb8f279e611a02afe501d02855ebb03930f",
       "to_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53"
+    },
+    {
+      "prompt_path": "pdd/prompts/get_test_command_python.prompt",
+      "language_id": "python",
+      "from_requirement_id": "CONTRACT-SHA256:ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
+      "to_requirement_id": "CONTRACT-SHA256:f0368c27b89775d6683d998700c2a5cd1787fd2266a1b5e6ceb7d64145362e3a",
+      "policy_path": ".pdd/verification-profiles.json",
+      "from_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53",
+      "to_policy_sha256": "51b160c987495b19f1b1d9e7aeab617540d0a2bf799004bfe9a3c9118065e7ea"
     }
   ]
 }
