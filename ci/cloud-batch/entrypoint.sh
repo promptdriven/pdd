@@ -140,6 +140,30 @@ START_TIME=$(date +%s)
 trap term_handler TERM INT
 trap trap_handler EXIT
 
+initialize_source_git_snapshot() {
+    # The upload intentionally excludes the host repository's .git directory.
+    # Build an exact ephemeral HEAD from the uploaded test inputs so protected
+    # rollout/finalizer tests can clone and compare a clean committed snapshot.
+    # Test-only supplemental files must remain available without becoming part
+    # of that protected source identity.
+    git init -q "${WORK_DIR}"
+    git -C "${WORK_DIR}" config user.email "ci@pdd.dev"
+    git -C "${WORK_DIR}" config user.name "PDD Cloud Batch"
+    printf '%s\n' ".pdd-package-version" ".pddrc_pddcloud" \
+        >> "${WORK_DIR}/.git/info/exclude"
+    # Force-add files that were tracked in the host checkout even if a current
+    # ignore rule now matches them; the synthetic commit must represent every
+    # uploaded source byte, not reinterpret the host's tracked set.
+    git -C "${WORK_DIR}" add -f -A -- . \
+        ':(exclude).pdd-package-version' ':(exclude).pddrc_pddcloud'
+    git -C "${WORK_DIR}" commit -q --no-gpg-sign \
+        -m "test(cloud-test): snapshot uploaded source"
+    if [ -n "$(git -C "${WORK_DIR}" status --porcelain=v1 --untracked-files=all)" ]; then
+        echo "FATAL: synthetic Cloud Batch source checkout is not clean"
+        return 1
+    fi
+}
+
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
 echo "=== Task ${TASK_INDEX}: extracting source ==="
@@ -154,12 +178,43 @@ if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
     export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
 fi
 
+initialize_source_git_snapshot
+
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
 SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
 # ── Phantom-contract preflight ────────────────────────────────────────────
+# Protected Linux runner contract: the inner verifier deliberately fails
+# closed unless every namespace/bind-staging tool is present and sudo is
+# noninteractive. Report this as an image prerequisite failure instead of an
+# opaque nested pytest COLLECTION_ERROR.
+MISSING_SANDBOX_COMMANDS=()
+for command in bwrap sudo setpriv mount umount; do
+    command -v "${command}" >/dev/null 2>&1 || MISSING_SANDBOX_COMMANDS+=("${command}")
+done
+if [ "${#MISSING_SANDBOX_COMMANDS[@]}" -ne 0 ] || ! sudo -n true; then
+    echo "FATAL: missing protected sandbox prerequisites: ${MISSING_SANDBOX_COMMANDS[*]:-passwordless sudo}"
+    write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
+    exit 1
+fi
+
+# The runner stages private bind mounts before entering bubblewrap. Exercise
+# that capability explicitly because container runtimes can expose the tools
+# while withholding the required mount capability.
+SANDBOX_PREFLIGHT_DIR=$(mktemp -d)
+mkdir "${SANDBOX_PREFLIGHT_DIR}/source" "${SANDBOX_PREFLIGHT_DIR}/target"
+if ! sudo -n mount --bind \
+    "${SANDBOX_PREFLIGHT_DIR}/source" "${SANDBOX_PREFLIGHT_DIR}/target"; then
+    echo "FATAL: protected sandbox bind-mount capability is unavailable"
+    rm -rf "${SANDBOX_PREFLIGHT_DIR}"
+    write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
+    exit 1
+fi
+sudo -n umount "${SANDBOX_PREFLIGHT_DIR}/target"
+rm -rf "${SANDBOX_PREFLIGHT_DIR}"
+
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.

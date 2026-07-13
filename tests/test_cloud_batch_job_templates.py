@@ -155,6 +155,9 @@ def test_cloud_batch_entrypoint_builds_clean_ephemeral_git_head(tmp_path):
     workspace.mkdir()
     (workspace / ".gitignore").write_text("*.egg-info/\n", encoding="utf-8")
     (workspace / "payload.py").write_text("VALUE = 1\n", encoding="utf-8")
+    ignored_upload = workspace / "tracked.egg-info" / "PKG-INFO"
+    ignored_upload.parent.mkdir()
+    ignored_upload.write_text("uploaded tracked bytes\n", encoding="utf-8")
     (workspace / ".pdd-package-version").write_text("0.0.303.dev1\n", encoding="utf-8")
     (workspace / ".pddrc_pddcloud").write_text("[pdd]\n", encoding="utf-8")
 
@@ -180,7 +183,7 @@ initialize_source_git_snapshot
     ).stdout.splitlines()
 
     assert status == ""
-    assert {".gitignore", "payload.py"} <= set(tracked)
+    assert {".gitignore", "payload.py", "tracked.egg-info/PKG-INFO"} <= set(tracked)
     assert ".pdd-package-version" not in tracked
     assert ".pddrc_pddcloud" not in tracked
     assert (workspace / ".pdd-package-version").read_text() == "0.0.303.dev1\n"

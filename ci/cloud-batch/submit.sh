@@ -85,6 +85,7 @@ SOURCE_PATHS=(
     scripts
     utils
     .github
+    .gitignore
     .sync-config.yml
     architecture.json
     README.md

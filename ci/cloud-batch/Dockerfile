@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tcsh \
     nodejs \
     npm \
+    bubblewrap \
+    sudo \
+    util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Gemini CLI and Codex CLI for agentic fix tests
