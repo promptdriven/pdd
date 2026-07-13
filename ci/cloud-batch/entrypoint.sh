@@ -3,33 +3,25 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 # Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by dedicated STANDARD groups), TASK_INDEX_OFFSET maps a serial group
-# onto a contiguous task range, and SKIP_INDEXES lets the main group skip
-# dedicated task indexes while preserving the global task numbering.
+# (used by dedicated STANDARD groups). Otherwise TASK_INDEX_OFFSET selects a
+# group's starting index and SKIP_INDEXES omits indexes owned by other groups,
+# preserving the global 0-76 result numbering.
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
-elif [ -n "${TASK_INDEX_OFFSET:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX=$((_RAW + TASK_INDEX_OFFSET))
-elif [ -n "${SKIP_INDEXES:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX="${_RAW}"
-    IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
-    for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
-        [ -n "${_SKIP_INDEX}" ] || continue
-        if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
-            TASK_INDEX=$((TASK_INDEX + 1))
-        fi
-    done
-elif [ -n "${SKIP_INDEX:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
-        TASK_INDEX=$((_RAW + 1))
-    else
-        TASK_INDEX="${_RAW}"
-    fi
 else
-    TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX=$((_RAW + ${TASK_INDEX_OFFSET:-0}))
+    if [ -n "${SKIP_INDEXES:-}" ]; then
+        IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
+        for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
+            [ -n "${_SKIP_INDEX}" ] || continue
+            if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+                TASK_INDEX=$((TASK_INDEX + 1))
+            fi
+        done
+    elif [ -n "${SKIP_INDEX:-}" ] && [ "${SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+        TASK_INDEX=$((TASK_INDEX + 1))
+    fi
 fi
 RESULTS_DIR="/mnt/disks/results"
 SOURCE_DIR="/mnt/disks/source"
