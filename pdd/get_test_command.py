@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 import csv
 import json
+import os
 import re
 import shlex
 
@@ -41,6 +42,7 @@ _MAX_BRACE_ALTERNATIVES = 32
 _MAX_WORKSPACE_MATCH_STATES = 250_000
 _MAX_WORKSPACE_MANIFEST_BYTES = 1_048_576
 _MAX_WORKSPACE_MANIFEST_NESTING = 64
+_EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
 
 
 class _WorkspaceProvider(Enum):
@@ -218,6 +220,11 @@ def _declared_workspace_membership(
         not patterns
         or len(patterns) > _MAX_WORKSPACE_PATTERNS
         or len(rel_parts) > _MAX_WORKSPACE_SEGMENTS
+        or any(
+            marker in raw_pattern
+            for raw_pattern in patterns
+            for marker in _EXTGLOB_MARKERS
+        )
     ):
         return None
     prepared_patterns = []
@@ -348,7 +355,7 @@ def _pnpm_workspace_globs(path: Path) -> Optional[list[str]]:
 
 def _manifest_workspace_globs(path: Path) -> Optional[list[str]]:
     """Load npm/Yarn workspace patterns when a package manifest declares them."""
-    if not path.exists():
+    if not os.path.lexists(path):
         return []
     contents = _read_workspace_manifest(path)
     if contents is None:
@@ -369,7 +376,7 @@ def _manifest_workspace_globs(path: Path) -> Optional[list[str]]:
 
 def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
     """Load Lerna patterns, including its conventional ``packages/*`` default."""
-    if not path.exists():
+    if not os.path.lexists(path):
         return []
     contents = _read_workspace_manifest(path)
     if contents is None:
@@ -388,21 +395,32 @@ def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
 
 def _workspace_declarations_for(
     ancestor: Path,
+    cache: Optional[dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]] = None,
 ) -> Optional[tuple[_WorkspaceDeclaration, ...]]:
     """Return provider declarations, or ``None`` for an invalid declaration.
 
     An existing ``pnpm-workspace.yaml`` is authoritative over package and Lerna
     manifests at the same root.
     """
-    pnpm_path = ancestor / "pnpm-workspace.yaml"
-    if pnpm_path.exists():
+    canonical_ancestor = ancestor.resolve()
+    if cache is not None and canonical_ancestor in cache:
+        return cache[canonical_ancestor]
+    pnpm_path = canonical_ancestor / "pnpm-workspace.yaml"
+    if os.path.lexists(pnpm_path):
         patterns = _pnpm_workspace_globs(pnpm_path)
         if patterns is None:
+            if cache is not None:
+                cache[canonical_ancestor] = None
             return None
-        return (_WorkspaceDeclaration(_WorkspaceProvider.PNPM, tuple(patterns)),)
-    manifest_globs = _manifest_workspace_globs(ancestor / "package.json")
-    lerna_globs = _lerna_workspace_globs(ancestor / "lerna.json")
+        result = (_WorkspaceDeclaration(_WorkspaceProvider.PNPM, tuple(patterns)),)
+        if cache is not None:
+            cache[canonical_ancestor] = result
+        return result
+    manifest_globs = _manifest_workspace_globs(canonical_ancestor / "package.json")
+    lerna_globs = _lerna_workspace_globs(canonical_ancestor / "lerna.json")
     if manifest_globs is None or lerna_globs is None:
+        if cache is not None:
+            cache[canonical_ancestor] = None
         return None
     declarations = []
     if manifest_globs:
@@ -413,15 +431,23 @@ def _workspace_declarations_for(
         declarations.append(
             _WorkspaceDeclaration(_WorkspaceProvider.LERNA, tuple(lerna_globs))
         )
-    return tuple(declarations)
+    result = tuple(declarations)
+    if cache is not None:
+        cache[canonical_ancestor] = result
+    return result
 
 
-def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
+def _ancestor_workspace_root(
+    package_dir: Path,
+    declaration_cache: Optional[
+        dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
+    ] = None,
+) -> Optional[Path]:
     """Return the nearest ancestor workspace that proves package membership."""
     canonical_package = package_dir.resolve()
     ancestor = canonical_package.parent
     for _ in range(80):
-        declarations = _workspace_declarations_for(ancestor)
+        declarations = _workspace_declarations_for(ancestor, declaration_cache)
         if declarations is None:
             return None
         if declarations:
@@ -437,9 +463,9 @@ def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
                 return None
             if any(memberships):
                 return ancestor.resolve()
-        if (ancestor / "pnpm-workspace.yaml").exists():
+        if os.path.lexists(ancestor / "pnpm-workspace.yaml"):
             return None
-        if (ancestor / ".git").exists():
+        if os.path.lexists(ancestor / ".git"):
             break
         parent = ancestor.parent
         if parent == ancestor:
@@ -448,7 +474,12 @@ def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
     return None
 
 
-def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
+def _belongs_to_ancestor_workspace(
+    package_dir: Path,
+    declaration_cache: Optional[
+        dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
+    ] = None,
+) -> bool:
     """Return True if ``package_dir`` is a proven ancestor-workspace member.
 
     Membership is proven, not assumed: an ancestor's declared workspace globs
@@ -458,14 +489,14 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
     root is therefore not treated as a member. The search never looks above the
     repository root (``.git``).
     """
-    return _ancestor_workspace_root(package_dir) is not None
+    return _ancestor_workspace_root(package_dir, declaration_cache) is not None
 
 
 def _nearest_package_root_for(test_path: Path) -> Optional[Path]:
     """Return the nearest canonical package root containing ``test_path``."""
     current = test_path.resolve().parent
     for _ in range(80):
-        if (current / "package.json").exists():
+        if os.path.lexists(current / "package.json"):
             return current
         parent = current.parent
         if parent == current:
@@ -478,7 +509,7 @@ def _repository_root_for(test_path: Path) -> Optional[Path]:
     """Return the canonical repository root containing ``test_path``, if any."""
     current = test_path.resolve().parent
     for _ in range(80):
-        if (current / ".git").exists():
+        if os.path.lexists(current / ".git"):
             return current.resolve()
         parent = current.parent
         if parent == current:
@@ -488,7 +519,11 @@ def _repository_root_for(test_path: Path) -> Optional[Path]:
 
 
 def _runner_ownership_root(
-    test_path: Path, repository_root: Optional[Path]
+    test_path: Path,
+    repository_root: Optional[Path],
+    declaration_cache: Optional[
+        dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]
+    ] = None,
 ) -> Optional[Path]:
     """Return the canonical ceiling that may own a discovered runner config."""
     if repository_root is not None:
@@ -498,7 +533,9 @@ def _runner_ownership_root(
         return None
     ownership_root = package_root.resolve()
     for _ in range(80):
-        workspace_root = _ancestor_workspace_root(ownership_root)
+        workspace_root = _ancestor_workspace_root(
+            ownership_root, declaration_cache
+        )
         if workspace_root is None or workspace_root == ownership_root:
             break
         ownership_root = workspace_root
@@ -559,7 +596,12 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
     repository_root = _repository_root_for(test_path)
-    ownership_root = _runner_ownership_root(test_path, repository_root)
+    declaration_cache: dict[
+        Path, Optional[tuple[_WorkspaceDeclaration, ...]]
+    ] = {}
+    ownership_root = _runner_ownership_root(
+        test_path, repository_root, declaration_cache
+    )
     for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any(
@@ -584,8 +626,10 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         # Stop at the JS project boundary (nearest package.json), but cross it when
         # this package is a member of an ancestor workspace whose config lives at
         # the workspace root.
-        is_project = (search_dir / "package.json").exists()
-        if is_project and not _belongs_to_ancestor_workspace(search_dir):
+        is_project = os.path.lexists(search_dir / "package.json")
+        if is_project and not _belongs_to_ancestor_workspace(
+            search_dir, declaration_cache
+        ):
             break
         # Never escape the repository, even absent an in-project config.
         if repository_root is not None and search_dir == repository_root:
@@ -683,7 +727,9 @@ def get_test_command_for_file(
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)))
+            return TestCommand(
+                command=csv_cmd.replace('{file}', shlex.quote(str(test_file)))
+            )
 
     # 3. Smart detection
     if resolved_language:

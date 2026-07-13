@@ -193,7 +193,7 @@ class TestEdgeCases:
     @patch('pdd.get_test_command.default_verify_cmd_for')
     @patch('pdd.get_test_command.get_language')
     def test_path_with_spaces(self, mock_get_lang, mock_smart_detect, mock_load_csv):
-        """Test with file path containing spaces."""
+        """CSV paths with spaces remain one literal shell argument."""
         mock_load_csv.return_value = {
             '.py': {'extension': '.py', 'run_test_command': 'pytest {file}'}
         }
@@ -201,7 +201,50 @@ class TestEdgeCases:
         
         result = get_test_command_for_file('/my path/test file.py')
 
-        assert result.command == 'pytest /my path/test file.py'
+        assert shlex.split(result.command) == ['pytest', '/my path/test file.py']
+
+    @pytest.mark.parametrize(
+        "test_file",
+        (
+            "/tmp/space path.py",
+            "/tmp/single'quote.py",
+            '/tmp/double"quote.py',
+            "/tmp/semi;colon.py",
+            "/tmp/`backticks`.py",
+            "/tmp/$(command-substitution).py",
+            "/tmp/a&b|c>(d)<e.py",
+        ),
+    )
+    @patch('pdd.get_test_command._load_language_format')
+    def test_csv_path_is_one_literal_argument(self, mock_load_csv, test_file):
+        """Every POSIX shell metacharacter stays inside the path argument."""
+        mock_load_csv.return_value = {
+            '.py': {'extension': '.py', 'run_test_command': 'pytest {file}'}
+        }
+
+        result = get_test_command_for_file(test_file, language='python')
+
+        assert result is not None
+        assert shlex.split(result.command) == ['pytest', test_file]
+
+    @patch('pdd.get_test_command._load_language_format')
+    def test_csv_path_cannot_execute_an_extra_shell_command(
+        self, mock_load_csv, tmp_path
+    ):
+        """A semicolon in a CSV-substituted path cannot start another command."""
+        injected = tmp_path / "injected.py"
+        test_file = f"literal; touch {injected}"
+        mock_load_csv.return_value = {
+            '.py': {'extension': '.py', 'run_test_command': "printf '%s' {file}"}
+        }
+
+        result = get_test_command_for_file(test_file, language='python')
+        completed = subprocess.run(
+            result.command, shell=True, check=True, capture_output=True, text=True
+        )
+
+        assert completed.stdout == test_file
+        assert not injected.exists()
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -1535,3 +1578,112 @@ class TestAdditionalCoverage:
         assert result is not None
         argv = shlex.split(result.command)
         assert str(test_file.resolve()) in argv
+
+
+class TestRunnerBoundaryRegressions:
+    """Public-boundary regressions for ownership proof and bounded discovery."""
+
+    @pytest.mark.parametrize("extglob", ("?(foo)", "*(foo)", "+(foo)", "@(foo)", "!(foo)"))
+    @pytest.mark.parametrize("excluded", (False, True))
+    def test_unsupported_extglob_declaration_cannot_authorize_root_runner(
+        self, tmp_path, extglob, excluded
+    ):
+        """Any extglob makes the relevant workspace declaration unproven."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        patterns = ["packages/*", f"{'!' if excluded else ''}packages/{extglob}"]
+        (repo / "package.json").write_text(json.dumps({"workspaces": patterns}))
+        leaf = repo / "packages" / "foo"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    @pytest.mark.parametrize("marker_kind", ("dangling", "looping"))
+    def test_lexical_package_marker_stops_unrelated_runner_adoption(
+        self, tmp_path, marker_kind
+    ):
+        """Unreadable symlink markers remain independent package boundaries."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        leaf = repo / "packages" / "independent"
+        leaf.mkdir(parents=True)
+        marker = leaf / "package.json"
+        marker.symlink_to(
+            tmp_path / "missing-package.json"
+            if marker_kind == "dangling"
+            else marker
+        )
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_git_worktree_file_is_repository_ceiling(self, tmp_path):
+        """A worktree-style .git file prevents discovery above the repository."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        repo = tmp_path / "worktree"
+        repo.mkdir()
+        (repo / ".git").write_text("gitdir: /tmp/example.git/worktrees/example\n")
+        test_file = repo / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_public_lookup_reads_each_workspace_manifest_at_most_once(
+        self, tmp_path
+    ):
+        """Overlapping package-boundary searches reuse per-lookup manifest reads."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["**"]}')
+        current = repo
+        manifest_paths = {repo / "package.json"}
+        for index in range(8):
+            current = current / f"level-{index}"
+            current.mkdir()
+            marker = current / "package.json"
+            marker.write_text("{}")
+            manifest_paths.add(marker)
+        test_file = current / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        reads = []
+        from pdd.get_test_command import _read_workspace_manifest
+
+        def counted_read(path):
+            reads.append(path.resolve())
+            return _read_workspace_manifest(path)
+
+        with patch(
+            "pdd.get_test_command._read_workspace_manifest",
+            side_effect=counted_read,
+        ):
+            result = get_test_command_for_file(
+                str(test_file), language="typescript"
+            )
+
+        assert result is not None and "npx jest" in result.command
+        relevant_reads = [path for path in reads if path in manifest_paths]
+        assert len(relevant_reads) == len(set(relevant_reads))

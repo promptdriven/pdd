@@ -2,15 +2,13 @@
 """
 Language-specific test command utilities.
 
-This module provides the default_verify_cmd_for function which returns
-test commands for different languages. It first checks the language_format.csv
-for a run_test_command, then falls back to a hardcoded Python command,
-and finally returns None to trigger agentic mode.
+This module resolves configured language test commands, with a Python fallback.
 """
 from __future__ import annotations
 
 import csv
 import os
+import shlex
 from pathlib import Path
 
 
@@ -20,12 +18,15 @@ def _load_language_format_by_name() -> dict:
     if not csv_path.exists():
         return {}
     result = {}
-    with open(csv_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            lang_name = row.get('language', '').strip().lower()
-            if lang_name:
-                result[lang_name] = row
+    try:
+        with open(csv_path, 'r', encoding='utf-8', newline='') as file_handle:
+            reader = csv.DictReader(file_handle)
+            for row in reader:
+                lang_name = row.get('language', '').strip().lower()
+                if lang_name:
+                    result[lang_name] = row
+    except (OSError, UnicodeError, csv.Error):
+        return {}
     return result
 
 
@@ -54,23 +55,18 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     if lang in lang_formats:
         csv_cmd = lang_formats[lang].get('run_test_command', '').strip()
         if csv_cmd:
-            return csv_cmd.replace('{file}', unit_test_file)
+            return csv_cmd.replace('{file}', shlex.quote(unit_test_file))
 
     # 2. Hardcoded Python fallback
     if lang == "python":
-        return f'{os.sys.executable} -m pytest "{unit_test_file}" -q'
+        return f'{os.sys.executable} -m pytest {shlex.quote(unit_test_file)} -q'
 
     # 3. No command available — triggers agentic fallback
     return None
 
 
 def missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None:
-    """
-    Return guidance if required tools are missing.
-
-    This function is kept for compatibility but currently returns None for all
-    cases since non-Python languages are handled by agentic mode which can
-    install dependencies dynamically.
+    """Return no hint while preserving the compatibility API.
 
     Args:
         lang: The programming language.
@@ -78,7 +74,8 @@ def missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) ->
         project_root: Path to the project root.
 
     Returns:
-        None (agentic mode handles missing tools).
+        Always None.
     """
-    # Agentic mode handles tool installation for non-Python
-    return None
+    _ = lang, verify_cmd, project_root
+    hint: str | None = None
+    return hint
