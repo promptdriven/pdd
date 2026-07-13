@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import fnmatch
 import glob
-import inspect
 import json
 import logging
 import os
@@ -3102,26 +3101,16 @@ def run_agentic_sync(
         console.print("[bold]Running dry-run validation for each module...[/bold]")
 
     trusted_validation_failures: List[Tuple[str, str]] = []
-    validation_kwargs: Dict[str, Any] = {
-        "modules": modules_to_sync,
-        "project_root": project_root,
-        "quiet": quiet,
-        "verbose": verbose,
-        "reasoning_time": reasoning_time,
-        "local": local,
-    }
-    # Keep long-standing monkeypatched/fake validation callables compatible:
-    # only the real/new callable advertises the private typed-state collector.
-    try:
-        validation_parameters = inspect.signature(
-            _run_dry_run_validation
-        ).parameters
-    except (TypeError, ValueError):
-        validation_parameters = {}
-    if "trusted_failures" in validation_parameters:
-        validation_kwargs["trusted_failures"] = trusted_validation_failures
     all_valid, module_cwds, module_targets, dry_run_errors, dry_run_cost = (
-        _run_dry_run_validation(**validation_kwargs)
+        _run_dry_run_validation(
+            modules=modules_to_sync,
+            project_root=project_root,
+            quiet=quiet,
+            verbose=verbose,
+            reasoning_time=reasoning_time,
+            local=local,
+            trusted_failures=trusted_validation_failures,
+        )
     )
     llm_cost += dry_run_cost
 
