@@ -574,6 +574,65 @@ def _enclosing_git_root(path: Any) -> Optional[Path]:
     return Path(top)
 
 
+def _lexical_path_within(child: str, parent: str) -> bool:
+    """Whether the absolute, already-resolved ``child`` is inside ``parent`` (or equal).
+
+    Both operands are expected to be ``os.path.realpath`` results (absolute, symlink-free),
+    so this comparison is purely lexical and follows no further symlinks.
+    """
+    try:
+        Path(child).relative_to(parent)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _symlink_chain_within_root(path: Any, root_real: str) -> bool:
+    """Whether resolving ``path`` stays inside ``root_real`` at EVERY physical hop.
+
+    ``Path.resolve()`` exposes only the FINAL target, so an approved alias whose
+    INTERMEDIATE hop leaves the repository — an in-repo symlink pointing at an external
+    symlink that currently points back in — would pass a terminal-only containment check,
+    yet a later retarget of that external node would escape (R15 F1 / TOCTOU). This walks
+    the chain one symlink level at a time and rejects it if ANY node's own location (its
+    parent resolved, the leaf link NOT followed) falls outside ``root_real``. A legitimate
+    in-repository alias never has an out-of-repo hop, so it is unaffected; a chain that
+    leaves the trusted root is rejected even if it later re-enters.
+    """
+    if not root_real:
+        return False
+    try:
+        current = os.path.abspath(path)
+    except (OSError, ValueError):
+        return False
+    seen: set = set()
+    for _ in range(64):  # bound: also breaks symlink loops
+        if current in seen:
+            return False
+        seen.add(current)
+        try:
+            parent_real = os.path.realpath(os.path.dirname(current))
+        except (OSError, ValueError, RuntimeError):
+            return False
+        node_real = os.path.join(parent_real, os.path.basename(current))
+        if not _lexical_path_within(node_real, root_real):
+            return False
+        try:
+            is_link = os.path.islink(current)
+        except (OSError, ValueError):
+            return False
+        if not is_link:
+            return True
+        try:
+            target = os.readlink(current)
+        except (OSError, ValueError):
+            return False
+        if not os.path.isabs(target):
+            target = os.path.join(os.path.dirname(current), target)
+        current = os.path.normpath(target)
+    return False
+
+
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
     """Find a filename by scanning a directory instead of joining an input leaf.
 
@@ -762,12 +821,17 @@ def _walk_prompt_relative_path(
         # It escapes the prompts root but stays inside the enclosing git repository,
         # so treat it as CONTAINED (its lexical alias identity is authoritative). A
         # symlink whose target leaves the repository (or a non-repository tree) is a
-        # genuine escape and stays uncontained (R8).
-        _repo = _enclosing_git_root(found)
+        # genuine escape and stays uncontained (R8). The repository boundary is anchored
+        # at the TRUSTED prompts root (R15 F1), never the candidate's own location, so a
+        # symlinked ancestor cannot redirect it; and EVERY physical hop must stay inside
+        # the repository, not merely the terminal target.
+        _repo = _enclosing_git_root(resolved_root)
         if _repo is not None:
+            _repo_real = os.path.realpath(str(_repo))
             try:
-                found.resolve(strict=False).relative_to(Path(os.path.abspath(_repo)))
-                return found, True
+                found.resolve(strict=False).relative_to(_repo_real)
+                if _symlink_chain_within_root(found, _repo_real):
+                    return found, True
             except (OSError, RuntimeError, ValueError):
                 pass
         return None, False
@@ -1392,11 +1456,17 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
         return True
     except (OSError, RuntimeError, ValueError):
         pass
-    _repo = _enclosing_git_root(candidate)
+    # The repository boundary is anchored at the TRUSTED root (R15 F1), never the
+    # candidate's own possibly-redirected location, and EVERY physical hop of the
+    # candidate must stay inside the repository — a chain that leaves the repo (even one
+    # that currently re-enters) is rejected, closing the intermediate-symlink escape.
+    _repo = _enclosing_git_root(resolved_root)
     if _repo is not None:
+        _repo_real = os.path.realpath(str(_repo))
         try:
-            candidate.resolve(strict=False).relative_to(Path(os.path.abspath(_repo)))
-            return True
+            candidate.resolve(strict=False).relative_to(_repo_real)
+            if _symlink_chain_within_root(candidate, _repo_real):
+                return True
         except (OSError, RuntimeError, ValueError):
             pass
     return False
@@ -2608,6 +2678,17 @@ def _architecture_module_choices(
                 continue
             if _contained_architecture_code_path(architecture_path.parent, _fpv) is None:
                 continue
+            # Context eligibility (R15 F3): the owner flag must match SELECTION's full
+            # eligibility, which rejects a row whose code target lies in a SIBLING
+            # context's territory (a stale cross-context row). A path-owning row that
+            # SELECTION would reject on those grounds must not set the flag here — else it
+            # suppresses two genuinely-ambiguous valid legacy rows in the resolving
+            # context while selection returns nothing, so resolution falls through silently
+            # instead of raising AmbiguousModuleError.
+            if _filepath_owned_by_other_context(
+                _fpv, context_name, architecture_path.parent
+            ):
+                continue
             _has_path_owning_filename = True
             break
 
@@ -3236,17 +3317,30 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             _repo = _enclosing_git_root(_anchor)
             if _repo is None:
                 return False
+            _repo_real = os.path.realpath(str(_repo))
             try:
-                _prompt_resolved.relative_to(_repo)
-                return True
+                _prompt_resolved.relative_to(_repo_real)
             except (OSError, RuntimeError, ValueError):
                 return False
+            # Every physical hop must stay inside the repository, not just the terminal
+            # target (R15 F1): an intermediate external symlink is rejected even if it
+            # currently re-enters the repo.
+            return _symlink_chain_within_root(_prompt, _repo_real)
 
-        def _finalize_output_paths(paths: Dict[str, Path]) -> Dict[str, Path]:
+        def _finalize_output_paths(
+            paths: Dict[str, Path], *, prompt_from_config: bool = False
+        ) -> Dict[str, Path]:
             # Re-anchor CWD-relative/absolute outputs UNDER the governing root, then
             # fail closed if the result escapes it or carries a non-portable
             # component (R16). The prompt is held to the prompts root (R8): an
             # outputs.prompt.path template must not return a prompt outside it.
+            #
+            # ``prompt_from_config`` is the EXPLICIT provenance flag (R15 F2): True only
+            # when ``paths["prompt"]`` was produced by a configured ``outputs.prompt.path``
+            # template, False when it is the discovered/convention prompt. The
+            # discovery-only approved-alias exception below keys off this flag, NOT off
+            # final-path equality — a configured destination that merely coincides with a
+            # discovered alias path must NOT inherit the discovery privilege.
             _governing_resolved = _governing_root.resolve(strict=False)
             for _artifact in ("code", "example", "test"):
                 _candidate = paths.get(_artifact)
@@ -3305,19 +3399,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 paths["test_files"] = _contained_tfs
             _prompt = paths.get("prompt")
             if _prompt is not None:
-                # Discovery provenance (R14 F2): the approved-alias exception below is
-                # DISCOVERY-ONLY. `paths["prompt"]` equals the discovered/convention prompt
-                # (`prompt_path`) UNLESS a configured `outputs.prompt.path` template set it.
-                # A configured output destination must obey the normal configured-path
-                # policy (contained in the prompts root / governing project) and may NOT
-                # inherit discovery's enclosing-repository alias acceptance — otherwise a
-                # configured symlink could redirect a later update to a shared/foreign prompt.
-                try:
-                    _is_discovered_prompt = (
-                        Path(os.path.abspath(_prompt)) == Path(os.path.abspath(prompt_path))
-                    )
-                except (OSError, ValueError):
-                    _is_discovered_prompt = False
+                # Discovery provenance (R14 F2 / R15 F2): the approved-alias exception below
+                # is DISCOVERY-ONLY, keyed on the EXPLICIT `prompt_from_config` flag threaded
+                # from configuration parsing — never on final-path equality. A configured
+                # `outputs.prompt.path` destination (even one that coincides with a
+                # discovered alias path) must obey the normal configured-path policy
+                # (contained in the prompts root / governing project) and may NOT inherit
+                # discovery's enclosing-repository alias acceptance.
+                _is_discovered_prompt = not prompt_from_config
                 # A relative outputs.prompt.path (Issue #237, e.g. `custom/prompts/`)
                 # is project-relative, not CWD-relative: anchor it under the
                 # governing root the same way outputs are, so a parent/sibling-CWD
@@ -3779,7 +3868,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     if _new_pddrc is not None:
                         result = _anchor_output_paths_at_project(result, _new_pddrc.parent)
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
-                    return _finalize_output_paths(result)
+                    return _finalize_output_paths(
+                        result,
+                        prompt_from_config=isinstance(outputs_config, dict) and "prompt" in outputs_config,
+                    )
 
                 # Legacy path construction (backwards compatibility)
                 # Extract directory configuration from resolved_config
@@ -3971,7 +4063,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if _existing_pddrc is not None:
                 result = _anchor_output_paths_at_project(result, _existing_pddrc.parent)
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
-            return _finalize_output_paths(result)
+            return _finalize_output_paths(
+                result,
+                prompt_from_config=isinstance(outputs_config, dict) and "prompt" in outputs_config,
+            )
 
         # For sync command, output_file_paths contains the configured paths
         # Extract the code path from output_file_paths

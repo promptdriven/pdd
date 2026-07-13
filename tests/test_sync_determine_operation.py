@@ -9935,3 +9935,153 @@ def test_get_pdd_file_paths_discovered_nested_alias_still_allowed_control(tmp_pa
     assert paths["prompt"].resolve(strict=False) == (
         root / "shared-prompts" / "widget_python.prompt"
     ).resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-15 review hardening: approved aliases must stay in-repo at EVERY physical
+# symlink hop (no intermediate external hop / TOCTOU); discovery privilege comes
+# from explicit provenance, not final-path equality; and the R11 owner pre-pass
+# must apply context eligibility so a sibling-context owner cannot suppress
+# ambiguity between two valid legacy rows.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_rejects_alias_through_external_intermediate_symlink(tmp_path, monkeypatch):
+    """r15 F1: an in-repo prompt alias whose chain traverses an EXTERNAL intermediate
+    symlink (currently re-entering the repo) must be rejected — validating only the final
+    target would let a later retarget of the external node escape (TOCTOU)."""
+    root = tmp_path / "repo"
+    (root / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "canonical").mkdir()
+    (root / "canonical" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (root / "canonical" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    ext = tmp_path / "external"  # OUTSIDE the repository
+    ext.mkdir()
+    try:
+        # external intermediate currently points BACK into the repo...
+        (ext / "intermediate").symlink_to(root / "canonical" / "widget_python.prompt")
+        # ...and the in-repo alias hops through that external node.
+        (root / "prompts" / "widget_python.prompt").symlink_to(ext / "intermediate")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "canonical/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_symlink_chain_within_root_rejects_external_intermediate(tmp_path):
+    """r15 F1 (unit): _symlink_chain_within_root walks every hop; an external intermediate
+    node is rejected even when it re-enters, while a fully in-repo chain is accepted."""
+    import sync_determine_operation as sync_determine_module
+    root = tmp_path / "repo"
+    (root / "a").mkdir(parents=True)
+    (root / "canon").mkdir()
+    (root / "canon" / "f").write_text("x\n", encoding="utf-8")
+    ext = tmp_path / "ext"
+    ext.mkdir()
+    try:
+        (ext / "mid").symlink_to(root / "canon" / "f")
+        (root / "a" / "via_ext").symlink_to(ext / "mid")           # hops out then back
+        (root / "a" / "in_repo").symlink_to(root / "canon" / "f")  # stays in repo
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    root_real = os.path.realpath(str(root))
+    assert sync_determine_module._symlink_chain_within_root(root / "a" / "via_ext", root_real) is False
+    assert sync_determine_module._symlink_chain_within_root(root / "a" / "in_repo", root_real) is True
+
+
+def test_get_pdd_file_paths_configured_prompt_equal_to_discovered_alias_no_exception(tmp_path, monkeypatch):
+    """r15 F2: a CONFIGURED outputs.prompt.path expanding to exactly the discovered alias
+    path must NOT inherit the discovery-only exception (provenance is explicit, not path
+    equality). The configured symlink to a shared prompt outside the subproject is rejected."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()
+    (root / "shared" / "canonical_python.prompt").write_text("% shared\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    try:
+        # discovered prompt AND configured outputs.prompt.path expand to the SAME path.
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            root / "shared" / "canonical_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    # LITERAL configured destination that coincides exactly with the discovered alias
+    # path (no placeholders, so it is rejected only by provenance — not by an unresolved
+    # `{...}` — isolating the R15 F2 fix).
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "prompts/widget_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_sibling_context_owner_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r15 F3: a path-owning row whose code target lives in a SIBLING context must not set
+    the owner flag (selection would reject it), so two valid legacy rows in the resolving
+    context stay ambiguous and raise AmbiguousModuleError instead of falling through."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  frontend:\n    paths: ["frontend/**"]\n'
+        '  backend:\n    paths: ["backend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # path-owning row, but its target is in the SIBLING (frontend) context
+            {"filename": "nested/widget_python.prompt", "filepath": "frontend/nested/widget.py"},
+            # two valid legacy rows in the resolving (backend) context, both suffix-aligning
+            # with `nested/widget` -> genuine ambiguity that the sibling owner must not hide
+            {"filename": "widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python", context_name="backend"
+    )
+    # The sibling owner must NOT collapse the two backend legacy rows.
+    assert "backend/nested/widget.py" in choices
+    assert "backend/src/nested/widget.py" in choices
+    assert len(choices) >= 2
+
+
+def test_get_pdd_file_paths_current_context_owner_still_suppresses(tmp_path, monkeypatch):
+    """r15 F3 control: a path-owning row in the CURRENT context legitimately owns the
+    qualified basename and still uniquely resolves (the sibling-context guard must not
+    over-suppress a genuine same-context owner)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "backend" / "nested").mkdir(parents=True)
+    (tmp_path / "backend" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["backend/**"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "backend/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "backend/legacy/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts", context_override="backend")
+    assert paths["code"].resolve(strict=False) == (
+        tmp_path / "backend" / "nested" / "widget.py"
+    ).resolve()
