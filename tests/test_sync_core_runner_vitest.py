@@ -5,12 +5,14 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 import pytest
 
+import pdd.sync_core.runner as runner_module
 from pdd.sync_core import (
     AttestationIssue,
     AttestationSigner,
@@ -295,6 +297,134 @@ def test_vitest_rejects_dynamic_or_ambiguous_loader_aliases(
         vitest_validator_config_digest(
             root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
         )
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        (
+            "const p = './helper.cjs'; "
+            "function invoke(loader, arg) { return loader(arg); } "
+            "invoke(require, p);"
+        ),
+        (
+            "const p = './helper.cjs'; const { apply } = Reflect; "
+            "apply(require, null, [p]);"
+        ),
+        (
+            "const p = './helper.cjs'; const invoke = Reflect.apply; "
+            "invoke(require, null, [p]);"
+        ),
+        (
+            "const p = './helper.cjs'; const invoke = Function.prototype.call; "
+            "invoke(require, null, p);"
+        ),
+        "const p = './helper.cjs'; (0, require)(p);",
+        "const p = './helper.cjs'; (require, require)(p);",
+        (
+            "import Module from 'node:module'; const p = './helper.cjs'; "
+            "const load = Module._load; load(p);"
+        ),
+        (
+            "const p = './helper.cjs'; "
+            "const load = module.constructor._load; load(p, module);"
+        ),
+        "const p = './helper.cjs'; const box = { load: require }; box.load(p);",
+        "const p = './helper.cjs'; function pass() { return require; } pass()(p);",
+        "const req = require; { const req = unknown; req('./helper.cjs'); }",
+        "const req = require; function shadow(req) { req('./helper.cjs'); } shadow(req);",
+        "const req = require; req = unknown; req('./helper.cjs');",
+    ],
+)
+def test_vitest_positive_loader_capability_rejects_unproven_uses(
+    tmp_path: Path, loader: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.cjs").write_text("module.exports = 1;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        f"{loader}\nimport {{ test }} from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add uncertain loader capability")
+
+    with pytest.raises(ValueError, match="capability|loader|provenance|internal"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_rejects_loader_capability_forwarding_transitively(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.cjs").write_text("module.exports = 1;\n", encoding="utf-8")
+    (root / "tests/loader.cjs").write_text(
+        "const p = './helper.cjs';\n"
+        "function invoke(loader, arg) { return loader(arg); }\n"
+        "module.exports = invoke(require, p);\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.test.ts").write_text(
+        "import './loader.cjs';\nimport { test } from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "forward loader transitively")
+
+    with pytest.raises(ValueError, match="capability|loader|provenance"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_binds_transitive_create_require_helper_mutation(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    fixture = root / "tests/fixture.cjs"
+    fixture.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    (root / "tests/loader.cjs").write_text(
+        "const { createRequire: makeRequire } = require('node:module');\n"
+        "const req = makeRequire(import.meta.url);\n"
+        "module.exports = req('./fixture.cjs');\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.test.ts").write_text(
+        "import './loader.cjs';\nimport { test } from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add transitive createRequire helper")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths)
+    fixture.write_text("module.exports = 'changed';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate transitive createRequire helper")
+
+    assert vitest_validator_config_digest(root, "HEAD", paths) != before
+
+
+def test_vitest_grammar_dependencies_are_exactly_pinned() -> None:
+    project = tomllib.loads(
+        (Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    dependencies = set(project["project"]["dependencies"])
+
+    assert "tree-sitter==0.25.2" in dependencies
+    assert "tree-sitter-javascript==0.25.0" in dependencies
+    assert "tree-sitter-typescript==0.23.2" in dependencies
+    assert not any(item.startswith("tree-sitter-language-pack") for item in dependencies)
+
+
+def test_vitest_uses_packaged_grammars_without_language_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "tree_sitter_language_pack", None)
+    javascript = runner_module._vitest_parser("javascript")
+    typescript = runner_module._vitest_parser("typescript")
+
+    assert not javascript.parse(b"const value = 1;").root_node.has_error
+    assert not typescript.parse(b"const value: number = 1;").root_node.has_error
 
 
 def test_vitest_binds_commonjs_alias_in_transitive_local_helper(tmp_path: Path) -> None:
