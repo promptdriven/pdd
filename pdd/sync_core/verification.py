@@ -302,7 +302,6 @@ def _authorized_rotation_updates(
             and obligation.validator_config_digest == authorization.from_config_digest
         ]
         if not protected:
-            invalid.append("authorized profile rotation has no protected obligations")
             continue
         unchanged = _rotation_updates(
             head, protected, authorization.from_config_digest
