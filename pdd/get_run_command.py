@@ -36,7 +36,9 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
       the value would break out onto a new command line).
 
     Substitution is single-pass, so a value that itself contains a ``{...}`` token is
-    never rescanned as a placeholder.
+    never rescanned as a placeholder. An empty placeholder key is rejected up front (it
+    would match everywhere and never advance), and an ESCAPED placeholder (``\\{test}``)
+    is declined rather than emitted with the placeholder left unresolved.
     """
     # Refuse constructs the single-pass allowlist cannot reason about: multiline
     # (here-document bodies) and any command-evaluation context. `$` covers `$(`,
@@ -45,6 +47,10 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
     if "\n" in template or "\r" in template:
         return None
     if any(ch in template for ch in "$`()"):
+        return None
+    # An empty placeholder key would match at every position (``startswith("", i)``)
+    # and never advance the cursor — reject rather than loop forever.
+    if any(not key for key in values):
         return None
     out: list = []
     i, n = 0, len(template)
@@ -55,7 +61,7 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
         placeholder = next(
             (k for k in values if template.startswith(k, i)), None)
         if placeholder is not None:
-            if in_single or in_double or in_comment or prev_significant == "\\":
+            if in_single or in_double or in_comment:
                 return None
             out.append(shlex.quote(values[placeholder]))
             i += len(placeholder)
@@ -63,6 +69,11 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
             continue
         char = template[i]
         if char == "\\" and not in_single:
+            # An escaped placeholder (``\{test}``) cannot be filled meaningfully — its
+            # brace is now a literal — so decline rather than emit a command with the
+            # placeholder left unresolved.
+            if any(template.startswith(k, i + 1) for k in values):
+                return None
             out.append(char)
             nxt = template[i + 1] if i + 1 < n else ""
             if nxt:
