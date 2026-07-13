@@ -8986,3 +8986,55 @@ def test_get_pdd_file_paths_rejects_nonstring_prompts_dir_config(tmp_path, monke
     )
     with pytest.raises((UnsafeOutputPathError, UnsafePromptPathError)):
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+# ---------------------------------------------------------------------------
+# Round-7 review hardening: absolute outputs templates (which template
+# normalization would mangle into a doubled path) and malformed `outputs`
+# shapes fail closed instead of silently degrading to a convention path.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_rejects_absolute_outputs_template(tmp_path, monkeypatch):
+    """R16: an absolute `outputs.<artifact>.path` template is rejected — template
+    normalization strips its leading slash and would double-anchor it under the root."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      outputs:\n        code:\n          path: "'
+        + str((tmp_path / "src").resolve()) + '/{name}.py"\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+@pytest.mark.parametrize(
+    "outputs_yaml",
+    [
+        '      outputs:\n        code: "src/{name}.py"\n',   # entry is a bare string, not {path:...}
+        '      outputs: "not-a-mapping"\n',                    # outputs is not a mapping
+        '      outputs:\n        code:\n          path: 123\n',  # path is non-string
+    ],
+)
+def test_get_pdd_file_paths_rejects_malformed_outputs_shape(tmp_path, monkeypatch, outputs_yaml):
+    """R16: a malformed `outputs` mapping is rejected rather than silently ignored and
+    degraded to a convention path."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(tmp_path, outputs_yaml, with_arch=True)
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_reject_unsafe_pddrc_output_config_rejects_normalized_traversal(tmp_path):
+    """Isolates the nearer-.pddrc revalidation: `_reject_unsafe_pddrc_output_config`
+    (called on the resolved prompt's directory in the finalizer) rejects a raw `..`
+    even though it would normalize back inside the project."""
+    import sync_determine_operation as sync_determine_module
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      generate_output_path: "safe/../src/"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        sync_determine_module._reject_unsafe_pddrc_output_config(tmp_path)

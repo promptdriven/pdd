@@ -2224,12 +2224,28 @@ def _configured_output_string_is_unsafe(raw: Any) -> bool:
 
 
 def _reject_unsafe_output_config(
-    project_root: Path, artifact: str, *raw_values: Any
+    project_root: Path,
+    artifact: str,
+    *raw_values: Any,
+    reject_absolute: bool = False,
 ) -> None:
-    """Fail closed on any unsafe ``.pddrc`` output directory/template value."""
+    """Fail closed on any unsafe ``.pddrc`` output directory/template value.
+
+    ``reject_absolute`` is set for ``outputs.<artifact>.path`` TEMPLATES: those go
+    through template normalization, which strips a POSIX leading slash and would
+    re-anchor an absolute in-project template into a doubled path — so an absolute
+    template is rejected rather than silently mangled. Directory values
+    (generate/example/test_output_path) still accept an absolute in-project path.
+    """
     for raw in raw_values:
         if _configured_output_string_is_unsafe(raw) or _configured_output_escapes_root(
             raw, project_root
+        ):
+            raise UnsafeOutputPathError(raw, project_root, artifact)
+        if (
+            reject_absolute
+            and isinstance(raw, str)
+            and (PurePosixPath(raw).is_absolute() or PureWindowsPath(raw).drive)
         ):
             raise UnsafeOutputPathError(raw, project_root, artifact)
 
@@ -2237,14 +2253,26 @@ def _reject_unsafe_output_config(
 def _reject_unsafe_outputs_templates(
     outputs_config: Any, project_root: Path
 ) -> None:
-    """Fail closed on any unsafe ``outputs.<artifact>.path`` template value."""
-    if not isinstance(outputs_config, dict):
+    """Fail closed on a malformed or unsafe ``outputs`` mapping.
+
+    The supported shape is ``outputs: {<artifact>: {path: <str>}}``. A present but
+    non-mapping ``outputs`` value, or an artifact entry that is present but not a
+    mapping (e.g. ``code: "src/{name}.py"`` written without the ``path:`` key), is
+    malformed — it would be silently ignored and degrade to a convention path — so
+    it fails closed. Absolute template paths are rejected (see ``reject_absolute``).
+    """
+    if outputs_config is None:
         return
+    if not isinstance(outputs_config, dict):
+        raise UnsafeOutputPathError(outputs_config, project_root, "outputs")
     for artifact, entry in outputs_config.items():
-        if isinstance(entry, dict):
-            _reject_unsafe_output_config(
-                project_root, str(artifact), entry.get("path")
-            )
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise UnsafeOutputPathError(entry, project_root, str(artifact))
+        _reject_unsafe_output_config(
+            project_root, str(artifact), entry.get("path"), reject_absolute=True
+        )
 
 
 def _reject_unsafe_pddrc_output_config(config_anchor: Path) -> None:
@@ -3730,13 +3758,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Even this last-resort fallback must be anchored under the governing root
         # and contained — otherwise a parent/sibling CWD makes these relative
         # basename paths resolve outside the project. Route it through the same
-        # finalizer; if resolution failed so early that the finalizer/governing
-        # root were never established, return the basename-derived paths as-is
-        # (they carry no traversal — basename is validated by R7/R9/R10).
+        # finalizer. If resolution failed so early that the finalizer/governing
+        # root were never established (e.g. a pathological prompts_dir that could
+        # not be resolved), fail closed rather than return unvalidated CWD-relative
+        # paths.
         try:
             return _finalize_output_paths(_outer_fallback)
         except NameError:
-            return _outer_fallback
+            raise UnsafePromptPathError(
+                Path(str(prompts_dir)), Path.cwd()
+            )
 
 
 def calculate_sha256(file_path: Path) -> Optional[str]:
