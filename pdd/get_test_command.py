@@ -1298,53 +1298,65 @@ _VITE_CONFIG_NAMES = (
 
 
 _VITEST_RUNNERS = frozenset({"npx", "pnpm", "yarn", "bun", "bunx", "npm"})
-# Runner sub-commands/flags to skip while looking for the invoked binary after a runner
-# (``pnpm exec vitest``, ``pnpm dlx vitest``, ``yarn run vitest``, ``npx --yes vitest``).
-_RUNNER_SKIP = frozenset({"exec", "dlx", "run", "--yes", "-y", "--"})
+# Runner sub-commands to skip while looking for the invoked binary (``pnpm exec vitest``,
+# ``pnpm dlx vitest``, ``yarn run vitest``).
+_RUNNER_SUBCMDS = frozenset({"exec", "dlx", "run"})
+# Boolean runner flags safe to skip. Any OTHER ``-``-prefixed option (an arg-taking flag
+# such as ``npx --package`` / ``pnpm --filter``, or an unknown flag) fails closed.
+_RUNNER_BOOL_FLAGS = frozenset({"--yes", "-y"})
+# Shell control operators that separate command clauses.
+_CLAUSE_OPERATORS = frozenset({";", "&", "&&", "|", "||"})
 
 
-def _clause_invokes_vitest(clause: str) -> bool:
-    """True when a single command clause runs ``vitest`` in EXECUTABLE position — as the
-    command itself (basename ``vitest``) or as the binary a supported runner invokes
-    (``npx vitest``, ``pnpm exec vitest``, ``yarn vitest``, ``pnpm dlx vitest``). A
-    ``vitest`` appearing only as an ARGUMENT (``echo vitest``, ``node vitest``,
-    ``command -v vitest``) does NOT count."""
-    try:
-        tokens = shlex.split(clause)
-    except ValueError:
-        tokens = clause.split()
-    # Drop leading ``VAR=value`` environment assignments.
+def _clause_invokes_vitest(tokens: list) -> bool:
+    """True when a single command clause (already tokenized) runs ``vitest`` in
+    EXECUTABLE position — as the command itself (basename ``vitest``) or as the binary a
+    supported runner invokes (``npx vitest``, ``pnpm exec vitest``, ``yarn run vitest``).
+    After a runner, only known subcommands and boolean flags are skipped; an arg-taking
+    or unknown flag fails CLOSED, so ``npx --package vitest echo ok`` (where ``vitest`` is
+    the value of ``--package`` and the real command is ``echo``) is NOT a vitest
+    invocation, and neither is a bare ``vitest`` ARGUMENT (``echo vitest``, ``node
+    vitest``, ``command -v vitest``)."""
     idx = 0
     while idx < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[idx]):
-        idx += 1
+        idx += 1  # drop leading VAR=value environment assignments
     if idx >= len(tokens):
         return False
-    cmd = tokens[idx].split("/")[-1]
-    if cmd == "vitest":
+    if tokens[idx].split("/")[-1] == "vitest":
         return True
-    if cmd in _VITEST_RUNNERS:
-        for tok in tokens[idx + 1:]:
-            base = tok.split("/")[-1]
-            if base == "vitest":
-                return True
-            if base in _RUNNER_SKIP or base.startswith("-"):
-                continue
-            break  # first real argument that is not vitest → not a vitest invocation
+    if tokens[idx].split("/")[-1] not in _VITEST_RUNNERS:
+        return False
+    for tok in tokens[idx + 1:]:
+        if tok in _RUNNER_SUBCMDS or tok in _RUNNER_BOOL_FLAGS:
+            continue
+        if tok.startswith("-"):
+            return False  # arg-taking/unknown flag → fail closed
+        return tok.split("/")[-1] == "vitest"
     return False
 
 
 def _script_invokes_vitest(script: str) -> bool:
     """True when a package.json script actually INVOKES vitest as a command (in
     executable position, or via a supported ``npx``/``pnpm``/``yarn``/``bun`` runner),
-    rather than merely mentioning the string. The script is split into command clauses
-    on shell control operators (``;``, ``&&``, ``||``, ``|``, ``&``) and each clause is
-    checked independently, so ``echo vitest``, ``node vitest``, ``cat vitest.config.ts``,
-    and ``echo no-vitest-installed`` are all correctly rejected while ``vitest run`` and
-    ``test:unit && vitest`` are accepted."""
-    for clause in re.split(r"&&|\|\||[;&|\n]", script):
-        if clause.strip() and _clause_invokes_vitest(clause):
-            return True
-    return False
+    not merely mentioning the string. The script is tokenized with a QUOTE- and
+    ESCAPE-aware shell lexer and split into command clauses on unquoted control operators
+    (``;`` ``&`` ``&&`` ``|`` ``||``), so ``echo x\\; vitest`` stays one clause (the
+    escaped ``;`` is a literal argument, not a boundary) and ``echo 'a; b' vitest`` is
+    not mis-split. Malformed (unbalanced-quote) scripts fail closed."""
+    try:
+        lex = shlex.shlex(script, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        clause: list = []
+        for tok in lex:
+            if tok in _CLAUSE_OPERATORS:
+                if _clause_invokes_vitest(clause):
+                    return True
+                clause = []
+            else:
+                clause.append(tok)
+        return _clause_invokes_vitest(clause)
+    except ValueError:
+        return False
 
 
 def _vitest_proven_by_manifest(manifest: dict) -> bool:

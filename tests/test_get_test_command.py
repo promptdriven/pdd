@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 import csv
 import io
+import json
 import shlex
 import sys
 import os
@@ -1485,11 +1486,15 @@ class TestWorkspaceMembershipHardening:
             cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
             assert cmd2 is not None and "npx vitest run" in cmd2, (script, cmd2)
         # A script where "vitest" is not in EXECUTABLE position (a bare argument, an
-        # arg to echo/node/command, or just a substring) does NOT prove Vitest.
+        # arg to echo/node/command, the value of a runner option flag, a substring, or
+        # only reachable past an ESCAPED/quoted operator) does NOT prove Vitest.
         for script in ("echo no-vitest-installed", "cat vitest.config.ts",
                        "echo run-vitest-later", "echo vitest", "node vitest",
-                       "command -v vitest", "printf vitest", "pnpm run test"):
-            (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
+                       "command -v vitest", "printf vitest", "pnpm run test",
+                       "npx --package vitest echo ok", "npx -p vitest echo ok",
+                       r"echo x\; vitest", "echo 'a; b' vitest"):
+            (repo / "package.json").write_text(
+                json.dumps({"scripts": {"test": script}}))
             assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
         # Executable-position invocations (incl. env prefix and a later clause) DO prove.
         for script in ("CI=1 vitest run", "build && vitest", "yarn run vitest"):

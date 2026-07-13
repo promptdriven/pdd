@@ -273,3 +273,19 @@ class TestShellSafeSubstitute:
         # Escaped placeholder → None (unfillable), while the unescaped form still works.
         assert shell_safe_substitute(r"pytest \{test}", {"{test}": "x"}) is None
         assert shell_safe_substitute("pytest {test}", {"{test}": "/a.py"}) == "pytest /a.py"
+
+    def test_brace_and_glob_contexts_are_refused(self):
+        """A brace-expansion or pathname-expansion metacharacter OUTSIDE a placeholder
+        (`{a,b}`, `*`, `?`, `[…]`, `~`) would change the command's word count under bash
+        (and a value's ``,`` is left unquoted by ``shlex.quote``, so it would re-split
+        inside a template brace). Such templates are refused. Ordinary adjacency
+        (`{file}.out`, `./{file}`) is unaffected. Proven with real ``bash -lc``."""
+        for tpl in ('printf "<%s>" pre{{file},tail}', "ls {file}*", "ls {file}[abc]",
+                    "cat ~/{file}", "echo {a,b}{file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "a,b"}) is None, tpl
+        # A comma-bearing value in a NON-brace template stays a single argument.
+        cmd = shell_safe_substitute("python {file}", {"{file}": "a,b"})
+        assert cmd == "python a,b"
+        proc = subprocess.run(["bash", "-lc", cmd.replace("python", "printf '%s\\n'")],
+                              capture_output=True, text=True, timeout=10)
+        assert proc.stdout == "a,b\n", proc.stdout  # one argument, not brace-split

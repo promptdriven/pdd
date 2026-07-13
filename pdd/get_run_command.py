@@ -30,6 +30,10 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
       parameter/arithmetic expansion, and subshell/process-substitution form requires
       one of these — real ``run``/verify templates like ``python {file}`` or
       ``gfortran -o {file}.out {file}`` need none of them);
+    * contains a brace-expansion / pathname-expansion metacharacter (`{`, `}`, `*`, `?`,
+      `[`, `]`, `~`) OUTSIDE a placeholder token — an unquoted `{a,b}` or glob would
+      change the command's word count (and ``shlex.quote`` leaves a value's ``,``
+      unquoted, so a value inside such a brace would re-split);
     * places a placeholder inside its own single/double quotes, immediately after a
       backslash, or inside a shell comment (a ``#`` that starts a comment — at a word
       boundary or right after a ``;``/``&``/``|`` control operator — where a newline in
@@ -51,6 +55,18 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
     # An empty placeholder key would match at every position (``startswith("", i)``)
     # and never advance the cursor — reject rather than loop forever.
     if any(not key for key in values):
+        return None
+    # Reject brace-expansion (`{a,b}`), pathname-expansion (`*`/`?`/`[…]`), and tilde
+    # metacharacters that appear OUTSIDE a placeholder token: an unquoted `{…,…}` or a
+    # glob would re-split/expand the command into a DIFFERENT word count under bash
+    # (e.g. `pre{X,tail}` → `preX pretail`), and a bare ``,`` from ``shlex.quote`` (which
+    # leaves ``,`` unquoted) inside such a brace would be reinterpreted. Placeholders
+    # legitimately contain `{`/`}`, so mask them out first; ordinary adjacency like
+    # ``./{file}`` and ``{file}.out`` has none of these and is unaffected.
+    masked = template
+    for key in values:
+        masked = masked.replace(key, "\x00")
+    if any(ch in masked for ch in "{}[]*?~"):
         return None
     out: list = []
     i, n = 0, len(template)
