@@ -38,6 +38,7 @@ from pdd.agentic_common import (
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _is_structured_provider_json_prefix,
     _parse_claude_interactive_reply,
     _run_claude_interactive_with_mcp,
     _run_interactive_pty_until_reply,
@@ -54,6 +55,17 @@ from pdd.agentic_common import (
     TASK_CLASS_REPO_SCALE,
     TASK_CLASS_SINGLE_FILE,
 )
+
+
+def test_structured_provider_json_prefix_requires_known_first_top_level_key():
+    assert _is_structured_provider_json_prefix(
+        '  \n { "type" : "result", "result": "quoted UI"'
+    )
+    assert not _is_structured_provider_json_prefix(
+        '{"message":"echoes \\\"result\\\": and ^[[2K Auto-update",'
+        '"type":"result"}'
+    )
+
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification

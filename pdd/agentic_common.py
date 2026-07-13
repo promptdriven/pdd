@@ -6077,7 +6077,7 @@ def _interactive_provider_reason(text: str) -> Optional[str]:
 
 
 _STRUCTURED_PROVIDER_JSON_KEY_RE = re.compile(
-    r'"(?:type|subtype|is_error|result|total_cost_usd|usage|modelUsage)"\s*:'
+    r'^\{\s*"(?:type|subtype|is_error|result|total_cost_usd|usage|modelUsage)"\s*:'
 )
 
 
@@ -6086,7 +6086,9 @@ def _is_structured_provider_json_prefix(text: str) -> bool:
 
     Claude's captured ``--output-format json`` result may arrive in arbitrary
     chunks and may contain leading whitespace. Once an object frame exposes a
-    known provider-result key, its quoted values are data, not terminal UI.
+    known provider-result key as its first top-level key, its quoted values are
+    data, not terminal UI. JSON-looking text inside an earlier untrusted value
+    cannot bless the frame.
     """
     stripped = (text or "").lstrip()
     if not stripped.startswith("{"):
