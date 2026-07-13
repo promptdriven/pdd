@@ -342,6 +342,34 @@ def test_vitest_rejects_dynamic_or_ambiguous_loader_aliases(
         "const req = require; { const req = unknown; req('./helper.cjs'); }",
         "const req = require; function shadow(req) { req('./helper.cjs'); } shadow(req);",
         "const req = require; req = unknown; req('./helper.cjs');",
+        r"requ\u0069re(process.argv[2]);",
+        r"const req = requ\u0069re; req(process.argv[2]);",
+        (
+            r"import { create\u0052equire as make } from 'node:module'; "
+            "const req = make(import.meta.url); req(process.argv[2]);"
+        ),
+        "eval('require')(process.argv[2]);",
+        "Function('return require')()(process.argv[2]);",
+        (
+            "const m = module; const req = Reflect.get(m, 'require'); "
+            "req(process.argv[2]);"
+        ),
+        (
+            "const m = module; const c = m.constructor; const key = '_lo' + 'ad'; "
+            "const load = c[key]; load(process.argv[2], m);"
+        ),
+        (
+            "const m = module; const c = m.constructor; "
+            "const load = Reflect.get(c, '_lo' + 'ad'); load(process.argv[2], m);"
+        ),
+        (
+            "const key = 'requ' + 'ire'; const req = globalThis[key]; "
+            "req(process.argv[2]);"
+        ),
+        (
+            "const key = '_lo' + 'ad'; const load = process.mainModule.constructor[key]; "
+            "load(process.argv[2]);"
+        ),
     ],
 )
 def test_vitest_positive_loader_capability_rejects_unproven_uses(
