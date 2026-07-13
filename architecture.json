@@ -3116,7 +3116,8 @@
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "context_packet_python.prompt"
     ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
@@ -3132,7 +3133,7 @@
         "functions": [
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
@@ -5489,7 +5490,8 @@
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "context_packet_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -7441,8 +7443,13 @@
           },
           {
             "name": "log_event",
-            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None) -> None",
+            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None, cache_hit: bool = False, cache_miss: bool = False) -> None",
             "returns": "None"
+          },
+          {
+            "name": "get_run_telemetry",
+            "signature": "() -> dict",
+            "returns": "dict"
           }
         ]
       }
@@ -7705,7 +7712,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False, local: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {
@@ -7737,14 +7744,16 @@
     }
   },
   {
-    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
+    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings and resolves each child's --context against its own module cwd's .pddrc.",
     "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects four repairable generation failures from per-module sync subprocesses - architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012), and prose-output ('Generation output extraction failure for ' line prefix, parsed by _parse_prose_output_failure, issue #1649, checked first and limited to 1 additional attempt) - and retries conformance/surface/churn failures up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry keeps the per-module resolved .pddrc context, --strength, and --temperature stable so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, ('prose',), or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block - '=== architecture conformance failure ===', '=== public surface regression ===', '=== test churn threshold exceeded ===', or '=== generation output extraction failure ===' with extractor_result/raw_output_excerpt fields (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error / build_prose_output_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) - plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
       "sync_order_python.prompt",
-      "resolved_sync_unit_python.prompt"
+      "resolved_sync_unit_python.prompt",
+      "sync_evidence_cache_python.prompt",
+      "context_packet_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -10843,7 +10852,8 @@
       "context_snapshot_python.prompt",
       "contract_ir_python.prompt",
       "operation_log_python.prompt",
-      "test_context_packer_python.prompt"
+      "test_context_packer_python.prompt",
+      "context_packet_python.prompt"
     ],
     "priority": 249,
     "filename": "compressed_sync_context_python.prompt",
@@ -10859,12 +10869,12 @@
         "functions": [
           {
             "name": "build_compressed_sync_context",
-            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext",
-            "returns": "CompressedSyncContext"
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None, must_have_priority_threshold=3, shared_segment_registry=None, evidence_cache=None) -> ContextPacket",
+            "returns": "ContextPacket"
           },
           {
             "name": "render_for_prompt",
-            "signature": "(context: CompressedSyncContext) -> str",
+            "signature": "(context: ContextPacket) -> str",
             "returns": "str"
           }
         ]
@@ -11622,6 +11632,99 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Pure data-model module for structured sync context packets, typed slot entries, and InsufficientContextError.",
+    "description": "Defines ContextSlot, ContextPacket (Pydantic v2 models), and InsufficientContextError used by agentic sync phase assembly. Pure data definition layer with no file I/O, no LLM calls, and no external calls. ContextPacket provides slot_hashes() and compressed_sha256() for cache-key generation.",
+    "dependencies": [],
+    "priority": 250,
+    "filename": "context_packet_python.prompt",
+    "filepath": "pdd/context_packet.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ContextSlot",
+            "signature": "(kind, content_hash, token_estimate, priority, truncated, content) -> ContextSlot",
+            "returns": "ContextSlot"
+          },
+          {
+            "name": "ContextPacket",
+            "signature": "(phase, slots, budget, prior_packet_id=None) -> ContextPacket",
+            "returns": "ContextPacket"
+          },
+          {
+            "name": "InsufficientContextError",
+            "signature": "(phase, budget, required_tokens, packet_id) -> InsufficientContextError",
+            "returns": "InsufficientContextError"
+          },
+          {
+            "name": "ContextPacket.slot_hashes",
+            "signature": "() -> dict[str, str]",
+            "returns": "dict[str, str]"
+          },
+          {
+            "name": "ContextPacket.compressed_sha256",
+            "signature": "() -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 16000,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Content-addressed diskcache-backed evidence cache for PDD sync preprocessing artifacts, keyed by PDD version plus content hash.",
+    "description": "Wraps diskcache.Cache with version-pinned SHA-256 cache key derivation and per-instance hit/miss telemetry counters. Used by agentic_sync_runner and sync_orchestration to avoid recomputing deterministic preprocessing artifacts across retries and runs.",
+    "dependencies": [],
+    "priority": 251,
+    "filename": "sync_evidence_cache_python.prompt",
+    "filepath": "pdd/sync_evidence_cache.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "SyncEvidenceCache",
+            "signature": "(cache_dir=None) -> SyncEvidenceCache",
+            "returns": "SyncEvidenceCache"
+          },
+          {
+            "name": "SyncEvidenceCache.get",
+            "signature": "(tool_id: str, tool_version: str, content_hash: str) -> str | None",
+            "returns": "str | None"
+          },
+          {
+            "name": "SyncEvidenceCache.put",
+            "signature": "(tool_id: str, tool_version: str, content_hash: str, value: str) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "SyncEvidenceCache.reset_counters",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 16000,
+      "y": 2400
     }
   }
 ]
