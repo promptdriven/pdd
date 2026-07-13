@@ -9,6 +9,7 @@ import pytest
 from pdd.agentic_fix import (
     run_agentic_fix,
     _verify_and_log,
+    _substitute_verify_template,
 )
 
 
@@ -242,6 +243,32 @@ class TestVerifyAndLog:
         argv = shlex.split(captured["cmd"])
         assert str(test_file.resolve()) in argv, (captured["cmd"], argv)
         assert "touch" not in argv, argv
+
+    def test_verify_template_with_quoted_placeholder_is_refused(self, tmp_path):
+        """`shlex.quote` only neutralizes metacharacters when the placeholder is a
+        standalone bare word. A template that nests `{test}`/`{cwd}` inside its own
+        quotes (e.g. `pytest "{test}"`) would let the inserted single quotes become
+        literal and still execute a `$(...)` in the resolved path — so such a template
+        is refused (no command built) rather than turned injectable."""
+        evil = tmp_path / "$(touch PWN)"
+        evil.mkdir()
+        test_file = evil / "a.py"
+        test_file.write_text("print('x')\n")
+        # Bare-word placeholder: substituted safely (single-quoted, $() is literal).
+        safe = _substitute_verify_template("pytest {test}", str(test_file), tmp_path)
+        assert safe is not None and "touch" in safe  # present, but inside single quotes
+        assert safe.count("'") >= 2 and "$(touch PWN)" in safe
+        # Quoted / adjacent placeholders are refused (None).
+        for tpl in ('pytest "{test}"', "pytest '{test}'", "pytest {test}x",
+                    'cd "{cwd}" && pytest {test}'):
+            assert _substitute_verify_template(tpl, str(test_file), tmp_path) is None, tpl
+        # End-to-end: a quoted-placeholder template fails the verification gate closed.
+        with patch("pdd.agentic_fix._run_testcmd") as run:
+            result = _verify_and_log(str(test_file), tmp_path,
+                                     verify_cmd='pytest "{test}"', enabled=True,
+                                     verify_cmd_is_template=True)
+        assert result is False
+        run.assert_not_called()
 
     def test_verify_and_log_finalized_command_is_not_resubstituted(self, tmp_path):
         """A finalized command (verify_cmd_is_template=False, the default) is

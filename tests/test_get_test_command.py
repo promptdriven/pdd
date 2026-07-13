@@ -1185,14 +1185,46 @@ class TestWorkspaceMembershipHardening:
         assert _has_complete_bracket_class("packages/[]]") is True
         assert _package_matches_workspace(("packages", "a"), ["packages/[^]]"]) is False
 
-    def test_at_most_one_leading_dot_slash_is_normalized(self):
-        """npm normalizes only ONE leading ``./``; a second leading ``.`` segment is
-        significant. ``././packages/*`` therefore does NOT match ``packages/app``,
-        while a single ``./packages/*`` still does."""
-        assert _package_matches_workspace(("packages", "app"), ["././packages/*"]) is False
-        assert _package_matches_workspace(("packages", "app"), [".//./packages/*"]) is False
-        assert _package_matches_workspace(("packages", "app"), ["./packages/*"]) is True
-        assert _package_matches_workspace(("packages", "app"), ["packages/*"]) is True
+    def test_leading_prefix_normalized_exactly_once(self):
+        """npm applies leading normalization exactly ONCE — a single leading ``./``
+        OR a leading run of ``/``. A residual ``./`` afterward is significant, so
+        ``/./packages/*`` (→ ``./packages/*``), ``//./packages/*``, and
+        ``././packages/*`` do NOT match ``packages/app``, while a single ``./`` or a
+        leading ``/`` does. (Independently stripping ``/`` and then ``./`` would
+        wrongly collapse ``/./packages/*`` to ``packages/*``.)"""
+        for glob in ("/./packages/*", "//./packages/*", "././packages/*",
+                     ".//./packages/*"):
+            assert _package_matches_workspace(("packages", "app"), [glob]) is False, glob
+        for glob in ("packages/*", "./packages/*", "/packages/*", "//packages/*"):
+            assert _package_matches_workspace(("packages", "app"), [glob]) is True, glob
+
+    def test_json_manifest_rejects_nonstandard_constants(self, tmp_path):
+        """``NaN``/``Infinity``/``-Infinity`` are accepted by Python's ``json`` but
+        rejected by npm's (Node's) strict JSON parser, so a manifest containing them —
+        even outside the workspace field — is invalid and must fail membership closed,
+        not prove a member off the still-parsed ``workspaces`` list."""
+        for body in ('{"workspaces":["packages/*"],"x":NaN}',
+                     '{"workspaces":["packages/*"],"x":Infinity}',
+                     '{"workspaces":["packages/*"],"x":-Infinity}'):
+            (tmp_path / "package.json").write_text(body)
+            assert _workspace_globs_for(tmp_path) == []
+        # lerna.json uses the same parser and is guarded too.
+        (tmp_path / "package.json").unlink()
+        (tmp_path / "lerna.json").write_text('{"packages":["packages/*"],"x":NaN}')
+        assert _workspace_globs_for(tmp_path) == []
+
+    def test_matcher_fast_rejects_and_bounds_wildcard_work(self):
+        """Without ``**`` every pattern segment consumes exactly one path segment, so a
+        segment-count mismatch is rejected before the DP. And the per-unit character
+        work of matching is charged against a shared budget, so a manifest of many
+        long wildcard-heavy globs against a deep path fails closed instead of burning
+        CPU (the reviewer's 80-segment path × 100 × 240-wildcard-segment case)."""
+        # Fast reject on unequal segment counts (no ``**``): 2 pattern vs 3 path segs.
+        assert _package_matches_workspace(("a", "b", "c"), ["x/y"]) is False
+        # A pathological deep match with ``**`` fails closed (budget), not hangs.
+        pattern = "**/" + "/".join(["a*b"] * 240)
+        assert _package_matches_workspace(
+            tuple(["bbbbbbbbbb"] * 80), [pattern] * 100) is False
 
     def test_length_guard_precedes_syntax_scan(self):
         """The cheap length guard runs before any O(len) syntax scan, and the bracket

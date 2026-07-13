@@ -217,15 +217,29 @@ def _raw_glob_unsupported(raw: str) -> bool:
     return "\\" in raw
 
 
+def _strip_one_leading(pattern: str) -> str:
+    """Strip exactly ONE leading prefix token — npm normalizes a leading run of
+    ``/`` OR a single ``./``, once — and return the remainder. A prefix left over
+    afterward is SIGNIFICANT: ``/./x`` normalizes to ``./x`` (needing a literal ``.``
+    segment) and ``././x`` keeps its second ``./``, so neither collapses to ``x`` and
+    falsely matches a plain ``x`` package. (One pass, matching @npmcli/map-workspaces
+    rather than independently stripping ``/`` and then ``./``.)"""
+    if pattern.startswith("./"):
+        return pattern[2:]
+    if pattern.startswith("/"):
+        return pattern.lstrip("/")
+    return pattern
+
+
 def _effective_leading(pattern: str) -> str:
-    """Return ``pattern`` with the SAME leading normalization the matcher applies —
-    all leading ``/`` and at most one leading ``./`` removed — so a caller can
-    classify the effective first segment (e.g. a ``#`` comment) consistently with
-    matching. A second/further leading ``.`` segment is significant and is kept."""
-    eff = pattern.lstrip("/")
-    if eff.startswith("./"):
-        eff = eff[2:].lstrip("/")
-    return eff
+    """Return ``pattern``'s effective leading form for classification (e.g. a ``#``
+    comment), using the SAME one-pass normalization as matching. A residual leading
+    ``/`` or ``./`` after that one pass is an absolute/dot-slash remainder that the
+    matcher never matches, so it is reported as empty (not a comment)."""
+    rest = _strip_one_leading(pattern)
+    if rest.startswith("/") or rest.startswith("./"):
+        return ""
+    return rest
 
 
 def _concrete_pattern_unsupported(pattern: str) -> bool:
@@ -314,7 +328,8 @@ class TestCommand:
 
 
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
-                                     cell_budget: Optional[list] = None) -> bool:
+                                     cell_budget: Optional[list] = None,
+                                     work_budget: Optional[list] = None) -> bool:
     """Match a package's path segments against a single workspace glob pattern.
 
     Supports the segment semantics workspace tools use: ``*`` matches exactly one
@@ -339,26 +354,49 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     # Cheap guard before allocating the split list (a "slash wall" attack).
     if pattern.count("/") > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
-    # Drop empty segments (from ``//`` or a trailing ``/``) and AT MOST ONE leading
-    # ``./`` (npm normalizes a single leading current-dir). Every *subsequent* ``.``
-    # segment — leading (``././packages`` keeps the second) or internal
-    # (``packages/./x``) — is significant and kept, so such a glob must not be
-    # collapsed to ``packages/x`` and falsely prove membership.
-    pat_parts = [p for p in pattern.strip("/").split("/") if p != ""]
-    if pat_parts and pat_parts[0] == ".":
-        pat_parts.pop(0)
+    # Apply npm's leading normalization exactly ONCE. A residual leading ``/`` or
+    # ``./`` (e.g. ``/./packages/*`` → ``./packages/*``) is an absolute/dot-slash
+    # remainder that does not match a relative package path — never collapse it to
+    # ``packages/*`` and falsely prove membership.
+    rest = _strip_one_leading(pattern)
+    if rest.startswith("/") or rest.startswith("./"):
+        return False
+    # Drop empty segments (from ``//`` or a trailing ``/``); every internal ``.``
+    # segment is significant and kept.
+    pat_parts = [p for p in rest.split("/") if p != ""]
     if len(pat_parts) > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
     rel = list(rel_parts)
     n, m = len(rel), len(pat_parts)
-    # (``?`` now matches over UTF-16 code units in ``_wildcard_segment_match``, giving
-    # exact minimatch parity for astral characters — no separate astral guard needed.)
+    # Fast reject: without ``**`` every pattern segment consumes exactly one path
+    # segment, so mismatched counts can never match — skip the DP (and its per-cell
+    # character work) entirely. This bounds a manifest of many wildcard-heavy globs
+    # against a deep path.
+    if "**" not in pat_parts and m != n:
+        return False
     # Charge this match's DP-table size against a shared aggregate budget so that
     # many long globs against a deep path cannot sum to tens of millions of cells.
     if cell_budget is not None:
         cell_budget[0] -= (n + 1) * (m + 1)
         if cell_budget[0] < 0:
             raise _PatternBudgetError
+    # Per-segment work budget (shared across the walk) charges the character-level
+    # matching so that many long wildcard segments cannot burn CPU under the cell cap.
+    work = work_budget if work_budget is not None else [_MAX_BRACE_SCAN_WORK]
+    return _segments_dp_match(rel, pat_parts, work)
+
+
+def _segments_dp_match(rel: list, pat_parts: list, work: list) -> bool:
+    """Iterative ``O(len(rel) * len(pat_parts))`` dynamic program matching path
+    segments ``rel`` against glob segments ``pat_parts`` (``*``/literal per segment,
+    ``**`` spanning any depth, ``dot:false``). UTF-16 units and dot-flags are computed
+    ONCE per segment (not per DP cell), and per-unit character work is charged against
+    ``work`` — so a deep path against many long wildcard segments cannot burn CPU."""
+    n, m = len(rel), len(pat_parts)
+    rel_units = [_utf16_units(r) for r in rel]
+    rel_is_dot = [r.startswith(".") for r in rel]
+    pat_units = [None if p == "**" else _utf16_units(p) for p in pat_parts]
+    pat_is_dot = [p.startswith(".") for p in pat_parts]
     # dp[i][j] is True when rel[i:] matches pat_parts[j:].
     dp = [[False] * (m + 1) for _ in range(n + 1)]
     dp[n][m] = True
@@ -366,16 +404,19 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     for j in range(m - 1, -1, -1):
         dp[n][j] = pat_parts[j] == "**" and dp[n][j + 1]
     for i in range(n - 1, -1, -1):
-        seg_is_dot = rel[i].startswith(".")
         for j in range(m - 1, -1, -1):
-            head = pat_parts[j]
-            if head == "**":
+            if pat_parts[j] == "**":
                 # ``**`` matches zero segments (advance pattern) or one-or-more
                 # (consume rel[i], stay on the same ``**``). Under dot:false a
                 # leading-dot segment is not consumed by ``**``.
-                dp[i][j] = dp[i][j + 1] or (not seg_is_dot and dp[i + 1][j])
+                dp[i][j] = dp[i][j + 1] or (not rel_is_dot[i] and dp[i + 1][j])
+            elif rel_is_dot[i] and not pat_is_dot[j]:
+                # dot:false — a wildcard segment does not match a leading-dot name
+                # unless the pattern segment also begins with ``.``.
+                dp[i][j] = False
             else:
-                dp[i][j] = _segment_matches(rel[i], head) and dp[i + 1][j + 1]
+                dp[i][j] = (dp[i + 1][j + 1]
+                            and _wildcard_units_match(rel_units[i], pat_units[j], work))
     return dp[0][0]
 
 
@@ -396,28 +437,32 @@ def _utf16_units(text: str) -> list:
     return units
 
 
-def _wildcard_segment_match(name: str, pat: str) -> bool:
-    """Match one path segment ``name`` against one glob segment ``pat`` in the
-    matcher's *own* supported language — literal characters plus ``*`` (any run,
-    including empty) and ``?`` (exactly one UTF-16 code unit) — and NOTHING else.
+def _wildcard_units_match(name_u: list, pat_u: list,
+                          work: Optional[list] = None) -> bool:
+    """Match one path segment against one glob segment, both given as UTF-16 code-unit
+    lists, in the matcher's *own* supported language — literal units plus ``*`` (any
+    run, including empty) and ``?`` (exactly one unit) — and NOTHING else.
 
-    Matching is over UTF-16 code units so ``?`` has exact minimatch parity even for
-    astral characters (``?`` matches one surrogate unit; an emoji needs ``??``).
-    Every other character, including ``[ ] ( ) { } ^ ! $`` and ``.``, is a literal.
-    Unsupported minimatch constructs (real ``[...]`` classes, extglobs, ranges) never
-    reach here — they fail membership closed at the guard — so this deliberately does
-    NOT delegate to ``fnmatch``, whose ``[...]``/``[^…]`` reinterpretation and OS
-    case-folding diverge from minimatch on the literal bracket forms this matcher
-    intentionally permits (e.g. a dir named ``[^]``).
+    Working over UTF-16 units gives ``?`` exact minimatch parity even for astral
+    characters (``?`` matches one surrogate unit; an emoji needs ``??``). Every other
+    character, including ``[ ] ( ) { } ^ ! $`` and ``.``, is a literal — this
+    deliberately does NOT delegate to ``fnmatch``, whose ``[...]``/``[^…]``
+    reinterpretation and OS case-folding diverge from minimatch on the literal
+    bracket forms this matcher intentionally permits (e.g. a dir named ``[^]``).
 
-    Linear-space greedy two-pointer with single-star backtracking: no recursion, no
-    regex, O(len(name) * number of ``*``) time and O(1) space."""
+    Linear-space greedy two-pointer with single-star backtracking. Each unit examined
+    is charged against the ``work`` budget (shared across the discovery walk), so a
+    manifest of many long wildcard segments cannot burn CPU under the DP-cell cap."""
+    if work is None:
+        work = [_MAX_BRACE_SCAN_WORK]
     q, star = 0x3F, 0x2A  # ord('?'), ord('*') — always wildcards in a glob
-    name_u, pat_u = _utf16_units(name), _utf16_units(pat)
     s = p = 0
     star_p = star_s = -1
     ns, npat = len(name_u), len(pat_u)
     while s < ns:
+        work[0] -= 1
+        if work[0] < 0:
+            raise _PatternBudgetError
         if p < npat and (pat_u[p] == q or pat_u[p] == name_u[s]):
             s += 1
             p += 1
@@ -435,13 +480,10 @@ def _wildcard_segment_match(name: str, pat: str) -> bool:
     return p == npat
 
 
-def _segment_matches(name: str, pattern_segment: str) -> bool:
-    """Match a single path segment with minimatch ``dot:false`` semantics: a
-    wildcard pattern segment does not match a ``name`` that begins with ``.``
-    unless the pattern segment itself begins with ``.``."""
-    if name.startswith(".") and not pattern_segment.startswith("."):
-        return False
-    return _wildcard_segment_match(name, pattern_segment)
+def _wildcard_segment_match(name: str, pat: str) -> bool:
+    """Convenience wrapper: match segment strings by converting to UTF-16 units. See
+    :func:`_wildcard_units_match`."""
+    return _wildcard_units_match(_utf16_units(name), _utf16_units(pat))
 
 
 def _workspace_globs_for(ancestor: Path, cache: Optional[dict] = None) -> list:
@@ -607,7 +649,8 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
     if manifest_path.exists():
         text = _read_manifest_text(manifest_path)
         try:
-            manifest = json.loads(text) if text is not None else {}
+            manifest = json.loads(
+                text, parse_constant=_reject_json_constant) if text is not None else {}
         except (ValueError, RecursionError):
             # Malformed or deeply-nested (recursion-bomb) JSON → membership
             # unproven (fail closed) rather than crashing discovery.
@@ -621,7 +664,8 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
     if lerna_path.exists():
         text = _read_manifest_text(lerna_path)
         try:
-            lerna = json.loads(text) if text is not None else None
+            lerna = json.loads(
+                text, parse_constant=_reject_json_constant) if text is not None else None
         except (ValueError, RecursionError):
             lerna = None  # parse failed → contribute nothing (fail closed)
         if isinstance(lerna, dict):
@@ -635,6 +679,15 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
             else:
                 globs.extend(_string_globs(lerna["packages"]))
     return globs
+
+
+def _reject_json_constant(token: str):
+    """``parse_constant`` callback for ``json.loads``: raise on the non-standard
+    ``NaN``/``Infinity``/``-Infinity`` constants that Python accepts but strict JSON
+    parsers (npm's, Node's ``JSON.parse``) reject. A manifest using them is invalid
+    JSON and must fail closed, even when the token sits outside the workspace field —
+    a whole-document parse failure is what npm produces."""
+    raise ValueError(f"invalid JSON constant {token!r}")
 
 
 def _string_globs(value) -> list:
@@ -945,7 +998,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             # Order-dependent: if this raw glob matches (any expansion), it sets
             # membership to its polarity — a later positive can re-include a path an
             # earlier ``!`` excluded, and vice versa.
-            if any(_relative_matches_workspace_glob(rel_parts, p, cells)
+            if any(_relative_matches_workspace_glob(rel_parts, p, cells, work)
                    for p in expanded):
                 member = not negated
         return member
