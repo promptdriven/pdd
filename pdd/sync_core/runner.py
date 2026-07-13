@@ -16,6 +16,7 @@ import platform
 import re
 import select
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -36,7 +37,7 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
+from .isolation import untrusted_child_environment
 from .git_io import read_git_blob, read_git_mode, read_git_regular_blob
 from .types import (
     EvidenceOutcome,
@@ -1735,6 +1736,7 @@ def _playwright_support_closure(
 def _playwright_source_syntax(
     path: PurePosixPath, source: bytes
 ) -> tuple[set[str], set[str], bool, set[str]]:
+    # pylint: disable=too-many-nested-blocks
     """Derive module/snapshot edges under an AST runtime-capability allowlist."""
     tree = _javascript_parser(path).parse(source)
     if tree.root_node.has_error:
@@ -4070,9 +4072,9 @@ def _playwright_execution_tree_identity(root: Path) -> str:
         relative = path.relative_to(root)
         if relative.parts and relative.parts[0] == ".git":
             continue
-        stat = path.lstat()
+        metadata = path.lstat()
         digest.update(relative.as_posix().encode() + b"\0")
-        digest.update(str(stat.st_mode).encode() + b"\0")
+        digest.update(str(metadata.st_mode).encode() + b"\0")
         if path.is_symlink():
             digest.update(os.readlink(path).encode())
         elif path.is_file():
