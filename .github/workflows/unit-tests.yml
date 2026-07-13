@@ -94,6 +94,39 @@ jobs:
               handle.write(f"PDD_REAL_VITEST_TOOLCHAIN_MANIFEST={manifest}\n")
           PY
 
+      - name: Provision identity-bound Playwright Chromium toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
+          browser_cache="$toolchain/browser-runtime"
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
+          TOOLCHAIN="$toolchain" BROWSER_CACHE="$browser_cache" python - <<'PY'
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve()
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/@playwright/test/cli.js").resolve(strict=True)
+          browser = Path(os.environ["BROWSER_CACHE"]).resolve(strict=True)
+          manifest = root / "playwright-toolchain.json"
+          manifest.write_text(json.dumps({
+              "version": 2,
+              "roles": {
+                  "launcher": str(launcher),
+                  "entrypoint": str(entrypoint),
+                  "dependencies": str((root / "node_modules").resolve()),
+                  "browser_runtime": str(browser),
+                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+              },
+          }), encoding="utf-8")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
+
       - name: Configure git identity
         run: |
           git config --global user.email "ci@pdd.dev"
@@ -178,7 +211,24 @@ jobs:
           tests/test_sync_core_trust.py
           tests/test_sync_core_lifecycle_scenarios.py
           tests/test_sync_core_reporting.py
+          tests/test_sync_core_runner_playwright.py
           --timeout=60
+
+      - name: Verify protected Playwright toolchain is complete
+        run: |
+          set -euo pipefail
+          test -n "${PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST:-}"
+          test -f "$PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+          roles = json.loads(manifest.read_text())["roles"]
+          required = {"launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile"}
+          assert set(roles) == required
+          assert all(Path(value).exists() for value in roles.values())
+          PY
 
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok

@@ -874,7 +874,7 @@ def test_validate_command_requires_vitest_command_and_manifest_together(
     assert "manifest" in result.output.lower()
 
 
-def test_validate_command_wires_protected_playwright_runner_config(
+def test_validate_command_rejects_unpaired_playwright_command(
     tmp_path, monkeypatch
 ) -> None:
     root, commit = _repository(tmp_path)
@@ -904,13 +904,9 @@ def test_validate_command_wires_protected_playwright_runner_config(
             ],
         )
 
-    assert result.exit_code == 0, result.output
-    call = mocked_finalize.call_args
-    assert call.kwargs["signer"] is signer
-    assert call.kwargs["config"].playwright_command == (
-        os.sys.executable,
-        str(external),
-    )
+    assert result.exit_code != 0
+    assert "required together" in result.output
+    mocked_finalize.assert_not_called()
 
 
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(

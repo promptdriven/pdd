@@ -52,13 +52,13 @@ def test_attestation_json_round_trip_preserves_signed_payload() -> None:
     assert decoded.payload() == envelope.payload()
 
 
-def test_attestation_json_round_trip_preserves_playwright_command() -> None:
+def test_attestation_json_round_trip_preserves_playwright_toolchain_identity() -> None:
     envelope = _envelope()
     envelope = replace(
         envelope,
         binding=replace(
             envelope.binding,
-            playwright_command=("/opt/node", "/opt/playwright/cli.js"),
+            playwright_toolchain_identity="3e5f" * 16,
         ),
     )
     decoded = decode_attestation(json.loads(encode_attestation(envelope)))

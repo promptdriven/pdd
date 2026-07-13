@@ -183,8 +183,7 @@ class AttestationBinding:
     vitest_toolchain_manifest: str | None = None
     vitest_toolchain_identity: str | None = None
     adapter_identities: tuple[tuple[str, str], ...] = ()
-    playwright_command: tuple[str, ...] | None = None
-    playwright_toolchain_manifest: str | None = None
+    playwright_toolchain_identity: str | None = None
 
 
 @dataclass(frozen=True)
@@ -240,13 +239,9 @@ class AttestationEnvelope:
         }
         if self.binding.adapter_identities:
             data["binding"]["adapter_identities"] = list(self.binding.adapter_identities)
-        if self.binding.playwright_command is not None:
-            data["binding"]["playwright_command"] = list(
-                self.binding.playwright_command
-            )
-        if self.binding.playwright_toolchain_manifest is not None:
-            data["binding"]["playwright_toolchain_manifest"] = (
-                self.binding.playwright_toolchain_manifest
+        if self.binding.playwright_toolchain_identity is not None:
+            data["binding"]["playwright_toolchain_identity"] = (
+                self.binding.playwright_toolchain_identity
             )
         return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 

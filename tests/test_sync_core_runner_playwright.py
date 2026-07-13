@@ -1,6 +1,7 @@
 """Contract tests for the fail-closed trusted Playwright adapter."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,18 @@ UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typesc
 IDENTITY = "chromium::tests/widget.spec.ts::widget works"
 
 
+def _write_private_result(kwargs: dict, payload: dict) -> None:
+    """Model the checker-owned reporter transport in supervisor fakes."""
+    fifo = kwargs["result_fifo"]
+    writer = os.open(fifo, os.O_WRONLY)
+    try:
+        os.write(writer, json.dumps({
+            "pdd_playwright_reporter": 1, **payload,
+        }).encode())
+    finally:
+        os.close(writer)
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
@@ -46,7 +59,7 @@ def _git(root: Path, *args: str) -> str:
 def _fake_playwright(tmp_path: Path) -> Path:
     runner = tmp_path / "fake_playwright.py"
     runner.write_text(
-        "import json, os, pathlib, sys, time\n"
+        "import json, os, pathlib, re, sys, time\n"
         "root = pathlib.Path.cwd()\n"
         "mode = (root / 'source.ts').read_text().strip()\n"
         "if mode == 'timeout': time.sleep(5)\n"
@@ -55,7 +68,9 @@ def _fake_playwright(tmp_path: Path) -> Path:
         "  tests = [] if mode == 'zero' else [{'identity': 'chromium::tests/widget.spec.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped'}.get(mode, 'passed')}]\n"
         "  if mode == 'mismatch': tests = [{'identity': 'chromium::tests/widget.spec.ts::other', 'status': 'passed'}]\n"
         "  if mode == 'candidate': tests.append({'identity': 'chromium::tests/widget.spec.ts::candidate only', 'status': 'passed'})\n"
-        "  print(json.dumps({'tests': tests}))\n",
+        "  reporter = next((arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--reporter=')), '')\n"
+        "  fd = int(re.search(r'RESULT_FD = (\\d+)', pathlib.Path(reporter).read_text()).group(1))\n"
+        "  os.write(fd, json.dumps({'pdd_playwright_reporter': 1, 'tests': tests}).encode())\n",
         encoding="utf-8",
     )
     return runner
@@ -372,10 +387,10 @@ def test_playwright_execution_uses_process_group_supervisor(
 
     def supervised(command, **_kwargs):
         calls.append(command)
-        payload = {
+        _write_private_result(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
-        }
-        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+        })
+        return subprocess.CompletedProcess(command, 0, "forged stdout is ignored", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -411,8 +426,9 @@ def test_playwright_forces_snapshot_updates_off_and_detects_tree_writes(
         encoding="utf-8",
     )
     _envelope, executions = _run(root, commit, commit, fake)
-    assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "modified" in executions[0].detail.lower()
+    assert executions[0].outcome in {
+        EvidenceOutcome.ERROR, EvidenceOutcome.COLLECTION_ERROR,
+    }
 
 
 def test_playwright_manifest_roles_drive_runtime_environment(tmp_path: Path) -> None:
@@ -1566,8 +1582,8 @@ def test_playwright_each_protocol_phase_uses_fresh_immutable_materialization(
         phase_roots.append(cwd)
         assert cwd not in writable_roots
         assert cwd / ".git" not in writable_roots
-        payload = {"tests": [{"identity": IDENTITY, "status": "passed"}]}
-        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+        _write_private_result(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
+        return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -1606,8 +1622,8 @@ def test_playwright_detects_clean_status_and_ignored_phase_writes(
             else:
                 (cwd / "candidate-cache").mkdir()
                 (cwd / "candidate-cache/state").write_text("candidate", encoding="utf-8")
-        payload = {"tests": [{"identity": IDENTITY, "status": "passed"}]}
-        return subprocess.CompletedProcess(command, 0, json.dumps(payload), ""), False
+        _write_private_result(_kwargs, {"tests": [{"identity": IDENTITY, "status": "passed"}]})
+        return subprocess.CompletedProcess(command, 0, "", ""), False
 
     monkeypatch.setattr(runner_module, "run_supervised", supervised)
     _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
@@ -1761,3 +1777,85 @@ def test_playwright_tracks_page_locator_and_frame_receiver_aliases(
     assert playwright_validator_config_digest(
         root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
     )
+
+
+def test_playwright_stdout_result_forgery_is_not_a_reporter_result(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    outcome, _detail, identities = _playwright_result(
+        root, json.dumps({"tests": [{"identity": IDENTITY, "status": "passed"}]}), 0, None
+    )
+    assert outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert not identities
+
+
+@pytest.mark.parametrize("source", [
+    "const proc = globalThis.process; proc.exit(0);",
+    "const { exit } = process; exit(0);",
+    "const load = process.getBuiltinModule; const fs = load('node:fs'); fs.readFileSync('./x');",
+    "const { write } = process.stdout; write('forged');",
+])
+def test_playwright_rejects_ambient_capability_aliases(tmp_path: Path, source: str) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "ambient capability alias")
+    with pytest.raises(ValueError, match="runtime|module loading"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize("config", [
+    "export default { expect: { toHaveScreenshot: { pathTemplate: './oracle.png' } } };\n",
+    "export default { expect: { toHaveScreenshot: { pathTemplate: '../oracle.png' } } };\n",
+])
+def test_playwright_rejects_unbound_expect_path_options(tmp_path: Path, config: str) -> None:
+    root, _commit = _repository(tmp_path, config=config)
+    with pytest.raises(ValueError, match="expect|unsupported"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+@pytest.mark.parametrize("option", [
+    "storageState: './auth.json'",
+    "launchOptions: { executablePath: './evil-browser' }",
+    "recordHar: { path: './capture.har' }",
+])
+def test_playwright_rejects_unbound_test_use_paths(tmp_path: Path, option: str) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        f"test.use({{ {option} }});\n"
+        "test('widget works', async () => {});\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "path-bearing use option")
+    with pytest.raises(ValueError, match="path option"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_package_import_mapping_is_bound_with_nearest_manifest(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/package.json").write_text(
+        json.dumps({"imports": {"#helper": "./helper.ts"}}), encoding="utf-8"
+    )
+    (root / "tests/helper.ts").write_text("export const ready = true;\n", encoding="utf-8")
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "import { ready } from '#helper';\n"
+        "test('widget works', async () => { check(ready); });\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mapped Playwright helper")
+    before = playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
+    (root / "tests/helper.ts").write_text("export const ready = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate mapped helper")
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    ) != before

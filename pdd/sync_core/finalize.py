@@ -225,18 +225,14 @@ def _reusable_result(
             profile, root=root, ref=head_sha,
             config=RunnerConfig(
                 adapter_identities=envelope.binding.adapter_identities,
-                playwright_command=envelope.binding.playwright_command,
-                playwright_toolchain_manifest=Path(
-                    envelope.binding.playwright_toolchain_manifest
-                ) if envelope.binding.playwright_toolchain_manifest else None,
+                playwright_toolchain_identity=envelope.binding.playwright_toolchain_identity,
             ),
         ),
         TRUSTED_RUNNER_VERSION,
         base_sha,
         envelope.binding.checked_sha,
         adapter_identities=envelope.binding.adapter_identities,
-        playwright_command=envelope.binding.playwright_command,
-        playwright_toolchain_manifest=envelope.binding.playwright_toolchain_manifest,
+        playwright_toolchain_identity=envelope.binding.playwright_toolchain_identity,
     )
     verifier.verify_current_for_idempotency(envelope, binding, now=now)
     ancestry = subprocess.run(

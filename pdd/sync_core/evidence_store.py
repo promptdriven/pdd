@@ -83,11 +83,9 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         payload["binding"]["adapter_identities"] = [
             list(item) for item in binding.adapter_identities
         ]
-    if binding.playwright_command is not None:
-        payload["binding"]["playwright_command"] = list(binding.playwright_command)
-    if binding.playwright_toolchain_manifest is not None:
-        payload["binding"]["playwright_toolchain_manifest"] = (
-            binding.playwright_toolchain_manifest
+    if binding.playwright_toolchain_identity is not None:
+        payload["binding"]["playwright_toolchain_identity"] = (
+            binding.playwright_toolchain_identity
         )
     return payload
 
@@ -133,18 +131,11 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             or len(set(adapter_identities)) != len(adapter_identities)
         ):
             raise TypeError("adapter_identities must be sorted and unique")
-        command_data = binding_data.get("playwright_command")
-        if command_data is not None and (
-            not isinstance(command_data, list)
-            or len(command_data) != 2
-            or not all(isinstance(item, str) and item for item in command_data)
+        toolchain_identity = binding_data.get("playwright_toolchain_identity")
+        if toolchain_identity is not None and (
+            not isinstance(toolchain_identity, str) or not toolchain_identity
         ):
-            raise TypeError("playwright_command must be two non-empty strings")
-        manifest_data = binding_data.get("playwright_toolchain_manifest")
-        if manifest_data is not None and (
-            not isinstance(manifest_data, str) or not manifest_data
-        ):
-            raise TypeError("playwright_toolchain_manifest must be a non-empty string")
+            raise TypeError("playwright_toolchain_identity must be a non-empty string")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -154,10 +145,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
             adapter_identities=adapter_identities,
-            playwright_command=(
-                tuple(command_data) if command_data is not None else None
-            ),
-            playwright_toolchain_manifest=manifest_data,
+            playwright_toolchain_identity=toolchain_identity,
         )
         results = tuple(
             ObligationEvidence(

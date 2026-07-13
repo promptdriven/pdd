@@ -45,7 +45,9 @@ from ..sync_core.git_io import resolve_git_commit
 from ..sync_core.runner import (
     RunnerConfig,
     _load_vitest_toolchain_descriptor,
+    _playwright_toolchain_identity,
     _protected_command_error,
+    _playwright_command_error,
     _vitest_command_error,
 )
 from .. import __version__
@@ -188,6 +190,7 @@ def _protected_playwright_command(
 def _runner_config_from_options(
     options: dict[str, object], cwd: Path
 ) -> RunnerConfig:
+    # pylint: disable=too-many-locals
     """Build trusted validator configuration from protected CLI/env options."""
     jest_command = options.get("jest_command")
     vitest_command = options.get("vitest_command")
@@ -215,6 +218,22 @@ def _runner_config_from_options(
             raise click.ClickException(f"--vitest-command: {error}")
     playwright_command = options.get("playwright_command")
     playwright_manifest = options.get("playwright_toolchain_manifest")
+    protected_playwright = _protected_playwright_command(
+        playwright_command if isinstance(playwright_command, str) else None,
+        cwd,
+    )
+    playwright_manifest_path = (
+        Path(playwright_manifest).expanduser().resolve()
+        if isinstance(playwright_manifest, str) and playwright_manifest else None
+    )
+    if (protected_playwright is None) != (playwright_manifest_path is None):
+        raise click.ClickException(
+            "--playwright-command and --playwright-toolchain-manifest are required together"
+        )
+    if protected_playwright is not None:
+        error = _playwright_command_error(cwd, protected_playwright)
+        if error is not None:
+            raise click.ClickException(f"--playwright-command: {error}")
     config = RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
@@ -223,12 +242,8 @@ def _runner_config_from_options(
         ),
         vitest_command=protected_vitest,
         vitest_toolchain_manifest=manifest_path,
-        playwright_command=_protected_playwright_command(
-            playwright_command if isinstance(playwright_command, str) else None,
-            cwd,
-        ),
-        playwright_toolchain_manifest=Path(playwright_manifest).expanduser().resolve()
-        if isinstance(playwright_manifest, str) and playwright_manifest else None,
+        playwright_command=protected_playwright,
+        playwright_toolchain_manifest=playwright_manifest_path,
     )
     if protected_vitest is not None:
         try:
@@ -242,6 +257,23 @@ def _runner_config_from_options(
             vitest_toolchain_identity=descriptor.identity,
             playwright_command=config.playwright_command,
             playwright_toolchain_manifest=config.playwright_toolchain_manifest,
+            adapter_identities=config.adapter_identities,
+        )
+    if protected_playwright is not None:
+        try:
+            identity = _playwright_toolchain_identity(
+                cwd, protected_playwright, playwright_manifest_path
+            )
+        except (OSError, ValueError) as exc:
+            raise click.ClickException(f"invalid Playwright toolchain: {exc}") from exc
+        config = RunnerConfig(
+            jest_command=config.jest_command,
+            vitest_command=config.vitest_command,
+            vitest_toolchain_manifest=config.vitest_toolchain_manifest,
+            vitest_toolchain_identity=config.vitest_toolchain_identity,
+            playwright_command=config.playwright_command,
+            playwright_toolchain_manifest=config.playwright_toolchain_manifest,
+            playwright_toolchain_identity=identity,
             adapter_identities=config.adapter_identities,
         )
     return config
