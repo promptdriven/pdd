@@ -475,6 +475,27 @@ class TestTypeScriptTestRunnerDetection:
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
+    def test_npm_parent_exclusion_prunes_deep_workspace_candidate(self, tmp_path):
+        """npm exclusions prune a matching parent instead of using pnpm ordering."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": ["packages/**", "!packages/*"]}'
+        )
+        package = repo / "packages" / "deep" / "app"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}")
+        test_file = package / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
     def test_brace_expansion_in_workspace_glob_matches_member(self, tmp_path):
         """npm/Yarn brace-expansion globs must be honored, not matched literally.
 

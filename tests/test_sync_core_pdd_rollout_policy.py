@@ -472,7 +472,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
-    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 1
     candidate_only = [
         reason
         for reason in profiles.invalid_reasons
@@ -485,6 +485,10 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     ]
     assert len(candidate_only) == EXPECTED_MANAGED_UNITS
     assert len(incomplete) == EXPECTED_MANAGED_UNITS
+    assert sum(
+        "requirement transition bindings mismatch" in reason
+        for reason in profiles.invalid_reasons
+    ) == 1
 
 
 def _bootstrap_addition_fixture(monkeypatch):

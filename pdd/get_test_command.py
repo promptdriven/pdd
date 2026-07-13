@@ -8,6 +8,7 @@ for a given test file based on:
 3. None (triggers agentic fallback)
 """
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple
 import csv
@@ -40,6 +41,22 @@ _MAX_BRACE_ALTERNATIVES = 32
 _MAX_WORKSPACE_MATCH_STATES = 250_000
 _MAX_WORKSPACE_MANIFEST_BYTES = 1_048_576
 _MAX_WORKSPACE_MANIFEST_NESTING = 64
+
+
+class _WorkspaceProvider(Enum):
+    """Resolver whose declaration semantics must be preserved."""
+
+    NPM = "npm-yarn"
+    LERNA = "lerna"
+    PNPM = "pnpm"
+
+
+@dataclass(frozen=True)
+class _WorkspaceDeclaration:
+    """One provider-specific, bounded workspace declaration."""
+
+    provider: _WorkspaceProvider
+    patterns: tuple[str, ...]
 
 
 def _match_workspace_segment(value: str, pattern: str) -> bool:
@@ -154,6 +171,21 @@ def _workspace_segments_match(
     return previous[-1]
 
 
+def _workspace_alternative_cost(
+    rel_parts: Tuple[str, ...],
+    segments: Tuple[str, ...],
+    *,
+    include_prefixes: bool,
+) -> int:
+    """Charge every path shape that provider-specific matching will evaluate."""
+    if not include_prefixes:
+        return _workspace_match_state_cost(rel_parts, segments)
+    return sum(
+        _workspace_match_state_cost(rel_parts[:depth], segments)
+        for depth in range(1, len(rel_parts) + 1)
+    )
+
+
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -> bool:
     """Match a relative path against one bounded workspace glob, fail closed."""
     if (
@@ -178,31 +210,63 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
 
 
 def _declared_workspace_membership(
-    rel_parts: Tuple[str, ...], patterns: list[str]
+    rel_parts: Tuple[str, ...], declaration: _WorkspaceDeclaration
 ) -> Optional[bool]:
-    """Apply ordered workspace patterns; ``None`` means the declaration is invalid."""
-    if not patterns or len(patterns) > _MAX_WORKSPACE_PATTERNS:
-        return None
-    if len(rel_parts) > _MAX_WORKSPACE_SEGMENTS:
+    """Apply provider semantics; ``None`` means exact evaluation is unsupported."""
+    patterns = declaration.patterns
+    if (
+        not patterns
+        or len(patterns) > _MAX_WORKSPACE_PATTERNS
+        or len(rel_parts) > _MAX_WORKSPACE_SEGMENTS
+    ):
         return None
     prepared_patterns = []
     work_states = 0
     for raw_pattern in patterns:
-        if (
-            not isinstance(raw_pattern, str)
-            or len(raw_pattern) > _MAX_WORKSPACE_PATTERN_LENGTH
-        ):
-            return None
         excluded = raw_pattern.startswith("!")
         pattern = raw_pattern[1:] if excluded else raw_pattern
         alternatives = _prepare_workspace_pattern(pattern)
         if alternatives is None:
             return None
         for segments in alternatives:
-            work_states += _workspace_match_state_cost(rel_parts, segments)
+            work_states += _workspace_alternative_cost(
+                rel_parts,
+                segments,
+                include_prefixes=(
+                    excluded and declaration.provider is not _WorkspaceProvider.PNPM
+                ),
+            )
             if work_states > _MAX_WORKSPACE_MATCH_STATES:
                 return None
         prepared_patterns.append((excluded, alternatives))
+
+    if declaration.provider is not _WorkspaceProvider.PNPM:
+        seen_exclusion = False
+        for excluded, _alternatives in prepared_patterns:
+            if excluded:
+                seen_exclusion = True
+            elif seen_exclusion:
+                # npm/Yarn/Lerna traversal and re-inclusion details differ across
+                # versions. Do not reinterpret pnpm's ordered behavior here.
+                return None
+        positive = any(
+            not excluded
+            and any(
+                _workspace_segments_match(rel_parts, segments)
+                for segments in alternatives
+            )
+            for excluded, alternatives in prepared_patterns
+        )
+        excluded = any(
+            excluded
+            and any(
+                _workspace_segments_match(rel_parts[:depth], segments)
+                for depth in range(1, len(rel_parts) + 1)
+                for segments in alternatives
+            )
+            for excluded, alternatives in prepared_patterns
+        )
+        return positive and not excluded
 
     member = False
     for excluded, alternatives in prepared_patterns:
@@ -288,11 +352,11 @@ def _manifest_workspace_globs(path: Path) -> Optional[list[str]]:
         return []
     contents = _read_workspace_manifest(path)
     if contents is None:
-        return []
+        return None
     try:
         manifest = json.loads(contents)
     except (RecursionError, ValueError):
-        return []
+        return None
     if not isinstance(manifest, dict):
         return None
     workspaces = manifest.get("workspaces")
@@ -322,20 +386,34 @@ def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
     return _string_pattern_list(packages)
 
 
-def _workspace_globs_for(ancestor: Path) -> Optional[list[str]]:
-    """Return workspace globs, or ``None`` for an invalid declaration.
+def _workspace_declarations_for(
+    ancestor: Path,
+) -> Optional[tuple[_WorkspaceDeclaration, ...]]:
+    """Return provider declarations, or ``None`` for an invalid declaration.
 
     An existing ``pnpm-workspace.yaml`` is authoritative over package and Lerna
     manifests at the same root.
     """
     pnpm_path = ancestor / "pnpm-workspace.yaml"
     if pnpm_path.exists():
-        return _pnpm_workspace_globs(pnpm_path)
+        patterns = _pnpm_workspace_globs(pnpm_path)
+        if patterns is None:
+            return None
+        return (_WorkspaceDeclaration(_WorkspaceProvider.PNPM, tuple(patterns)),)
     manifest_globs = _manifest_workspace_globs(ancestor / "package.json")
     lerna_globs = _lerna_workspace_globs(ancestor / "lerna.json")
     if manifest_globs is None or lerna_globs is None:
         return None
-    return manifest_globs + lerna_globs
+    declarations = []
+    if manifest_globs:
+        declarations.append(
+            _WorkspaceDeclaration(_WorkspaceProvider.NPM, tuple(manifest_globs))
+        )
+    if lerna_globs:
+        declarations.append(
+            _WorkspaceDeclaration(_WorkspaceProvider.LERNA, tuple(lerna_globs))
+        )
+    return tuple(declarations)
 
 
 def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
@@ -343,18 +421,21 @@ def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
     canonical_package = package_dir.resolve()
     ancestor = canonical_package.parent
     for _ in range(80):
-        globs = _workspace_globs_for(ancestor)
-        if globs is None:
+        declarations = _workspace_declarations_for(ancestor)
+        if declarations is None:
             return None
-        if globs:
+        if declarations:
             try:
                 rel_parts = tuple(canonical_package.relative_to(ancestor.resolve()).parts)
             except ValueError:
                 rel_parts = ()
-            membership = _declared_workspace_membership(rel_parts, globs)
-            if membership is None:
+            memberships = [
+                _declared_workspace_membership(rel_parts, declaration)
+                for declaration in declarations
+            ]
+            if any(membership is None for membership in memberships):
                 return None
-            if membership:
+            if any(memberships):
                 return ancestor.resolve()
         if (ancestor / "pnpm-workspace.yaml").exists():
             return None
