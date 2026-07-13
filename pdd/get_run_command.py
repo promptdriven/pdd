@@ -10,13 +10,6 @@ from pdd.path_resolution import get_default_resolver
 # Commands/forms that RE-EVALUATE an argument as code, undoing ``shlex.quote``'s single
 # quoting: ``eval <arg>`` and a shell invoked with ``-c`` (``bash -c``/``sh -c``…).
 _REEVAL_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
-# Command wrappers that run the FOLLOWING command — a shell hidden behind one of these
-# (``env bash -c``) is still a re-evaluation. A wrapper in command position is skipped
-# when locating the effective command.
-_COMMAND_WRAPPERS = frozenset({
-    "env", "command", "exec", "nohup", "nice", "time", "setsid", "stdbuf",
-    "timeout", "ionice", "xargs", "sudo", "doas", "builtin",
-})
 
 
 def _is_dash_c_option(tok: str) -> bool:
@@ -31,10 +24,13 @@ def _feeds_value_into_reevaluation(template: str) -> bool:
     """True when ``template`` would RE-EVALUATE an inserted value as code — so a
     ``shlex.quote``-d ``$(...)`` in the value would still execute at the second parse.
     The value is unsafe when a command clause runs ``eval`` or a shell with ``-c``
-    (``bash -c {file}``, ``bash -lc {file}``, ``env bash -c {file}``). A bare ``sh {file}``
-    / ``bash {file}`` (run the *file* as a script — the shipped Shell/Bash/Zsh templates)
-    is SAFE and NOT rejected: only the ``-c`` *code* argument is; a non-shell ``-c`` option
-    (``pytest -c cfg``) is also safe.
+    (``bash -c {file}``, ``bash -lc {file}``). To stay robust against option-bearing
+    command WRAPPERS whose operands make the effective-command position ambiguous
+    (``timeout 5 bash -c``, ``env -i bash -c``, ``nice -n 5 bash -c``), a clause is
+    refused CONSERVATIVELY when it contains BOTH a shell name and a ``-c``-bearing option,
+    or an ``eval`` token — anywhere in the clause. A bare ``sh {file}`` / ``bash {file}``
+    (run the *file* as a script — the shipped Shell/Bash/Zsh templates) has no ``-c`` and
+    stays SAFE; a non-shell ``-c`` option (``pytest -c cfg``) has no shell and stays safe.
 
     Comment parsing is disabled so a mid-word ``#`` (``echo a#b``, which Bash does NOT
     treat as a comment) cannot hide a later ``&& bash -c`` clause. An unparseable template
@@ -55,27 +51,11 @@ def _feeds_value_into_reevaluation(template: str) -> bool:
     except ValueError:
         return True
     for toks in clauses:
-        # Locate the effective command: skip leading ``VAR=value`` assignments and
-        # command wrappers (``env``/``command``/``exec``/…).
-        j = 0
-        while j < len(toks):
-            tok = toks[j]
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tok):
-                j += 1
-                continue
-            base = tok.split("/")[-1]
-            if base in _COMMAND_WRAPPERS:
-                j += 1
-                continue
-            break
-        if j >= len(toks):
-            continue
-        cmd = toks[j].split("/")[-1]
-        if cmd == "eval":
+        bases = [t.split("/")[-1] for t in toks]
+        if "eval" in bases:
             return True
-        # A shell with a ``-c``-bearing option anywhere in the clause re-evaluates its
-        # code argument. (Scanning the whole clause covers wrapper-passed options.)
-        if cmd in _REEVAL_SHELLS and any(_is_dash_c_option(t) for t in toks[j + 1:]):
+        if any(b in _REEVAL_SHELLS for b in bases) \
+                and any(_is_dash_c_option(t) for t in toks):
             return True
     return False
 

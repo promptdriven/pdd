@@ -302,7 +302,11 @@ class TestShellSafeSubstitute:
                     # mid-word `#` (which bash does NOT treat as a comment) hiding a clause
                     "bash -lc {file}", "sh -xc {file}", "env bash -c {file}",
                     "command sh -c {file}", "env FOO=1 bash -lc {file}",
-                    "echo a#b && bash -c {file}"):
+                    "echo a#b && bash -c {file}",
+                    # option-bearing wrappers whose operands hide the shell command
+                    "timeout 5 bash -c {file}", "env -i bash -c {file}",
+                    "nice -n 5 bash -c {file}", "command -- sh -c {file}",
+                    "nohup bash -lc {file}"):
             assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
         # Safe: the shell runs the FILE (value is a filename, single-quoted); a mid-word
         # `#` is literal; a non-shell `-c` option is fine.
@@ -311,6 +315,9 @@ class TestShellSafeSubstitute:
         assert shell_safe_substitute(
             "pytest -c cfg {file}", {"{file}": "/t.py"}) == "pytest -c cfg /t.py"
         assert shell_safe_substitute("echo a#b {file}", {"{file}": "x"}) == "echo a#b x"
+        # A wrapper around a NON-shell command (no `-c`) is still safe.
+        assert shell_safe_substitute(
+            "timeout 5 python {file}", {"{file}": "/t.py"}) == "timeout 5 python /t.py"
         # Prove the bypasses the guard prevents are genuine (naive forms inject).
         for naive_tpl, marker in (("eval {V}", "PWN_EVAL"), ("bash -lc {V}", "PWN_LC"),
                                   ("env bash -c {V}", "PWN_ENV")):
