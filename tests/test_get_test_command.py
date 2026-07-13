@@ -22,6 +22,7 @@ from pdd.get_test_command import (
     _lexical_repo_root,
     _find_expandable_brace,
     _has_complete_bracket_class,
+    _MAX_GLOB_LENGTH,
     _MAX_BRACE_SCAN_WORK,
     _MAX_MATCH_CELLS,
     _MAX_BRACE_EXPANSION,
@@ -1033,6 +1034,44 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("packages", "[!]"), ["packages/[!]"]) is True
         assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
         assert _package_matches_workspace(("packages", "b"), ["packages/[ab]"]) is False
+
+    def test_expanded_patterns_are_revalidated_for_constructs(self):
+        """Brace expansion can *create* an unsupported construct from separate
+        alternatives or *dissolve* an apparent one, so validation must run on each
+        concrete (expanded) pattern, not the raw glob."""
+        # `{?,x}(foo)` expands to `?(foo)` — an extglob fnmatch would mishandle
+        # (`?` matching `a`); must fail closed, not falsely prove `a(foo)`.
+        assert _package_matches_workspace(
+            ("packages", "a(foo)"), ["packages/{?,x}(foo)"]) is False
+        # `{[,x}]` expands only to the literals `[]` and `x]` — both supported — so
+        # it must NOT be rejected by a raw-level bracket scan.
+        assert _package_matches_workspace(("packages", "[]"), ["packages/{[,x}]"]) is True
+        assert _package_matches_workspace(("packages", "x]"), ["packages/{[,x}]"]) is True
+        # `[{a,b}]` expands to real classes `[a]`/`[b]` → still fails closed.
+        assert _package_matches_workspace(("packages", "a"), ["packages/[{a,b}]"]) is False
+
+    def test_dollar_brace_is_opaque_including_nested(self):
+        """A balanced ``${...}`` is opaque to brace-expansion, nested braces
+        included, so ``${foo,{bar,baz}}`` is fully literal (its inner ``{bar,baz}``
+        must NOT expand into a false member), while ``${1..3}`` is a literal dir name
+        (its ``..`` is not a range) and must stay matchable."""
+        assert _expand_braces("packages/${foo,{bar,baz}}") == ["packages/${foo,{bar,baz}}"]
+        assert _package_matches_workspace(
+            ("packages", "${foo,bar}"), ["packages/${foo,{bar,baz}}"]) is False
+        assert _package_matches_workspace(
+            ("packages", "${1..3}"), ["packages/${1..3}"]) is True
+        # A real brace after a ``${...}`` group still expands.
+        assert sorted(_expand_braces("${a,b}/{c,d}")) == ["${a,b}/c", "${a,b}/d"]
+
+    def test_length_guard_precedes_syntax_scan(self):
+        """The cheap length guard runs before any O(len) syntax scan, and the bracket
+        scan is linear, so a hostile megabyte-long unmatched-``[`` glob fails closed
+        immediately instead of triggering a quadratic pre-scan."""
+        huge = "packages/" + "[" * 2_000_000
+        assert len(huge) > _MAX_GLOB_LENGTH
+        assert _package_matches_workspace(("a",), [huge]) is False
+        # The linear bracket scanner itself does not choke on the raw string either.
+        assert _has_complete_bracket_class("[" * 100000) is False
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""

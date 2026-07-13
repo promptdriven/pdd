@@ -101,21 +101,26 @@ def _has_complete_bracket_class(raw: str) -> bool:
 
     Only a class with at least one content character — whose ``[^…]`` negation and
     POSIX ``[[:…:]]`` semantics diverge between ``fnmatch`` and minimatch — is
-    flagged for fail-closed handling."""
+    flagged for fail-closed handling.
+
+    Runs in a single left-to-right pass (each ``find`` advances monotonically), so a
+    hostile glob of a million unmatched ``[`` cannot drive quadratic rescanning."""
     i, n = 0, len(raw)
     while i < n:
-        start = raw.find("[", i)
-        if start == -1:
-            return False
-        k = start + 1
-        if k < n and raw[k] in "!^":  # a leading negation marker is not content
-            k += 1
-        if k < n and raw[k] == "]":  # empty class ([], [!], [^]) → literal
-            i = start + 1
+        if raw[i] != "[":
+            i += 1
             continue
-        if raw.find("]", k) != -1:  # a ']' closes a non-empty class
+        j = i + 1
+        if j < n and raw[j] in "!^":  # a leading negation marker is not content
+            j += 1
+        if j < n and raw[j] == "]":  # empty class ([], [!], [^]) → literal
+            i = j + 1
+            continue
+        # A non-empty class needs a closing ']'. There is at most one forward search
+        # per string because a failure means no ']' exists at any later position.
+        if j < n and raw.find("]", j) != -1:
             return True
-        i = start + 1  # unmatched '[' → literal; keep scanning
+        return False
     return False
 
 
@@ -132,20 +137,24 @@ def _has_brace_range(raw: str) -> bool:
         expander already handles it correctly).
 
     Nesting is tracked per level, so a range nested inside an alternation
-    (``{a,{1..3}}``) is still flagged."""
+    (``{a,{1..3}}``) is still flagged. A balanced ``${...}`` group is opaque (its
+    ``..`` is literal, not a range), so ``${1..3}`` is NOT flagged."""
     # Each stack frame tracks, for one open brace level: whether a top-level comma
-    # and whether a top-level ``..`` have been seen, plus whether the previous char
-    # at this level was a ``.``.
+    # and whether a top-level ``..`` have been seen, whether the previous char at
+    # this level was a ``.``, and whether this group (or an ancestor) is a ``${...}``
+    # opaque region.
     stack: list = []
+    prev = ""
     for ch in raw:
         if ch == "{":
-            stack.append([False, False, False])  # [has_comma, has_range, prev_dot]
+            opaque = prev == "$" or (bool(stack) and stack[-1][3])
+            stack.append([False, False, False, opaque])
         elif ch == "}":
             if stack:
-                has_comma, has_range, _ = stack.pop()
-                if has_range and not has_comma:
-                    return True  # balanced brace, a ``..``, and no comma → range
-        elif stack:
+                has_comma, has_range, _, opaque = stack.pop()
+                if has_range and not has_comma and not opaque:
+                    return True  # balanced, a ``..``, no comma, not opaque → range
+        elif stack and not stack[-1][3]:  # ignore content of an opaque ${...}
             top = stack[-1]
             if ch == ",":
                 top[0] = True
@@ -156,28 +165,39 @@ def _has_brace_range(raw: str) -> bool:
                 top[2] = True
             else:
                 top[2] = False
+        prev = ch
     return False  # an unbalanced '{' left open never closes → literal, not a range
 
 
-def _glob_beyond_supported_subset(raw: str) -> bool:
-    """Return True when ``raw`` uses a minimatch construct this matcher does not
-    implement with faithful parity, so the whole membership check must fail closed.
+def _raw_glob_unsupported(raw: str) -> bool:
+    """Return True when the *raw* (unexpanded) glob uses a construct that must be
+    rejected *before* brace expansion, because expansion would mis-handle it:
 
-    The supported glob language is exactly literal characters, ``*`` (one segment),
-    ``**`` (any depth), ``?`` (one character), and ``{a,b}`` brace alternation.
-    Everything below is rejected because ``fnmatch``/this expander would diverge —
-    over-matching a positive or under-matching an exclusion into a false member:
-
-      * ``\\`` — backslash escapes of brace metacharacters (expander is not
+      * ``\\`` — backslash escapes of brace metacharacters (the expander is not
         escape-aware; ``{foo\\,bar}`` is two options, not three).
+
+    Construct checks that depend on how the concrete pattern actually reads — bracket
+    classes and extglobs, which brace expansion can *create* (``{?,x}(foo)`` →
+    ``?(foo)``) or *destroy* (``{[,x}]`` → ``[]``, ``x]``) across alternatives — are
+    NOT done here; they run per expanded pattern in
+    ``_concrete_pattern_unsupported``.
+    """
+    return "\\" in raw
+
+
+def _concrete_pattern_unsupported(pattern: str) -> bool:
+    """Return True when a fully brace-*expanded* (concrete) pattern uses a minimatch
+    construct this matcher does not implement with faithful parity, so the whole
+    membership check must fail closed:
+
       * a *closed, non-empty* ``[...]`` bracket class — ``[^a]`` negates in minimatch
         but ``^`` is literal in ``fnmatch``; POSIX ``[[:alpha:]]`` is unsupported. An
         unmatched literal ``[`` or an empty ``[]``/``[!]``/``[^]`` is fine (both treat
         it literally) and is NOT rejected.
-      * a brace *range* — ``..`` inside a non-comma brace group (``{1..3}``,
-        ``{a..c}``, ``{01..03}``, ``{1..9..2}``), which a comma-only expander emits
-        literally. A literal ``..`` outside braces or inside a comma alternation is
-        fine and is NOT rejected.
+      * a brace *range* — ``..`` inside a non-comma, non-``$`` brace group
+        (``{1..3}``, ``{a..c}``, ``{01..03}``, ``{1..9..2}``), which a comma-only
+        expander emits literally. A literal ``..`` outside braces, inside a comma
+        alternation, or inside an opaque ``${...}`` is fine and NOT rejected.
       * extglobs (``?(…)``/``*(…)``/``+(…)``/``@(…)``/``!(…)``) — ``fnmatch`` treats
         them literally, so an extglob exclusion fails to exclude.
 
@@ -191,13 +211,11 @@ def _glob_beyond_supported_subset(raw: str) -> bool:
     globs use ``*``/``**``/``{,}`` — not these — so legitimate declarations are
     unaffected.
     """
-    if "\\" in raw:
+    if _has_complete_bracket_class(pattern):
         return True
-    if _has_complete_bracket_class(raw):
+    if _has_brace_range(pattern):
         return True
-    if _has_brace_range(raw):
-        return True
-    return any(marker in raw for marker in _EXTGLOB_MARKERS)
+    return any(marker in pattern for marker in _EXTGLOB_MARKERS)
 
 
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
@@ -496,6 +514,25 @@ def _split_top_level_commas(body: str, limit: int) -> list:
     return parts
 
 
+def _skip_balanced_braces(pattern: str, start: int, work: list) -> int:
+    """Return the index just past the ``}`` matching the ``{`` at ``start`` (nesting
+    included), or ``len(pattern)`` when the group is unbalanced (literal to the end).
+    Each scanned character is charged against the ``work`` budget."""
+    depth, i, n = 0, start, len(pattern)
+    while i < n:
+        work[0] -= 1
+        if work[0] < 0:
+            raise _BraceBudgetError
+        if pattern[i] == "{":
+            depth += 1
+        elif pattern[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
 def _find_expandable_brace(pattern: str, limit: int,
                            work: Optional[list] = None) -> Optional[Tuple[int, int]]:
     """Return ``(start, end)`` of the first *expandable* ``{...}`` group — one whose
@@ -529,11 +566,16 @@ def _find_expandable_brace(pattern: str, limit: int,
         work[0] -= 1
         if work[0] < 0:
             raise _BraceBudgetError
-        if pattern[i] != "{" or (i > 0 and pattern[i - 1] == "$"):
-            # A ``{`` immediately preceded by ``$`` is a shell-style ``${...}`` group,
-            # which minimatch's brace-expansion treats as literal (never expanded).
-            # Skip it as a non-brace character and keep scanning for a later group.
+        if pattern[i] != "{":
             i += 1
+            continue
+        if i > 0 and pattern[i - 1] == "$":
+            # A balanced ``${...}`` is a shell-style group that minimatch's
+            # brace-expansion treats as fully literal (opaque) — nested braces
+            # included. Skip the WHOLE group (not just one character, which would let
+            # a nested ``{b,c}`` expand) and keep scanning for later independent
+            # braces. An unbalanced ``${...`` is literal to end of string.
+            i = _skip_balanced_braces(pattern, i, work)
             continue
         depth, end = 0, -1
         for j in range(i, n):
@@ -645,14 +687,12 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             raw = str(raw)
             if not raw:
                 continue
-            if _glob_beyond_supported_subset(raw):
-                # Unsupported minimatch construct → membership unproven (fail closed).
-                # (The astral-`?` divergence is handled per aligned segment during
-                # matching, in _relative_matches_workspace_glob.)
-                raise _PatternBudgetError
+            # Cheap length guard FIRST — before any O(len) syntax scan — so a hostile
+            # megabyte-long glob is rejected without a quadratic pre-scan.
             if len(raw) > _MAX_GLOB_LENGTH:
-                # An over-long glob would blow up expansion by bytes even under
-                # the count budget → membership unproven (fail closed).
+                raise _PatternBudgetError
+            if _raw_glob_unsupported(raw):
+                # A construct expansion itself would mishandle (backslash escapes).
                 raise _PatternBudgetError
             negated = raw.startswith("!")
             body = raw[1:] if negated else raw
@@ -669,14 +709,19 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             # (A ``!``-exclusion body starting with ``#`` is left to match its literal
             # ``#`` — the safe direction, since a spurious exclusion only removes a
             # member, never adds one.)
-            if not negated:
-                effective = body[2:] if body.startswith("./") else body
-                if effective.startswith("#"):
-                    continue
-            if negated:
-                negatives.extend(_expand_braces(body, budget, work))
-            else:
-                positives.extend(_expand_braces(body, budget, work))
+            if not negated and (
+                    body[2:] if body.startswith("./") else body).startswith("#"):
+                continue
+            expanded = _expand_braces(body, budget, work)
+            # Validate the CONCRETE (expanded) patterns, not the raw glob: brace
+            # expansion can create an unsupported construct out of separate
+            # alternatives (``{?,x}(foo)`` → ``?(foo)`` extglob) or dissolve an
+            # apparent one (``{[,x}]`` → ``[]``, ``x]`` literals). Checking each
+            # concrete pattern is faithful to what ``fnmatch`` will actually see.
+            for pat in expanded:
+                if _concrete_pattern_unsupported(pat):
+                    raise _PatternBudgetError
+            (negatives if negated else positives).extend(expanded)
         if not any(_relative_matches_workspace_glob(rel_parts, p, cells) for p in positives):
             return False
         return not any(_relative_matches_workspace_glob(rel_parts, n, cells) for n in negatives)
