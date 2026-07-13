@@ -4267,8 +4267,8 @@ def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
     if not errors:
         return "Playwright reported failed protected tests"
     diagnostic = errors[0]
-    if len(diagnostic) > 512:
-        diagnostic = diagnostic[:509] + "..."
+    if len(diagnostic) > 2048:
+        diagnostic = diagnostic[:1021] + "...<truncated>..." + diagnostic[-1012:]
     return f"Playwright reported failed protected tests: {diagnostic}"
 
 

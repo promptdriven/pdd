@@ -2010,11 +2010,12 @@ def test_playwright_reported_failure_has_bounded_diagnostics() -> None:
     detail = _playwright_reported_failure_detail([{
         "identity": IDENTITY,
         "status": "failed",
-        "error": "browser launch failed\n" + ("x" * 600),
+        "error": "browser launch failed\n" + ("x" * 3000) + "\nloader tail",
     }])
 
     assert "browser launch failed" in detail
-    assert len(detail) < 600
+    assert "loader tail" in detail
+    assert len(detail) < 2200
 
 
 @pytest.mark.parametrize("source", [
