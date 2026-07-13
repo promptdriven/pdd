@@ -120,14 +120,18 @@ if [ -f "ci/cloud-batch/test-durations.json" ] && ! grep -Fxq "ci/cloud-batch/te
     echo "ci/cloud-batch/test-durations.json" >> "${SOURCE_LIST_FILE}"
 fi
 
-COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -cf /tmp/pdd-source.tar -T "${SOURCE_LIST_FILE}"
+_source_tar() {
+    COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar "$@"
+}
+
+_source_tar -cf /tmp/pdd-source.tar -T "${SOURCE_LIST_FILE}"
 rm -f "${SOURCE_LIST_FILE}"
 
 # Include pdd_cloud .pddrc if available (for TestActualPddrcConfiguration tests)
 PARENT_PDDRC="${REPO_ROOT}/../.pddrc"
 if [ -f "${PARENT_PDDRC}" ]; then
     cp "${PARENT_PDDRC}" /tmp/.pddrc_pddcloud
-    tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
+    _source_tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
     rm /tmp/.pddrc_pddcloud
 fi
 
@@ -152,7 +156,7 @@ else
     PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
 fi
 printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
-tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
+_source_tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
 rm /tmp/.pdd-package-version
 
 gzip -f /tmp/pdd-source.tar
