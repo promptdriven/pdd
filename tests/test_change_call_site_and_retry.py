@@ -40,9 +40,9 @@ class JudgmentResult:
 CALL_SITE_NAMES = ("ingest", "transform", "export_csv", "audit_log")
 
 _CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
-    r"\b(?:unpack\w*|destructur\w*|capture|assign|use|check|inspect|handle|"
+    r"\b(?:unpack(?:s|ed|ing)?|destructur\w*|capture|assign|use|check|inspect|handle|"
     r"update|adapt|adjust|modify)\b.{0,120}\b(?:is_valid|reason)\b|"
-    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack\w*|destructur\w*|capture|"
+    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack(?:s|ed|ing)?|destructur\w*|capture|"
     r"assign|use|check|inspect|handle|update|adapt|adjust|modify)\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -74,8 +74,8 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"all\s+\d+\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
-    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt"
-    r".{0,40}\bfail(?:s|ed)?|"
+    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt\s+"
+    r"(?:(?:also|still)\s+)?fail(?:s|ed)?|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -305,6 +305,24 @@ class TestDeterministicChangeJudges:
 
         assert judgment.passed
 
+        unpacked = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log each call validate_record. "
+            "Each caller unpacked the result and checked is_valid."
+        )
+        assert unpacked.passed
+
+        unpackable = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log see an unpackable result. "
+            "Callers remain unchanged around is_valid."
+        )
+        assert not unpackable.passed
+
+        unpackaged = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log receive unpackaged "
+            "is_valid metadata, with no caller changes."
+        )
+        assert not unpackaged.passed
+
     def test_retry_bound_judge_requires_numeric_limit(self) -> None:
         judgment = _judge_retry_bound("Retry up to 3 times before failing.")
         assert judgment.passed
@@ -330,6 +348,16 @@ class TestDeterministicChangeJudges:
             "the exception to propagate."
         )
         assert ordinal_subject.passed
+
+        negated_failure = _judge_retry_fallback(
+            "Retry up to 3 times. If the 3rd attempt does not fail, return success."
+        )
+        assert not negated_failure.passed
+
+        negated_action = _judge_retry_fallback(
+            "If the 3rd attempt succeeds, do not fail the operation; return success."
+        )
+        assert not negated_action.passed
 
         final_attempt = _judge_retry_fallback(
             "Retry up to 3 times. If the final attempt still encounters a "
