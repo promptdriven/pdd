@@ -74,6 +74,8 @@ _RETRY_EXHAUSTION_PATTERN = re.compile(
     r"all\s+\d+\s+(?:retry\s+)?attempts?.{0,80}(?:fail|error|exception)|"
     r"(?:if|when)\s+[\w\s]+fail(?:s|ed)?\s+on\s+(?:the\s+)?"
     r"\d+(?:st|nd|rd|th)\s+attempt|"
+    r"(?:if|when)\s+(?:the\s+)?\d+(?:st|nd|rd|th)\s+attempt"
+    r".{0,40}\bfail(?:s|ed)?|"
     r"once\s+(?:the\s+)?(?:max(?:imum)?\s+)?(?:retry\s+)?attempts?\s+"
     r"(?:is\s+|are\s+)?(?:reached|exhausted)|"
     r"(?:once|when|if)\s+(?:the\s+)?max(?:imum)?\s+number\s+of\s+attempts?\s+"
@@ -314,6 +316,12 @@ class TestDeterministicChangeJudges:
             "raise the final connection exception."
         )
         assert ordinal.passed
+
+        ordinal_subject = _judge_retry_fallback(
+            "If the 3rd attempt also fails with a connection error, allow "
+            "the exception to propagate."
+        )
+        assert ordinal_subject.passed
 
         final_attempt = _judge_retry_fallback(
             "Retry up to 3 times. If the final attempt still encounters a "
