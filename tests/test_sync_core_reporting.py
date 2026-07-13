@@ -787,9 +787,28 @@ def test_validate_command_wires_protected_vitest_runner_config(
     tmp_path, monkeypatch
 ) -> None:
     root, commit = _repository(tmp_path)
-    external = tmp_path / "trusted-tools" / "vitest.py"
-    external.parent.mkdir()
+    toolchain = tmp_path / "trusted-tools"
+    external = toolchain / "node_modules/vitest/vitest.py"
+    external.parent.mkdir(parents=True)
     external.write_text("print('trusted vitest')\n")
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}\n", encoding="utf-8")
+    manifest = toolchain / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "roles": {
+                    "launcher": os.sys.executable,
+                    "entrypoint": str(external),
+                    "dependencies": str(toolchain / "node_modules"),
+                    "native_runtime": [os.sys.executable],
+                    "lockfile": str(lockfile),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     signer = object()
     monkeypatch.chdir(root)
     with patch(
@@ -810,6 +829,8 @@ def test_validate_command_wires_protected_vitest_runner_config(
                 commit,
                 "--vitest-command",
                 f"{os.sys.executable} {external}",
+                "--vitest-toolchain-manifest",
+                str(manifest),
             ],
         )
 
@@ -817,6 +838,32 @@ def test_validate_command_wires_protected_vitest_runner_config(
     call = mocked_finalize.call_args
     assert call.kwargs["signer"] is signer
     assert call.kwargs["config"].vitest_command == (os.sys.executable, str(external))
+    assert call.kwargs["config"].vitest_toolchain_manifest == manifest
+
+
+def test_validate_command_requires_vitest_command_and_manifest_together(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    external = tmp_path / "trusted-tools/vitest.py"
+    external.parent.mkdir()
+    external.write_text("print('trusted vitest')\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        validate_command,
+        [
+            "--module",
+            "prompts/widget_python.prompt",
+            "--base-ref",
+            commit,
+            "--vitest-command",
+            f"{os.sys.executable} {external}",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "manifest" in result.output.lower()
 
 
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(

@@ -1,8 +1,11 @@
 """Contract tests for the fail-closed trusted Vitest adapter."""
 
 import json
+import os
+import re
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -21,9 +24,12 @@ from pdd.sync_core import (
 )
 from pdd.sync_core.runner import (
     _local_javascript_imports,
-    _prepare_vitest_dependencies,
-    _protected_command_error,
+    _collect_vitest_at_base,
+    _load_vitest_toolchain_descriptor,
+    _prepare_vitest_toolchain,
     _run_vitest,
+    _validator_tree_identity,
+    _vitest_command_error,
     _vitest_environment,
     _vitest_result,
     vitest_validator_config_digest,
@@ -32,6 +38,28 @@ from pdd.sync_core.runner import (
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "tests/widget.test.ts::widget works"
+
+
+@pytest.fixture(autouse=True)
+def _controlled_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise adapter logic portably without weakening production policy."""
+    def execute(command, *, cwd, timeout, env, pass_fds=(), **_limits):
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                timeout=timeout,
+                env=env,
+                pass_fds=pass_fds,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            result = subprocess.CompletedProcess(command, 124, "", "timeout")
+        return result, False
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", execute)
 
 
 @pytest.mark.parametrize(
@@ -55,7 +83,7 @@ def test_vitest_command_schema_rejects_non_launcher_controls(
     entrypoint = tmp_path / "vitest.mjs"
     entrypoint.write_text("", encoding="utf-8")
 
-    assert _protected_command_error(
+    assert _vitest_command_error(
         tmp_path, (str(launcher), str(entrypoint), control)
     ) is not None
 
@@ -133,6 +161,50 @@ def test_vitest_ast_binds_static_template_loader_and_rejects_runtime_config(
         vitest_validator_config_digest(root, "HEAD", paths)
 
 
+@pytest.mark.parametrize(
+    "loader",
+    [
+        "const p = './helper'; module.require(p);",
+        "import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); load('./helper');",
+        "import.meta.glob('./helpers/*.ts');",
+    ],
+)
+def test_vitest_rejects_unbound_alternate_local_loaders(
+    tmp_path: Path, loader: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.test.ts").write_text(
+        f"{loader}\nimport {{ test }} from 'vitest';\ntest('widget works', () => {{}});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add alternate loader")
+
+    with pytest.raises(ValueError, match="loader|module loading|glob|createRequire"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_rejects_unbound_alternate_loader_transitively(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.ts").write_text(
+        "import.meta.glob('./fixtures/*.ts');\n", encoding="utf-8"
+    )
+    (root / "tests/widget.test.ts").write_text(
+        "import './helper';\nimport { test } from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add transitive alternate loader")
+
+    with pytest.raises(ValueError, match="glob|loader"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
 def test_vitest_rejects_nonregular_git_closure_members(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path)
     target = tmp_path / "outside.ts"
@@ -186,38 +258,132 @@ def test_vitest_execution_uses_shared_supervisor(
         root,
         (PurePosixPath("tests/widget.test.ts"),),
         1,
-        RunnerConfig(vitest_command=(sys.executable, str(_fake_vitest(tmp_path)))),
+        _runner_config(tmp_path, _fake_vitest(tmp_path)),
     )
     assert invoked
 
 
-def test_vitest_toolchain_descriptor_is_required_and_typed(tmp_path: Path) -> None:
-    fields = RunnerConfig.__dataclass_fields__
-    assert "vitest_toolchain_manifest" in fields
-    assert "vitest_toolchain_identity" in fields
-
-
-def test_vitest_toolchain_dependencies_are_copied_into_phase_tree(
+def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
     tmp_path: Path,
 ) -> None:
-    dependencies = tmp_path / "trusted-node-modules"
-    dependencies.mkdir()
-    (dependencies / "vitest.mjs").write_text("trusted", encoding="utf-8")
-    manifest = tmp_path / "toolchain.json"
-    manifest.write_text(
-        json.dumps({"dependencies": str(dependencies)}), encoding="utf-8"
-    )
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+    assert descriptor.launcher == Path(sys.executable).resolve()
+    assert descriptor.entrypoint == runner.resolve()
+    assert descriptor.dependencies.name == "node_modules"
+    assert descriptor.native_runtime == (Path(sys.executable).resolve(),)
+
+    wrong = tmp_path / "wrong.py"
+    wrong.write_text("pass\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="entrypoint.*command"):
+        _load_vitest_toolchain_descriptor(
+            tmp_path / "repo",
+            replace(config, vitest_command=(sys.executable, str(wrong))),
+        )
+
+
+@pytest.mark.parametrize("missing_role", [
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+])
+def test_vitest_toolchain_descriptor_rejects_missing_roles(
+    tmp_path: Path, missing_role: str
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    payload = json.loads(config.vitest_toolchain_manifest.read_text(encoding="utf-8"))
+    del payload["roles"][missing_role]
+    config.vitest_toolchain_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="roles"):
+        _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+
+
+def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_cache(
+    tmp_path: Path,
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    baseline = descriptor.identity
+
+    runner.write_text(runner.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    runner.write_text(runner.read_text(encoding="utf-8").removesuffix("\n# changed\n"), encoding="utf-8")
+    baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
+    dependency = descriptor.dependencies / "vitest/dependency.js"
+    dependency.write_text("export default 1;\n", encoding="utf-8")
+    dependency.chmod(0o600)
+    mode_identity = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+    dependency.chmod(0o644)
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != mode_identity
+
+    target = tmp_path / "external-target"
+    target.mkdir()
+    (target / "native.bin").write_bytes(b"one")
+    link = descriptor.dependencies / "linked-native"
+    link.symlink_to(target, target_is_directory=True)
+    linked_identity = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+    (target / "native.bin").write_bytes(b"two")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != linked_identity
+
+    cache = descriptor.dependencies / ".vite"
+    cache.mkdir()
+    before_cache = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+    (cache / "mutable.json").write_text("changed", encoding="utf-8")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity == before_cache
+
+
+def test_validator_tree_identity_is_uniquely_mode_and_symlink_sensitive(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    file_path = root / "file"
+    file_path.write_bytes(b"content")
+    first = _validator_tree_identity(root)
+    file_path.chmod(0o600)
+    assert _validator_tree_identity(root) != first
+
+
+def test_vitest_toolchain_entrypoint_is_copied_into_phase_tree(
+    tmp_path: Path,
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
     phase_root = tmp_path / "phase"
     phase_root.mkdir()
 
-    _prepare_vitest_dependencies(
-        phase_root, RunnerConfig(vitest_toolchain_manifest=manifest)
-    )
+    phase = _prepare_vitest_toolchain(phase_root, descriptor)
 
-    copied_entrypoint = phase_root / "node_modules/vitest.mjs"
-    assert copied_entrypoint.read_text(encoding="utf-8") == "trusted"
+    assert phase.entrypoint != descriptor.entrypoint
+    assert phase.entrypoint.read_bytes() == descriptor.entrypoint.read_bytes()
     assert (phase_root / "node_modules/.vite-temp").is_dir()
     assert (phase_root / "node_modules/.vite").is_dir()
+
+
+def test_vitest_result_channel_is_not_disclosed_to_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path, mode="forge")
+    observed: list[dict[str, object]] = []
+
+    def inspect(command, **kwargs):
+        observed.append({"command": command, **kwargs})
+        return _controlled_run(command, **kwargs)
+
+    monkeypatch.setattr("pdd.sync_core.runner.run_supervised", inspect)
+    _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.FAIL
+    assert observed
+    for call in observed:
+        assert "PDD_TRUSTED_VITEST_OUTPUT" not in call["env"]
+        assert "--outputFile" not in " ".join(call["command"])
+        assert call["pass_fds"]
 
 
 def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:
@@ -256,6 +422,65 @@ def test_vitest_missing_launcher_is_normalized(tmp_path: Path) -> None:
     assert identities == ()
 
 
+@pytest.mark.parametrize("failure", ["setup-oserror", "setup-valueerror"])
+def test_vitest_phase_setup_failures_are_normalized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+
+    def fail_setup(*_args, **_kwargs):
+        if failure == "setup-oserror":
+            raise OSError("copy denied")
+        raise ValueError("malformed descriptor")
+
+    monkeypatch.setattr("pdd.sync_core.runner._prepare_vitest_toolchain", fail_setup)
+    execution, identities = _collect_vitest_at_base(
+        root,
+        commit,
+        (PurePosixPath("tests/widget.test.ts"),),
+        config,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "setup" in execution.detail.lower()
+    assert not identities
+
+
+def test_vitest_post_phase_toolchain_deletion_is_normalized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    original = _load_vitest_toolchain_descriptor
+    calls = 0
+
+    def disappear(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise OSError("toolchain disappeared")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "pdd.sync_core.runner._load_vitest_toolchain_descriptor", disappear
+    )
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "toolchain" in execution.detail.lower()
+    assert not identities
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, capture_output=True, text=True, check=True
@@ -263,21 +488,79 @@ def _git(root: Path, *args: str) -> str:
 
 
 def _fake_vitest(tmp_path: Path) -> Path:
-    runner = tmp_path / "fake_vitest.py"
+    runner = tmp_path / "trusted-toolchain/node_modules/vitest/fake_vitest.py"
+    runner.parent.mkdir(parents=True, exist_ok=True)
     runner.write_text(
-        "import json, os, pathlib, time\n"
+        "import json, os, pathlib, re, sys, time\n"
         "root = pathlib.Path.cwd()\n"
         "mode = (root / 'source.ts').read_text().strip()\n"
         "if mode == 'timeout': time.sleep(5)\n"
-        "if mode == 'malformed': pathlib.Path(os.environ['PDD_TRUSTED_VITEST_OUTPUT']).write_text('{')\n"
+        "reporter_arg = next(x for x in sys.argv if x.startswith('--reporter='))\n"
+        "reporter = pathlib.Path(reporter_arg.split('=', 1)[1]).read_text()\n"
+        "fd = int(re.search(r'RESULT_FD = (\\d+)', reporter).group(1))\n"
+        "if mode == 'forge':\n"
+        "  forged = os.environ.get('PDD_TRUSTED_VITEST_OUTPUT')\n"
+        "  if forged: pathlib.Path(forged).write_text(json.dumps({'tests':[{'identity':'forged','status':'passed'}]}))\n"
+        "if mode == 'malformed': os.write(fd, b'{')\n"
         "else:\n"
         "  tests = [] if mode == 'zero' else [{'identity': 'tests/widget.test.ts::widget works', 'status': {'fail': 'failed', 'skip': 'skipped', 'todo': 'todo'}.get(mode, 'passed')}]\n"
+        "  if mode == 'forge': tests[0]['status'] = 'failed'\n"
         "  if mode == 'mismatch': tests = [{'identity': 'tests/widget.test.ts::other', 'status': 'passed'}]\n"
         "  if mode == 'candidate': tests.append({'identity': 'tests/widget.test.ts::candidate only', 'status': 'passed'})\n"
-        "  pathlib.Path(os.environ['PDD_TRUSTED_VITEST_OUTPUT']).write_text(json.dumps({'tests': tests}))\n",
+        "  os.write(fd, json.dumps({'tests': tests}).encode())\n",
         encoding="utf-8",
     )
     return runner
+
+
+def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
+    toolchain = tmp_path / "trusted-toolchain"
+    native = toolchain / "native"
+    native.mkdir(parents=True, exist_ok=True)
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}\n", encoding="utf-8")
+    manifest = toolchain / "vitest-toolchain.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "roles": {
+                    "launcher": str(Path(sys.executable).resolve()),
+                    "entrypoint": str(entrypoint.resolve()),
+                    "dependencies": str((toolchain / "node_modules").resolve()),
+                    "native_runtime": [str(Path(sys.executable).resolve())],
+                    "lockfile": str(lockfile.resolve()),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> RunnerConfig:
+    return RunnerConfig(
+        timeout_seconds=timeout,
+        vitest_command=(sys.executable, str(entrypoint)),
+        vitest_toolchain_manifest=_toolchain_manifest(tmp_path, entrypoint),
+    )
+
+
+def _controlled_run(command, *, cwd, timeout, env, pass_fds=(), **_limits):
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            timeout=timeout,
+            env=env,
+            pass_fds=pass_fds,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        result = subprocess.CompletedProcess(command, 124, "", "timeout")
+    return result, False
 
 
 def _repository(
@@ -320,9 +603,7 @@ def _run(root: Path, base: str, head: str, fake_vitest: Path, timeout: int = 2):
             "nonce",
             datetime(2026, 7, 10, tzinfo=timezone.utc),
         ),
-        config=RunnerConfig(
-            timeout_seconds=timeout, vitest_command=(sys.executable, str(fake_vitest))
-        ),
+        config=_runner_config(fake_vitest.parents[3], fake_vitest, timeout),
     )
 
 

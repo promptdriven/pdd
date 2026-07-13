@@ -582,6 +582,19 @@ def test_jest_rejects_package_launcher_indirection(tmp_path: Path) -> None:
     assert "launcher indirection" in executions[0].detail
 
 
+def test_jest_preserves_trusted_launcher_flags(tmp_path: Path) -> None:
+    root, commit = _repository(tmp_path)
+    _envelope, executions = _run(
+        root,
+        commit,
+        commit,
+        _fake_jest(tmp_path),
+        command=(sys.executable, "-B", str(_fake_jest(tmp_path))),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+
+
 def test_jest_runner_identity_binds_external_toolchain(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
     paths = (PurePosixPath("tests/widget.test.js"),)
