@@ -155,12 +155,12 @@ def test_cloud_batch_entrypoint_preflights_protected_sandbox_contract():
     assert "missing protected sandbox prerequisites" in entrypoint_text
 
 
-def test_only_pytest_shard_job_grants_minimal_sandbox_capabilities():
+def test_only_pytest_shard_job_grants_required_sandbox_privilege():
     pytest_container = _template_container("job-template.json")
-    assert pytest_container["options"] == (
-        "--cap-add=SYS_ADMIN --security-opt=seccomp=unconfined"
+    assert pytest_container["options"] == "--privileged"
+    assert "--cap-add=SYS_ADMIN --security-opt=seccomp=unconfined" not in (
+        pytest_container["options"]
     )
-    assert "--privileged" not in pytest_container["options"]
 
     for template_name in (
         "job-template-standard.json",
