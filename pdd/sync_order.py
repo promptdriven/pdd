@@ -14,6 +14,7 @@ from collections import deque, defaultdict
 from rich.console import Console
 
 from pdd.construct_paths import _is_known_language
+from pdd.sync_core.includes import include_paths
 
 # Initialize rich console
 console = Console()
@@ -44,71 +45,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
 
     try:
         content = file_path.read_text(encoding="utf-8")
-        includes: Set[str] = set()
-
-        # Reviewer 5th-pass (F1) + 6th-pass (F3): mirror the preprocessor's
-        # full tag tolerance. ``pdd.preprocess.process_include_tags`` accepts
-        # three forms:
-        #   - bare body:        ``<include>path</include>``
-        #   - attributed body:  ``<include query="...">path</include>``
-        #   - self-closing:     ``<include path="..." />``
-        # Real prompts use all three; missing any one means a real PDD
-        # include form sits outside #739's safety net.
-        # Body-form must exclude self-closing `<include ... />`. Without
-        # the `(?<!/)>` lookbehind, the body-form regex would absorb the
-        # entire `<include path="..." />\n<include>foo.md` span as one
-        # match, losing the inner include and producing garbage.
-        #
-        # Capture the attribute string so we can honor a `path="..."`
-        # attribute the same way ``pdd.preprocess.process_include_tags``
-        # does: ``attrs.get('path') or content.strip()`` (preprocess.py
-        # line ~501). Without this, an attributed body include such as
-        # ``<include path="docs/source.md">fallback.md</include>`` would
-        # be reported as ``fallback.md`` here while the preprocessor
-        # actually resolves it as ``docs/source.md`` — and the scope
-        # guard's allowlist would diverge from the real include graph.
-        single_matches = re.findall(
-            r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', content, re.DOTALL
-        )
-        for attrs, body in single_matches:
-            path_value: Optional[str] = None
-            if attrs:
-                attr_match = re.search(
-                    r'path\s*=\s*["\']([^"\']+)["\']', attrs
-                )
-                if attr_match:
-                    path_value = attr_match.group(1).strip()
-            if not path_value:
-                path_value = body.strip()
-            if path_value:
-                includes.add(path_value)
-
-        # Self-closing form: extract the ``path="..."`` attribute value.
-        self_closing_matches = re.findall(
-            r'<include\s+([^>]*?)\s*/>', content
-        )
-        for attrs in self_closing_matches:
-            path_match = re.search(
-                r'path\s*=\s*["\']([^"\']+)["\']', attrs
-            )
-            if path_match:
-                stripped = path_match.group(1).strip()
-                if stripped:
-                    includes.add(stripped)
-
-        many_matches = re.findall(
-            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', content, re.DOTALL
-        )
-        for m in many_matches:
-            # Mirror pdd.preprocess.process_include_many_tags: split on
-            # newlines first, then on commas, then strip and drop empties.
-            for part in m.splitlines():
-                for item in part.split(","):
-                    stripped = item.strip()
-                    if stripped:
-                        includes.add(stripped)
-
-        return includes
+        return include_paths(content)
     except Exception as e:
         logger.error(f"Error reading file {file_path}: {e}")
         return set()

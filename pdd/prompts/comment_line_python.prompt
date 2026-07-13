@@ -1,3 +1,22 @@
+<pdd-reason>Formats comment lines for different languages.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "comment_line",
+        "signature": "(code_line, comment_characters)",
+        "returns": "str",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a python function, "comment_line", that will comment out a line of code.
 
 % Here are the inputs and outputs of the function:
