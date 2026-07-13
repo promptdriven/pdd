@@ -80,6 +80,7 @@ of Done or authorize a partial green certificate.
 | pdd_cloud inventory | Protected registry/tombstone commit `39b78e487` retains 573 historical identities and authorizes only the retired finalizer; both transition and stable manifests report 572 managed = 572 expected, zero invalid, and zero unaccounted | profiles/evidence migration remains |
 | Global certificate | Scan remains red for protected checker deployment, transactional staging, profile/evidence debt, and nightly history | correctly blocked |
 | Adversarial review | xhigh round 9 returned `NOT APPROVED`; it confirmed exact-SHA candidate build attestation, protected release/nightly workflow, protected alias wiring, adapter completion, profile/evidence rollout, and seven real nights remain | no-follow commit and fail-closed unstaged mutation are implemented; release and rollout blockers remain |
+| Agentic parity gate | `ParityResult` Pydantic v2 schema (discriminated `outcome` union), convergence gate wiring in `agentic_sync.py`, bounded repair loop (max 3 attempts, per-module token budget, scope-containment guard), rejected artifact retention under `.pdd_rejected/`, six regression fixtures covering the acceptance-criteria scenarios, normal-sync parity equivalence | not started (#2022) |
 
 No acceptance claim is valid until the signed certificate recomputes `ok: true`
 for exact protected PDD and pdd_cloud SHAs and a verifier supplied with the
@@ -934,6 +935,75 @@ Exit gate:
 - No mutating path can bypass transactional finalization, and the property test is
   required CI.
 
+### PR 5.5: Agentic sync parity acceptance contract
+
+Issues: #2022, related: #1900, #1926, pdd_cloud#3004
+
+Tasks:
+
+- Implement `ParityResult` Pydantic v2 model with a `Literal`-discriminated `outcome`
+  union (`"repaired_success"`, `"unrepaired_policy_rejection"`, `"test_failure"`,
+  `"infra_failure"`), an `invariant_violations: list[dict[str, str]]` list keyed by
+  invariant name, `convergence_verified: bool`, `repair_attempts: int`, and
+  `rejected_artifact_paths: list[str]`. This is the single shared schema used by both
+  normal and agentic sync acceptance paths.
+- Wire the convergence gate into `agentic_sync.py`: after the agentic runner declares
+  success, run a second dry-run via `sync_determine_operation` and assert the result is
+  in `_GLOBAL_SYNC_NOOP_OPERATIONS`. Any non-no-op result sets
+  `convergence_verified=False`, adds `invariant="convergence"` to
+  `invariant_violations`, and emits `outcome="unrepaired_policy_rejection"` (not a
+  repair candidate — convergence failures require human review).
+- Implement the bounded repair loop: hard cap at 3 attempts (consistent with empirical
+  research on LLM repair loops). Enforce scope containment before each attempt
+  (`set(repair_modules) ⊆ set(original_scope_plan)`); scope expansion immediately
+  yields `outcome="unrepaired_policy_rejection"` with `invariant="scope_containment"`.
+  On budget exhaustion, emit the original violation evidence and fail — never downgrade
+  a gate rejection to success.
+- Evaluate invariants in this sequence to minimize wasted work: (1) path policy /
+  write-allowlist (`path_policy.py`), (2) interface preservation (`classifier.py`),
+  (3) architecture path authority (`includes.py`, `architecture_registry.py`),
+  (4) parse/build, (5) test discovery and execution (`runner.py` / `supervisor.py`),
+  (6) fingerprint finalization (`finalize.py`), (7) convergence gate (second dry-run).
+  Fail fast on first violation; accumulate all violations in `invariant_violations`.
+- Before rolling back a failed repair attempt, copy the artifact set to
+  `.pdd_rejected/<module_id>/<attempt_n>/` (content-addressed). Record paths in
+  `rejected_artifact_paths`.
+- Extend normal sync to produce an equivalent `ParityResult` (omitting
+  `repair_attempts` and `rejected_artifact_paths`, which are agentic-only). A clean
+  normal-sync run and a clean agentic run on the same module must produce identical
+  `invariant_violations=[]`, `convergence_verified=True` evidence.
+- Serialize the final `ParityResult` as JSON in the GitHub App check-run output.
+  The App reads `outcome` to route: `"repaired_success"` → merge eligible with repair
+  annotation; `"unrepaired_policy_rejection"` → block merge, open discussion;
+  `"test_failure"` → re-queue or request human fix; `"infra_failure"` → page oncall,
+  retry once.
+
+Tests:
+
+- Six regression fixtures covering the acceptance-criteria scenarios (each asserts
+  agentic success is impossible and the correct `invariant` key appears in
+  `invariant_violations`):
+  a. Wrong path write — violates path allowlist (`invariant="path_policy"`).
+  b. Scope expansion in repair — adds unauthorized module (`invariant="scope_containment"`).
+  c. Removed public interface — classifier regression (`invariant="interface_preservation"`).
+  d. Misplaced / uncollected test — runner discovery failure (`invariant="test_discovery"`).
+  e. Stale metadata / missing fingerprint finalization (`invariant="fingerprint_finalization"`).
+  f. Non-convergent second dry-run (`invariant="convergence"`).
+- Clean normal-sync and agentic runs on the same module produce equivalent
+  `invariant_violations=[]`, `convergence_verified=True` evidence.
+- Repair attempts are bounded: exhaustion produces `outcome="unrepaired_policy_rejection"`
+  with the original Phase 1 violations preserved, never a downgraded success.
+
+Exit gate:
+
+- One shared `ParityResult` schema is used by both normal and agentic paths.
+- Agentic success is impossible unless all required invariants pass.
+- Clean normal-sync and agentic outputs produce equivalent parity evidence.
+- Repair attempts are bounded by count and token budget and cannot expand scope.
+- The GitHub App can distinguish `repaired_success`, `unrepaired_policy_rejection`,
+  `test_failure`, and `infra_failure`.
+- All six regression fixtures are checked-in and pass.
+
 ### PR 6: Honest reconcile, baseline, and repository inventory gate
 
 Issues: #1927, #1836
@@ -1325,6 +1395,8 @@ transactional finalization, merge gate, post-merge check, and nightly no-op.
 | Required test skipped/xfail/deselected | obligation is not verified; gate fails after activation |
 | Zero tests/collection error/timeout | normalized failure; retry cannot convert it to trusted pass |
 | Failed nightly | next run resumes from last success without a window gap |
+| Agentic sync module succeeds but second dry-run is not no-op | parity `convergence_verified=False`; `outcome="unrepaired_policy_rejection"`; agentic run is not marked success |
+| Agentic repair loop exhausted (3 attempts, same violation) | original violation preserved in `invariant_violations`; `outcome="unrepaired_policy_rejection"`; never downgraded to success |
 
 ### 7.3 Historical regression fixtures
 
@@ -1341,6 +1413,12 @@ Keep minimal, checked-in reproductions for:
 - Prompt and code co-edit with preserved ancestor (#1929).
 - Manual code hotfix followed by stale-prompt regeneration risk
   (pdd_cloud#2252/#2834 class).
+- Agentic sync wrong path write blocked by allowlist (#2022-a).
+- Agentic repair loop scope expansion rejected as policy violation (#2022-b).
+- Agentic sync removed public interface caught by classifier (#2022-c, #1900 class).
+- Agentic sync misplaced/uncollected test fails runner discovery (#2022-d).
+- Agentic sync stale metadata / missing fingerprint finalization caught by finalize gate (#2022-e, #1926 class).
+- Agentic sync non-convergent second dry-run blocks acceptance (#2022-f).
 
 ### 7.4 Required CI lanes
 
@@ -1657,3 +1735,6 @@ commands, commit SHAs, and reports.
    then activate protected enforcement in a separate operational PR.
 8. Maintain the pdd_cloud prompt-side reconciler in report/repair scope until the
    released upstream replacement passes parity and canary gates.
+9. Implement PR 5.5 (#2022): `ParityResult` schema, convergence gate wiring, bounded
+   repair loop, rejected artifact retention, and six regression fixtures; do not merge
+   until all six fixture scenarios assert agentic success is impossible.

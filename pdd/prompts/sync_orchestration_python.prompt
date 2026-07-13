@@ -104,6 +104,11 @@ Returns a dictionary containing:
 - `snapshot_manifest_path` / `context_snapshot`: Optional replayable context snapshot metadata when generation ran with `snapshot_context=True`
 - `compression`: Optional per-phase compressed-context metadata when `compressed_context=True`
 - `agentic_fallback`: Optional metadata summarizing whether agentic fallback was attempted or used by repair phases
+- `parity_result`: Optional[Dict] — serialized ParityResult (via `.model_dump()`) recording the
+  acceptance-gate outcome for this module run. Present on both success and failure. Fields:
+  `module_id`, `outcome`, `invariant_violations`, `convergence_verified`, `repair_attempts`,
+  `rejected_artifact_paths`. `convergence_verified` is always `True` for normal (non-agentic)
+  sync because deterministic sync operations always converge by construction.
 
 ### Compressed Sync Context
 - When `compressed_context=True`, build a phase-aware compressed context package once per module/phase for `generate`, `verify`, `test`, and `fix` from the prompt, existing tests, examples when present, contract rules, coverage/user-story evidence, latest run or error reports, and active repair directives.
@@ -209,6 +214,7 @@ from .get_run_command import get_run_command_for_file
 from .compressed_sync_context import build_compressed_sync_context, render_for_prompt
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
+from .sync_core import ParityResult
 ```
 
 ### Function-Scope Imports
@@ -292,6 +298,28 @@ Use `AtomicStateUpdate` context manager for consistent state writes:
 - After each successful operation, save a `Fingerprint` to disk with current file hashes
 - **Case-insensitive language in paths**: All metadata file paths (fingerprint `.json`, run report `_run.json`, sync log `_sync.log`) must use `language.lower()` for consistent paths on case-sensitive filesystems. This applies to any direct path construction in this module (e.g., `f"{_safe_basename(basename)}_{language.lower()}_run.json"`).
 - **Subproject anchoring (issue #1211)**: never compose `META_DIR / <file>` directly for runtime writes — the module-level `META_DIR` is CWD-resolved at import time and won't follow a subproject `.pddrc` that lives below the run CWD. Instead, route fingerprint/run-report/log paths through `get_fingerprint_path(...)`, `get_run_report_path(...)`, and `get_log_path(...)` (from `operation_log`) and pass `paths=pdd_files` so the helper resolves the meta dir via upward `.pddrc` detection from those paths. `_save_run_report_atomic` and `_save_fingerprint_atomic` both accept `paths` and forward them into the atomic-state file path AND into `read_fingerprint` for stored-deps lookup. Every `read_run_report` / `clear_run_report` / `log_event` / `append_log_entry` call inside `sync_orchestration` must pass `paths=pdd_files` once `pdd_files` is in scope — including the post-`pdd_files` branches in coverage retry, crash-detection, generate logic, lifecycle events (sync_start, lock_acquired, lock_released, budget_warning/exceeded, cycle_detected, steering_override, etc.), and per-operation log_entry appends. The dry-run / `_display_sync_log` branch executes BEFORE `pdd_files` is set, so it does a best-effort `get_pdd_file_paths(...)` lookup (wrapped in try/except) and forwards the result via `paths=` so log display still finds the subproject log when invoked from a parent CWD. Mismatched paths leave stale state behind and let stale parent metadata leak into decision logic. The only acceptable `META_DIR` reference outside of these helpers is the `if __name__ == '__main__':` demo block at the end of the file.
+
+### Parity Result
+
+At the end of every `sync_worker_logic()` execution, construct a `ParityResult`
+(imported via `from .sync_core import ParityResult`) reflecting the run outcome:
+- `outcome`: `"repaired_success"` on success; `"test_failure"` when tests failed
+  (`tests_failed > 0` and the workflow terminates in the fix/test loop); `"infra_failure"`
+  on unrecoverable infrastructure errors (path/lock/subprocess failure);
+  `"unrepaired_policy_rejection"` otherwise.
+- `invariant_violations`: `[]` for clean runs; populated from errors that map to a named
+  invariant (`"path_policy"` from `PathPolicyError`, `"interface_preservation"` from
+  `PublicSurfaceRegressionError`, etc.).
+- `convergence_verified`: `True` — set by construction for deterministic sync (the sync
+  engine writes exactly what the prompt demands, so a re-run produces a no-op by design;
+  no second subprocess is needed).
+- `repair_attempts`: `0` for the first successful pass; increment when the
+  architecture-conformance/public-surface/test-churn repair loop retries.
+- `rejected_artifact_paths`: `[]` — normal sync does not retain rejected artifacts;
+  only the agentic path does.
+- `module_id`: `basename`
+Include the serialized dict (`parity_result.model_dump()`) as `"parity_result"` in
+the returned `Dict[str, Any]`.
 
 ### Skip Handling
 

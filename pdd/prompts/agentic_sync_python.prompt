@@ -57,7 +57,7 @@ Entry point for sync orchestration. Supports two public workflows:
 17. If `dry_run=True`, stop after dry-run validation and fingerprint filtering, return success with a concise list of modules that would sync, and do not instantiate `AsyncSyncRunner` or `DurableSyncRunner`
 18. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, the `module_cwds` and `module_targets` maps from dry-run validation, a per-module `module_units` map (one `resolve_sync_unit(bn, module_targets.get(bn, bn), module_cwds[bn], requested_context=context_override)` per module — the canonical cwd/target/context/paths identity built from the SAME (cwd, relative target) the dry-run validated, issue #1675) with `module_contexts` derived from it (`{bn: unit.context}`) for the dict fallback, and `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs) so the runner can display the full cost in its GitHub progress comment
 19. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, and durable max-parallel setting through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, initial cost accounting, and the same `module_units`/`module_contexts` identity threading (#1675) as standard issue sync.
-20. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
+20. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution + parity repair loop attempts
 21. Include `one_session`, `local`, `target_coverage`, and `compressed_context` in `sync_options` dict passed to the selected runner
 
 % Global Sync (Tier 1)
@@ -92,6 +92,45 @@ Before dispatching to the runner, validate each module can actually sync:
    - If the preflight reports errors, treat validation as failed with `"prompt contract preflight failed"` and do not invoke the LLM fallback for that module. The fallback only resolves cwd/command errors; it cannot make an inconsistent prompt/code contract safe.
 4. On dry-run failure, invoke `_llm_fix_dry_run_failure` as fallback: load `agentic_sync_fix_dry_run_LLM` prompt template with project tree (2 levels), .pddrc locations, and the error. Run the LLM-suggested command via shell, extract effective cwd using a pwd marker appended to the command. Validate resolved cwd is within project root. If it succeeds, still run the prompt-contract preflight before accepting the cwd.
 5. `_run_dry_run_validation(modules, project_root, local=False)`: orchestrates the above per module and forwards `local` into validation subprocesses and LLM fallback commands, returns `(all_valid, module_to_cwd_map, module_to_target_map, errors, total_llm_cost)` — both maps keyed by the scheduler basename, so callers carry the cwd-relative target into fingerprint filtering and the runner (issue #1675).
+
+% Acceptance Gate and Bounded Repair Loop
+After runner.run() returns success for each synced module:
+1. Call `evaluate_parity_invariants(module_id, artifact_set, project_root)` imported via
+   `from pdd.sync_core import ParityResult, evaluate_parity_invariants, retain_rejected_artifacts`.
+   This runs the 7-step invariant sweep in fixed order: path policy → interface preservation →
+   architecture path authority → parse/build → test discovery → test execution →
+   fingerprint finalization.
+2. Bounded repair loop — if `invariant_violations` is non-empty:
+   a. Hard cap: 3 total repair attempts. Budget exhaustion preserves the original violation
+      and fails — never downgrades to success.
+   b. Before each repair attempt, enforce scope-containment guard:
+      assert `set(repair_modules) ⊆ set(original_scope_plan)`; scope expansion immediately
+      sets `outcome="unrepaired_policy_rejection"` with `invariant="scope_containment"` and
+      exits the loop without further attempts.
+   c. Before rolling back a failed attempt, call
+      `retain_rejected_artifacts(module_id, attempt_n, artifact_paths, project_root)`
+      to copy the artifact set to `.pdd_rejected/<module_id>/<attempt_n>/`; record returned
+      paths in `ParityResult.rejected_artifact_paths`.
+3. Convergence gate — after a clean invariant sweep (`violations=[]`):
+   Invoke `sync_determine_operation` in read-only mode (`log_mode=True, read_only=True`)
+   for each synced module as a second dry-run. If any module's operation is NOT in
+   `_GLOBAL_SYNC_NOOP_OPERATIONS`, set `convergence_verified=False` and
+   `outcome="unrepaired_policy_rejection"`. Convergence failures are NOT repair candidates
+   (they require human review); do not enter the bounded repair loop for them.
+4. Serialize the final `ParityResult` for each module as JSON (via `.model_dump_json()`)
+   in the GitHub App check-run output payload so the App can distinguish
+   `repaired_success`, `unrepaired_policy_rejection`, `test_failure`, and `infra_failure`.
+
+% Regression Fixtures (tests/test_agentic_sync.py)
+Add six fixtures asserting agentic acceptance fails with the correct invariant key:
+(a) wrong-path write blocked by allowlist → `invariant="path_policy"`
+(b) repair loop scope expansion rejected → `invariant="scope_containment"`
+(c) removed public interface caught by classifier → `invariant="interface_preservation"`
+(d) misplaced/uncollected test fails runner discovery → `invariant="test_discovery"`
+(e) stale metadata / missing fingerprint finalization → `invariant="fingerprint_finalization"`
+(f) non-convergent second dry-run blocks acceptance → `invariant="convergence"`
+Each fixture MUST assert: (i) the sync does not return `success=True`, and
+(ii) the correct `invariant` key appears in `ParityResult.invariant_violations`.
 
 % Fingerprint Filtering
 After dry-run validation, check which modules are already fully synced:
@@ -152,6 +191,7 @@ Also imports from `sync_order`: `extract_module_from_include`, `topological_sort
 Also imports from `architecture_registry`: `find_architecture_for_project` (function-scope import inside `_load_architecture_json`)
 Also imports from `sync_determine_operation`: `sync_determine_operation`
 Also imports from `sync_main`: `_detect_languages_with_context`
+Also imports from `pdd.sync_core`: `ParityResult`, `evaluate_parity_invariants`, `retain_rejected_artifacts`
 
 % Error Handling
 - Return `(False, "gh CLI not found...", 0.0, "")` if `gh` command not available
@@ -165,6 +205,8 @@ Also imports from `sync_main`: `_detect_languages_with_context`
 - Return `(True, "All modules are already synced — nothing to do.", cost, provider)` if fingerprint check filters all modules
 - Return `(True, "All modules are already synced — nothing to do.", cost, provider)` if the runtime-LLM-template filter (Req 9, Req 10, or dry-run step 0) removes every selected basename. Issues that touch only runtime `*_LLM.prompt` templates are a successful no-op because those templates are already consumed directly by their owning code modules and there is nothing to regenerate. Do not invoke `pdd sync` or the LLM dry-run fallback in this case.
 - Post error comment on GitHub issue when LLM fails, basenames invalid, or dry-run fails (if `use_github_state` is True)
+- Return `(False, "Parity invariant violated: {invariant}", cost, provider)` when the bounded repair loop is exhausted; preserve original violation evidence and never downgrade to success
+- Return `(False, "Convergence gate failed: module did not reach no-op after sync", cost, provider)` when the convergence gate detects a non-no-op second dry-run
 
 % Deliverables
 - Code: `pdd/agentic_sync.py`

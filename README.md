@@ -1241,6 +1241,7 @@ When a GitHub issue URL is passed instead of a basename, sync enters agentic mod
 2. **Dependency Validation**: Validates architecture.json dependencies and applies corrections if needed
 3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (up to 4 concurrent workers by default; set `PDD_SYNC_MAX_WORKERS` to cap concurrency lower — e.g. `1` on memory-constrained runners)
 4. **Live Progress**: Posts and updates a GitHub comment with real-time module sync status
+5. **Acceptance Gate**: After every module completes, applies the same observable correctness invariants as normal sync — write-allowlist enforcement, prompt-declared interface and public-compatibility preservation, architecture and `.pddrc` output-path authority, parse/build verification, real test-runner discovery and execution, and transactional fingerprint finalization — then runs a convergence gate (a second dry-run must report no-op). Failed invariants trigger a bounded repair loop (capped at 3 attempts; scope cannot expand beyond the original authorized module set). Machine-readable `ParityResult` evidence is returned to the GitHub App, distinguishing `repaired_success`, `unrepaired_policy_rejection`, `test_failure`, and `infra_failure`. Rejected generations are retained under `.pdd_rejected/<module>/<attempt>/` for inspection. Agentic success is impossible unless all required invariants pass.
 
 ```bash
 # Sync modules identified from a GitHub issue (parallel, dependency-aware)

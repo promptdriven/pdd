@@ -1,0 +1,60 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Shared ParityResult acceptance schema and invariant evaluation entry-points for agentic and normal sync paths.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "evaluate_parity_invariants", "signature": "(module_id: str, artifact_set: Mapping[str, Path], project_root: Path, *, sync_determine_operation: Callable, **kwargs) -> ParityResult", "returns": "ParityResult"},
+      {"name": "retain_rejected_artifacts", "signature": "(module_id: str, attempt_n: int, artifact_paths: list[str], project_root: Path) -> list[str]", "returns": "list[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Write the `pdd/sync_core/parity.py` module — the shared `ParityResult` acceptance schema and invariant evaluation functions consumed by both the agentic and normal sync paths.
+
+% Role & Scope
+This module is the single source of truth for acceptance-gate outcomes. It defines `ParityResult`, orchestrates the 7-step invariant sweep (delegating to existing `sync_core` primitives), and provides `retain_rejected_artifacts` for pre-rollback artifact copying. It does NOT reimplement path-policy enforcement, interface classification, or fingerprint logic — it orchestrates calls to existing `sync_core` modules.
+
+% Requirements
+1. `ParityResult` — Pydantic v2 model with fields:
+   - `module_id: str`
+   - `outcome: Literal["repaired_success", "unrepaired_policy_rejection", "test_failure", "infra_failure"]` (discriminated union via `Literal`)
+   - `invariant_violations: list[dict[str, str]]` — each dict keyed by `"invariant"` and `"detail"`
+   - `convergence_verified: bool`
+   - `repair_attempts: int`
+   - `rejected_artifact_paths: list[str]`
+   Must support `.model_dump_json()` for serialization in GitHub App check-run payloads.
+
+2. `evaluate_parity_invariants(module_id: str, artifact_set: Mapping[str, Path], project_root: Path, *, sync_determine_operation: Callable, **kwargs) -> ParityResult` — runs the 7-step invariant sequence in fixed order:
+   (1) path policy (via `PathPolicy` from `.path_policy`)
+   (2) interface preservation (via `classify` from `.classifier`)
+   (3) architecture path authority (via `includes` from `.includes`)
+   (4) parse/build
+   (5) test discovery
+   (6) test execution (via `run_obligation`/`run_profile` from `.runner`)
+   (7) fingerprint finalization (via `finalize_unit` from `.finalize`)
+   Accumulates all violations in `invariant_violations`; fails fast on the first violation. Returns `outcome="repaired_success"` when `invariant_violations` is empty, `"test_failure"` when step 5 or 6 fails, `"infra_failure"` on unrecoverable infrastructure errors, and `"unrepaired_policy_rejection"` for all other violations. Calls existing `sync_core` primitives rather than reimplementing their logic.
+
+3. `retain_rejected_artifacts(module_id: str, attempt_n: int, artifact_paths: list[str], project_root: Path) -> list[str]` — copies each path in `artifact_paths` to `.pdd_rejected/<module_id>/<attempt_n>/` (relative to `project_root`) before the caller performs rollback; returns the list of retained destination paths.
+
+<contract_rules>
+R1 (MUST): `evaluate_parity_invariants` MUST run the 7 invariant steps in the declared fixed order and accumulate all violations before returning.
+R2 (MUST NOT): `evaluate_parity_invariants` MUST NOT re-invoke any step whose `sync_core` primitive already ran and recorded a result; it consumes pre-computed invariant evidence rather than re-executing the entire sync pipeline.
+R3 (MUST): `retain_rejected_artifacts` MUST copy artifacts before the caller performs any rollback and MUST return the retained destination paths.
+R4 (MUST NOT): `retain_rejected_artifacts` MUST NOT raise when a source path does not exist; it MUST skip missing files and log a warning.
+R5 (MUST): `ParityResult.outcome` MUST be one of the four `Literal` values; no other string is a valid outcome.
+</contract_rules>
+
+% Dependencies
+<pdd.sync_core.path_policy><include mode="interface">pdd/sync_core/path_policy.py</include></pdd.sync_core.path_policy>
+<pdd.sync_core.finalize><include mode="interface">pdd/sync_core/finalize.py</include></pdd.sync_core.finalize>
+<pdd.sync_core.classifier><include mode="interface">pdd/sync_core/classifier.py</include></pdd.sync_core.classifier>
+<pdd.sync_core.types><include mode="interface">pdd/sync_core/types.py</include></pdd.sync_core.types>
+
+% Deliverables
+- Code: `pdd/sync_core/parity.py`
+- The three public symbols (`ParityResult`, `evaluate_parity_invariants`, `retain_rejected_artifacts`) MUST also be re-exported from `pdd/sync_core/__init__.py` so callers use `from pdd.sync_core import ParityResult`. This is a paired manual edit that accompanies generation of this module.
