@@ -6076,6 +6076,26 @@ def _interactive_provider_reason(text: str) -> Optional[str]:
     return None
 
 
+_STRUCTURED_PROVIDER_JSON_KEY_RE = re.compile(
+    r'^\{\s*"(?:type|subtype|is_error|result|total_cost_usd|usage|modelUsage)"\s*:'
+)
+
+
+def _is_structured_provider_json_prefix(text: str) -> bool:
+    """Recognize a provider JSON result frame without trusting its value text.
+
+    Claude's captured ``--output-format json`` result may arrive in arbitrary
+    chunks and may contain leading whitespace. Once an object frame exposes a
+    known provider-result key as its first top-level key, its quoted values are
+    data, not terminal UI. JSON-looking text inside an earlier untrusted value
+    cannot bless the frame.
+    """
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("{"):
+        return False
+    return bool(_STRUCTURED_PROVIDER_JSON_KEY_RE.search(stripped[:8192]))
+
+
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
     """Wrapper around subprocess that uses Popen for proper process group cleanup.
@@ -6107,8 +6127,12 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
         interactive_reason: List[str] = []
         interactive_seen = threading.Event()
 
-        def _read_pipe(pipe: Any, chunks: List[Any]) -> None:
+        def _read_pipe(
+            pipe: Any, chunks: List[Any], *, allow_structured_json: bool = False
+        ) -> None:
             tail = ""
+            stream_prefix = ""
+            structured_json_frame = False
             while True:
                 raw_chunk = (
                     pipe.buffer.read1(4096)
@@ -6130,8 +6154,17 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
                     if isinstance(chunk, str)
                     else chunk.decode("utf-8", errors="replace")
                 )
+                if allow_structured_json and not structured_json_frame:
+                    stream_prefix = (stream_prefix + decoded)[:8192]
+                    structured_json_frame = _is_structured_provider_json_prefix(
+                        stream_prefix
+                    )
                 tail = (tail + decoded)[-8192:]
-                reason = _interactive_provider_reason(tail)
+                reason = (
+                    None
+                    if structured_json_frame
+                    else _interactive_provider_reason(tail)
+                )
                 if reason and not interactive_seen.is_set():
                     interactive_reason.append(reason)
                     interactive_seen.set()
@@ -6142,7 +6175,10 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
             proc.stdin.close()
         readers = [
             threading.Thread(
-                target=_read_pipe, args=(proc.stdout, stdout_chunks), daemon=True
+                target=_read_pipe,
+                args=(proc.stdout, stdout_chunks),
+                kwargs={"allow_structured_json": True},
+                daemon=True,
             ),
             threading.Thread(
                 target=_read_pipe, args=(proc.stderr, stderr_chunks), daemon=True

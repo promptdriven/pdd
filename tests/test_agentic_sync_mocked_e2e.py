@@ -86,6 +86,17 @@ DEPS_CORRECTIONS: []'
   RESULT="$RESULT" {PYTHON} -c 'import json, os; print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "result": os.environ["RESULT"], "total_cost_usd": 0.01}}))'
   exit 0
 fi
+if [ "$CLAUDE_SHIM_MODE" = "structured-ui-quote" ]; then
+  # A valid Claude JSON result, deliberately chunked with leading whitespace.
+  # The quoted caret-CSI/update phrase must remain ordinary model output.
+  printf '  \n'
+  printf '%s' '{{"type":"result","subtype":"success","is_error":false,"res'
+  sleep 0.05
+  printf '%s' 'ult":"User fixture quotes ^[[2K Auto-'
+  sleep 0.05
+  printf '%s\n' 'update failed in docs.\\nMODULES_TO_SYNC: [\\"greeter\\"]\\nDEPS_VALID: true\\nDEPS_CORRECTIONS: []","total_cost_usd":0.01}}'
+  exit 0
+fi
 if [ "$CLAUDE_SHIM_MODE" = "interactive-ui" ]; then
   printf '\033[?25l\342\240\213 Trust this workspace?\n'
   printf '^[[2K\342\234\246 Permission required: press Enter to continue\n'
@@ -465,6 +476,23 @@ def test_plain_provider_output_quoting_ui_phrases_remains_ordinary(harness):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Dry run complete" in result.stdout
     assert "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1" not in result.stdout
+
+
+def test_chunked_structured_provider_output_quoting_ui_remains_success(harness):
+    sink = harness.project / "provider-failure.json"
+    result = run_sync(
+        harness,
+        "--dry-run",
+        "--no-github-state",
+        shim_mode="structured-ui-quote",
+        provider_failure_sink=sink,
+        provider_failure_token="producer-owned-random-token-0123456789abcdef",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dry run complete" in result.stdout
+    assert "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1" not in result.stdout
+    assert not sink.exists()
 
 
 def test_branch_diff_detection_skips_llm(harness):
