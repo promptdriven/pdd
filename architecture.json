@@ -47,7 +47,7 @@
   },
   {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
-    "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
+    "description": "Common functions for running agentic tasks: provider preference, availability detection, background-safe subprocess orchestration with early interactive-UI detection, producer-owned typed provider-failure metadata and authenticated atomic side-channel publication, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
@@ -66,6 +66,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
+          }
+        ],
         "dataclasses": [
           {
             "name": "SteerEntry",
@@ -113,7 +119,7 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False, background_safe=False) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -247,12 +253,6 @@
               "INTERACTIVE_ONLY",
               "UNSUPPORTED"
             ]
-          }
-        ],
-        "typeAliases": [
-          {
-            "name": "TaskClass",
-            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
           }
         ]
       }
@@ -7683,7 +7683,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync consumes a cloud-owned provider-failure capability before children inherit it, transports trusted provider state through private token-authenticated channels from pinned PDD validation children, and never promotes marker-shaped stdout. It uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7705,7 +7705,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False, local: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {
