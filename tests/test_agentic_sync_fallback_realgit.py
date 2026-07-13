@@ -243,9 +243,11 @@ def test_workflow_fallback_only_module_reaches_sync_plan(tmp_path, monkeypatch):
         verbose=False,
         reasoning_time=None,
         local=False,
+        trusted_failures=None,
     ):
         # The real dry-run shells out to `pdd` and needs the module's files on disk;
         # new_module exists only as an architecture entry, so stub a passing validation.
+        assert isinstance(trusted_failures, list)
         return True, {m: project_root for m in modules}, {m: m for m in modules}, [], 0.0
 
     with ExitStack() as stack:

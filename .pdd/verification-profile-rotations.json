@@ -22,19 +22,10 @@
       "prompt_path": "pdd/prompts/get_test_command_python.prompt",
       "language_id": "python",
       "from_requirement_id": "CONTRACT-SHA256:ef559f5558fb627aa53f078cba0eaae221a7af9a2c6bdadf580a4cb12bf217b7",
-      "to_requirement_id": "CONTRACT-SHA256:f247fccad025aa3e428ea86abb8123945ad9907c0bb5769e64d4e1c4f43dadf5",
-      "policy_path": ".pdd/verification-profiles.json",
-      "from_policy_sha256": "8a957dfa94fdc78ec9d1eb5ea6dfb0a08ff2452928a8b9f6a4dbd5368cb25f53",
-      "to_policy_sha256": "d844d88c2631f3000da80d85657079934479c9334dba0184ca183fa48d9ea6c6"
-    },
-    {
-      "prompt_path": "pdd/prompts/get_test_command_python.prompt",
-      "language_id": "python",
-      "from_requirement_id": "CONTRACT-SHA256:f247fccad025aa3e428ea86abb8123945ad9907c0bb5769e64d4e1c4f43dadf5",
       "to_requirement_id": "CONTRACT-SHA256:3525d273e684633ff2f84daec3fb92a1fc5a3bd80a08076a372aa4ac275fa6e4",
       "policy_path": ".pdd/verification-profiles.json",
-      "from_policy_sha256": "d844d88c2631f3000da80d85657079934479c9334dba0184ca183fa48d9ea6c6",
-      "to_policy_sha256": "f3d40a134a57635f461cda660c532bea324b4f741535146cfb4170507162f72b"
+      "from_policy_sha256": "92a006d31417892681e032678e9885a10802db3825b967a66e4d34361cb25f89",
+      "to_policy_sha256": "632d509e34c463fdea2efc1e1e86084b2fd2429be9361a1b8190328d733ee54a"
     },
     {
       "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
@@ -42,8 +33,8 @@
       "from_requirement_id": "CONTRACT-SHA256:1dcdbb492c9bdd543fd6d07fcd712b4d9b939a26caf60c53e447514472c5c956",
       "to_requirement_id": "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e",
       "policy_path": ".pdd/verification-profiles.json",
-      "from_policy_sha256": "f3d40a134a57635f461cda660c532bea324b4f741535146cfb4170507162f72b",
-      "to_policy_sha256": "31880567ff1bd205f25305c7899787c85dd5064a8d605e671f07d91d2af48576"
+      "from_policy_sha256": "632d509e34c463fdea2efc1e1e86084b2fd2429be9361a1b8190328d733ee54a",
+      "to_policy_sha256": "69b1e000886f86249021ca3af4b67301b786465569b9b01ab658f7e639ec57da"
     }
   ]
 }
