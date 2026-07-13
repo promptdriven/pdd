@@ -144,6 +144,20 @@ def test_cloud_batch_image_provisions_protected_linux_sandbox():
             rf"^\s*{re.escape(package)}\s*\\$", dockerfile_text, re.MULTILINE
         ), f"Cloud Batch image must install {package}"
 
+    assert "useradd --create-home" in dockerfile_text
+    assert "pdd ALL=(ALL) NOPASSWD: ALL" in dockerfile_text
+
+
+def test_cloud_batch_pytest_runs_as_non_root_sandbox_user():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'PYTEST_SANDBOX_USER="pdd"' in entrypoint_text
+    assert "chown -R pdd:pdd" in entrypoint_text
+    assert '"${PYTEST_USER_COMMAND[@]}" sudo -n true' in entrypoint_text
+    assert '"${PYTEST_USER_COMMAND[@]}" python -m pytest' in entrypoint_text
+
 
 def test_cloud_batch_entrypoint_preflights_protected_sandbox_contract():
     entrypoint_text = (

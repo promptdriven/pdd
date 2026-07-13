@@ -51,6 +51,8 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
     monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         "pdd.sync_core.supervisor.subprocess.run",
@@ -67,9 +69,27 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert "--unshare-user" not in bwrap
     separator = bwrap.index("--")
     assert bwrap.index("--bind") < separator < bwrap.index("--reuid")
-    assert bwrap[bwrap.index("--reuid") + 1] == str(os.getuid())
+    assert bwrap[bwrap.index("--reuid") + 1] == "1234"
+    assert bwrap[bwrap.index("--regid") + 1] == "2345"
     assert bwrap.index("--proc") < separator
     assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
+
+
+def test_linux_sandbox_fails_closed_for_root_caller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 0)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    result, surviving = run_supervised(
+        ["/bin/true"], cwd=tmp_path, timeout=1, env={},
+        writable_roots=(tmp_path,),
+    )
+
+    assert result.returncode == 125
+    assert "non-root caller" in result.stderr
+    assert surviving is False
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
