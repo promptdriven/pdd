@@ -272,6 +272,10 @@ def test_vitest_binds_statically_proven_commonjs_loader_aliases(
         ),
         "const req = require; const box = { req }; box.req('./helper.cjs');",
         "const box = getLoader(); box.load('./helper.cjs');",
+        "const p = './helper.cjs'; require.apply(null, [p]);",
+        "const p = './helper.cjs'; Reflect.apply(require, null, [p]);",
+        "const p = './helper.cjs'; const [load = require] = []; load(p);",
+        "const p = './helper.cjs'; module.constructor._load(p, module);",
     ],
 )
 def test_vitest_rejects_dynamic_or_ambiguous_loader_aliases(
@@ -315,6 +319,21 @@ def test_vitest_binds_commonjs_alias_in_transitive_local_helper(tmp_path: Path) 
     _git(root, "commit", "-q", "-m", "change transitive CommonJS helper")
 
     assert vitest_validator_config_digest(root, "HEAD", paths) != before
+
+
+def test_vitest_parser_initialization_failure_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.get_parser",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")),
+    )
+
+    with pytest.raises(ValueError, match="parser is unavailable"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
 
 
 def test_vitest_rejects_nonregular_git_closure_members(tmp_path: Path) -> None:
@@ -710,6 +729,53 @@ def test_vitest_post_phase_toolchain_deletion_is_normalized(
     assert execution.outcome is EvidenceOutcome.ERROR
     assert "toolchain" in execution.detail.lower()
     assert not identities
+
+
+def test_profile_does_not_execute_after_failed_initial_vitest_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    config = _runner_config(tmp_path, _fake_vitest(tmp_path))
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    obligation = VerificationObligation(
+        "vitest", "test", "vitest",
+        vitest_validator_config_digest(root, commit, paths),
+        ("REQ-1",), paths,
+    )
+    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+    original = _load_vitest_toolchain_descriptor
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("capture race")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "pdd.sync_core.runner._load_vitest_toolchain_descriptor", fail_once
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_obligation",
+        lambda *_args, **_kwargs: pytest.fail("Vitest ran after failed capture"),
+    )
+
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot-v1", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32),
+            "id", "nonce", datetime(2026, 7, 13, tzinfo=timezone.utc),
+        ),
+        config,
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.ERROR
+    assert "initial capture failed" in executions[0].detail
+    assert envelope.binding.vitest_toolchain_identity is None
+    assert calls > 1
 
 
 def _git(root: Path, *args: str) -> str:

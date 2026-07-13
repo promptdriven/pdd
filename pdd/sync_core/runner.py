@@ -27,7 +27,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tree_sitter_language_pack import get_parser
+from tree_sitter_language_pack import Error as TreeSitterLanguagePackError, get_parser
 
 from .trust import (
     AttestationBinding,
@@ -928,7 +928,14 @@ def _vitest_ast_imports(
 ) -> set[PurePosixPath]:
     # pylint: disable=too-many-locals,too-many-nested-blocks
     """Resolve static loaders and positively proven CommonJS aliases."""
-    tree = get_parser("typescript" if source_path.suffix in {".ts", ".tsx", ".cts", ".mts"} else "javascript").parse(source)
+    try:
+        tree = get_parser(
+            "typescript"
+            if source_path.suffix in {".ts", ".tsx", ".cts", ".mts"}
+            else "javascript"
+        ).parse(source)
+    except (OSError, TreeSitterLanguagePackError) as exc:
+        raise ValueError("Vitest JavaScript parser is unavailable") from exc
     if tree.root_node.has_error:
         raise ValueError(f"Vitest support source is not valid JavaScript/TypeScript: {source_path}")
     nodes = []
@@ -1042,6 +1049,11 @@ def _vitest_ast_imports(
                         recognized = True
                 if recognized:
                     continue
+        if left_name is None and any(
+            re.search(rb"\b" + re.escape(name.encode()) + rb"\b", node_text(left))
+            for name in loader_aliases | factory_aliases | {"createRequire"}
+        ):
+            raise ValueError("Vitest destructured loader alias provenance is ambiguous")
         if right.type == "call_expression":
             function, arguments = call_parts(right)
             function_name = (
@@ -1091,7 +1103,23 @@ def _vitest_ast_imports(
                     and value.startswith(("./", "../"))
                     for argument in arguments
                 )
-                if property_text in {b"require", b"createRequire", b"glob", b"globEager"} or local_operand:
+                carries_provenance = property_text in {b"apply", b"call", b"bind"} and any(
+                    re.search(
+                        rb"\b" + re.escape(name.encode()) + rb"\b",
+                        function_text
+                        + b" "
+                        + b" ".join(node_text(item) for item in arguments),
+                    )
+                    for name in loader_aliases | factory_aliases | {"createRequire"}
+                )
+                if (
+                    property_text in {
+                        b"require", b"createRequire", b"glob", b"globEager",
+                        b"load", b"_load",
+                    }
+                    or local_operand
+                    or carries_provenance
+                ):
                     raise ValueError("Vitest alternate module loader is not bound")
             function_name = function_text.decode("utf-8", errors="replace")
             if function_name in factory_aliases:
@@ -1119,6 +1147,12 @@ def _vitest_ast_imports(
             raise ValueError("Vitest dynamic module loader is unsupported")
         if value.startswith(("./", "../")):
             values.append(value)
+    for node in nodes:
+        if node.type == "assignment_pattern" and any(
+            re.search(rb"\b" + re.escape(name.encode()) + rb"\b", node_text(node))
+            for name in loader_aliases | factory_aliases | {"createRequire"}
+        ):
+            raise ValueError("Vitest destructured loader alias provenance is ambiguous")
     resolved: set[PurePosixPath] = set()
     for value in values:
         candidate = _normalize_repo_relative_path(source_path.parent / PurePosixPath(value))
@@ -3531,6 +3565,7 @@ def run_profile(
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
     initial_vitest_identity: str | None = None
+    initial_vitest_error: str | None = None
     if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
         try:
             initial_vitest_identity = _load_vitest_toolchain_descriptor(
@@ -3539,16 +3574,23 @@ def run_profile(
             config = replace(
                 config, vitest_toolchain_identity=initial_vitest_identity
             )
-        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-            pass
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            initial_vitest_error = f"Vitest toolchain initial capture failed: {exc}"
     executions = tuple(
-        run_obligation(
-            root,
-            obligation,
-            base_sha=binding.base_sha,
-            head_sha=binding.head_sha,
-            config=config,
+        RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            "vitest-toolchain",
+            initial_vitest_error,
         )
+        if obligation.validator_id == "vitest" and initial_vitest_error is not None
+        else run_obligation(
+                root,
+                obligation,
+                base_sha=binding.base_sha,
+                head_sha=binding.head_sha,
+                config=config,
+            )
         for obligation in profile.obligations
     )
     if initial_vitest_identity is not None:
