@@ -3195,6 +3195,53 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         _config_pddrc = _find_pddrc_file(config_anchor)
         _reject_unsafe_pddrc_output_config(config_anchor)
 
+        def _discovered_alias_within_repo(_prompt: Any, _prompt_resolved: Path) -> bool:
+            """Whether a DISCOVERED approved-alias prompt is contained in the project repo.
+
+            #1991 approved aliases let a discovered prompt SYMLINK target a canonical
+            prompt elsewhere in the SAME enclosing git repository (e.g. a nested
+            subproject aliasing a shared prompt). This grants that exception, but only
+            when it cannot be abused:
+
+            - R14 F1: the repository boundary is anchored at the PROJECT (the prompts root
+              / governing root — real directories), NOT at the prompt's own resolved
+              location. Every physical ANCESTOR of the prompt must stay inside the project
+              (``os.path.realpath`` of the parent, with the LEAF symlink NOT followed), so
+              a symlinked parent cannot redirect ``git -C`` into a FOREIGN repository whose
+              boundary would then vacuously "contain" the alias target.
+            - The prompt itself must be a leaf symlink (the alias), and its resolved target
+              must live inside the git worktree enclosing the project.
+
+            The DISCOVERY-only gate (R14 F2) is enforced by the caller; a configured
+            ``outputs.prompt.path`` never reaches here.
+            """
+            if not Path(_prompt).is_symlink():
+                return False
+            _prompt_lexical = Path(os.path.abspath(_prompt))
+            try:
+                _parent_real = Path(os.path.realpath(_prompt_lexical.parent))
+            except (OSError, ValueError):
+                return False
+            _anchor: Optional[Path] = None
+            for _root in (prompts_root_anchor, _governing_root):
+                try:
+                    _root_real = Path(os.path.realpath(_root))
+                except (OSError, ValueError):
+                    continue
+                if _parent_real == _root_real or _root_real in _parent_real.parents:
+                    _anchor = _root_real
+                    break
+            if _anchor is None:
+                return False
+            _repo = _enclosing_git_root(_anchor)
+            if _repo is None:
+                return False
+            try:
+                _prompt_resolved.relative_to(_repo)
+                return True
+            except (OSError, RuntimeError, ValueError):
+                return False
+
         def _finalize_output_paths(paths: Dict[str, Path]) -> Dict[str, Path]:
             # Re-anchor CWD-relative/absolute outputs UNDER the governing root, then
             # fail closed if the result escapes it or carries a non-portable
@@ -3258,6 +3305,19 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 paths["test_files"] = _contained_tfs
             _prompt = paths.get("prompt")
             if _prompt is not None:
+                # Discovery provenance (R14 F2): the approved-alias exception below is
+                # DISCOVERY-ONLY. `paths["prompt"]` equals the discovered/convention prompt
+                # (`prompt_path`) UNLESS a configured `outputs.prompt.path` template set it.
+                # A configured output destination must obey the normal configured-path
+                # policy (contained in the prompts root / governing project) and may NOT
+                # inherit discovery's enclosing-repository alias acceptance — otherwise a
+                # configured symlink could redirect a later update to a shared/foreign prompt.
+                try:
+                    _is_discovered_prompt = (
+                        Path(os.path.abspath(_prompt)) == Path(os.path.abspath(prompt_path))
+                    )
+                except (OSError, ValueError):
+                    _is_discovered_prompt = False
                 # A relative outputs.prompt.path (Issue #237, e.g. `custom/prompts/`)
                 # is project-relative, not CWD-relative: anchor it under the
                 # governing root the same way outputs are, so a parent/sibling-CWD
@@ -3272,15 +3332,24 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # reject it rather than return a literal-brace path or a directory (R16).
                 if "{" in str(_prompt) or "}" in str(_prompt):
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
-                if Path(_prompt).resolve(strict=False) == _governing_resolved:
+                # Resolve ONCE, GUARDED (R14 F3): a cyclic/looping configured prompt
+                # symlink makes resolve() raise RuntimeError/OSError. Fail CLOSED as
+                # UnsafePromptPathError (re-raised past the broad fallback) rather than let
+                # the raw error propagate to the outer handler, which would silently
+                # discard the configured paths or leak the exception. The single resolved
+                # value is reused by every check below.
+                try:
+                    _prompt_resolved = Path(_prompt).resolve(strict=False)
+                except (OSError, RuntimeError, ValueError):
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                if _prompt_resolved == _governing_resolved:
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # R13 F3: an EXISTING non-regular-file prompt destination (e.g. an
                 # `outputs.prompt.path` pointing at a real directory) is not a prompt
                 # FILE — reject it rather than hand back a directory a later read/update
                 # would choke on. A discovered approved alias is a symlink to a regular
                 # file (is_file() follows the link) and stays allowed.
-                _prompt_leaf_resolved = Path(_prompt).resolve(strict=False)
-                if _prompt_leaf_resolved.exists() and not _prompt_leaf_resolved.is_file():
+                if _prompt_resolved.exists() and not _prompt_resolved.is_file():
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
@@ -3299,10 +3368,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # location such as `custom/prompts/`, which is legitimate); only a
                 # path outside both is rejected. Resolve so a trusted in-root symlink
                 # alias (prompts -> pdd/prompts) is preserved.
-                try:
-                    _prompt_resolved = Path(_prompt).resolve(strict=False)
-                except (OSError, RuntimeError, ValueError):
-                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 _prompt_ok = False
                 for _root in (prompts_root_anchor, _governing_root):
                     try:
@@ -3311,36 +3376,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         break
                     except (OSError, RuntimeError, ValueError):
                         continue
-                if not _prompt_ok:
-                    # R12 F1: an APPROVED in-repo prompt alias DISCOVERED on disk (a
-                    # symlink whose LEXICAL path sits inside the prompts root / governing
-                    # project) may target a canonical prompt ELSEWHERE in the same
-                    # enclosing git repository — e.g. a nested subproject aliasing a shared
-                    # canonical prompt. Honour it in finalization the SAME way discovery
-                    # does, but only for a genuine discovered alias (an on-disk symlink)
-                    # whose resolved target stays inside the VALIDATED enclosing repository
-                    # (a planted/empty `.git` grants nothing — R12 F2). A non-symlink
-                    # outputs.prompt.path escaping both roots gets no such allowance.
-                    _alias_ok = False
-                    _prompt_lexical = Path(os.path.abspath(_prompt))
-                    _lex_in_root = False
-                    for _root in (prompts_root_anchor, _governing_root):
-                        try:
-                            _prompt_lexical.relative_to(Path(os.path.abspath(_root)))
-                            _lex_in_root = True
-                            break
-                        except (OSError, RuntimeError, ValueError):
-                            continue
-                    if _lex_in_root and Path(_prompt).is_symlink():
-                        _repo = _enclosing_git_root(_prompt)
-                        if _repo is not None:
-                            try:
-                                _prompt_resolved.relative_to(_repo)
-                                _alias_ok = True
-                            except (OSError, RuntimeError, ValueError):
-                                _alias_ok = False
-                    if not _alias_ok:
-                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                if not _prompt_ok and not (
+                    _is_discovered_prompt
+                    and _discovered_alias_within_repo(_prompt, _prompt_resolved)
+                ):
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
             return paths
 
         resolved_context_name = _resolve_context_name_for_basename(

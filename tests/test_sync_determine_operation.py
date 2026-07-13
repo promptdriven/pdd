@@ -9816,3 +9816,122 @@ def test_get_pdd_file_paths_rejects_existing_directory_prompt_destination(tmp_pa
     )
     with pytest.raises(UnsafePromptPathError):
         get_pdd_file_paths("widget", "python", "prompts")
+
+
+# ---------------------------------------------------------------------------
+# Round-14 review hardening: the approved-alias exception is DISCOVERY-ONLY and
+# must not follow a symlinked ANCESTOR into a foreign repository; a configured
+# outputs.prompt.path symlink obeys the normal configured-destination policy;
+# and a cyclic configured prompt symlink fails closed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_configured_prompt_symlinked_ancestor_into_foreign_repo(tmp_path, monkeypatch):
+    """r14 F1: an outputs.prompt.path whose lexical path sits under the project but
+    traverses a DIRECTORY symlink into a FOREIGN git repository must be rejected — a
+    symlinked ancestor must not redirect `git -C` authority to that foreign repo."""
+    proj = tmp_path / "proj"
+    (proj / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    (proj / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    (foreign / "real_python.prompt").write_text("% evil\n", encoding="utf-8")
+    try:
+        # The LEAF is itself a symlink (so it enters the discovery-alias branch), reached
+        # through `link`, a DIRECTORY symlink into the foreign repository.
+        (foreign / "evil_python.prompt").symlink_to("real_python.prompt")
+        (proj / "link").symlink_to(foreign, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (proj / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "link/evil_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(proj)
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_configured_prompt_symlink_gets_no_discovery_alias_exception(tmp_path, monkeypatch):
+    """r14 F2: a CONFIGURED outputs.prompt.path that is an existing leaf symlink to a
+    canonical prompt elsewhere in the SAME repository must obey the normal
+    configured-destination policy (contained in prompts root / governing project) and
+    must NOT inherit the discovery-only approved-alias exception."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()
+    (root / "shared" / "canonical_python.prompt").write_text("% shared\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (sub / "custom").mkdir()
+    try:
+        (sub / "custom" / "widget_python.prompt").symlink_to(
+            root / "shared" / "canonical_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "custom/widget_python.prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_cyclic_configured_prompt_symlink_fails_closed(tmp_path, monkeypatch):
+    """r14 F3: a configured outputs.prompt.path resolving through a symlink LOOP must fail
+    closed as UnsafePromptPathError — never leak a raw RuntimeError/OSError or silently
+    fall through to convention fallback."""
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    try:
+        (tmp_path / "a").symlink_to(tmp_path / "b")
+        (tmp_path / "b").symlink_to(tmp_path / "a")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "a"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_discovered_nested_alias_still_allowed_control(tmp_path, monkeypatch):
+    """r14 control: the legitimate neighbour — a DISCOVERED nested-subproject approved
+    alias targeting a canonical prompt elsewhere in the same repo — must STILL resolve
+    after the F1/F2 hardening (the discovery-only exception is preserved)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()
