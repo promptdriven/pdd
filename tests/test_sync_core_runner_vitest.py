@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -42,8 +41,13 @@ IDENTITY = "tests/widget.test.ts::widget works"
 
 
 @pytest.fixture(autouse=True)
-def _controlled_supervisor(monkeypatch: pytest.MonkeyPatch) -> None:
+def _controlled_supervisor(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
     """Exercise adapter logic portably without weakening production policy."""
+    if request.node.name.startswith("test_real_vitest_runs_copied_entrypoint"):
+        return
+
     def execute(command, *, cwd, timeout, env, pass_fds=(), **_limits):
         try:
             result = subprocess.run(
@@ -1041,3 +1045,58 @@ def test_vitest_rejects_unbound_execution_controls(
     root, commit = _repository(tmp_path, config=config)
     _envelope, executions = _run(root, commit, commit, _fake_vitest(tmp_path))
     assert executions[0].outcome is EvidenceOutcome.ERROR
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"),
+    reason="requires Linux sandbox and provisioned real Vitest toolchain",
+)
+def test_real_vitest_runs_copied_entrypoint_without_candidate_result_access(
+    tmp_path: Path,
+) -> None:
+    manifest = Path(os.environ["PDD_REAL_VITEST_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "real-vitest-repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.test.ts").write_text(
+        "import { expect, test } from 'vitest';\n"
+        "test('result channel is private', () => {\n"
+        "  expect(process.env.PDD_TRUSTED_VITEST_OUTPUT).toBeUndefined();\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    (root / "vitest.config.json").write_text('{"test":{}}\n', encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected real Vitest test")
+    commit = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    obligation = VerificationObligation(
+        "vitest-real", "test", "vitest",
+        vitest_validator_config_digest(root, commit, paths),
+        ("REQ-1",), paths,
+    )
+    profile = VerificationProfile(
+        UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
+        (obligation,), ("REQ-1",), "profile-v1",
+    )
+
+    _envelope, executions = run_profile(
+        root, profile, RunBinding("snapshot", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"v" * 32), "id", "nonce",
+            datetime(2026, 7, 13, tzinfo=timezone.utc),
+        ),
+        RunnerConfig(
+            timeout_seconds=30,
+            vitest_command=(roles["launcher"], roles["entrypoint"]),
+            vitest_toolchain_manifest=manifest,
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail

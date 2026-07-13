@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -791,6 +792,9 @@ def test_validate_command_wires_protected_vitest_runner_config(
     external = toolchain / "node_modules/vitest/vitest.py"
     external.parent.mkdir(parents=True)
     external.write_text("print('trusted vitest')\n")
+    launcher = toolchain / "python"
+    shutil.copy2(os.sys.executable, launcher)
+    launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
     manifest = toolchain / "manifest.json"
@@ -799,10 +803,10 @@ def test_validate_command_wires_protected_vitest_runner_config(
             {
                 "version": 1,
                 "roles": {
-                    "launcher": os.sys.executable,
+                    "launcher": str(launcher),
                     "entrypoint": str(external),
                     "dependencies": str(toolchain / "node_modules"),
-                    "native_runtime": [os.sys.executable],
+                    "native_runtime": [str(launcher)],
                     "lockfile": str(lockfile),
                 },
             }
@@ -828,7 +832,7 @@ def test_validate_command_wires_protected_vitest_runner_config(
                 "--base-ref",
                 commit,
                 "--vitest-command",
-                f"{os.sys.executable} {external}",
+                f"{launcher} {external}",
                 "--vitest-toolchain-manifest",
                 str(manifest),
             ],
@@ -837,7 +841,7 @@ def test_validate_command_wires_protected_vitest_runner_config(
     assert result.exit_code == 0, result.output
     call = mocked_finalize.call_args
     assert call.kwargs["signer"] is signer
-    assert call.kwargs["config"].vitest_command == (os.sys.executable, str(external))
+    assert call.kwargs["config"].vitest_command == (str(launcher), str(external))
     assert call.kwargs["config"].vitest_toolchain_manifest == manifest
 
 
@@ -850,17 +854,21 @@ def test_validate_command_requires_vitest_command_and_manifest_together(
     external.write_text("print('trusted vitest')\n", encoding="utf-8")
     monkeypatch.chdir(root)
 
-    result = CliRunner().invoke(
-        validate_command,
-        [
-            "--module",
-            "prompts/widget_python.prompt",
-            "--base-ref",
-            commit,
-            "--vitest-command",
-            f"{os.sys.executable} {external}",
-        ],
-    )
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=object(),
+    ):
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--vitest-command",
+                f"{os.sys.executable} {external}",
+            ],
+        )
 
     assert result.exit_code != 0
     assert "manifest" in result.output.lower()

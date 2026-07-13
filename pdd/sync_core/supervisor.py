@@ -181,7 +181,7 @@ def _staged_bwrap(
     helper = "\n".join((
         "import json,os,pathlib,shutil,subprocess,sys,tempfile",
         "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2]); "
-        "fds=tuple(json.loads(sys.argv[3]))",
+        "fds=tuple(json.loads(sys.argv[3])) if len(sys.argv)>3 else ()",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
         "os.chmod(base,0o755); staged=[]",
         "try:",
@@ -201,9 +201,9 @@ def _staged_bwrap(
     sudo = ["sudo", "-n", "-E"]
     if pass_fds:
         sudo.extend(("-C", str(max(pass_fds) + 1)))
-    return [*sudo, str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps(argv), json.dumps([str(path) for path in sources]),
-            json.dumps(pass_fds)]
+    command = [*sudo, str(_SUPERVISOR_EXECUTABLE), "-c", helper,
+               json.dumps(argv), json.dumps([str(path) for path in sources])]
+    return [*command, json.dumps(pass_fds)] if pass_fds else command
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
