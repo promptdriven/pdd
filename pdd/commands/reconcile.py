@@ -75,7 +75,7 @@ def _emit_report(report: dict, as_json: bool) -> None:
     "--heal",
     is_flag=True,
     default=False,
-    help="Refresh valid stale fingerprints without LLM calls.",
+    help="Deprecated; blind fingerprint acceptance is disabled.",
 )
 @click.option(
     "--ledger",
@@ -103,10 +103,15 @@ def reconcile(
     ctx.ensure_object(dict)
     if as_json:
         ctx.obj["_suppress_result_summary"] = True
+    if heal:
+        raise click.UsageError(
+            "--heal is disabled because changing a fingerprint does not prove "
+            "semantic synchronization; run pdd sync/update/resolve instead"
+        )
     report = build_report(
         consumer="reconcile",
         modules=[module_name] if module_name else None,
-        heal=heal,
+        heal=False,
         ledger=ledger,
     )
     _emit_report(report, as_json)

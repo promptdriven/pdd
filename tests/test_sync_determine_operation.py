@@ -7003,6 +7003,69 @@ class TestFingerprintIncludeDependencies:
             "stored deps should contribute to the composite hash"
         )
 
+    def test_legacy_include_hash_uses_prompt_dir_then_process_cwd(
+        self, pdd_test_environment, monkeypatch
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        dependency = pdd_test_environment / "shared.py"
+        create_file(dependency, "VALUE = 1\n")
+        create_file(prompt, "Build it.\n<include>shared.py</include>\n")
+        expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+        hashes = []
+        for cwd in (pdd_test_environment, pdd_test_environment.parent):
+            monkeypatch.chdir(cwd)
+            hashes.append(calculate_prompt_hash(prompt))
+        assert hashes == [expected, hashlib.sha256(prompt.read_bytes()).hexdigest()]
+
+    def test_legacy_include_hash_sorts_and_deduplicates_dependencies(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        create_file(
+            prompt,
+            "Build.\n<include>b.py</include>\n<include>a.py</include>\n"
+            "<include>a.py</include>\n",
+        )
+        expected = hashlib.sha256(
+            prompt.read_bytes() + first.read_bytes() + second.read_bytes()
+        ).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_preserves_pre_versioned_include_grammar_and_missing_files(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        body_dep = prompt.parent / "body.py"
+        attr_dep = prompt.parent / "attribute.py"
+        create_file(body_dep, "BODY = 1\n")
+        create_file(attr_dep, "ATTRIBUTE = 1\n")
+        create_file(
+            prompt,
+            "<include path=\"attribute.py\">body.py</include>\n"
+            "<include path=\"attribute.py\"/>\n"
+            "<include-many>*.py</include-many>\n"
+            "<include>missing.py</include>\n",
+        )
+        expected = hashlib.sha256(prompt.read_bytes() + body_dep.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+    def test_legacy_v1_stored_dependencies_skip_missing_and_keep_key_order(
+        self, pdd_test_environment
+    ):
+        prompt = pdd_test_environment / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt"
+        first = pdd_test_environment / "a.py"
+        second = pdd_test_environment / "b.py"
+        create_file(prompt, "No includes.\n")
+        create_file(first, "A = 1\n")
+        create_file(second, "B = 1\n")
+        stored = {str(second): "old", str(pdd_test_environment / "missing.py"): "old", str(first): "old"}
+        expected = hashlib.sha256(prompt.read_bytes() + first.read_bytes() + second.read_bytes()).hexdigest()
+        assert calculate_prompt_hash(prompt, stored_deps=stored, hash_version=1) == expected
+
     def test_calculate_prompt_hash_detects_dep_change_via_stored_deps(self, pdd_test_environment):
         """When a stored dep file changes, the composite hash must change."""
         prompts_dir = pdd_test_environment / "prompts"
@@ -7024,6 +7087,36 @@ class TestFingerprintIncludeDependencies:
             "Composite prompt hash must change when a stored dependency file changes, "
             "even when the prompt itself has no <include> tags"
         )
+
+    def test_calculate_prompt_hash_anchors_relative_stored_deps_to_explicit_root(
+        self, pdd_test_environment, monkeypatch
+    ):
+        """Stored relative dependency keys must not be interpreted from process CWD."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper using project docs.\n")
+        project_dep = pdd_test_environment / "docs" / "contract.md"
+        create_file(project_dep, "trusted project dependency\n")
+
+        nested = pdd_test_environment / "nested"
+        alternate_dep = nested / "docs" / "contract.md"
+        create_file(alternate_dep, "wrong nested dependency\n")
+        monkeypatch.chdir(nested)
+
+        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
+        anchored_hash = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+        create_file(alternate_dep, "changed wrong nested dependency\n")
+        anchored_hash_after_alternate_change = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+
+        assert anchored_hash == anchored_hash_after_alternate_change
 
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
@@ -9085,3 +9178,137 @@ def test_get_pdd_file_paths_rejects_pathless_outputs_entry(tmp_path, monkeypatch
     )
     with pytest.raises(UnsafeOutputPathError):
         get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+def test_v1_hash_matches_base_whitespace_cwd_and_invalid_utf8(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "shared.bin"
+    dependency.write_bytes(b"dependency\xff")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"<include>  shared.bin  </include>\ninvalid:\xff\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(prompt, hash_version=1) == expected
+
+
+def test_v1_hash_resolves_stored_relative_keys_from_cwd(tmp_path, monkeypatch):
+    prompt_dir = tmp_path / "prompts"
+    cwd = tmp_path / "cwd"
+    prompt_dir.mkdir()
+    cwd.mkdir()
+    dependency = cwd / "stored.txt"
+    dependency.write_bytes(b"stored")
+    prompt = prompt_dir / "widget.prompt"
+    prompt.write_bytes(b"no includes\n")
+    monkeypatch.chdir(cwd)
+    expected = hashlib.sha256(prompt.read_bytes() + dependency.read_bytes()).hexdigest()
+    assert calculate_prompt_hash(
+        prompt, {"stored.txt": "ignored"}, hash_version=1
+    ) == expected
+
+
+def test_v1_old_grammar_ignores_self_closing_and_path_attributes(tmp_path):
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(
+        '<include path="missing.txt"/>\n<include-many>missing.txt</include-many>\n'
+    )
+    assert calculate_prompt_hash(prompt, hash_version=1) == hashlib.sha256(
+        prompt.read_bytes()
+    ).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<include path="dep.txt"/>',
+        '<include-many>dep.txt</include-many>',
+    ],
+)
+def test_v1_new_grammar_save_reload_rerun_does_not_self_drift(
+    tmp_path, monkeypatch, markup
+):
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "widget.prompt"
+    prompt.write_text(markup, encoding="utf-8")
+    (tmp_path / "dep.txt").write_text("dependency", encoding="utf-8")
+
+    first = calculate_prompt_hash(prompt, hash_version=1)
+    persisted = extract_include_deps(prompt, version=1)
+    reloaded = json.loads(json.dumps(persisted))
+    second = calculate_prompt_hash(prompt, reloaded, hash_version=1)
+
+    assert persisted == {}
+    assert second == first
+
+
+# ---------------------------------------------------------------------------
+# Round-9 review hardening (post-#1985 merge): explicit null outputs entries
+# fail closed; test_files are rebuilt from the ANCHORED test dir (parent-CWD
+# safe); templates that expand to nothing / the project root / an unexpanded
+# placeholder fail closed instead of returning a directory or literal braces.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_rejects_null_outputs_entry(tmp_path, monkeypatch):
+    """R16: an explicit `outputs: {code: null}` is malformed (its key presence would
+    suppress the configured legacy fallback) and must fail closed."""
+    monkeypatch.chdir(tmp_path)
+    _write_escape_pddrc_project(
+        tmp_path,
+        '      generate_output_path: "src/"\n      outputs:\n        code: null\n',
+        with_arch=True,
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+@pytest.mark.parametrize("code_template", ['"{category}"', '"src/{module}.py"'])
+def test_get_pdd_file_paths_rejects_empty_or_unresolved_template_expansion(tmp_path, monkeypatch, code_template):
+    """R16: a template that expands to nothing (flat-basename `{category}` -> project
+    root) or keeps an unexpanded/unsupported placeholder is not a real artifact file."""
+    monkeypatch.chdir(tmp_path)
+    # NO architecture.json -> the outputs.code template is actually applied.
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: ' + code_template + '\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_test_files_rebuilt_from_anchored_dir_parent_cwd(tmp_path, monkeypatch):
+    """R16: test_files come from the ANCHORED (nested project) test directory, not the
+    parent CWD — a parent-CWD run must not hand the parent's sibling tests to the runner
+    nor return nonexistent nested paths."""
+    parent = tmp_path
+    project = parent / "project"
+    (project / "prompts").mkdir(parents=True)
+    (project / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (project / "tests").mkdir()
+    (project / "tests" / "test_widget.py").write_text("x = 1\n", encoding="utf-8")
+    (project / "tests" / "test_widget_extra.py").write_text("y = 2\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      generate_output_path: "src/"\n      test_output_path: "tests/"\n',
+        encoding="utf-8",
+    )
+    # A decoy sibling under the PARENT CWD that must NOT be picked up.
+    (parent / "tests").mkdir()
+    (parent / "tests" / "test_widget_parent.py").write_text("z = 3\n", encoding="utf-8")
+    monkeypatch.chdir(parent)
+    paths = get_pdd_file_paths(
+        "widget", "python",
+        prompts_dir=str((project / "prompts").resolve()),
+        context_override="backend",
+    )
+    root = project.resolve()
+    for tf in paths["test_files"]:
+        rp = Path(tf).resolve(strict=False)
+        assert rp.is_relative_to(root), f"test_file escaped project: {tf}"
+        assert rp.exists(), f"nonexistent test_file returned: {tf}"
+    names = {Path(tf).name for tf in paths["test_files"]}
+    assert "test_widget_parent.py" not in names
