@@ -516,9 +516,12 @@ def _pnpm_yaml_loader(yaml):
     _Loader.add_implicit_resolver(
         "tag:yaml.org,2002:bool",
         re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+    # Null includes the EMPTY scalar (``- `` with nothing after it) — YAML 1.2
+    # resolves it to null, a non-string that must fail closed. PyYAML looks up the
+    # empty-string first-char bucket, so register ``""`` and let the regex match "".
     _Loader.add_implicit_resolver(
         "tag:yaml.org,2002:null",
-        re.compile(r"^(?:~|null|Null|NULL)$"), ["~", "n", "N"])
+        re.compile(r"^(?:~|null|Null|NULL|)$"), ["~", "n", "N", ""])
     _Loader.add_implicit_resolver(
         "tag:yaml.org,2002:int",
         re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"),
@@ -530,15 +533,36 @@ def _pnpm_yaml_loader(yaml):
             r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"),
         list("-+0123456789."))
 
+    def _construct_int_yaml_1_2(loader, node):
+        # YAML 1.2 constructs an ordinary digit run as BASE 10 (``012`` is 12, not
+        # octal 10 as YAML 1.1 does) and only ``0o``/``0x`` as bases 8/16. Getting
+        # this right is what makes duplicate keys such as ``012:`` and ``12:``
+        # (both integer 12 in 1.2) compare equal below.
+        text = loader.construct_scalar(node)
+        sign = -1 if text[:1] == "-" else 1
+        digits = text[1:] if text[:1] in "+-" else text
+        if digits[:2] == "0o":
+            return sign * int(digits[2:], 8)
+        if digits[:2] == "0x":
+            return sign * int(digits[2:], 16)
+        return sign * int(digits, 10)
+
+    _Loader.add_constructor("tag:yaml.org,2002:int", _construct_int_yaml_1_2)
+
     def _construct_mapping_no_duplicates(loader, node, deep=False):
         mapping = {}
         for key_node, value_node in node.value:
             key = loader.construct_object(key_node, deep=deep)
-            if key in mapping:
+            # Compare on (YAML tag, canonical value) so ``012``/``12`` (both int 12)
+            # collide while a string ``"12"`` and int ``12`` stay distinct.
+            marker = (key_node.tag, key)
+            if marker in mapping:
                 raise yaml.constructor.ConstructorError(
                     None, None, f"duplicate key {key!r}", key_node.start_mark)
-            mapping[key] = loader.construct_object(value_node, deep=deep)
-        return mapping
+            mapping[marker] = loader.construct_object(value_node, deep=deep)
+        # Re-key by the plain constructed key so downstream ``data.get("packages")``
+        # still works.
+        return {marker[1]: value for marker, value in mapping.items()}
 
     _Loader.add_constructor(
         "tag:yaml.org,2002:map", _construct_mapping_no_duplicates)
@@ -845,14 +869,19 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                                work_budget: Optional[list] = None,
                                expand_budget: Optional[list] = None) -> bool:
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
-    semantics: at least one positive pattern matches and no ``!`` exclusion does.
+    semantics, evaluated **in declaration order** (last matching pattern wins): a
+    positive pattern includes, a ``!`` exclusion excludes, and a later positive
+    *re-includes* a previously-excluded path. This matches both npm's
+    ``@npmcli/map-workspaces`` and pnpm's ``@pnpm/matcher`` (a later
+    ``packages/legacy/app`` after ``!packages/legacy/**`` re-includes that package);
+    treating every exclusion as permanent would wrongly deny such a member.
 
-    Exclusions (a leading ``!``, e.g. pnpm's ``!**/test/**``) are honored, and
-    brace alternations are expanded before matching. The brace-expansion count
-    (``expand_budget``), the brace-scan work (``work_budget``), and the DP-cell
-    count (``cell_budget``) are each shared across the whole discovery walk when
-    the caller supplies them, so pathological globs at several ancestors cannot
-    each spend a full budget's worth of expansion, scanning, or matching.
+    Brace alternations are expanded before matching (a raw glob matches when any of
+    its expansions does). The brace-expansion count (``expand_budget``), the
+    brace-scan work (``work_budget``), and the DP-cell count (``cell_budget``) are
+    each shared across the whole discovery walk when the caller supplies them, so
+    pathological globs at several ancestors cannot each spend a full budget's worth
+    of expansion, scanning, or matching.
     """
     if len(globs) > _MAX_RAW_GLOBS:
         return False  # hostile declaration size → membership unproven (fail closed)
@@ -869,7 +898,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # set at each package boundary cannot sum to tens of millions of cells);
         # otherwise a fresh per-call budget is used (direct/standalone callers).
         cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
-        positives, negatives = [], []
+        member = False
         for raw in globs:
             # Do NOT strip surrounding whitespace: workspace tools treat it
             # literally, so `" packages/* "` is a package literally named with
@@ -913,10 +942,13 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             for pat in expanded:
                 if _concrete_pattern_unsupported(pat):
                     raise _PatternBudgetError
-            (negatives if negated else positives).extend(expanded)
-        if not any(_relative_matches_workspace_glob(rel_parts, p, cells) for p in positives):
-            return False
-        return not any(_relative_matches_workspace_glob(rel_parts, n, cells) for n in negatives)
+            # Order-dependent: if this raw glob matches (any expansion), it sets
+            # membership to its polarity — a later positive can re-include a path an
+            # earlier ``!`` excluded, and vice versa.
+            if any(_relative_matches_workspace_glob(rel_parts, p, cells)
+                   for p in expanded):
+                member = not negated
+        return member
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
