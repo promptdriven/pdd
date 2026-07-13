@@ -1144,6 +1144,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         name = basename.split('/')[-1] if '/' in basename else basename
         resolved_context_name = _resolve_context_name_for_basename(basename, context_override)
         construct_paths_basename = _relative_basename_for_context(basename, resolved_context_name)
+        template_basename = construct_paths_basename
 
         # Anchor configuration lookups (architecture.json, .pddrc) at the resolved
         # prompts root so nested subprojects (e.g. extensions/<name>/prompts/) find
@@ -1179,7 +1180,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 discovered_basename = (
                     relative_prompt.parent / prompt_stem
                 ).as_posix()
-                construct_paths_basename = _relative_basename_for_context(
+                template_basename = _relative_basename_for_context(
                     discovered_basename, resolved_context_name
                 )
             except ValueError:
@@ -1514,7 +1515,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
             context_name = context_override or resolved_config.get('_matched_context')
-            basename_for_templates = construct_paths_basename
+            basename_for_templates = template_basename
             result = _generate_paths_from_templates(
                 basename=basename_for_templates,
                 language=language,
