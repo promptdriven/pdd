@@ -55,7 +55,7 @@ class _WorkspaceProvider(Enum):
 
 @dataclass(frozen=True)
 class _WorkspaceDeclaration:
-    """One provider-specific, bounded workspace declaration."""
+    """One provider declaration; empty patterns mark an invalid declaration."""
 
     provider: _WorkspaceProvider
     patterns: tuple[str, ...]
@@ -426,10 +426,12 @@ def _workspace_declarations_for(
     ancestor: Path,
     cache: Optional[dict[Path, Optional[tuple[_WorkspaceDeclaration, ...]]]] = None,
 ) -> Optional[tuple[_WorkspaceDeclaration, ...]]:
-    """Return provider declarations, or ``None`` for an invalid declaration.
+    """Return provider declarations, preserving provider-local invalidity.
 
     An existing ``pnpm-workspace.yaml`` is authoritative over package and Lerna
-    manifests at the same root.
+    manifests at the same root, so invalid pnpm data returns ``None``. Invalid
+    npm/Yarn or Lerna data is retained as an empty-pattern declaration, allowing
+    a separate valid provider to prove membership independently.
     """
     canonical_ancestor = ancestor.resolve()
     if cache is not None and canonical_ancestor in cache:
@@ -445,18 +447,18 @@ def _workspace_declarations_for(
         if cache is not None:
             cache[canonical_ancestor] = result
         return result
-    manifest_globs = _manifest_workspace_globs(canonical_ancestor / "package.json")
-    lerna_globs = _lerna_workspace_globs(canonical_ancestor / "lerna.json")
-    if manifest_globs is None or lerna_globs is None:
-        if cache is not None:
-            cache[canonical_ancestor] = None
-        return None
     declarations = []
-    if manifest_globs:
+    manifest_globs = _manifest_workspace_globs(canonical_ancestor / "package.json")
+    if manifest_globs is None:
+        declarations.append(_WorkspaceDeclaration(_WorkspaceProvider.NPM, ()))
+    elif manifest_globs:
         declarations.append(
             _WorkspaceDeclaration(_WorkspaceProvider.NPM, tuple(manifest_globs))
         )
-    if lerna_globs:
+    lerna_globs = _lerna_workspace_globs(canonical_ancestor / "lerna.json")
+    if lerna_globs is None:
+        declarations.append(_WorkspaceDeclaration(_WorkspaceProvider.LERNA, ()))
+    elif lerna_globs:
         declarations.append(
             _WorkspaceDeclaration(_WorkspaceProvider.LERNA, tuple(lerna_globs))
         )
@@ -488,10 +490,10 @@ def _ancestor_workspace_root(
                 _declared_workspace_membership(rel_parts, declaration)
                 for declaration in declarations
             ]
-            if any(membership is None for membership in memberships):
-                return None
             if any(memberships):
                 return ancestor.resolve()
+            if any(membership is None for membership in memberships):
+                return None
         if os.path.lexists(ancestor / "pnpm-workspace.yaml"):
             return None
         if os.path.lexists(ancestor / ".git"):
