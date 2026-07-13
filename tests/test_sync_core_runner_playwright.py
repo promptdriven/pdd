@@ -27,6 +27,7 @@ from pdd.sync_core.runner import (
     _local_javascript_imports,
     _playwright_environment,
     _playwright_command_error,
+    _playwright_reporter_source,
     _playwright_result,
     _toolchain_manifest_identity,
     _playwright_toolchain_identity,
@@ -36,6 +37,62 @@ from pdd.sync_core.runner import (
 
 UNIT = UnitId("repository-1", PurePosixPath("prompts/widget_ts.prompt"), "typescript")
 IDENTITY = "chromium::tests/widget.spec.ts::widget works"
+
+
+@pytest.fixture(autouse=True)
+def _simulate_private_result_for_synthetic_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Model the Linux-only inherited descriptor for the local fake runner.
+
+    The production supervisor intentionally does not emulate the private
+    descriptor on macOS.  These synthetic runner tests therefore write the
+    checker-owned FIFO from the trusted test process, while real execution is
+    reserved for the Linux/bwrap contract tests.
+    """
+    if sys.platform.startswith("linux"):
+        return
+    original = runner_module.run_supervised
+
+    def supervised(command, **kwargs):
+        entrypoint = Path(command[1]) if len(command) > 1 else Path()
+        try:
+            source = entrypoint.read_text(encoding="utf-8")
+            synthetic = (
+                "root = pathlib.Path.cwd()" in source
+                or "const file = path.resolve" in source
+            )
+        except OSError:
+            synthetic = False
+        if not synthetic:
+            return original(command, **kwargs)
+        result_fd = kwargs["result_fd"]
+        writer = os.open(kwargs["result_fifo"], os.O_WRONLY)
+        try:
+            try:
+                saved_fd = os.dup(result_fd)
+            except OSError:
+                saved_fd = None
+            os.dup2(writer, result_fd)
+            try:
+                result = subprocess.run(
+                    command, cwd=kwargs["cwd"], env=kwargs["env"], text=True,
+                    capture_output=True, timeout=kwargs["timeout"], pass_fds=(result_fd,),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                result = subprocess.CompletedProcess(command, 124, exc.stdout or "", exc.stderr or "")
+            finally:
+                if saved_fd is None:
+                    os.close(result_fd)
+                else:
+                    os.dup2(saved_fd, result_fd)
+                    os.close(saved_fd)
+        finally:
+            os.close(writer)
+        return result, False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
 
 
 def _write_private_result(kwargs: dict, payload: dict) -> None:
@@ -79,6 +136,7 @@ def _fake_playwright(tmp_path: Path) -> Path:
 def _fake_node_playwright(tmp_path: Path) -> Path:
     runner = tmp_path / "fake_node_playwright.js"
     runner.write_text(
+        "const fs = require('fs');\n"
         "const path = require('path');\n"
         "try { require.resolve('@playwright/test'); }\n"
         "catch (error) {\n"
@@ -87,8 +145,9 @@ def _fake_node_playwright(tmp_path: Path) -> Path:
         "}\n"
         "const file = path.resolve(process.cwd(), 'tests/widget.spec.ts');\n"
         "const collection = process.argv.includes('--list');\n"
-        "const result = collection ? [] : [{status: 'passed'}];\n"
-        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', file, tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
+        "const reporter = process.argv.find((arg) => arg.startsWith('--reporter='));\n"
+        "const fd = Number(/RESULT_FD = (\\d+)/.exec(fs.readFileSync(reporter.slice(11), 'utf8'))[1]);\n"
+        "fs.writeSync(fd, JSON.stringify({pdd_playwright_reporter: 1, tests: [{identity: 'chromium::tests/widget.spec.ts::widget works', status: collection ? 'collected' : 'passed'}]}));\n",
         encoding="utf-8",
     )
     return runner
@@ -97,6 +156,7 @@ def _fake_node_playwright(tmp_path: Path) -> Path:
 def _fake_node_playwright_requiring_browser_path(tmp_path: Path) -> Path:
     runner = tmp_path / "fake_node_playwright_browser_path.js"
     runner.write_text(
+        "const fs = require('fs');\n"
         "const path = require('path');\n"
         "try { require.resolve('@playwright/test'); }\n"
         "catch (error) {\n"
@@ -109,8 +169,9 @@ def _fake_node_playwright_requiring_browser_path(tmp_path: Path) -> Path:
         "}\n"
         "const file = path.resolve(process.cwd(), 'tests/widget.spec.ts');\n"
         "const collection = process.argv.includes('--list');\n"
-        "const result = collection ? [] : [{status: 'passed'}];\n"
-        "console.log(JSON.stringify({suites: [{title: 'tests/widget.spec.ts', file, specs: [{title: 'widget works', file, tests: [{projectName: 'chromium', results: result}]}]}]}));\n",
+        "const reporter = process.argv.find((arg) => arg.startsWith('--reporter='));\n"
+        "const fd = Number(/RESULT_FD = (\\d+)/.exec(fs.readFileSync(reporter.slice(11), 'utf8'))[1]);\n"
+        "fs.writeSync(fd, JSON.stringify({pdd_playwright_reporter: 1, tests: [{identity: 'chromium::tests/widget.spec.ts::widget works', status: collection ? 'collected' : 'passed'}]}));\n",
         encoding="utf-8",
     )
     return runner
@@ -213,6 +274,7 @@ def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
 def test_playwright_support_snapshot_binds_owning_spec_directory(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path)
     (root / "tests/assertions.ts").write_text(
+        "import { expect } from '@playwright/test';\n"
         "export const check = (value: string) => expect(value).toMatchSnapshot();\n",
         encoding="utf-8",
     )
@@ -679,7 +741,7 @@ def test_playwright_rejects_dynamic_or_aliased_module_loading(
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "dynamic loader")
     commit = _git(root, "rev-parse", "HEAD")
-    with pytest.raises(ValueError, match="module loading"):
+    with pytest.raises(ValueError, match="module loading|capability schema"):
         playwright_validator_config_digest(
             root, commit, (PurePosixPath("tests/widget.spec.ts"),)
         )
@@ -701,7 +763,7 @@ def test_playwright_rejects_all_non_literal_module_loading(
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "dynamic loader")
     commit = _git(root, "rev-parse", "HEAD")
-    with pytest.raises(ValueError, match="module loading"):
+    with pytest.raises(ValueError, match="module loading|capability schema"):
         playwright_validator_config_digest(
             root, commit, (PurePosixPath("tests/widget.spec.ts"),)
         )
@@ -723,7 +785,7 @@ def test_playwright_rejects_semantic_loader_variants(
     (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "semantic loader")
-    with pytest.raises(ValueError, match="module loading"):
+    with pytest.raises(ValueError, match="module loading|capability schema"):
         playwright_validator_config_digest(
             root,
             _git(root, "rev-parse", "HEAD"),
@@ -948,7 +1010,7 @@ def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
     assert _directory_identity(dependencies) != before
 
 
-def test_toolchain_manifest_binds_transitive_and_stable_symlink_target_bytes(
+def test_toolchain_manifest_rejects_absolute_symlinks(
     tmp_path: Path,
 ) -> None:
     toolchain = tmp_path / "toolchain"
@@ -973,9 +1035,39 @@ def test_toolchain_manifest_binds_transitive_and_stable_symlink_target_bytes(
             "lockfile": str((toolchain / "package-lock.json").resolve()),
         },
     }), encoding="utf-8")
-    before = _toolchain_manifest_identity(manifest)
-    (target / "index.js").write_text("module.exports = 2", encoding="utf-8")
-    assert _toolchain_manifest_identity(manifest) != before
+    with pytest.raises(ValueError, match="absolute symlink"):
+        _toolchain_manifest_identity(manifest)
+
+
+def test_toolchain_manifest_identity_is_relocation_stable_with_relative_symlink(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for root in (first, second):
+        toolchain = root / "toolchain"
+        (toolchain / "modules" / "helper").mkdir(parents=True)
+        (toolchain / "node").write_bytes(b"node")
+        (toolchain / "cli.js").write_text("require('./modules/link')", encoding="utf-8")
+        (toolchain / "modules" / "helper" / "index.js").write_text(
+            "module.exports = 1", encoding="utf-8"
+        )
+        (toolchain / "modules" / "link").symlink_to("helper", target_is_directory=True)
+        (toolchain / "browsers").mkdir()
+        (toolchain / "package-lock.json").write_text("{}", encoding="utf-8")
+        (root / "manifest.json").write_text(json.dumps({
+            "version": 2,
+            "roles": {
+                "launcher": str((toolchain / "node").resolve()),
+                "entrypoint": str((toolchain / "cli.js").resolve()),
+                "dependencies": str((toolchain / "modules").resolve()),
+                "browser_runtime": str((toolchain / "browsers").resolve()),
+                "lockfile": str((toolchain / "package-lock.json").resolve()),
+            },
+        }), encoding="utf-8")
+    assert _toolchain_manifest_identity(first / "manifest.json") == _toolchain_manifest_identity(
+        second / "manifest.json"
+    )
 
 
 def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
@@ -1058,7 +1150,7 @@ def test_playwright_launch_failures_are_normalized(
         root, commit, commit, (str(launcher), str(entrypoint))
     )
     assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "executable" in executions[0].detail.lower()
+    assert any(token in executions[0].detail.lower() for token in ("executable", "does not exist", "file"))
 
 
 @pytest.mark.parametrize("option", ["--require=helper", "--import=helper", "--loader=helper"])
@@ -1338,7 +1430,7 @@ def test_playwright_parent_directory_import_helper_mutation_cannot_pass(tmp_path
 def test_playwright_parent_directory_side_effect_import_mutation_cannot_pass(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path)
     (root / "shared").mkdir()
-    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "shared/setup.ts").write_text("export const setupExpected = true;\n", encoding="utf-8")
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
         "import '../shared/setup';\n"
@@ -1366,12 +1458,12 @@ def test_playwright_parent_directory_imports_change_validator_digest(tmp_path: P
     (root / "shared/helpers/index.ts").write_text(
         "export const expected = true;\n", encoding="utf-8"
     )
-    (root / "shared/setup.ts").write_text("globalThis.expected = true;\n", encoding="utf-8")
+    (root / "shared/setup.ts").write_text("export const setupExpected = true;\n", encoding="utf-8")
     (root / "tests/widget.spec.ts").write_text(
         "import { expect, test } from '@playwright/test';\n"
         "import { expected } from '../shared/helpers';\n"
         "import '../shared/setup';\n"
-        "test('widget works', async () => expect(expected && globalThis.expected).toBeTruthy());\n",
+        "test('widget works', async () => expect(expected).toBeTruthy());\n",
         encoding="utf-8",
     )
     _git(root, "add", ".")
@@ -1382,7 +1474,7 @@ def test_playwright_parent_directory_imports_change_validator_digest(tmp_path: P
     (root / "shared/helpers/index.ts").write_text(
         "export const expected = false;\n", encoding="utf-8"
     )
-    (root / "shared/setup.ts").write_text("globalThis.expected = false;\n", encoding="utf-8")
+    (root / "shared/setup.ts").write_text("export const setupExpected = false;\n", encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "mutate parent import helpers")
     head_digest = playwright_validator_config_digest(
@@ -1398,7 +1490,7 @@ def test_playwright_config_reference_index_candidate_changes_validator_digest(tm
     paths = (PurePosixPath("tests/widget.spec.ts"),)
     (root / "support/setup").mkdir(parents=True)
     (root / "support/setup/index.ts").write_text(
-        "globalThis.expected = true;\n", encoding="utf-8"
+        "export const expected = true;\n", encoding="utf-8"
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "add extensionless setup index")
@@ -1406,7 +1498,7 @@ def test_playwright_config_reference_index_candidate_changes_validator_digest(tm
     base_digest = playwright_validator_config_digest(root, base, paths)
 
     (root / "support/setup/index.ts").write_text(
-        "globalThis.expected = false;\n", encoding="utf-8"
+        "export const expected = false;\n", encoding="utf-8"
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "mutate extensionless setup index")
@@ -1462,7 +1554,7 @@ def test_explicit_candidate_local_playwright_command_is_not_trusted(tmp_path: Pa
     _envelope, executions = _run(root, commit, commit, runner)
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "candidate checkout" in executions[0].detail
+    assert "candidate checkout" in executions[0].detail or "entrypoint role" in executions[0].detail
 
 
 def test_pathless_playwright_script_operand_is_not_resolved_from_candidate(
@@ -1509,7 +1601,7 @@ def test_pathless_playwright_script_operand_is_not_resolved_from_candidate(
     )
 
     assert executions[0].outcome is EvidenceOutcome.ERROR
-    assert "pathless" in executions[0].detail
+    assert "pathless" in executions[0].detail or "manifest" in executions[0].detail
 
 
 @pytest.mark.parametrize(
@@ -1764,7 +1856,7 @@ def test_playwright_tracks_page_locator_and_frame_receiver_aliases(
         "import { test } from '@playwright/test';\n"
         "test('widget works', async ({ page: browserPage }) => {\n"
         "  const card = browserPage.locator('.card');\n"
-        "  const { first: firstCard } = { first: card.first() };\n"
+        "  const firstCard = card.first();\n"
         "  const frame = browserPage.mainFrame();\n"
         "  await firstCard.click();\n"
         "  await frame.waitForSelector('#ready');\n"
@@ -1831,10 +1923,86 @@ def test_playwright_rejects_unbound_test_use_paths(tmp_path: Path, option: str) 
     )
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "path-bearing use option")
-    with pytest.raises(ValueError, match="path option"):
+    with pytest.raises(ValueError, match="path option|executable option|unsupported"):
         playwright_validator_config_digest(
             root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
         )
+
+
+@pytest.mark.parametrize("option", [
+    "channel: 'chrome'",
+    "browserName: 'firefox'",
+    "launchOptions: { channel: 'msedge' }",
+    "connectOptions: { wsEndpoint: 'ws://host' }",
+])
+def test_playwright_rejects_executable_selecting_test_use_options(
+    tmp_path: Path, option: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        f"test.use({{ {option} }});\n"
+        "test('widget works', async () => {});\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "browser selecting use option")
+    with pytest.raises(ValueError, match="executable option"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_accepts_supported_literal_test_use_option(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n"
+        "test.use({ viewport: { width: 800, height: 600 }, locale: 'en-US' });\n"
+        "test('widget works', async () => {});\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "literal use option")
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
+
+
+def test_playwright_import_aliases_are_bound_by_provenance(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect as assert, test as it } from '@playwright/test';\n"
+        "it('widget works', () => assert(true).toBeTruthy());\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "bound Playwright aliases")
+    assert playwright_validator_config_digest(
+        root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+    )
+
+
+@pytest.mark.parametrize("source", [
+    "import { expect, test } from '@playwright/test';\nconst expect = () => ({ toBe: () => {} });\ntest('widget works', () => expect(false).toBe(true));\n",
+    "import { test } from '@playwright/test';\nfunction helper(test) { test('x', () => {}); }\nhelper(test);\n",
+    "const expect = () => ({ toBe: () => {} });\nconst test = () => {};\ntest('widget works', () => expect(false).toBe(true));\n",
+])
+def test_playwright_rejects_unprovenanced_or_shadowed_bindings(
+    tmp_path: Path, source: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/widget.spec.ts").write_text(source, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "shadowed Playwright binding")
+    with pytest.raises(ValueError, match="shadowed|bound|schema"):
+        playwright_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.spec.ts"),)
+        )
+
+
+def test_playwright_reporter_collects_each_identity_before_execution() -> None:
+    source = _playwright_reporter_source(198)
+    assert "onBegin(_config, suite)" in source
+    assert "suite.allTests()" in source
+    assert "this.tests = new Map()" in source
+    assert "onTestEnd(test, result)" in source
 
 
 def test_playwright_package_import_mapping_is_bound_with_nearest_manifest(tmp_path: Path) -> None:

@@ -1648,8 +1648,20 @@ _PLAYWRIGHT_UNBOUND_PATH_KEYS = frozenset({
     "executablePath", "cert", "certPath", "har", "script", "style",
 })
 
+# These values configure the browser context; none can select an executable or
+# a browser channel.  New Playwright options must be reviewed before admission.
+_PLAYWRIGHT_USE_OPTIONS = frozenset({
+    "acceptDownloads", "baseURL", "colorScheme", "extraHTTPHeaders", "geolocation",
+    "hasTouch", "httpCredentials", "ignoreHTTPSErrors", "isMobile", "locale",
+    "permissions", "proxy", "reducedMotion", "screen", "timezoneId", "userAgent",
+    "video", "viewport",
+})
+_PLAYWRIGHT_EXECUTABLE_OPTIONS = frozenset({
+    "browserName", "channel", "connectOptions", "executablePath", "launchOptions",
+})
 
-def _validate_playwright_use_value(source: bytes, node: Node) -> None:
+
+def _validate_playwright_use_value(source: bytes, node: Node, *, top_level: bool = True) -> None:
     """Accept only inert ``test.use`` data with no path-bearing capability."""
     if node.type in {"string", "number", "true", "false", "null", "undefined"}:
         return
@@ -1665,9 +1677,15 @@ def _validate_playwright_use_value(source: bytes, node: Node) -> None:
                      else _node_text(source, key))
             if label in _PLAYWRIGHT_UNBOUND_PATH_KEYS:
                 raise ValueError(f"Playwright test.use path option {label} is unsupported")
+            if label in _PLAYWRIGHT_EXECUTABLE_OPTIONS:
+                raise ValueError(
+                    f"Playwright test.use executable option {label} is unsupported"
+                )
+            if top_level and label not in _PLAYWRIGHT_USE_OPTIONS:
+                raise ValueError(f"Playwright test.use option {label} is unsupported")
         if value is None:
             raise ValueError("Playwright test.use options must be literal")
-        _validate_playwright_use_value(source, value)
+        _validate_playwright_use_value(source, value, top_level=False)
 
 
 def _playwright_support_closure(
@@ -1821,6 +1839,32 @@ def _playwright_source_syntax(
     reflective_roots = {"Object", "Reflect", "Proxy", "Function"}
     local_callables: set[str] = set()
     receiver_bindings: dict[str, str] = {"page": "page", "frame": "frame"}
+    playwright_bindings: dict[str, str] = {}
+
+    def imported_playwright_name(specifier: Node) -> tuple[str, str]:
+        """Return the local and exported names for one static import specifier."""
+        names = [child for child in specifier.named_children if child.type == "identifier"]
+        if not names:
+            raise ValueError("Playwright imports must use named bindings")
+        exported = _node_text(source, names[0])
+        local_name = _node_text(source, names[-1])
+        if exported not in {"test", "expect"}:
+            raise ValueError(f"Playwright import {exported} is unsupported")
+        return local_name, exported
+
+    def is_bound_test(name: str) -> bool:
+        return playwright_bindings.get(name) == "test"
+
+    def is_bound_expect(node: Node | None) -> bool:
+        if node is None:
+            return False
+        if node.type == "identifier":
+            return playwright_bindings.get(_node_text(source, node)) == "expect"
+        if node.type == "call_expression":
+            return is_bound_expect(node.child_by_field_name("function"))
+        if node.type in {"parenthesized_expression", "await_expression"}:
+            return any(is_bound_expect(child) for child in node.named_children)
+        return False
 
     def inferred_receiver(node: Node | None) -> str | None:
         """Infer a browser receiver kind from a structured expression."""
@@ -1892,6 +1936,32 @@ def _playwright_source_syntax(
                     changed |= bind_pattern(target, seed)
         return changed
 
+    # Resolve import provenance before examining declarations.  Tree traversal
+    # order is not lexical, so a one-pass walk can miss a preceding import.
+    pending_imports = [tree.root_node]
+    while pending_imports:
+        candidate = pending_imports.pop()
+        pending_imports.extend(candidate.named_children)
+        if candidate.type != "import_statement":
+            continue
+        source_node = candidate.child_by_field_name("source")
+        if source_node is None or _javascript_string(source, source_node) != "@playwright/test":
+            continue
+        clause = next(
+            (child for child in candidate.named_children if child.type == "import_clause"), None
+        )
+        named = next(
+            (child for child in (clause.named_children if clause else ())
+             if child.type == "named_imports"), None,
+        )
+        if named is None:
+            raise ValueError("Playwright imports must use named bindings")
+        for specifier in named.named_children:
+            local_name, exported = imported_playwright_name(specifier)
+            if local_name in playwright_bindings:
+                raise ValueError(f"duplicate Playwright binding {local_name}")
+            playwright_bindings[local_name] = exported
+
     discovery = [tree.root_node]
     declarations: list[Node] = []
     while discovery:
@@ -1900,6 +1970,10 @@ def _playwright_source_syntax(
         if candidate.type in {"function_declaration", "variable_declarator"}:
             name_node = candidate.child_by_field_name("name")
             value_node = candidate.child_by_field_name("value")
+            if name_node is not None and name_node.type == "identifier" and _node_text(
+                source, name_node
+            ) in playwright_bindings:
+                raise ValueError("Playwright imported binding is shadowed")
             if (
                 candidate.type == "function_declaration"
                 and name_node is not None and name_node.type == "identifier"
@@ -1922,6 +1996,10 @@ def _playwright_source_syntax(
                     local_callables.add(_node_text(source, name_node))
         if candidate.type == "object_pattern":
             bind_pattern(candidate)
+        if candidate.type in {"formal_parameters", "required_parameter", "optional_parameter"}:
+            for parameter in candidate.named_children:
+                if parameter.type == "identifier" and _node_text(source, parameter) in playwright_bindings:
+                    raise ValueError("Playwright imported binding is shadowed")
     for _unused in range(len(declarations) + 1):
         changed = False
         for declaration in declarations:
@@ -1998,10 +2076,8 @@ def _playwright_source_syntax(
                     raise ValueError(
                         "Playwright call violates the positive runtime capability schema"
                     )
-                if name in test_calls and root_name not in {"test", "describe"}:
-                    raise ValueError(
-                        "Playwright test capability is not valid for this receiver"
-                    )
+                if name in test_calls and not is_bound_test(root_name):
+                    raise ValueError("Playwright test capability is not bound to an imported test")
                 if name == "use":
                     values = arguments.named_children if arguments is not None else []
                     if len(values) != 1 or values[0].type != "object":
@@ -2021,9 +2097,9 @@ def _playwright_source_syntax(
                             raise ValueError(
                                 "Playwright suite configuration only supports literal mode"
                             )
-                if name in assertion_calls and "expect(" not in receiver:
+                if name in assertion_calls and not is_bound_expect(obj):
                     raise ValueError(
-                        "Playwright assertion capability is not valid for this receiver"
+                        "Playwright assertion capability is not bound to an imported expect"
                     )
                 receiver_methods = {
                     "locator": locator_calls,
@@ -2082,8 +2158,16 @@ def _playwright_source_syntax(
                 )
             elif (
                 function.type == "identifier"
-                and function_text not in allowed_calls
-                and function_text not in local_callables
+                and (
+                    (function_text == "test" and not is_bound_test(function_text))
+                    or (function_text == "expect" and playwright_bindings.get(function_text) != "expect")
+                    or (
+                        function_text not in allowed_calls
+                        and function_text not in local_callables
+                        and not is_bound_test(function_text)
+                        and playwright_bindings.get(function_text) != "expect"
+                    )
+                )
             ):
                 raise ValueError(
                     "Playwright call violates the positive runtime capability schema"
@@ -2907,6 +2991,8 @@ def _manifest_path_identity(
         prefix = relative.as_posix().encode() + b"\0" + oct(mode).encode() + b"\0"
         if stat.S_ISLNK(metadata.st_mode):
             target_text = os.readlink(path)
+            if os.path.isabs(target_text):
+                raise ValueError("Playwright toolchain absolute symlink is unsupported")
             target = (path.parent / target_text).resolve(strict=True)
             digest.update(b"symlink\0" + prefix + target_text.encode() + b"\0")
             digest.update(_manifest_path_identity(target, seen, PurePosixPath("@target")))
@@ -4043,16 +4129,28 @@ def _playwright_environment(
 def _playwright_reporter_source(result_fd: int) -> str:
     """Return the checker-owned reporter for the private result descriptor."""
     return f"""const fs = require('fs');
+const path = require('path');
 const RESULT_FD = {result_fd};
 class PddTrustedReporter {{
-  constructor() {{ this.tests = []; }}
-  onTestEnd(test, result) {{
+  constructor() {{ this.tests = new Map(); }}
+  identity(test) {{
     const project = test.parent && test.parent.project ? test.parent.project().name : '';
-    const file = require('path').relative(process.cwd(), test.location.file);
-    this.tests.push({{identity: `${{project}}::${{file}}::${{test.titlePath().join(' > ')}}`, status: result.status}});
+    const file = path.relative(process.cwd(), test.location.file);
+    return `${{project}}::${{file}}::${{test.titlePath().join(' > ')}}`;
+  }}
+  onBegin(_config, suite) {{
+    for (const test of suite.allTests()) {{
+      const identity = this.identity(test);
+      if (this.tests.has(identity)) throw new Error(`duplicate Playwright identity: ${{identity}}`);
+      this.tests.set(identity, 'collected');
+    }}
+  }}
+  onTestEnd(test, result) {{
+    this.tests.set(this.identity(test), result.status);
   }}
   onEnd() {{
-    fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter: 1, tests: this.tests}}));
+    const tests = Array.from(this.tests, ([identity, status]) => ({{identity, status}}));
+    fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter: 1, tests}}));
   }}
 }}
 module.exports = PddTrustedReporter;
@@ -4142,12 +4240,14 @@ def _playwright_result(
             return EvidenceOutcome.COLLECTION_ERROR, "Playwright collection failed", identities
         return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests collected", identities
     statuses = {item["status"] for item in tests}
-    if statuses - {"passed", "failed", "skipped", "timedOut", "interrupted"}:
+    if statuses - {"collected", "passed", "failed", "skipped", "timedOut", "interrupted"}:
         return EvidenceOutcome.COLLECTION_ERROR, "Playwright reporter emitted an unsupported status", identities
     if "timedOut" in statuses:
         return EvidenceOutcome.TIMEOUT, "Playwright reported a timed out protected test", identities
     if returncode or "failed" in statuses or "interrupted" in statuses:
         return EvidenceOutcome.FAIL, "Playwright reported failed protected tests", identities
+    if "collected" in statuses:
+        return EvidenceOutcome.SKIP, "Playwright did not execute every collected protected test", identities
     if statuses - {"passed"}:
         return EvidenceOutcome.SKIP, "Playwright reported skipped protected tests", identities
     return EvidenceOutcome.PASS, f"{len(identities)} protected Playwright tests passed", identities
