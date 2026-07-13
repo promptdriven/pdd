@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -125,6 +126,70 @@ def test_cloud_batch_image_installs_and_verifies_github_cli():
     assert re.search(r"^\s*gh\s*\\$", dockerfile_text, re.MULTILINE)
     assert '"gh"' in cloudbuild_text
     assert "gh --version" in cloudbuild_text or '["gh", "--version"]' in cloudbuild_text
+
+
+def test_cloud_batch_image_provisions_protected_linux_sandbox():
+    dockerfile_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "Dockerfile"
+    ).read_text(encoding="utf-8")
+
+    for package in ("bubblewrap", "sudo", "util-linux"):
+        assert re.search(
+            rf"^\s*{re.escape(package)}\s*\\$", dockerfile_text, re.MULTILINE
+        ), f"Cloud Batch image must install {package}"
+
+
+def test_cloud_batch_entrypoint_preflights_protected_sandbox_contract():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "for command in bwrap sudo setpriv mount umount" in entrypoint_text
+    assert "sudo -n true" in entrypoint_text
+    assert "missing protected sandbox prerequisites" in entrypoint_text
+
+
+def test_cloud_batch_entrypoint_builds_clean_ephemeral_git_head(tmp_path):
+    entrypoint = REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".gitignore").write_text("*.egg-info/\n", encoding="utf-8")
+    (workspace / "payload.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (workspace / ".pdd-package-version").write_text("0.0.303.dev1\n", encoding="utf-8")
+    (workspace / ".pddrc_pddcloud").write_text("[pdd]\n", encoding="utf-8")
+
+    script = f"""
+set -euo pipefail
+source <(sed -n '/^initialize_source_git_snapshot() {{/,/^}}/p' {entrypoint!s})
+WORK_DIR={workspace!s}
+initialize_source_git_snapshot
+"""
+    subprocess.run(["bash", "-c", script], check=True, text=True, capture_output=True)
+
+    head = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=workspace,
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=workspace, check=True, text=True, capture_output=True,
+    ).stdout
+    tracked = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", head], cwd=workspace,
+        check=True, text=True, capture_output=True,
+    ).stdout.splitlines()
+
+    assert status == ""
+    assert {".gitignore", "payload.py"} <= set(tracked)
+    assert ".pdd-package-version" not in tracked
+    assert ".pddrc_pddcloud" not in tracked
+    assert (workspace / ".pdd-package-version").read_text() == "0.0.303.dev1\n"
+    assert (workspace / ".pddrc_pddcloud").read_text() == "[pdd]\n"
+
+    entrypoint_text = entrypoint.read_text(encoding="utf-8")
+    assert entrypoint_text.index("initialize_source_git_snapshot\n") < (
+        entrypoint_text.index('pip install -e ".[dev]"')
+    )
 
 
 def test_cloud_batch_uploaded_pyproject_registers_story_marker():

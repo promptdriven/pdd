@@ -65,3 +65,8 @@ def test_cloud_batch_source_upload_includes_checkup_interactive_demo() -> None:
         "cloud-batch source upload must include checkup interactive "
         f"demo fixtures; missing: {missing}"
     )
+
+
+def test_cloud_batch_source_upload_includes_repository_ignore_contract() -> None:
+    """The synthetic worker checkout must retain generated-file exclusions."""
+    assert ".gitignore" in _cloud_batch_source_paths()
