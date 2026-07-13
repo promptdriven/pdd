@@ -1134,7 +1134,10 @@ def test_finalizer_rejects_invalid_alias_manifest_before_validation_or_writes(
     with patch("pdd.sync_core.finalize.run_profile") as run_profile, patch(
         "pdd.sync_core.finalize.TransactionManager.prepare"
     ) as prepare:
-        with pytest.raises(ValueError, match="manifest is invalid"):
+        with pytest.raises(
+            ValueError,
+            match="canonical finalization requires a valid protected candidate manifest",
+        ):
             finalize_unit(
                 root,
                 PurePosixPath("prompts/widget_python.prompt"),
@@ -1178,7 +1181,10 @@ def test_excluded_project_alias_counterpart_is_invalid_before_finalization(
     with patch("pdd.sync_core.finalize.run_profile") as run_profile, patch(
         "pdd.sync_core.finalize.TransactionManager.prepare"
     ) as prepare:
-        with pytest.raises(ValueError, match="manifest is invalid"):
+        with pytest.raises(
+            ValueError,
+            match="canonical finalization requires a valid protected candidate manifest",
+        ):
             finalize_unit(
                 root,
                 PurePosixPath("prompts/widget_python.prompt"),
