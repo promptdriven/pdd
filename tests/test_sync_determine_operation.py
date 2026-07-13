@@ -1799,46 +1799,60 @@ def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
     )
 
 
-def test_find_prompt_file_uses_snapshot_after_architecture_removed(tmp_path, monkeypatch):
-    """Prompt discovery must use the frozen snapshot after a concurrent rename."""
+def test_get_pdd_file_paths_uses_snapshot_after_architecture_removed(
+    tmp_path, monkeypatch
+):
+    """Public path resolution must survive removal after its architecture load."""
     import sync_determine_operation as sync_determine_module
 
-    prompts_root = tmp_path / "prompts"
-    correct_prompt = prompts_root / "deep" / "credits_Python.prompt"
-    correct_prompt.parent.mkdir(parents=True)
-    correct_prompt.write_text("% architecture-selected prompt\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    prompts_root = tmp_path / "prompts" / "backend"
+    selected_prompt = prompts_root / "deep" / "credits_Python.prompt"
+    selected_prompt.parent.mkdir(parents=True)
+    selected_prompt.write_text("% architecture-selected prompt\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n"
+        "  backend:\n"
+        "    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts/backend\n"
+        "      generate_output_path: backend/generated/\n",
+        encoding="utf-8",
+    )
     architecture_path = tmp_path / "architecture.json"
     architecture_path.write_text(
         json.dumps({"modules": [{
-            "filename": "credits_Python.prompt",
-            "filepath": "backend/credits.py",
+            "filename": "backend/deep/credits_Python.prompt",
+            "filepath": "backend/services/credits.py",
         }]}),
         encoding="utf-8",
     )
 
-    modules = sync_determine_module._load_architecture_modules(architecture_path)
-    architecture_path.unlink()
-    original_lookup = sync_determine_module._get_filepath_from_architecture
-    snapshot_calls = []
+    original_loader = sync_determine_module._load_architecture_modules
+    loads = {"n": 0}
 
-    def track_lookup(*args, **kwargs):
-        snapshot_calls.append(kwargs.get("modules"))
-        return original_lookup(*args, **kwargs)
+    def load_then_remove(path):
+        loads["n"] += 1
+        modules = original_loader(path)
+        path.unlink()
+        return modules
 
     monkeypatch.setattr(
-        sync_determine_module, "_get_filepath_from_architecture", track_lookup
+        sync_determine_module, "_load_architecture_modules", load_then_remove
     )
 
-    resolved = sync_determine_module._find_prompt_file(
+    paths = sync_determine_module.get_pdd_file_paths(
         "credits",
         "python",
-        prompts_root,
-        architecture_path,
-        modules=modules,
+        prompts_dir="prompts/backend",
+        context_override="backend",
     )
 
-    assert snapshot_calls == [modules]
-    assert resolved == correct_prompt
+    assert loads["n"] == 1
+    assert paths["prompt"] == selected_prompt
+    assert paths["code"] == tmp_path / "backend" / "services" / "credits.py"
 
 
 def test_get_pdd_file_paths_failed_architecture_parse_is_frozen(tmp_path, monkeypatch):

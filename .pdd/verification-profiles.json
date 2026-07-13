@@ -9715,7 +9715,7 @@
       "prompt_path": "pdd/prompts/sync_determine_operation_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:f403185139bef48ffb3139cde7b68b72625e94aa37eea40741a147aba31d38d0"
+        "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
       ],
       "obligations": [
         {
@@ -9724,7 +9724,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:f403185139bef48ffb3139cde7b68b72625e94aa37eea40741a147aba31d38d0"
+            "CONTRACT-SHA256:015f38916d10072fb517102911d17143464321f4c2bf86fc69c049f42891602e"
           ],
           "artifact_paths": [
             "pdd/prompts/sync_determine_operation_python.prompt"
