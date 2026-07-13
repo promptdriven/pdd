@@ -1063,6 +1063,44 @@ class TestWorkspaceMembershipHardening:
         # A real brace after a ``${...}`` group still expands.
         assert sorted(_expand_braces("${a,b}/{c,d}")) == ["${a,b}/c", "${a,b}/d"]
 
+    def test_unbalanced_dollar_brace_still_expands_later_alternation(self):
+        """An *unbalanced* ``${`` (no matching ``}``) is a literal ``${``, not an
+        opaque group, so a later balanced ``{a,b}`` must still expand. Otherwise
+        ``!packages/${foo/{a,b}`` never excludes ``packages/${foo/a``."""
+        assert sorted(_expand_braces("packages/${foo/{a,b}")) == [
+            "packages/${foo/a",
+            "packages/${foo/b",
+        ]
+        globs = ["packages/**", "!packages/${foo/{a,b}"]
+        assert _package_matches_workspace(("packages", "${foo", "a"), globs) is False
+        assert _package_matches_workspace(("packages", "${foo", "b"), globs) is False
+        assert _package_matches_workspace(("packages", "${foo", "c"), globs) is True
+
+    def test_literal_bracket_forms_are_not_reinterpreted_by_fnmatch(self):
+        """The matcher implements ``*``/``?``/literal directly (no ``fnmatch``), so a
+        literal bracket form it permits is matched literally, matching minimatch —
+        not reinterpreted as a class. ``[^]``/``[!]`` are empty (literal); ``[^]]``/
+        ``[!]]``/``[]]`` are real non-empty classes (``]`` is their first member) and
+        fail closed."""
+        # Empty forms: literal, so they match only their literal dir name.
+        assert _package_matches_workspace(("packages", "^"), ["packages/[^]"]) is False
+        assert _package_matches_workspace(("packages", "[^]"), ["packages/[^]"]) is True
+        assert _package_matches_workspace(("packages", "[!]"), ["packages/[!]"]) is True
+        # ']' as first member → non-empty class → fail closed.
+        assert _has_complete_bracket_class("packages/[^]]") is True
+        assert _has_complete_bracket_class("packages/[!]]") is True
+        assert _has_complete_bracket_class("packages/[]]") is True
+        assert _package_matches_workspace(("packages", "a"), ["packages/[^]]"]) is False
+
+    def test_at_most_one_leading_dot_slash_is_normalized(self):
+        """npm normalizes only ONE leading ``./``; a second leading ``.`` segment is
+        significant. ``././packages/*`` therefore does NOT match ``packages/app``,
+        while a single ``./packages/*`` still does."""
+        assert _package_matches_workspace(("packages", "app"), ["././packages/*"]) is False
+        assert _package_matches_workspace(("packages", "app"), [".//./packages/*"]) is False
+        assert _package_matches_workspace(("packages", "app"), ["./packages/*"]) is True
+        assert _package_matches_workspace(("packages", "app"), ["packages/*"]) is True
+
     def test_length_guard_precedes_syntax_scan(self):
         """The cheap length guard runs before any O(len) syntax scan, and the bracket
         scan is linear, so a hostile megabyte-long unmatched-``[`` glob fails closed

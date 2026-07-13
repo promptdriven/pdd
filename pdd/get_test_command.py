@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 import csv
-import fnmatch
 import json
 import os
 import re
@@ -92,16 +91,18 @@ _EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
 
 def _has_complete_bracket_class(raw: str) -> bool:
     """True when ``raw`` contains a *closed, non-empty* ``[...]`` bracket class. Two
-    kinds are NOT flagged because both ``fnmatch`` and minimatch treat them
-    literally, so rejecting them would needlessly refuse a legitimate dir name:
+    kinds are NOT flagged because minimatch treats them literally, so rejecting them
+    would needlessly refuse a legitimate dir name:
 
-      * an *unmatched* ``[`` (no later ``]``), e.g. ``foo[bar``; and
-      * an *empty* class ``[]``, ``[!]``, ``[^]`` (nothing between the optional
-        negation marker and ``]``), e.g. a dir literally named ``[]``.
+      * an *unmatched* ``[`` (no closing ``]``), e.g. ``foo[bar``; and
+      * an *empty* class ``[]``, ``[!]``, ``[^]`` (no member before the closing
+        ``]``), e.g. a dir literally named ``[]``.
 
-    Only a class with at least one content character — whose ``[^…]`` negation and
-    POSIX ``[[:…:]]`` semantics diverge between ``fnmatch`` and minimatch — is
-    flagged for fail-closed handling.
+    Per POSIX/minimatch, a ``]`` in the *first member position* (immediately after
+    ``[`` or its ``!``/``^`` negation marker) is a literal member, not the close —
+    so ``[]]``, ``[^]]``, ``[!]]`` ARE non-empty classes (their content is ``]``)
+    and ARE flagged. Only a class with ``[^…]`` negation or POSIX ``[[:…:]]``
+    semantics, which diverge from a literal match, needs fail-closed handling.
 
     Runs in a single left-to-right pass (each ``find`` advances monotonically), so a
     hostile glob of a million unmatched ``[`` cannot drive quadratic rescanning."""
@@ -111,14 +112,12 @@ def _has_complete_bracket_class(raw: str) -> bool:
             i += 1
             continue
         j = i + 1
-        if j < n and raw[j] in "!^":  # a leading negation marker is not content
+        if j < n and raw[j] in "!^":  # a leading negation marker is not a member
             j += 1
-        if j < n and raw[j] == "]":  # empty class ([], [!], [^]) → literal
-            i = j + 1
-            continue
-        # A non-empty class needs a closing ']'. There is at most one forward search
-        # per string because a failure means no ']' exists at any later position.
-        if j < n and raw.find("]", j) != -1:
+        # The character at ``j`` (even ``]``) is the first class member; a real
+        # class needs a *closing* ``]`` somewhere after it. A single forward search
+        # suffices — no ``]`` after ``j`` means none exists for any later ``[``.
+        if j < n and raw.find("]", j + 1) != -1:
             return True
         return False
     return False
@@ -319,12 +318,13 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     # Cheap guard before allocating the split list (a "slash wall" attack).
     if pattern.count("/") > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
-    # Drop empty segments (from ``//`` or a trailing ``/``) and a *leading* ``./``
-    # (npm normalizes a leading current-dir). An *internal* ``.`` segment is kept:
-    # minimatch does not collapse ``packages/./x``, so such a glob must not be
-    # treated as ``packages/x`` and falsely prove membership.
+    # Drop empty segments (from ``//`` or a trailing ``/``) and AT MOST ONE leading
+    # ``./`` (npm normalizes a single leading current-dir). Every *subsequent* ``.``
+    # segment — leading (``././packages`` keeps the second) or internal
+    # (``packages/./x``) — is significant and kept, so such a glob must not be
+    # collapsed to ``packages/x`` and falsely prove membership.
     pat_parts = [p for p in pattern.strip("/").split("/") if p != ""]
-    while pat_parts and pat_parts[0] == ".":
+    if pat_parts and pat_parts[0] == ".":
         pat_parts.pop(0)
     if len(pat_parts) > _MAX_GLOB_SEGMENTS:
         raise _PatternBudgetError
@@ -358,13 +358,48 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     return dp[0][0]
 
 
+def _wildcard_segment_match(name: str, pat: str) -> bool:
+    """Match one path segment ``name`` against one glob segment ``pat`` in the
+    matcher's *own* supported language — literal characters plus ``*`` (any run,
+    including empty) and ``?`` (exactly one character) — and NOTHING else.
+
+    Every other character, including ``[ ] ( ) { } ^ ! $`` and ``.``, is treated as
+    a literal. Unsupported minimatch constructs (real ``[...]`` classes, extglobs,
+    ranges) never reach here — they fail membership closed at the guard — so this
+    deliberately does NOT delegate to ``fnmatch``, whose ``[...]``/``[^…]``
+    reinterpretation and OS case-folding diverge from minimatch on the literal
+    bracket forms this matcher intentionally permits (e.g. a dir named ``[^]``).
+
+    Linear-space greedy two-pointer with single-star backtracking: no recursion, no
+    regex, O(len(name) * number of ``*``) time and O(1) space."""
+    s = p = 0
+    star_p = star_s = -1
+    ns, npat = len(name), len(pat)
+    while s < ns:
+        if p < npat and (pat[p] == "?" or pat[p] == name[s]):
+            s += 1
+            p += 1
+        elif p < npat and pat[p] == "*":
+            star_p, star_s = p, s
+            p += 1
+        elif star_p != -1:
+            p = star_p + 1
+            star_s += 1
+            s = star_s
+        else:
+            return False
+    while p < npat and pat[p] == "*":
+        p += 1
+    return p == npat
+
+
 def _segment_matches(name: str, pattern_segment: str) -> bool:
-    """fnmatch a single path segment with minimatch ``dot:false`` semantics: a
+    """Match a single path segment with minimatch ``dot:false`` semantics: a
     wildcard pattern segment does not match a ``name`` that begins with ``.``
     unless the pattern segment itself begins with ``.``."""
     if name.startswith(".") and not pattern_segment.startswith("."):
         return False
-    return fnmatch.fnmatch(name, pattern_segment)
+    return _wildcard_segment_match(name, pattern_segment)
 
 
 def _workspace_globs_for(ancestor: Path, cache: Optional[dict] = None) -> list:
@@ -516,8 +551,11 @@ def _split_top_level_commas(body: str, limit: int) -> list:
 
 def _skip_balanced_braces(pattern: str, start: int, work: list) -> int:
     """Return the index just past the ``}`` matching the ``{`` at ``start`` (nesting
-    included), or ``len(pattern)`` when the group is unbalanced (literal to the end).
-    Each scanned character is charged against the ``work`` budget."""
+    included) when the group is *balanced*. When it is *unbalanced* (no matching
+    ``}``), return ``start + 1`` so the caller treats only that one ``{`` as literal
+    and keeps scanning — a later balanced alternation (e.g. the ``{a,b}`` in
+    ``${foo/{a,b}``) must still expand. Each scanned character is charged against
+    the ``work`` budget."""
     depth, i, n = 0, start, len(pattern)
     while i < n:
         work[0] -= 1
@@ -530,7 +568,7 @@ def _skip_balanced_braces(pattern: str, start: int, work: list) -> int:
             if depth == 0:
                 return i + 1
         i += 1
-    return n
+    return start + 1  # unbalanced ${ → ``{`` is literal; resume after it
 
 
 def _find_expandable_brace(pattern: str, limit: int,
