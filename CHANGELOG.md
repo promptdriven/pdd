@@ -4,6 +4,7 @@
 
 ### Feat
 
+- **agentic_sync**: implement incremental context packets and reusable evidence cache (#2021). Introduces `ContextPacket` (Pydantic v2 model) with typed `ContextSlot` entries (`prompt_contract`, `diff_hunk`, `dep_interface`, `test_output`, `verifier_finding`, `target_code`) and per-slot token counts, content hashes, and priority levels. Adds `diskcache`-backed content-addressed evidence cache under `$PDD_CACHE_DIR/sync_evidence` (default `~/.cache/pdd/sync_evidence`) with PDD-version-pinned SHA-256 keys so stale evidence cannot cross commits or tool upgrades. Cross-module shared-segment deduplication within one agentic run (in-memory, per-run). Retry delta sends re-embed only changed artifact slots while referencing the prior `ContextPacket` by ID — unchanged slots carry `content=None`. Per-phase hard token budgets with priority-ordered truncation raise `InsufficientContextError` (with `phase`, `budget`, `required_tokens`, `packet_id`) instead of silently clipping must-have slots. Emits `context_manifest.json` per run recording `cache_hit_count`, `cache_miss_count`, `total_input_tokens`, `total_output_tokens`, `provider_call_count`, `time_to_first_progress_ms`, and `wall_clock_ms`.
 - **test**: add `pdd test --from-story <story>` to compile a story's sibling
   contract into deterministic, offline pytest. The generator consumes
   `## Entry Point`, `## Seams`, `## Covers`, `## Oracle`, and

@@ -1,0 +1,43 @@
+<pdd-reason>Content-addressed diskcache-backed evidence cache for PDD sync preprocessing artifacts, keyed by PDD version plus content hash.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "SyncEvidenceCache", "signature": "(cache_dir=None) -> SyncEvidenceCache", "returns": "SyncEvidenceCache"},
+      {"name": "SyncEvidenceCache.get", "signature": "(tool_id: str, tool_version: str, content_hash: str) -> str | None", "returns": "str | None"},
+      {"name": "SyncEvidenceCache.put", "signature": "(tool_id: str, tool_version: str, content_hash: str, value: str) -> None", "returns": "None"},
+      {"name": "SyncEvidenceCache.reset_counters", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Write `pdd/sync_evidence_cache.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Implement a content-addressed evidence cache for PDD sync preprocessing artifacts, backed by `diskcache.Cache`, with PDD-version-pinned SHA-256 keys and per-instance hit/miss instrumentation.
+
+% Role & Scope
+This module wraps `diskcache.Cache` with version-pinned cache key derivation and telemetry counters. It is used by `agentic_sync_runner` and `sync_orchestration` to avoid recomputing deterministic preprocessing artifacts (diff extraction, interface extraction, test discovery, verifier evidence) across retries and runs. It performs only reads/writes to the cache directory and `importlib.metadata` lookups.
+
+% Requirements
+1. `SyncEvidenceCache` class wrapping `diskcache.Cache` stored under `$PDD_CACHE_DIR/sync_evidence` (default `~/.cache/pdd/sync_evidence`). Cache directory is configurable at construction time via `cache_dir` parameter; when `None`, resolve from `os.environ.get("PDD_CACHE_DIR", os.path.expanduser("~/.cache/pdd"))` and append `"sync_evidence"`.
+2. Cache key derivation: `sha256(pdd_version + "|" + tool_id + "|" + tool_version + "|" + content_hash)` where `pdd_version` is read once from `importlib.metadata.version("pdd")` at construction time and stored as `self._pdd_version`.
+3. `get(tool_id: str, tool_version: str, content_hash: str) -> str | None` — returns cached artifact string or None on miss. Increments `self._miss_count` on None, `self._hit_count` on hit.
+4. `put(tool_id: str, tool_version: str, content_hash: str, value: str) -> None` — stores artifact string in the cache. No TTL (content-hash keys are inherently stable until input or tool version changes).
+5. `hit_count: int` property returning `self._hit_count`.
+6. `miss_count: int` property returning `self._miss_count`.
+7. `reset_counters() -> None` — resets both `self._hit_count` and `self._miss_count` to zero. Called at the start of each agentic sync run.
+8. Cache entries MUST NOT contain source content with secrets; callers are responsible for providing only redacted/safe artifact strings. This module performs no redaction itself.
+9. Module is side-effect-free except for reads/writes to the cache directory and the `importlib.metadata` lookup at construction time.
+10. Tests and examples MUST import from `pdd.sync_evidence_cache`.
+
+% Dependencies
+<include>context/python_preamble.prompt</include>
+
+% Deliverables
+- Code: `pdd/sync_evidence_cache.py`

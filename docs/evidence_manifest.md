@@ -193,6 +193,53 @@ prompt, test, example, contract, or repair text.
 or used, which phases were involved, why fallback occurred, and provider/tool
 metadata when available.
 
+### Agentic Sync Context Manifest
+
+Agentic sync runs emit a separate JSON sidecar alongside the standard run manifest:
+
+```text
+<run_dir>/context_manifest.json
+```
+
+This file is written at run completion and records context-assembly telemetry for the
+entire agentic sync operation. It never contains source content or secrets.
+
+```json
+{
+  "packet_ids": ["<uuid>", "..."],
+  "total_input_tokens": 12400,
+  "total_output_tokens": 3200,
+  "provider_call_count": 5,
+  "cache_hit_count": 8,
+  "cache_miss_count": 2,
+  "time_to_first_progress_ms": 1420,
+  "wall_clock_ms": 38500
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `packet_ids` | Ordered list of `ContextPacket` UUIDs processed during the run. |
+| `total_input_tokens` | Sum of input tokens across all LLM provider calls in the run. |
+| `total_output_tokens` | Sum of output tokens across all LLM provider calls. |
+| `provider_call_count` | Total number of provider API calls made. |
+| `cache_hit_count` | Number of evidence cache hits (preprocessing, interface extraction, test discovery, verifier findings). |
+| `cache_miss_count` | Number of evidence cache misses (first-time or stale content). |
+| `time_to_first_progress_ms` | Milliseconds from run start to the first successful tool-call result. |
+| `wall_clock_ms` | Total elapsed time in milliseconds from run start to run end. |
+
+The evidence cache is a content-addressed `diskcache.Cache` keyed by
+`sha256(pdd_version + "|" + tool_id + "|" + tool_version + "|" + content_hash)`.
+Cache entries are automatically invalidated when the PDD version or input content
+changes. The cache directory is `$PDD_CACHE_DIR/sync_evidence`
+(default: `~/.cache/pdd/sync_evidence`).
+
+When a must-have `ContextSlot` (priority above the truncation threshold) cannot fit
+within the per-phase hard token budget, assembly raises `InsufficientContextError`
+with `phase`, `budget`, `required_tokens`, and `packet_id` fields. The orchestrator
+catches this error and routes to a scope-reduction retry rather than silently clipping
+high-priority content.
+
 ### Story Regression Coverage
 
 The story regression lane (`make regression-stories`) emits a deterministic,

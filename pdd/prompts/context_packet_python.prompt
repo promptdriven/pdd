@@ -1,0 +1,52 @@
+<pdd-reason>Pure data-model module for structured sync context packets, typed slot entries, and InsufficientContextError.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ContextSlot", "signature": "(kind, content_hash, token_estimate, priority, truncated, content) -> ContextSlot", "returns": "ContextSlot"},
+      {"name": "ContextPacket", "signature": "(phase, slots, budget, prior_packet_id=None) -> ContextPacket", "returns": "ContextPacket"},
+      {"name": "InsufficientContextError", "signature": "(phase, budget, required_tokens, packet_id) -> InsufficientContextError", "returns": "InsufficientContextError"},
+      {"name": "ContextPacket.slot_hashes", "signature": "() -> dict[str, str]", "returns": "dict[str, str]"},
+      {"name": "ContextPacket.compressed_sha256", "signature": "() -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Write `pdd/context_packet.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Define the pure Pydantic v2 data models for structured sync context packets, typed slot entries, and the InsufficientContextError exception used by agentic sync phase assembly.
+
+% Role & Scope
+This module is a pure data definition layer. It owns the `ContextSlot` and `ContextPacket` Pydantic v2 models and `InsufficientContextError`. It performs no file I/O, no LLM calls, and no external calls.
+
+% Requirements
+1. Pydantic v2 `ContextSlot` model with fields:
+   - `kind: Literal["prompt_contract", "diff_hunk", "dep_interface", "test_output", "verifier_finding", "target_code"]`
+   - `content_hash: str` — SHA-256 hex digest of the slot content
+   - `token_estimate: int` — estimated token count for this slot
+   - `priority: int` — higher value = more critical; must-have threshold is priority ≥ 3
+   - `truncated: bool` — True when this slot was dropped or shortened to fit the budget
+   - `content: str | None` — None when the slot is referenced by hash only (shared-segment or retry delta)
+2. Pydantic v2 `ContextPacket` model with fields:
+   - `packet_id: str` — UUID4, auto-generated at construction via `default_factory=lambda: str(uuid.uuid4())`
+   - `phase: str` — sync phase name (e.g. "generate", "verify", "test", "fix")
+   - `pdd_version: str` — read from `importlib.metadata.version("pdd")` at construction time via `default_factory`; never hard-coded
+   - `slots: list[ContextSlot]` — ordered list of context slots
+   - `total_token_estimate: int` — sum of `token_estimate` for all non-truncated slots with `content is not None`; auto-derived via `@model_validator(mode="after")`
+   - `budget: int` — per-phase hard token budget
+   - `prior_packet_id: str | None` — packet_id of the previous packet in a retry chain; None for first attempts
+3. `InsufficientContextError(ValueError)` exception class with attributes `phase: str`, `budget: int`, `required_tokens: int`, `packet_id: str`. Raised by packet assembly when must-have slots (priority ≥ threshold) cannot fit within the hard budget after all lower-priority slots are dropped.
+4. `ContextPacket` must produce a deterministic `model_json_schema()` for cache-key generation. Non-deterministic fields (timestamps, run UUIDs other than `packet_id`) MUST NOT appear in the packet body. `packet_id` is acceptable because it is generated once at construction and stable thereafter.
+5. `ContextPacket.slot_hashes() -> dict[str, str]`: returns a mapping of `kind → content_hash` for all slots. Slots with `content=None` are included (the hash is still valid for delta comparison).
+6. `ContextPacket.compressed_sha256() -> str`: returns `sha256(self.model_dump_json())` as a hex string for use as a content-addressed cache key.
+7. No external calls, no file I/O, no LLM calls; this module is a pure data definition.
+8. Tests and examples MUST import from `pdd.context_packet`.
+
+% Deliverables
+- Code: `pdd/context_packet.py`

@@ -7,7 +7,8 @@
     "functions": [
       {"name": "log_operation", "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable", "returns": "Callable"},
       {"name": "append_log_entry", "signature": "(basename: str, language: str, entry: Mapping[str, Any], project_root=None, paths=None) -> None", "returns": "None"},
-      {"name": "log_event", "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None) -> None", "returns": "None"}
+      {"name": "log_event", "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None, compression=None, agentic_fallback=None, cache_hit: bool = False, cache_miss: bool = False) -> None", "returns": "None"},
+      {"name": "get_run_telemetry", "signature": "() -> dict", "returns": "dict"}
     ]
   }
 }
@@ -40,6 +41,8 @@ A shared logging infrastructure module for tracking all PDD operations. Provides
 
 5. **Event Logging** - Log special events (lock_acquired, budget_warning, etc.) to the sync log. **Issue #1211**: `log_event` accepts an optional `paths` argument and forwards it to `append_log_entry` so lifecycle events (sync_start, lock_acquired, lock_released, budget_warning/exceeded, cycle_detected, steering_override, test_extend_skipped/limit, import_validation_failed, auto_fix_attempted/success, etc.) land in the same subproject `.pdd/meta` as the fingerprints/run reports. Without this, lifecycle logs split across two trees when invoked from a parent CWD. `load_operation_log` accepts the same `paths` hint so dry-run / log-display reads find the subproject log.
    - Sync callers may attach per-phase compression status and agentic-fallback status to log entries/events. Store only metadata such as requested, used, phase, hashes, source counts, estimates, reason, and fallback booleans.
+
+6. **Run-Level Telemetry Aggregation** - Extend `log_event` to accept and accumulate the following optional fields when `event` is a cache-instrumentation event: `cache_hit: bool`, `cache_miss: bool`. Accumulate `_cache_hit_count: int` and `_cache_miss_count: int` at the module/session level across all logged events within a run. Track `_run_start_ts: float | None` (set on the first `log_event` call for the run) and `_first_progress_ts: float | None` (set on the first `log_event` call where `event` is one of `generate_complete`, `example_complete`, `test_complete`, `verify_complete`). Expose `get_run_telemetry() -> dict` returning `{"cache_hit_count": int, "cache_miss_count": int, "total_input_tokens": int, "total_output_tokens": int, "provider_call_count": int, "time_to_first_progress_ms": int | None, "wall_clock_ms": int | None}` for consumption by `sync_orchestration` when emitting `context_manifest.json`. `time_to_first_progress_ms` is `(_first_progress_ts - _run_start_ts) * 1000` or `None` when `_first_progress_ts` is not yet set. `wall_clock_ms` is `(now - _run_start_ts) * 1000` computed at call time. `total_input_tokens`, `total_output_tokens`, and `provider_call_count` are summed from logged events that carry those fields. All new fields are additive; older log entries without them load without error.
 
 % The @log_operation Decorator
 

@@ -5,8 +5,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "build_compressed_sync_context", "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext", "returns": "CompressedSyncContext"},
-      {"name": "render_for_prompt", "signature": "(context: CompressedSyncContext) -> str", "returns": "str"}
+      {"name": "build_compressed_sync_context", "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None, must_have_priority_threshold=3, shared_segment_registry=None, evidence_cache=None) -> ContextPacket", "returns": "ContextPacket"},
+      {"name": "render_for_prompt", "signature": "(context: ContextPacket) -> str", "returns": "str"}
     ]
   }
 }
@@ -16,6 +16,7 @@
 <pdd-dependency>contract_ir_python.prompt</pdd-dependency>
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
 <pdd-dependency>test_context_packer_python.prompt</pdd-dependency>
+<pdd-dependency>context_packet_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Write `pdd/compressed_sync_context.py`.
 
@@ -28,20 +29,24 @@ Build deterministic, phase-aware compressed context packages for sync generation
 This internal helper prepares bounded context for sync phase executors. It owns compression policy, stable hashing, source metadata, safe rendering, and soft-failure status. It does not execute sync phases, call LLMs, write logs, or persist evidence.
 
 % Requirements
-1. Provide `build_compressed_sync_context(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext`.
+1. Provide `build_compressed_sync_context(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None, must_have_priority_threshold=3, shared_segment_registry=None, evidence_cache=None) -> ContextPacket`. The `shared_segment_registry` parameter is an optional `dict[str, str]` (content_hash → serialized slot content) used to deduplicate shared dependency/interface context across modules; when a slot's content hash is present in the registry, the slot is assembled with `content=None` (referenced by hash only). The `evidence_cache` parameter is an optional `SyncEvidenceCache` instance for caching deterministic preprocessing artifacts.
 2. Support phases `generate`, `verify`, `test`, and `fix`; reject unknown phases with a clear `ValueError`.
-3. Extract only behaviorally relevant context: prompt contract/interface sections, existing tests, example snippets when present, recent run/error reports, and repair directives.
+3. Extract only behaviorally relevant context and assemble each artifact as a `ContextSlot` with the appropriate `kind`, `priority`, `token_estimate`, and `content_hash`. Priority ordering (highest to lowest): `prompt_contract` (priority 5), `diff_hunk` (priority 4), `dep_interface` (priority 3), `target_code` (priority 2), `test_output` (priority 2), `verifier_finding` (priority 1). When a slot's content hash is present in `shared_segment_registry`, set `content=None` (referenced by hash only; content is injected from the registry at render time). When `evidence_cache` is provided, attempt to retrieve preprocessing artifacts from the cache before recomputing; store newly computed artifacts in the cache.
 4. Preserve exact identifiers, file paths, rule IDs, public API signatures, failing assertion names, and error signatures. Lossy prose summarization must not alter these tokens.
-5. Return content plus metadata: enabled/used status, phase, source paths, source SHA-256 hashes, compressed SHA-256, source count, character/token estimate, and unavailable/fallback reason.
+5. Return a `ContextPacket` whose slots carry per-slot `content_hash`, `token_estimate`, and `priority`. The packet's `compressed_sha256()` method derives the content-addressed key. Source SHA-256 hashes and token estimates are per-slot. The `ContextPacket` replaces the flat `CompressedSyncContext` metadata fields.
 6. Be deterministic for the same inputs: stable source ordering, stable JSON metadata, and no live web, shell, or LLM calls.
 7. Redact raw secrets from error logs and rendered content using the existing snapshot redaction policy or equivalent handling before metadata/content is persisted.
-8. Fail soft for missing optional sources: omit missing examples/tests with a reason, but do not prevent sync from falling back to full context.
-9. Provide `render_for_prompt(context) -> str` that returns a safe XML block, for example `<compressed_sync_context phase="generate">`, containing metadata and compressed content. Empty or unusable context should render as an empty string.
+8. Assemble slots into a `ContextPacket` using priority-ordered greedy truncation: drop slots from lowest priority first until `total_token_estimate ≤ budget`. If must-have slots (priority ≥ `must_have_priority_threshold`) cannot fit after all lower-priority slots are dropped, raise `InsufficientContextError(phase=phase, budget=budget, required_tokens=required, packet_id=packet.packet_id)` instead of silently clipping. Missing optional sources (examples, tests) continue to be omitted gracefully with a `truncated=True` slot and a reason in metadata — they do not trigger `InsufficientContextError`.
+9. Provide `render_for_prompt(context: ContextPacket) -> str` that returns a safe XML block `<compressed_sync_context phase="...">` containing metadata and compressed slot content. When a slot has `content=None`, inject the content from `shared_segment_registry` at render time (pass the registry as a module-level or call-time parameter). Empty or unusable context should render as an empty string. The `<compressed_sync_context>` XML output format is preserved for backward compatibility with downstream consumers.
 10. Keep the helper side-effect-free except for reading the explicit input files.
 11. Tests and examples for this package module MUST import from `pdd.compressed_sync_context`; they MUST NOT use a bare `compressed_sync_context` import or derive the import path from the prompt filename alone.
-12. When `context_compression` (new optional `str | None` parameter, default `None`) includes `"test"` or `"all"`, rank and filter only the caller-provided `test_paths` through `TestContextPacker(test_root=...).pack(module_path=code_path, budget_tokens=None, candidate_files=test_paths)` before assembling them. The explicit `candidate_files=test_paths` argument is required so sync path resolution cannot be widened to sibling tests under the common root. Use the packer's `context_text` output in place of the raw test file content. Append the `TestPackingManifest` to the returned `CompressedSyncContext` metadata under key `test_packing_manifest`. If `code_path` is None, fall back to recency-only ranking inside the packer (graceful degradation). When `context_compression` is `None` or does not include `"test"`, include `test_paths` verbatim (existing behavior preserved).
+12. When `context_compression` (new optional `str | None` parameter, default `None`) includes `"test"` or `"all"`, rank and filter only the caller-provided `test_paths` through `TestContextPacker(test_root=...).pack(module_path=code_path, budget_tokens=None, candidate_files=test_paths)` before assembling them. The explicit `candidate_files=test_paths` argument is required so sync path resolution cannot be widened to sibling tests under the common root. Use the packer's `context_text` output in place of the raw test file content. Append the `TestPackingManifest` to the returned `ContextPacket` metadata under key `test_packing_manifest`. If `code_path` is None, fall back to recency-only ranking inside the packer (graceful degradation). When `context_compression` is `None` or does not include `"test"`, include `test_paths` verbatim (existing behavior preserved).
+13. Import `ContextPacket`, `ContextSlot`, and `InsufficientContextError` from `pdd.context_packet`.
 
 % Dependencies
+<pdd.context_packet>
+  <include mode="interface">pdd/context_packet.py</include>
+</pdd.context_packet>
 <pdd.context_snapshot>
   <include mode="interface">pdd/context_snapshot.py</include>
 </pdd.context_snapshot>

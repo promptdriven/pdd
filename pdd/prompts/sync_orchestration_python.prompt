@@ -14,6 +14,7 @@
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>context_packet_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
 
@@ -111,7 +112,10 @@ Returns a dictionary containing:
 - Record per-phase metadata in the sync result and operation log: requested, used, unavailable reason, source counts, source hashes, compressed hash, token/character estimates, and fallback state. Never store raw compressed content in logs.
 - If compression fails, an optional source is missing, or the package is empty, continue with current full-context behavior and record `used=false` with a reason.
 - For isolated code repair or generation replay, do not force an `example` operation just to build context. Use existing example content only when it is present and relevant.
-- Implement a small helper such as `_build_phase_context(phase, repair_directive=None)` that returns `(package_or_none, metadata)`. It calls `build_compressed_sync_context(...)` only when the boolean request flag is true, catches construction errors, appends metadata to the result/log surfaces, and returns `None` on soft failure. Call this helper immediately before each phase attempt so retries see the current repair directive; do not reuse a stale generate package for fix or verify.
+- Implement a small helper such as `_build_phase_context(phase, repair_directive=None)` that returns `(package_or_none, metadata)`. It calls `build_compressed_sync_context(...)` only when the boolean request flag is true, catches construction errors (including `InsufficientContextError`), appends metadata to the result/log surfaces, and returns `None` on soft failure. Call this helper immediately before each phase attempt so retries see the current repair directive; do not reuse a stale generate package for fix or verify.
+- When `_build_phase_context` catches `InsufficientContextError` (import from `pdd.context_packet`), surface the structured error payload (`phase`, `budget`, `required_tokens`, `packet_id`) as a hard failure to the orchestrator — do NOT fall back to full-context behavior for this error. It signals the per-phase budget is too small and requires scope reduction, not a silent retry.
+- **Retry delta packet construction**: on retry attempt N, diff the current artifact content hashes against `prior_packet.slot_hashes()` (the `ContextPacket` returned by the previous attempt's `build_compressed_sync_context` call). Only slots whose hash changed are re-fetched and re-embedded (`content` populated); unchanged slots are referenced by hash with `content=None`. Pass `prior_packet_id=prior_packet.packet_id` when constructing the new `ContextPacket`. This replaces the current full-context re-send on each retry.
+- **Emit `context_manifest.json` sidecar at run end**: after the final workflow step completes (success or failure), write `<run_dir>/context_manifest.json` aggregating the run's telemetry: `packet_ids` (ordered list of `ContextPacket.packet_id` values processed during the run), `total_input_tokens`, `total_output_tokens`, `provider_call_count`, `cache_hit_count`, `cache_miss_count`, `time_to_first_progress_ms`, `wall_clock_ms`. Source these values from `operation_log`'s `get_run_telemetry()`. The file MUST NOT contain source content or secrets.
 - A `compressed_context` argument passed to phase executors is a mapping/package, not a boolean. The boolean `compressed_context` parameter on `sync_orchestration()` is only the request flag.
 - Isolated replay/repair means the sync invocation is deliberately replaying or repairing generated code rather than completing the whole dev-unit workflow. Treat the following as isolated: `force=True` generation replay, an active `PDD_REPAIR_DIRECTIVE`, a latest run report/error log that will route directly to `verify` or `fix`, or an explicit steering choice into `generate`, `verify`, or `fix` without an example operation. In isolated mode, missing/stale examples may be consumed if present but must not be scheduled before `generate`, `verify`, or `fix`.
 
@@ -197,6 +201,7 @@ from .sync_determine_operation import (
     _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
+from .context_packet import InsufficientContextError, ContextPacket
 from .code_generator_main import code_generator_main
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main

@@ -15,6 +15,7 @@
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>context_packet_python.prompt</pdd-dependency>
 # sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
@@ -111,7 +112,7 @@
     - Mutually exclusive with `skip_tests` and `skip_verify` (raise UsageError if combined)
     - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
     - **Fingerprint check**: If not force mode, call `sync_determine_operation()` to check if module is already synced; skip if operation is "nothing"
-    - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default. Forward `snapshot_context` into every generation attempt. When the effective compressed-context request flag is true, build a phase-specific compressed context package immediately before each LLM-backed generation attempt and pass that mapping to `code_generator_main(compressed_context=package)`. Never pass the boolean request flag itself to `code_generator_main`. If package construction fails, pass `None`, continue with full-context behavior, and record `used=false` compression metadata with the failure reason.
+    - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default. Forward `snapshot_context` into every generation attempt. When the effective compressed-context request flag is true, build a phase-specific compressed context package immediately before each LLM-backed generation attempt and pass that mapping to `code_generator_main(compressed_context=package)`. Never pass the boolean request flag itself to `code_generator_main`. If package construction raises `InsufficientContextError` (import from `pdd.context_packet`), surface the structured payload to the user as a clear error message: `f"Context budget insufficient for phase '{exc.phase}': required {exc.required_tokens} tokens but budget is {exc.budget} (packet {exc.packet_id}). Reduce scope or increase per-phase budget."` Return failure without attempting scope reduction — scope-reduction retry is the `sync_orchestration` concern. If package construction fails for any other reason, pass `None`, continue with full-context behavior, and record `used=false` compression metadata with the failure reason.
     - **Ambiguous module names (issue #1677)**: catch `AmbiguousModuleError` (imported from `sync_determine_operation`; a `ValueError` subclass raised by `get_pdd_file_paths` when a bare basename maps to ≥2 distinct architecture outputs) around module/path resolution and the per-language loop, and fail the command hard with the conflicting-target list (shown even under `--quiet`, exit non-zero). Never fall through to first-match-wins generation for an ambiguous bare basename.
     - **Architecture-conformance / public-surface / test-churn retry (#866, #1012)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). The loop catches three typed exceptions raised from `code_generator_main`: `ArchitectureConformanceError`, `PublicSurfaceRegressionError`, and `TestChurnError`. For each, add `exc.total_cost` to `pre_cost`, remember `exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only if budget remains.
         - Track the failure signature across attempts: sorted `missing_symbols` for conformance, sorted `removed_symbols` for public-surface, `(round(churn_ratio, 2), pre_line_count)` for test-churn. If the next attempt fails with the **identical** signature, abort the loop (no progress) instead of looping forever. Test-churn additionally caps at ONE repair attempt — the additive-only directive either lands the first try or stays stuck.
@@ -249,6 +250,9 @@
 <pdd.compressed_sync_context>
     <include optional mode="interface">pdd/compressed_sync_context.py</include>
 </pdd.compressed_sync_context>
+<pdd.context_packet>
+    <include mode="interface">pdd/context_packet.py</include>
+</pdd.context_packet>
 <pdd.agentic_sync_runner>
     <include select="def:build_conformance_hard_failure_from_error,def:build_public_surface_hard_failure_from_error,def:build_test_churn_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
 </pdd.agentic_sync_runner>
