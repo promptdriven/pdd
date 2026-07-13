@@ -261,3 +261,15 @@ class TestShellSafeSubstitute:
     def test_absent_placeholder_returns_template_unchanged(self):
         """A template with no placeholder is returned as-is (still a valid command)."""
         assert shell_safe_substitute("pytest --version", {"{file}": "x"}) == "pytest --version"
+
+    def test_empty_key_and_escaped_placeholder_are_handled(self):
+        """An empty placeholder key would match at every position and never advance the
+        cursor — it must be rejected up front (no hang), returning None. An ESCAPED
+        placeholder (``\\{test}``) cannot be filled and is declined rather than emitted
+        with the token left unresolved."""
+        # Empty key → None, and crucially returns quickly (no infinite loop).
+        assert shell_safe_substitute("echo", {"": "x"}) is None
+        assert shell_safe_substitute("pytest {test}", {"": "x", "{test}": "/a.py"}) is None
+        # Escaped placeholder → None (unfillable), while the unescaped form still works.
+        assert shell_safe_substitute(r"pytest \{test}", {"{test}": "x"}) is None
+        assert shell_safe_substitute("pytest {test}", {"{test}": "/a.py"}) == "pytest /a.py"

@@ -1259,6 +1259,25 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("#noop",), ["#noop"], ordered=False) is False
         assert _package_matches_workspace(("#noop",), ["#noop"], ordered=True) is False
 
+    def test_npm_removal_compares_raw_unexpanded_positive_string(self):
+        """npm's ``appendNegatedPatterns`` compares the RAW positive pattern STRING
+        (braces literal) against each negation, expanding braces only for the final
+        concrete-path membership test. So a later brace positive ``packages/{a,b}`` does
+        NOT remove a specific earlier ``!packages/a`` (the raw string ``packages/{a,b}``
+        doesn't match ``packages/a``): ``packages/a`` stays excluded, ``packages/b`` is a
+        member. (Expanding the positive before comparison would wrongly re-include
+        ``packages/a``.)"""
+        g = ["packages/**", "!packages/a", "packages/{a,b}"]
+        assert _package_matches_workspace(("packages", "a"), g, ordered=False) is False  # excluded
+        assert _package_matches_workspace(("packages", "b"), g, ordered=False) is True   # member
+        # A brace NEGATION, by contrast, is expanded — a raw positive matching any of its
+        # expansions removes the whole group.
+        g2 = ["packages/**", "!packages/{a,c}", "packages/a"]
+        assert _package_matches_workspace(("packages", "a"), g2, ordered=False) is True
+        assert _package_matches_workspace(("packages", "c"), g2, ordered=False) is True
+        # pnpm (per-path last-match) re-includes packages/a via the later brace positive.
+        assert _package_matches_workspace(("packages", "a"), g, ordered=True) is True
+
     def test_jest_config_extensions_include_cjs_and_json(self):
         """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
         `jest.config.cjs` must be detected as a Jest project, not fall back to tsx."""
@@ -1465,12 +1484,18 @@ class TestWorkspaceMembershipHardening:
             (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
             cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
             assert cmd2 is not None and "npx vitest run" in cmd2, (script, cmd2)
-        # A script that merely MENTIONS the substring "vitest" without invoking it does
-        # NOT prove Vitest — it must not be adopted (semantic token, not substring).
+        # A script where "vitest" is not in EXECUTABLE position (a bare argument, an
+        # arg to echo/node/command, or just a substring) does NOT prove Vitest.
         for script in ("echo no-vitest-installed", "cat vitest.config.ts",
-                       "echo run-vitest-later"):
+                       "echo run-vitest-later", "echo vitest", "node vitest",
+                       "command -v vitest", "printf vitest", "pnpm run test"):
             (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
             assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
+        # Executable-position invocations (incl. env prefix and a later clause) DO prove.
+        for script in ("CI=1 vitest run", "build && vitest", "yarn run vitest"):
+            (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
+            cmd3, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+            assert cmd3 is not None and "npx vitest run" in cmd3, (script, cmd3)
 
     def test_symlink_to_foreign_checkout_is_refused(self, tmp_path):
         """A symlink whose target is itself a git checkout must not be adopted.

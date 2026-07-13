@@ -1032,7 +1032,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             for pat in expanded:
                 if _concrete_pattern_unsupported(pat):
                     raise _PatternBudgetError
-            parsed.append((negated, expanded, is_comment))
+            parsed.append((negated, body, expanded, is_comment))
 
         def _matches_any(pattern_list) -> bool:
             return any(
@@ -1045,7 +1045,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             # that matches this path decides — a later positive RE-INCLUDES a path an
             # earlier ``!`` excluded, per-path. A positive comment matches no path.
             member = False
-            for negated, expanded, is_comment in parsed:
+            for negated, _body, expanded, is_comment in parsed:
                 if is_comment:
                     continue
                 if _matches_any(expanded):
@@ -1060,30 +1060,38 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # ``!packages/legacy/**`` exclusion and every ``packages/**`` path — including
         # ``packages/legacy/app`` — is a member again. A positive COMMENT pattern
         # (``#noop``) also participates in this removal (its pattern string can match an
-        # earlier negation) even though it never matches a concrete path. A path is then
-        # a member iff it matches a surviving non-comment positive and no surviving
-        # negation.
-        positives = []  # concrete positive pattern strings for path matching (no comments)
-        negatives = []  # concrete negation pattern strings still in force
-        for negated, expanded, is_comment in parsed:
+        # earlier negation) even though it never matches a concrete path.
+        #
+        # The removal MUST compare the RAW positive pattern *string* (braces literal, as
+        # upstream ``minimatch(pattern, negatedPattern)`` treats the pattern arg as a
+        # path) against each negation glob — NOT its brace expansions: for
+        # ``["packages/**", "!packages/a", "packages/{a,b}"]`` the raw ``packages/{a,b}``
+        # does NOT match ``packages/a``, so the exclusion survives and ``packages/a``
+        # stays excluded while ``packages/b`` is a member. Braces are expanded only for
+        # the final concrete-path membership test. Each negation is a group (its own
+        # brace expansions) removed atomically. A path is a member iff it matches a
+        # surviving non-comment positive expansion and no surviving negation expansion.
+        positives = []   # concrete positive expansions for path matching (no comments)
+        neg_groups = []  # per-negation lists of concrete expansions, still in force
+        for negated, body, expanded, is_comment in parsed:
             if negated:
-                negatives.extend(expanded)
+                neg_groups.append(expanded)
             else:
-                for pos in expanded:
-                    # npm applies the same leading normalization to every pattern
-                    # before comparing, so strip it before treating the positive
-                    # pattern string as a literal path for the removal test.
-                    pos_parts = tuple(_strip_one_leading(pos).split("/"))
-                    negatives = [
-                        neg for neg in negatives
-                        if not _relative_matches_workspace_glob(
-                            pos_parts, neg, cells, work)
-                    ]
-                    if not is_comment:
-                        positives.append(pos)
+                # RAW positive string as a literal path (braces NOT expanded), leading-
+                # normalized the SAME way npm normalizes every pattern before comparing.
+                raw_pos_parts = tuple(_strip_one_leading(body).split("/"))
+                neg_groups = [
+                    grp for grp in neg_groups
+                    if not any(
+                        _relative_matches_workspace_glob(raw_pos_parts, np, cells, work)
+                        for np in grp)
+                ]
+                if not is_comment:
+                    positives.extend(expanded)
+        neg_flat = [np for grp in neg_groups for np in grp]
         if not _matches_any(positives):
             return False
-        return not _matches_any(negatives)
+        return not _matches_any(neg_flat)
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
@@ -1289,18 +1297,54 @@ _VITE_CONFIG_NAMES = (
 )
 
 
-def _script_invokes_vitest(script: str) -> bool:
-    """True when a package.json script actually INVOKES vitest as a command, rather
-    than merely mentioning the substring (``echo no-vitest-installed`` must NOT count).
-    A token invokes vitest if its final path component is exactly ``vitest`` — covering
-    ``vitest run``, ``npx vitest``, ``pnpm exec vitest``, ``yarn vitest``, and
-    ``./node_modules/.bin/vitest`` — but not ``no-vitest-installed`` or
-    ``cat vitest.config.ts``."""
+_VITEST_RUNNERS = frozenset({"npx", "pnpm", "yarn", "bun", "bunx", "npm"})
+# Runner sub-commands/flags to skip while looking for the invoked binary after a runner
+# (``pnpm exec vitest``, ``pnpm dlx vitest``, ``yarn run vitest``, ``npx --yes vitest``).
+_RUNNER_SKIP = frozenset({"exec", "dlx", "run", "--yes", "-y", "--"})
+
+
+def _clause_invokes_vitest(clause: str) -> bool:
+    """True when a single command clause runs ``vitest`` in EXECUTABLE position — as the
+    command itself (basename ``vitest``) or as the binary a supported runner invokes
+    (``npx vitest``, ``pnpm exec vitest``, ``yarn vitest``, ``pnpm dlx vitest``). A
+    ``vitest`` appearing only as an ARGUMENT (``echo vitest``, ``node vitest``,
+    ``command -v vitest``) does NOT count."""
     try:
-        tokens = shlex.split(script)
+        tokens = shlex.split(clause)
     except ValueError:
-        tokens = script.split()
-    return any(tok.split("/")[-1] == "vitest" for tok in tokens)
+        tokens = clause.split()
+    # Drop leading ``VAR=value`` environment assignments.
+    idx = 0
+    while idx < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[idx]):
+        idx += 1
+    if idx >= len(tokens):
+        return False
+    cmd = tokens[idx].split("/")[-1]
+    if cmd == "vitest":
+        return True
+    if cmd in _VITEST_RUNNERS:
+        for tok in tokens[idx + 1:]:
+            base = tok.split("/")[-1]
+            if base == "vitest":
+                return True
+            if base in _RUNNER_SKIP or base.startswith("-"):
+                continue
+            break  # first real argument that is not vitest → not a vitest invocation
+    return False
+
+
+def _script_invokes_vitest(script: str) -> bool:
+    """True when a package.json script actually INVOKES vitest as a command (in
+    executable position, or via a supported ``npx``/``pnpm``/``yarn``/``bun`` runner),
+    rather than merely mentioning the string. The script is split into command clauses
+    on shell control operators (``;``, ``&&``, ``||``, ``|``, ``&``) and each clause is
+    checked independently, so ``echo vitest``, ``node vitest``, ``cat vitest.config.ts``,
+    and ``echo no-vitest-installed`` are all correctly rejected while ``vitest run`` and
+    ``test:unit && vitest`` are accepted."""
+    for clause in re.split(r"&&|\|\||[;&|\n]", script):
+        if clause.strip() and _clause_invokes_vitest(clause):
+            return True
+    return False
 
 
 def _vitest_proven_by_manifest(manifest: dict) -> bool:
