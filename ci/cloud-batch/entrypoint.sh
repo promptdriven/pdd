@@ -186,34 +186,46 @@ SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
 # ── Phantom-contract preflight ────────────────────────────────────────────
-# Protected Linux runner contract: the inner verifier deliberately fails
-# closed unless every namespace/bind-staging tool is present and sudo is
-# noninteractive. Report this as an image prerequisite failure instead of an
-# opaque nested pytest COLLECTION_ERROR.
-MISSING_SANDBOX_COMMANDS=()
-for command in bwrap sudo setpriv mount umount; do
-    command -v "${command}" >/dev/null 2>&1 || MISSING_SANDBOX_COMMANDS+=("${command}")
-done
-if [ "${#MISSING_SANDBOX_COMMANDS[@]}" -ne 0 ] || ! sudo -n true; then
-    echo "FATAL: missing protected sandbox prerequisites: ${MISSING_SANDBOX_COMMANDS[*]:-passwordless sudo}"
-    write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
-    exit 1
-fi
+preflight_protected_sandbox() {
+    # Protected Linux runner contract: the inner verifier deliberately fails
+    # closed unless every namespace/bind-staging tool is present and sudo is
+    # noninteractive. Report this as an image prerequisite failure instead of
+    # an opaque nested pytest COLLECTION_ERROR.
+    local command
+    local -a missing_sandbox_commands=()
+    for command in bwrap sudo setpriv mount umount; do
+        command -v "${command}" >/dev/null 2>&1 || \
+            missing_sandbox_commands+=("${command}")
+    done
+    if [ "${#missing_sandbox_commands[@]}" -ne 0 ] || ! sudo -n true; then
+        echo "FATAL: missing protected sandbox prerequisites: ${missing_sandbox_commands[*]:-passwordless sudo}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
+        exit 1
+    fi
 
-# The runner stages private bind mounts before entering bubblewrap. Exercise
-# that capability explicitly because container runtimes can expose the tools
-# while withholding the required mount capability.
-SANDBOX_PREFLIGHT_DIR=$(mktemp -d)
-mkdir "${SANDBOX_PREFLIGHT_DIR}/source" "${SANDBOX_PREFLIGHT_DIR}/target"
-if ! sudo -n mount --bind \
-    "${SANDBOX_PREFLIGHT_DIR}/source" "${SANDBOX_PREFLIGHT_DIR}/target"; then
-    echo "FATAL: protected sandbox bind-mount capability is unavailable"
-    rm -rf "${SANDBOX_PREFLIGHT_DIR}"
-    write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
-    exit 1
+    # The runner stages private bind mounts before entering bubblewrap.
+    # Exercise that capability explicitly because container runtimes can
+    # expose the tools while withholding the required mount capability.
+    local sandbox_preflight_dir
+    sandbox_preflight_dir=$(mktemp -d)
+    mkdir "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"
+    if ! sudo -n mount --bind \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"; then
+        echo "FATAL: protected sandbox bind-mount capability is unavailable"
+        rm -rf "${sandbox_preflight_dir}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
+        exit 1
+    fi
+    sudo -n umount "${sandbox_preflight_dir}/target"
+    rm -rf "${sandbox_preflight_dir}"
+}
+
+# Only pytest shards execute the protected verifier. Other regression jobs do
+# not receive SYS_ADMIN and must not require its mount preflight.
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    preflight_protected_sandbox
 fi
-sudo -n umount "${SANDBOX_PREFLIGHT_DIR}/target"
-rm -rf "${SANDBOX_PREFLIGHT_DIR}"
 
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping

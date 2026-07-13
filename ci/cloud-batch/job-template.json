@@ -6,7 +6,8 @@
                     {
                         "container": {
                             "imageUri": "{{REGION}}-docker.pkg.dev/{{PROJECT_ID}}/pdd-ci/pdd-test:latest",
-                            "entrypoint": "/entrypoint.sh"
+                            "entrypoint": "/entrypoint.sh",
+                            "options": "--cap-add=SYS_ADMIN --security-opt=seccomp=unconfined"
                         },
                         "environment": {
                             "variables": {
