@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # ── Arguments ──────────────────────────────────────────────────────────────
-PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME_SPOT [JOB_NAME_STD ...]}"
+PROJECT_ID="${1:?Usage: collect-results.sh PROJECT_ID BUCKET JOB_RUN_ID JOB_NAME [EXTRA_JOB_NAME ...]}"
 BUCKET="${2:?}"
 JOB_RUN_ID="${3:?}"
-JOB_NAME="${4:?}"           # primary (spot) job
+JOB_NAME="${4:?}"           # primary job
 shift 4
 EXTRA_JOB_NAMES=("$@")
 

@@ -65,3 +65,24 @@ def test_cloud_batch_source_upload_includes_checkup_interactive_demo() -> None:
         "cloud-batch source upload must include checkup interactive "
         f"demo fixtures; missing: {missing}"
     )
+
+
+def test_cloud_batch_source_upload_includes_repository_ignore_contract() -> None:
+    """The synthetic worker checkout must retain generated-file exclusions."""
+    assert ".gitignore" in _cloud_batch_source_paths()
+
+
+def test_cloud_batch_source_archive_disables_macos_metadata_for_every_write() -> None:
+    """Every tar write must suppress AppleDouble metadata on macOS."""
+    submit_text = SUBMIT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "_source_tar()" in submit_text
+    assert "COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar \"$@\"" in (
+        submit_text
+    )
+    assert submit_text.count("_source_tar ") == 3
+    assert not any(
+        line.strip().startswith("tar ")
+        and (" -cf " in f" {line} " or " -rf " in f" {line} ")
+        for line in submit_text.splitlines()
+    )

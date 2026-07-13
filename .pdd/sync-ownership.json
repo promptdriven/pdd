@@ -567,6 +567,12 @@
     {
       "inventory": "HUMAN_OWNED",
       "owner": "pdd-maintainers",
+      "pattern": "ci/cloud-batch/job-template-pytest.json",
+      "role": "human-maintained"
+    },
+    {
+      "inventory": "HUMAN_OWNED",
+      "owner": "pdd-maintainers",
       "pattern": "ci/cloud-batch/job-template-standard.json",
       "role": "human-maintained"
     },
