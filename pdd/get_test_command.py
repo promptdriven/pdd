@@ -61,8 +61,12 @@ class _WorkspaceDeclaration:
     patterns: tuple[str, ...]
 
 
-def _match_workspace_segment(value: str, pattern: str) -> bool:
+def _match_workspace_segment(
+    value: str, pattern: str, *, wildcards_match_dot: bool = True
+) -> bool:
     """Match one path segment with case-sensitive literal, ``*``, and ``?`` rules."""
+    if not wildcards_match_dot and value.startswith(".") and not pattern.startswith("."):
+        return False
     previous = [False] * (len(value) + 1)
     previous[0] = True
     for token in pattern:
@@ -153,7 +157,10 @@ def _workspace_match_state_cost(
 
 
 def _workspace_segments_match(
-    rel_parts: Tuple[str, ...], segments: Tuple[str, ...]
+    rel_parts: Tuple[str, ...],
+    segments: Tuple[str, ...],
+    *,
+    wildcards_match_dot: bool = True,
 ) -> bool:
     """Match one already-prepared alternative with iterative dynamic programming."""
     previous = [False] * (len(rel_parts) + 1)
@@ -163,11 +170,18 @@ def _workspace_segments_match(
         if segment == "**":
             current[0] = previous[0]
             for index in range(1, len(rel_parts) + 1):
-                current[index] = previous[index] or current[index - 1]
+                can_consume = wildcards_match_dot or not rel_parts[index - 1].startswith(
+                    "."
+                )
+                current[index] = previous[index] or (
+                    can_consume and current[index - 1]
+                )
         else:
             for index in range(1, len(rel_parts) + 1):
                 current[index] = previous[index - 1] and _match_workspace_segment(
-                    rel_parts[index - 1], segment
+                    rel_parts[index - 1],
+                    segment,
+                    wildcards_match_dot=wildcards_match_dot,
                 )
         previous = current
     return previous[-1]
@@ -216,6 +230,7 @@ def _declared_workspace_membership(
 ) -> Optional[bool]:
     """Apply provider semantics; ``None`` means exact evaluation is unsupported."""
     patterns = declaration.patterns
+    wildcards_match_dot = declaration.provider is not _WorkspaceProvider.NPM
     if (
         not patterns
         or len(patterns) > _MAX_WORKSPACE_PATTERNS
@@ -259,7 +274,11 @@ def _declared_workspace_membership(
         positive = any(
             not excluded
             and any(
-                _workspace_segments_match(rel_parts, segments)
+                _workspace_segments_match(
+                    rel_parts,
+                    segments,
+                    wildcards_match_dot=wildcards_match_dot,
+                )
                 for segments in alternatives
             )
             for excluded, alternatives in prepared_patterns
@@ -267,13 +286,24 @@ def _declared_workspace_membership(
         excluded = any(
             excluded
             and any(
-                _workspace_segments_match(rel_parts[:depth], segments)
+                _workspace_segments_match(
+                    rel_parts[:depth],
+                    segments,
+                    wildcards_match_dot=wildcards_match_dot,
+                )
                 for depth in range(1, len(rel_parts) + 1)
                 for segments in alternatives
             )
             for excluded, alternatives in prepared_patterns
         )
-        return positive and not excluded
+        return (
+            positive
+            and not excluded
+            and not (
+                declaration.provider is _WorkspaceProvider.NPM
+                and "node_modules" in rel_parts
+            )
+        )
 
     member = False
     for excluded, alternatives in prepared_patterns:
@@ -375,7 +405,7 @@ def _manifest_workspace_globs(path: Path) -> Optional[list[str]]:
 
 
 def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
-    """Load Lerna patterns, including its conventional ``packages/*`` default."""
+    """Load only explicit, valid Lerna package patterns, failing closed."""
     if not os.path.lexists(path):
         return []
     contents = _read_workspace_manifest(path)
@@ -387,10 +417,9 @@ def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
         return None
     if not isinstance(lerna, dict):
         return None
-    packages = lerna.get("packages")
-    if packages is None:
-        return ["packages/*"]
-    return _string_pattern_list(packages)
+    if "packages" not in lerna:
+        return []
+    return _string_pattern_list(lerna["packages"])
 
 
 def _workspace_declarations_for(
