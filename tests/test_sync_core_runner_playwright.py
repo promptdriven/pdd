@@ -27,6 +27,7 @@ from pdd.sync_core.runner import (
     _local_javascript_imports,
     _playwright_environment,
     _playwright_command_error,
+    _playwright_missing_result_detail,
     _playwright_reporter_source,
     _playwright_result,
     _toolchain_manifest_identity,
@@ -211,6 +212,8 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
         installed_entrypoint.write_bytes(entrypoint.read_bytes())
     lockfile = directory / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
+    native = directory / "native-runtime.so"
+    native.write_bytes(b"synthetic-native-runtime")
     manifest = directory / "playwright-toolchain.json"
     manifest.write_text(
         json.dumps({
@@ -220,7 +223,7 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
                 "entrypoint": str(installed_entrypoint.resolve()),
                 "dependencies": str(dependencies.resolve()),
                 "browser_runtime": str(browsers.resolve()),
-                "native_runtime": [str(launcher.resolve())],
+                "native_runtime": [str(native.resolve())],
                 "lockfile": str(lockfile.resolve()),
             },
         }),
@@ -1974,6 +1977,18 @@ def test_playwright_stdout_result_forgery_is_not_a_reporter_result(tmp_path: Pat
     )
     assert outcome is EvidenceOutcome.COLLECTION_ERROR
     assert not identities
+
+
+def test_playwright_missing_private_result_has_bounded_diagnostics() -> None:
+    result = subprocess.CompletedProcess(
+        ["playwright"], 17, "", "mount failed\n" + ("x" * 600)
+    )
+
+    detail = _playwright_missing_result_detail(result)
+
+    assert "exit 17" in detail
+    assert "mount failed" in detail
+    assert len(detail) < 600
 
 
 @pytest.mark.parametrize("source", [

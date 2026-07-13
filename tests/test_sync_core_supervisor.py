@@ -159,6 +159,62 @@ def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
     )
 
 
+def test_linux_sandbox_deduplicates_identical_read_only_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    native = tmp_path / "native.so"
+    native.write_bytes(b"native")
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_roots=(native, native),
+        readable_bindings=((native, native),),
+    )
+
+    bwrap = json.loads(argv[-2])
+    assert bwrap.count(str(native)) == 1
+
+
+def test_linux_sandbox_rejects_conflicting_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    first = tmp_path / "first.so"
+    second = tmp_path / "second.so"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    with pytest.raises(RuntimeError, match="conflicting bindings"):
+        _sandbox_command(
+            ["/bin/true"],
+            (tmp_path,),
+            readable_bindings=((first, Path("/opt/native.so")),
+                               (second, Path("/opt/native.so"))),
+        )
+
+
 def test_linux_sandbox_fails_closed_for_root_caller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

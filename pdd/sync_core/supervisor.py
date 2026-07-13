@@ -318,7 +318,7 @@ def _sandbox_command(
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[list[str], Path | None]:
-    # pylint: disable=too-many-locals,too-many-branches
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
         raise RuntimeError(
@@ -343,8 +343,18 @@ def _sandbox_command(
                 "--tmpfs", "/", "--proc", "/proc", "--dir", "/tmp"]
         sources: list[Path] = []
         destination_dirs = {Path("/tmp")}
+        mounted: dict[Path, tuple[str, Path]] = {}
         def bind(option: str, source: Path, destination: Path | None = None) -> None:
             destination = destination or source
+            binding = (option, source.resolve())
+            previous = mounted.get(destination)
+            if previous == binding:
+                return
+            if previous is not None and previous[1] != binding[1]:
+                raise RuntimeError(
+                    f"protected sandbox has conflicting bindings for {destination}"
+                )
+            mounted[destination] = binding
             missing = []
             parent = destination.parent
             while parent != Path("/") and parent not in destination_dirs:

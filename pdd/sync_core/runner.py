@@ -4230,6 +4230,17 @@ module.exports = PddTrustedReporter;
 """
 
 
+def _playwright_missing_result_detail(
+    result: subprocess.CompletedProcess[str],
+) -> str:
+    """Summarize a failed reporter launch without unbounded child output."""
+    diagnostic = " ".join(result.stderr.split())
+    if len(diagnostic) > 512:
+        diagnostic = diagnostic[:509] + "..."
+    detail = f"Playwright reporter produced no private result (exit {result.returncode})"
+    return f"{detail}: {diagnostic}" if diagnostic else detail
+
+
 def _playwright_result(
     root: Path, output: str, returncode: int, expected: tuple[str, ...] | None,
     collection: bool = False,
@@ -4540,7 +4551,7 @@ def _run_playwright_in_tree(
     if not output:
         return RunnerExecution(
             "playwright", EvidenceOutcome.COLLECTION_ERROR, digest,
-            "Playwright reporter produced no private result",
+            _playwright_missing_result_detail(result),
         ), ()
     outcome, detail, identities = _playwright_result(
         root, output.decode("utf-8", errors="replace"), result.returncode, expected, collection
