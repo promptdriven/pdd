@@ -297,14 +297,24 @@ class TestShellSafeSubstitute:
         Shell/Bash/Zsh run-commands) and a non-shell ``-c`` option (``pytest -c cfg``)
         are safe and still substitute. Proven with real ``bash -lc`` execution."""
         for tpl in ("eval {file}", "bash -c {file}", "sh -c {file}", "dash -c {file}",
-                    "build && eval {file}", "CI=1 eval {file}"):
+                    "build && eval {file}", "CI=1 eval {file}",
+                    # combined short-option groups (`-lc`, `-xc`), wrappers, and a
+                    # mid-word `#` (which bash does NOT treat as a comment) hiding a clause
+                    "bash -lc {file}", "sh -xc {file}", "env bash -c {file}",
+                    "command sh -c {file}", "env FOO=1 bash -lc {file}",
+                    "echo a#b && bash -c {file}"):
             assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
-        # Safe: the shell runs the FILE (value is a filename, single-quoted).
+        # Safe: the shell runs the FILE (value is a filename, single-quoted); a mid-word
+        # `#` is literal; a non-shell `-c` option is fine.
         assert shell_safe_substitute("sh {file}", {"{file}": "/a.sh"}) == "sh /a.sh"
+        assert shell_safe_substitute("bash {file}", {"{file}": "/a.sh"}) == "bash /a.sh"
         assert shell_safe_substitute(
             "pytest -c cfg {file}", {"{file}": "/t.py"}) == "pytest -c cfg /t.py"
-        # Prove the eval exploit the guard prevents is genuine.
-        with tempfile.TemporaryDirectory() as d:
-            naive = "eval " + shlex.quote("$(touch PWN_EVAL)")
-            subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)
-            assert "PWN_EVAL" in os.listdir(d), "expected the naive eval form to inject"
+        assert shell_safe_substitute("echo a#b {file}", {"{file}": "x"}) == "echo a#b x"
+        # Prove the bypasses the guard prevents are genuine (naive forms inject).
+        for naive_tpl, marker in (("eval {V}", "PWN_EVAL"), ("bash -lc {V}", "PWN_LC"),
+                                  ("env bash -c {V}", "PWN_ENV")):
+            with tempfile.TemporaryDirectory() as d:
+                naive = naive_tpl.replace("{V}", shlex.quote("$(touch %s)" % marker))
+                subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)
+                assert marker in os.listdir(d), (naive_tpl, os.listdir(d))
