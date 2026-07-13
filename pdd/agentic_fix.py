@@ -117,6 +117,36 @@ def _run_testcmd(cmd: str, cwd: Path) -> bool:
     return proc.returncode == 0
 
 
+def _substitute_verify_template(template: str, unit_test_file: str,
+                                cwd: Path) -> Optional[str]:
+    """Substitute a verify-command TEMPLATE's ``{test}``/``{cwd}`` placeholders with
+    shell-quoted values, or return ``None`` when the template is unsafe.
+
+    ``shlex.quote`` wraps its value in single quotes, which only neutralizes shell
+    metacharacters when the placeholder is a standalone *bare word*. If the template
+    instead nests a placeholder inside its own quotes (``pytest "{test}"``) or
+    adjoins it to another token, the inserted single quotes become literal and a
+    ``$(...)``/backtick in the resolved path is still executed by the shell. So each
+    placeholder occurrence must be bounded by whitespace or a string end; otherwise
+    the template is refused (``None``) rather than turned into an injectable command.
+    """
+    for placeholder in ("{test}", "{cwd}"):
+        start = 0
+        while True:
+            i = template.find(placeholder, start)
+            if i == -1:
+                break
+            end = i + len(placeholder)
+            before_ok = i == 0 or template[i - 1].isspace()
+            after_ok = end == len(template) or template[end].isspace()
+            if not (before_ok and after_ok):
+                return None  # placeholder inside quotes / a token → injectable
+            start = end
+    return template.replace(
+        "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
+    ).replace("{cwd}", shlex.quote(str(cwd)))
+
+
 def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str],
                     enabled: bool, verify_cmd_is_template: bool = False) -> bool:
     """
@@ -138,9 +168,13 @@ def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str]
         return True
     if verify_cmd:
         if verify_cmd_is_template:
-            cmd = verify_cmd.replace(
-                "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
-            ).replace("{cwd}", shlex.quote(str(cwd)))
+            cmd = _substitute_verify_template(verify_cmd, unit_test_file, cwd)
+            if cmd is None:
+                # Unsafe template (placeholder nested in quotes/token) → refuse to
+                # build an injectable command; the verification gate fails closed.
+                _info("Refusing verify-command template: {test}/{cwd} is not a "
+                      "standalone shell word (quoting it would allow injection).")
+                return False
         else:
             cmd = verify_cmd
         return _run_testcmd(cmd, cwd)
@@ -306,15 +340,18 @@ def run_agentic_fix(
             try:
                 lang = get_language(os.path.splitext(code_path)[1])
                 env_tpl = os.getenv("PDD_AGENTIC_VERIFY_CMD")
-                pre_cmd = env_tpl or default_verify_cmd_for(lang, unit_test_file)
+                # Only a user template's `{test}`/`{cwd}` placeholders are
+                # substituted (shell-quoted, and only when each is a standalone bare
+                # word — see _substitute_verify_template); an unsafe template is
+                # refused and we fall back to the finalized default command, which
+                # runs as-is so its own quoting is not corrupted (injection).
+                pre_cmd = None
+                if env_tpl:
+                    pre_cmd = _substitute_verify_template(
+                        env_tpl, unit_test_file, working_dir)
+                if pre_cmd is None:
+                    pre_cmd = default_verify_cmd_for(lang, unit_test_file)
                 if pre_cmd:
-                    # Only a user template's `{test}`/`{cwd}` placeholders are
-                    # substituted (shell-quoted); a finalized default command runs
-                    # as-is so its quoting is not corrupted (injection).
-                    if env_tpl:
-                        pre_cmd = env_tpl.replace(
-                            "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
-                        ).replace("{cwd}", shlex.quote(str(working_dir)))
                     pre = subprocess.run(
                         ["bash", "-lc", pre_cmd],
                         capture_output=True, text=True, check=False,
