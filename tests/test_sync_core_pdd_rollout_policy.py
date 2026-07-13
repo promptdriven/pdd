@@ -25,6 +25,7 @@ PROFILE_FILE = ROOT / PROFILE_REL_PATH
 ROTATION_FILE = ROOT / ".pdd" / "verification-profile-rotations.json"
 REPOSITORY_ID = "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0"
 EXPECTED_MANAGED_UNITS = 466
+PROTECTED_BASE = "501de70a3520bebf88d991acf705737eddd7ebe3"
 FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
@@ -454,6 +455,34 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
     } == FOUNDATION_PROFILE_PATHS
 
 
+def test_exact_working_tree_prompt_transitions_are_fully_covered(monkeypatch) -> None:
+    """The two exact base-to-working-tree transitions preserve full coverage."""
+    manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
+    candidate_manifest = replace(
+        manifest, refs=ManifestRefs("protected-base", "candidate-working-tree")
+    )
+
+    def exact_read(_root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+        if ref == "candidate-working-tree":
+            candidate = ROOT / path
+            return candidate.read_bytes() if candidate.is_file() else None
+        try:
+            return subprocess.check_output(
+                ["git", "show", f"{PROTECTED_BASE}:{path.as_posix()}"],
+                cwd=ROOT,
+            )
+        except subprocess.CalledProcessError:
+            return None
+
+    monkeypatch.setattr(verification, "read_git_blob", exact_read)
+
+    profiles = load_verification_profiles(ROOT, candidate_manifest)
+
+    assert profiles.coverage == 1.0
+    assert len(profiles.profiles) == EXPECTED_MANAGED_UNITS
+    assert not profiles.invalid_reasons
+
+
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     """A candidate copy is rejected until this rollout has merged as protected base."""
     manifest = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
@@ -472,7 +501,17 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     profiles = load_verification_profiles(ROOT, candidate_manifest)
 
     assert profiles.coverage == 0.0
-    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 1
+    assert len(profiles.invalid_reasons) == EXPECTED_MANAGED_UNITS * 2 + 2
+    assert all(
+        any(
+            f"{prompt}: requirement transition bindings mismatch" in reason
+            for reason in profiles.invalid_reasons
+        )
+        for prompt in (
+            "pdd/prompts/agentic_langtest_python.prompt",
+            "pdd/prompts/get_test_command_python.prompt",
+        )
+    )
     candidate_only = [
         reason
         for reason in profiles.invalid_reasons
@@ -488,7 +527,7 @@ def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
     assert sum(
         "requirement transition bindings mismatch" in reason
         for reason in profiles.invalid_reasons
-    ) == 1
+    ) == 2
 
 
 def _bootstrap_addition_fixture(monkeypatch):

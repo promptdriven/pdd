@@ -1,43 +1,19 @@
 <include>context/python_preamble.prompt</include>
 
 % Goal
-Write the pdd/agentic_langtest.py module.
+Implement the language-level verification command fallback in `pdd/agentic_langtest.py`.
 
-% Role & Scope
-A minimal utility module that provides language-specific test command utilities.
-For Python, it returns a pytest command. For all non-Python languages, it returns
-None to signal that agentic mode should handle test discovery and execution.
+% Public API
+- `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`
+- `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
 
-This module is intentionally simple because non-Python languages use agentic mode
-for test running, where agents can explore the project structure and determine the
-appropriate test framework (Jest, JUnit, Go test, Cargo test, etc.) dynamically.
+% Contract
+R1. `default_verify_cmd_for` MUST normalize the language name and return the first non-empty `run_test_command` for that language from the packaged `language_format.csv`.
+R2. If the CSV is absent or has no command, Python MUST return an executable-qualified `python -m pytest <file> -q` command and other languages MUST return `None`.
+R3. Every returned path-bearing command MUST be a POSIX-shell command string whose complete test path is shell-quoted as one literal argument under both `shell=True` and `shlex.split`/`shell=False` execution; spaces, quotes, semicolons, backticks, `$()`, and other shell metacharacters MUST NOT execute or create extra arguments.
+R4. CSV absence or unreadability MUST fall back without raising, and command resolution MUST NOT execute the returned command or mutate the project.
+R5. `missing_tool_hints` MUST remain API-compatible and return `None` without installing, probing, or modifying tools.
+R6. Public functions MUST be fully type-annotated, path values MUST use `pathlib.Path`, and the module MUST begin with `from __future__ import annotations`.
 
-% Requirements
-1. All functions must be fully type-hinted.
-2. Use `pathlib.Path` for path manipulations.
-3. The file must start with `from __future__ import annotations`.
-
-% Core Functions
-
-### `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`
-
-Returns a test command for the given language and test file.
-
-- **Python**: Returns a pytest command: `{sys.executable} -m pytest "{unit_test_file}" -q`
-- **All other languages**: Returns `None` to trigger agentic fallback mode
-
-The function normalizes language to lowercase before comparison.
-
-### `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
-
-Returns guidance if required tools are missing.
-
-- Currently returns `None` for all cases since non-Python languages are handled
-  by agentic mode which can install dependencies dynamically.
-- Kept for API compatibility.
-
-% Dependencies
-<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
-
-% Deliverables
-- Code: `pdd/agentic_langtest.py`
+% Deliverable
+Produce `pdd/agentic_langtest.py` with the public API and observable behavior above.

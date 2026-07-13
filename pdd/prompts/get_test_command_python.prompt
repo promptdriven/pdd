@@ -1,26 +1,32 @@
-# Role and Scope
-You are an expert software engineer implementing the `get_test_command.py` module for the `pdd` project. This module is responsible for resolving the appropriate test execution command for a given file. It acts as a bridge between static language configuration (CSV), project-specific configuration (like Jest or Playwright configs), and agentic fallback mechanisms.
+<include>context/python_preamble.prompt</include>
 
-# Requirements
-1. **Resolution Order**: The module must resolve commands in the following priority:
-   - Smart runner detection for TypeScript/TSX (looking for configuration files).
-   - Static lookup via `language_format.csv`.
-   - Heuristic detection via `default_verify_cmd_for`.
-   - Fallback to `None` to trigger agentic logic.
-2. **TypeScript Smart Detection**:
-   - For `.ts` and `.tsx` files, search upwards for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
-   - Continue the walk beyond a fixed number of parents so colocated suites in Next.js/monorepo layouts are found even when they live many directories below their runner config (e.g. a page test under `frontend/src/app/hackathon/[eventId]/team/__tests__/` and the config at `frontend/jest.config.js`). The nearest ancestor config wins. Stop the walk at the JS project boundary — the nearest `package.json` — with two refinements: (a) when that package is a member of an ancestor workspace, continue *through* the leaf to the workspace root, whose config it inherits; (b) an independent package must not adopt an unrelated ancestor's config, and the walk must never cross the repository root (`.git`, a directory in a clone and a file in a worktree). Anchor that root before searching and accept a runner config only when its resolved target is a regular file contained within the root; normal files and symlinks to in-repository files remain valid. Without a Git root, use the nearest independent package or proven workspace root as the containment ceiling; if neither can be established, allow ordinary config files but reject config symlinks whose ownership cannot be proven. Cap the walk defensively against pathological paths.
-   - Prove workspace membership from declared package globs (npm/Yarn `workspaces`, `lerna.json` `packages`, or authoritative `pnpm-workspace.yaml` `packages`) without erasing which provider supplied them. Match the supported bounded subset case-sensitively with literals, segment `*`/`?`/`**`, and simple `{a,b}` alternatives. Preserve pnpm's declaration-ordered exclusion and later re-inclusion behavior. For npm/Yarn/Lerna, honor exclusions that prune matching parent directories (so `packages/**` plus `!packages/*` excludes `packages/deep/app`) and fail closed where the supported subset cannot faithfully decide provider behavior; never apply pnpm's last-match semantics universally. Bound every manifest read to 1 MiB, cap document nesting before parsing, reject overlong lists before scanning their entries, and fail closed on parser recursion. Malformed, non-string, unsupported, or over-budget declarations leave membership unproven without invoking Node or a shell. An unrelated sibling such as `vendor/tool` is not a member merely because a workspace declaration exists.
-   - Invoke Jest with `--runTestsByPath` so the resolved absolute test path is matched literally. Jest otherwise treats the trailing path as a regex, and Next.js dynamic-route segments such as `[eventId]`/`[slug]` are regex character classes that never match the literal bracketed path.
-   - When constructing the runner command string, append the resolved absolute test path with per-runner escaping: Playwright treats its positional argument as a regular expression, so regex-escape the path; Jest (`--runTestsByPath`) and Vitest take it literally. In all cases shell-quote the argument, because callers execute the command string with `shell=True` and an unquoted path with spaces or shell metacharacters would be re-split or reinterpreted.
-   - If found, return the command with the specific directory containing the config as the `cwd`.
-   - Prioritize Playwright for files ending in `.spec.ts` or `.spec.tsx`.
-3. **Data Classes**: Define a `TestCommand` dataclass to bundle the `command` string and an optional `cwd` (Path). Use `__test__ = False` to avoid discovery by pytest.
-4. **CSV Integration**: Load language-specific test commands from `language_format.csv`, searching in both package-relative and project-root-relative `data/` directories.
-5. **Path Resolution**: Ensure all paths are handled using `pathlib` for cross-platform compatibility.
-6. **Error Handling**: Gracefully handle missing CSV files by returning an empty dictionary, allowing the resolution logic to proceed to the next step.
+% Goal
+Implement the test-command resolver in `pdd/get_test_command.py`.
 
-# Dependencies
+% Public API
+- `TestCommand(command: str, cwd: Optional[Path] = None)` MUST remain a dataclass and MUST NOT be collected by pytest.
+- `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]` MUST remain the public entry point.
+
+% Vocabulary
+- A lexical marker is a directory entry whose name exists even when it is unreadable or is a dangling or looping symlink.
+- A proven workspace member is a package whose relative path is decided by a fully supported, valid, bounded declaration from its workspace provider.
+- A command string is a POSIX-shell command string consumed either by `shell=True` or by `shlex.split` followed by `shell=False`.
+
+% Contract
+R1. Resolution MUST try TypeScript runner discovery first for TypeScript/TSX files, then a non-empty extension-matched `language_format.csv` command, then `default_verify_cmd_for`, and finally return `None`.
+R2. Runner discovery MUST select the nearest ancestor config, preferring Playwright for `.spec.ts`/`.spec.tsx`, then Jest, then Vitest at the same ancestor, and MUST return that config directory as `cwd`.
+R3. Discovery MUST continue beyond five parents but MUST NOT cross a lexical `.git` repository/worktree marker, an independent lexical `package.json` boundary, or the defensive ancestry cap.
+R4. A package boundary MUST be crossed only when an ancestor npm/Yarn, Lerna, or authoritative pnpm declaration proves membership; unrelated descendants MUST NOT inherit an ancestor runner.
+R5. Workspace matching MUST preserve provider semantics: npm/Yarn/Lerna exclusions prune matching prefixes, while pnpm exclusions and re-inclusions are declaration ordered; unsupported, malformed, unreadable, oversized, over-nested, over-budget, or non-string declarations MUST make the relevant membership unproven.
+R6. The supported workspace glob subset MUST be case-sensitive literals, segment `*`, `?`, `**`, and simple non-nested `{a,b}` alternatives; any bracket class, backslash escape, or extglob form `?(`, `*(`, `+(`, `@(`, or `!(` in a positive or exclusion pattern MUST make the entire relevant declaration unproven.
+R7. A runner config MUST resolve to a regular file within the proven repository/package/workspace owner; an unanchored config symlink or a symlink escaping that owner MUST NOT be accepted.
+R8. Jest MUST use `--runTestsByPath`; Playwright's positional path MUST be regex-escaped; Jest and Vitest paths MUST remain literal.
+R9. Every path-bearing returned command MUST POSIX-shell-quote the complete path as one literal argument, including CSV, heuristic, Jest, Vitest, and Playwright commands; spaces, quotes, semicolons, backticks, `$()`, and other shell metacharacters MUST NOT split arguments or execute shell syntax.
+R10. One public lookup MUST read and parse each relevant workspace manifest at most once, without a stale cross-lookup filesystem cache, while preserving all byte, nesting, pattern, segment, state, and ancestry limits.
+R11. Discovery MUST NOT execute Node, package managers, manifest code, or a shell, and any ownership or resource uncertainty MUST fail closed to CSV/heuristic/agentic fallback.
+R12. Missing CSV files MUST be treated as an empty mapping, and CSV lookup MUST support both package-relative and project-root-relative `data/language_format.csv` locations.
+
+% Required context
 <agentic_langtest>
     <include>pdd/agentic_langtest.py</include>
 </agentic_langtest>
@@ -34,27 +40,5 @@ You are an expert software engineer implementing the `get_test_command.py` modul
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
 
-# Instructions
-1. **Implement `_detect_ts_test_runner(test_path: Path)`**:
-   - Walk up the directory tree until a config is found or the JS project boundary (nearest `package.json`) is reached; cross that boundary only when the package belongs to an ancestor workspace, and never cross the repository root (`.git`). Add a helper that detects ancestor-workspace membership. Apply a defensive iteration cap.
-   - Check for `playwright.config.[ts|js|mjs]` only if the file is a `.spec` file.
-   - Check for `jest.config` and `vitest.config` variants.
-   - Use `npx jest --no-coverage --runTestsByPath` for Jest so the absolute test path is matched literally.
-   - Return a tuple of `(command_prefix, config_directory)` if found.
-2. **Implement `_load_language_format()`**:
-   - Attempt to locate `language_format.csv` in `pdd/data/` or `../data/`.
-   - Return a dictionary mapping extensions to CSV rows using `csv.DictReader`.
-3. **Implement `get_test_command_for_file(test_file: str, language: Optional[str])`**:
-   - This is the main entry point.
-   - Use `get_language` if the language is not provided.
-   - Execute the resolution order defined in the Requirements.
-   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file, regex-escaped for Playwright and shell-quoted for every runner (see the TypeScript Smart Detection requirement).
-   - For CSV commands, replace the `{file}` placeholder with the input file string.
-
-# Deliverables
-A single file `pdd/get_test_command.py` containing:
-- `TestCommand` dataclass.
-- Workspace-membership helpers (glob matching + declared-glob extraction) and `_belongs_to_ancestor_workspace`.
-- `_detect_ts_test_runner` helper function.
-- `_load_language_format` helper function.
-- `get_test_command_for_file` public function.
+% Deliverable
+Produce `pdd/get_test_command.py` with the public API and observable behavior above.

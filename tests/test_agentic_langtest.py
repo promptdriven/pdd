@@ -6,6 +6,7 @@ run_test_command first, falls back to a hardcoded Python command, and
 returns None for languages without a known test command.
 """
 import os
+import shlex
 from pathlib import Path
 from unittest.mock import patch
 import shutil
@@ -40,6 +41,36 @@ def test_default_verify_cmd_for_python_uppercase():
 
     assert cmd is not None
     assert "pytest" in cmd
+
+
+@pytest.mark.parametrize(
+    "test_file",
+    (
+        "/tmp/space path.ts",
+        "/tmp/single'quote.ts",
+        '/tmp/double"quote.ts',
+        "/tmp/semi;colon.ts",
+        "/tmp/`backticks`.ts",
+        "/tmp/$(command-substitution).ts",
+        "/tmp/a&b|c>(d)<e.ts",
+    ),
+)
+@pytest.mark.parametrize("language", ("python", "typescript", "javascript", "go"))
+def test_default_verify_cmd_path_is_one_literal_argument(language, test_file):
+    """CSV and Python fallback commands quote paths for both execution styles."""
+    formats = (
+        {} if language == "python" else {
+            language: {"run_test_command": "runner {file}"}
+        }
+    )
+    with patch(
+        'pdd.agentic_langtest._load_language_format_by_name',
+        return_value=formats,
+    ):
+        cmd = default_verify_cmd_for(language, test_file)
+
+    assert cmd is not None
+    assert test_file in shlex.split(cmd)
 
 
 def test_default_verify_cmd_for_javascript_returns_csv_command():
