@@ -27,8 +27,6 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
-from tree_sitter_language_pack import Error as TreeSitterLanguagePackError, get_parser
-
 from .trust import (
     AttestationBinding,
     AttestationEnvelope,
@@ -118,6 +116,11 @@ VITEST_DYNAMIC_CONFIG_NAMES = (
 )
 VITEST_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+}
+VITEST_GRAMMAR_VERSIONS = {
+    "tree-sitter": "0.25.2",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-typescript": "0.23.2",
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 
@@ -923,19 +926,52 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
     return references
 
 
+def _vitest_parser(language_name: str):
+    """Return a parser backed only by the exact wheel-provisioned grammars."""
+    try:
+        for distribution, expected in VITEST_GRAMMAR_VERSIONS.items():
+            actual = importlib.metadata.version(distribution)
+            if actual != expected:
+                raise ValueError(
+                    f"{distribution} grammar version {actual!r} != {expected!r}"
+                )
+        from tree_sitter import Language, Parser  # pylint: disable=import-outside-toplevel
+        from tree_sitter_javascript import (  # pylint: disable=import-outside-toplevel
+            language as javascript_language,
+        )
+        from tree_sitter_typescript import (  # pylint: disable=import-outside-toplevel
+            language_tsx,
+            language_typescript,
+        )
+
+        grammar = {
+            "javascript": javascript_language,
+            "typescript": language_typescript,
+            "tsx": language_tsx,
+        }[language_name]
+        return Parser(Language(grammar()))
+    except (
+        ImportError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        importlib.metadata.PackageNotFoundError,
+    ) as exc:
+        raise ValueError("Vitest JavaScript parser is unavailable") from exc
+
+
 def _vitest_ast_imports(
     root: Path, ref: str, source_path: PurePosixPath, source: bytes
 ) -> set[PurePosixPath]:
     # pylint: disable=too-many-locals,too-many-nested-blocks
-    """Resolve static loaders and positively proven CommonJS aliases."""
-    try:
-        tree = get_parser(
-            "typescript"
-            if source_path.suffix in {".ts", ".tsx", ".cts", ".mts"}
-            else "javascript"
-        ).parse(source)
-    except (OSError, TreeSitterLanguagePackError) as exc:
-        raise ValueError("Vitest JavaScript parser is unavailable") from exc
+    """Resolve static loaders through a positive lexical capability model."""
+    language_name = (
+        "tsx" if source_path.suffix == ".tsx"
+        else "typescript" if source_path.suffix in {".ts", ".cts", ".mts"}
+        else "javascript"
+    )
+    tree = _vitest_parser(language_name).parse(source)
     if tree.root_node.has_error:
         raise ValueError(f"Vitest support source is not valid JavaScript/TypeScript: {source_path}")
     nodes = []
@@ -968,7 +1004,24 @@ def _vitest_ast_imports(
     values: list[str] = []
     loader_aliases = {"require"}
     factory_aliases: set[str] = set()
+    allowed_capability_nodes: set[tuple[int, int]] = set()
     recognized_factory_calls: set[tuple[int, int]] = set()
+    uninitialized_bindings: dict[str, object] = {}
+
+    def allow(node) -> None:
+        allowed_capability_nodes.add((node.start_byte, node.end_byte))
+
+    def identifier_name(node) -> str | None:
+        if node is None or node.type != "identifier":
+            return None
+        return node_text(node).decode("utf-8")
+
+    def descendants(parent, node_type: str):
+        return (
+            child for child in nodes
+            if child.type == node_type
+            and parent.start_byte <= child.start_byte < parent.end_byte
+        )
 
     for node in nodes:
         if node.type != "import_statement":
@@ -978,20 +1031,17 @@ def _vitest_ast_imports(
             continue
         value = static_string(target)
         if value in {"module", "node:module"}:
-            for specifier in (
-                child for child in nodes
-                if child.type == "import_specifier"
-                and node.start_byte <= child.start_byte < node.end_byte
-            ):
+            for specifier in descendants(node, "import_specifier"):
                 name = specifier.child_by_field_name("name")
                 identifiers = [
                     child for child in specifier.named_children
                     if child.type == "identifier"
                 ]
                 if name is not None and node_text(name) == b"createRequire":
-                    factory_aliases.add(
-                        node_text(identifiers[-1]).decode("utf-8")
-                    )
+                    alias = identifiers[-1]
+                    factory_aliases.add(node_text(alias).decode("utf-8"))
+                    for identifier in identifiers:
+                        allow(identifier)
 
     assignments = sorted(
         (node for node in nodes if node.type in {
@@ -1008,17 +1058,22 @@ def _vitest_ast_imports(
         )
         if left is None:
             continue
-        left_name = (
-            node_text(left).decode("utf-8") if left.type == "identifier" else None
-        )
+        left_name = identifier_name(left)
         if right is None:
+            if left_name is not None and node.type == "variable_declarator":
+                uninitialized_bindings[left_name] = left
             continue
         right_raw = node_text(right)
-        right_name = (
-            right_raw.decode("utf-8") if right.type == "identifier" else None
-        )
+        right_name = identifier_name(right)
         if left_name is not None and right_name in loader_aliases:
+            if left_name in loader_aliases:
+                raise ValueError("Vitest loader capability is reassigned or shadowed")
             loader_aliases.add(left_name)
+            allow(left)
+            allow(right)
+            prior = uninitialized_bindings.pop(left_name, None)
+            if prior is not None:
+                allow(prior)
             continue
         if left.type == "object_pattern" and right.type == "call_expression":
             function, arguments = call_parts(right)
@@ -1040,30 +1095,30 @@ def _vitest_ast_imports(
                             and value_node.type == "identifier"
                         ):
                             factory_aliases.add(node_text(value_node).decode("utf-8"))
+                            allow(value_node)
+                            allow(children[0])
                             recognized = True
                     elif (
                         pattern.type == "shorthand_property_identifier_pattern"
                         and node_text(pattern) == b"createRequire"
                     ):
                         factory_aliases.add("createRequire")
+                        allow(pattern)
                         recognized = True
                 if recognized:
+                    allow(function)
                     continue
-        if left_name is None and any(
-            re.search(rb"\b" + re.escape(name.encode()) + rb"\b", node_text(left))
-            for name in loader_aliases | factory_aliases | {"createRequire"}
-        ):
-            raise ValueError("Vitest destructured loader alias provenance is ambiguous")
         if right.type == "call_expression":
             function, arguments = call_parts(right)
-            function_name = (
-                node_text(function).decode("utf-8")
-                if function is not None and function.type == "identifier" else None
-            )
+            function_name = identifier_name(function)
             if left_name is not None and function_name in factory_aliases:
                 if len(arguments) != 1 or node_text(arguments[0]) != b"import.meta.url":
                     raise ValueError("Vitest createRequire alias operand is dynamic")
+                if left_name in loader_aliases:
+                    raise ValueError("Vitest loader capability is reassigned or shadowed")
                 loader_aliases.add(left_name)
+                allow(left)
+                allow(function)
                 recognized_factory_calls.add((right.start_byte, right.end_byte))
                 continue
             if (
@@ -1072,18 +1127,26 @@ def _vitest_ast_imports(
                 and static_string(arguments[0]) is not None
             ):
                 continue
-        provenance_names = loader_aliases | factory_aliases | {"createRequire"}
-        if (
-            left_name in provenance_names
-            or any(re.search(rb"\b" + re.escape(name.encode()) + rb"\b", right_raw)
-                   for name in provenance_names)
-        ):
-            raise ValueError("Vitest CommonJS loader alias provenance is ambiguous")
+        del right_raw
 
     for node in nodes:
         node_raw = node_text(node)
+        if (
+            node_raw == b"_load"
+            and node.type not in {"string", "comment", "template_string"}
+        ):
+            raise ValueError("Vitest internal module loader is not bound")
+        if node.type == "member_expression":
+            property_node = node.child_by_field_name("property")
+            property_text = node_text(property_node) if property_node is not None else b""
+            if property_text in {b"_load", b"require", b"createRequire"}:
+                raise ValueError("Vitest internal module loader is not bound")
         if node.type == "subscript_expression" and any(
-            marker in node_raw for marker in (b"require", b"createRequire", b"glob")
+            marker in node_raw
+            for marker in (
+                b"require", b"createRequire", b"_load", b"glob",
+                b"module", b"Module",
+            )
         ):
             raise ValueError("Vitest computed module loader is not bound")
         target = None
@@ -1121,7 +1184,7 @@ def _vitest_ast_imports(
                     or carries_provenance
                 ):
                     raise ValueError("Vitest alternate module loader is not bound")
-            function_name = function_text.decode("utf-8", errors="replace")
+            function_name = identifier_name(function)
             if function_name in factory_aliases:
                 if (node.start_byte, node.end_byte) not in recognized_factory_calls:
                     raise ValueError("Vitest createRequire alias provenance is ambiguous")
@@ -1132,6 +1195,7 @@ def _vitest_ast_imports(
                 if len(arguments) != 1:
                     raise ValueError("Vitest dynamic module loader is unsupported")
                 target = arguments[0]
+                allow(function)
             elif function is not None and function.type == "identifier":
                 local_operand = any(
                     (value := static_string(argument)) is not None
@@ -1147,12 +1211,14 @@ def _vitest_ast_imports(
             raise ValueError("Vitest dynamic module loader is unsupported")
         if value.startswith(("./", "../")):
             values.append(value)
+    capability_names = loader_aliases | factory_aliases | {"require", "createRequire"}
     for node in nodes:
-        if node.type == "assignment_pattern" and any(
-            re.search(rb"\b" + re.escape(name.encode()) + rb"\b", node_text(node))
-            for name in loader_aliases | factory_aliases | {"createRequire"}
-        ):
-            raise ValueError("Vitest destructured loader alias provenance is ambiguous")
+        if node.type != "identifier":
+            continue
+        if identifier_name(node) not in capability_names:
+            continue
+        if (node.start_byte, node.end_byte) not in allowed_capability_nodes:
+            raise ValueError("Vitest loader capability provenance is ambiguous")
     resolved: set[PurePosixPath] = set()
     for value in values:
         candidate = _normalize_repo_relative_path(source_path.parent / PurePosixPath(value))

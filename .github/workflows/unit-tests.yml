@@ -294,11 +294,25 @@ jobs:
           python -m pip install build
           python -m build --wheel --outdir dist-smoke
 
-      - name: Install wheel in isolated environment
+      - name: Materialize offline wheelhouse
+        run: |
+          mkdir -p "$RUNNER_TEMP/pdd-wheelhouse"
+          python -m pip download \
+            --dest "$RUNNER_TEMP/pdd-wheelhouse" \
+            dist-smoke/*.whl
+
+      - name: Install wheel in isolated no-network environment
         run: |
           python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install dist-smoke/*.whl
+          PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install \
+            --find-links "$RUNNER_TEMP/pdd-wheelhouse" \
+            pdd-cli
+
+      - name: Verify packaged Vitest grammars offline
+        run: |
+          cd "$(mktemp -d)"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/verify_offline_vitest_grammars.py"
 
       - name: Verify packaged preprocess include resolution
         run: |

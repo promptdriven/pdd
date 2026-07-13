@@ -329,6 +329,14 @@ def test_vitest_rejects_dynamic_or_ambiguous_loader_aliases(
             "const p = './helper.cjs'; "
             "const load = module.constructor._load; load(p, module);"
         ),
+        (
+            "import Module from 'node:module'; const p = './helper.cjs'; "
+            "const { _load: load } = Module; load(p);"
+        ),
+        (
+            "const key = '_load'; const p = './helper.cjs'; "
+            "const load = module.constructor[key]; load(p, module);"
+        ),
         "const p = './helper.cjs'; const box = { load: require }; box.load(p);",
         "const p = './helper.cjs'; function pass() { return require; } pass()(p);",
         "const req = require; { const req = unknown; req('./helper.cjs'); }",
@@ -456,8 +464,24 @@ def test_vitest_parser_initialization_failure_is_deterministic(
 ) -> None:
     root, _commit = _repository(tmp_path)
     monkeypatch.setattr(
-        "pdd.sync_core.runner.get_parser",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("offline")),
+        "pdd.sync_core.runner.importlib.metadata.version",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            runner_module.importlib.metadata.PackageNotFoundError("missing")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="parser is unavailable"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_grammar_version_mismatch_is_deterministic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, _commit = _repository(tmp_path)
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.importlib.metadata.version", lambda _name: "unexpected"
     )
 
     with pytest.raises(ValueError, match="parser is unavailable"):
