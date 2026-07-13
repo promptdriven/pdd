@@ -936,15 +936,22 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
     semantics. The algorithm depends on the declaring tool (``ordered``):
 
-    * ``ordered=True`` (pnpm's ``@pnpm/matcher``): evaluate in DECLARATION ORDER, last
-      matching pattern wins — a positive includes, a ``!`` exclusion excludes, and a
-      *later* positive RE-INCLUDES a previously-excluded path
-      (``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` includes
-      ``packages/legacy/app``). This is the default for direct callers.
-    * ``ordered=False`` (npm/yarn's ``@npmcli/map-workspaces`` and lerna): a member
-      matches at least one positive AND no ``!`` exclusion — exclusion is TERMINAL, so
-      a later broad positive does NOT re-include
-      (``["packages/app", "!packages/app", "packages/*"]`` EXCLUDES ``packages/app``).
+    * ``ordered=True`` (pnpm's ``@pnpm/matcher``): evaluate in DECLARATION ORDER,
+      last matching pattern wins PER PATH — a positive includes, a ``!`` exclusion
+      excludes, and a *later* positive RE-INCLUDES only the specific paths it matches
+      (``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` re-includes
+      ``packages/legacy/app`` but still excludes its sibling ``packages/legacy/other``).
+      This is the default for direct callers.
+    * ``ordered=False`` (npm/yarn's ``@npmcli/map-workspaces`` and lerna): npm's
+      ``appendNegatedPatterns`` preprocessing — a later POSITIVE pattern whose pattern
+      STRING is matched by an earlier ``!`` negation's glob REMOVES that negation
+      wholesale, so the same declaration re-includes ``packages/legacy/app`` AND (unlike
+      pnpm) its sibling ``packages/legacy/other``, because dropping ``!packages/legacy/**``
+      un-excludes the entire subtree. A path is a member iff it matches a surviving
+      positive and no surviving negation.
+
+    A path inside any ``node_modules/`` directory is never a member in either mode
+    (npm's built-in ``**/node_modules/**`` ignore; pnpm/yarn skip ``node_modules``).
 
     Brace alternations are expanded before matching (a raw glob matches when any of
     its expansions does). The brace-expansion count (``expand_budget``), the
@@ -968,9 +975,18 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # set at each package boundary cannot sum to tens of millions of cells);
         # otherwise a fresh per-call budget is used (direct/standalone callers).
         cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
-        member = False           # ordered (pnpm): last-match-wins accumulator
-        matched_positive = False  # unordered (npm/lerna): any positive matched?
-        matched_negative = False  # unordered (npm/lerna): any exclusion matched?
+        # Universal built-in exclusion: a path *inside* a ``node_modules/`` directory
+        # is never a workspace member in any tool — npm appends ``**/node_modules/**``
+        # to its ignore set, and pnpm/yarn ignore ``node_modules`` during package
+        # discovery. (Only the *contents* are excluded, matching ``**/node_modules/**``;
+        # a leaf directory literally named ``node_modules`` is not itself excluded.)
+        if any(part == "node_modules" for part in rel_parts[:-1]):
+            return False
+
+        # Parse each declared glob once, IN ORDER, into (negated, concrete-patterns).
+        # Brace alternations are expanded here; a positive minimatch comment matches
+        # nothing (skipped); an unsupported construct fails membership closed.
+        parsed = []  # list[tuple[bool, list[str]]] in declaration order
         for raw in globs:
             # Do NOT strip surrounding whitespace: workspace tools treat it
             # literally, so `" packages/* "` is a package literally named with
@@ -1014,18 +1030,52 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             for pat in expanded:
                 if _concrete_pattern_unsupported(pat):
                     raise _PatternBudgetError
-            matches = any(_relative_matches_workspace_glob(rel_parts, p, cells, work)
-                          for p in expanded)
-            if matches:
-                # ordered (pnpm): last matching pattern's polarity wins, so a later
-                # positive re-includes. unordered (npm/lerna): accumulate — an
-                # exclusion is terminal regardless of a later broad positive.
-                member = not negated
-                if negated:
-                    matched_negative = True
-                else:
-                    matched_positive = True
-        return member if ordered else (matched_positive and not matched_negative)
+            parsed.append((negated, expanded))
+
+        def _matches_any(pattern_list) -> bool:
+            return any(
+                _relative_matches_workspace_glob(rel_parts, p, cells, work)
+                for p in pattern_list
+            )
+
+        if ordered:
+            # pnpm (@pnpm/matcher): evaluate in DECLARATION ORDER; the last pattern
+            # that matches this path decides — a later positive RE-INCLUDES a path an
+            # earlier ``!`` excluded, per-path.
+            member = False
+            for negated, expanded in parsed:
+                if _matches_any(expanded):
+                    member = not negated
+            return member
+
+        # npm/yarn/lerna (@npmcli/map-workspaces): faithful ``appendNegatedPatterns``
+        # preprocessing. Walking in order, a later POSITIVE pattern whose pattern
+        # STRING is matched by an earlier negation's glob REMOVES that negation
+        # entirely (``minimatch(pattern, negatedPattern)`` upstream), so
+        # ``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` drops the
+        # ``!packages/legacy/**`` exclusion and every ``packages/**`` path — including
+        # ``packages/legacy/app`` — is a member again. A path is then a member iff it
+        # matches a surviving positive and no surviving negation.
+        positives = []  # concrete positive pattern strings, declaration order
+        negatives = []  # concrete negation pattern strings still in force
+        for negated, expanded in parsed:
+            if negated:
+                negatives.extend(expanded)
+            else:
+                for pos in expanded:
+                    # npm applies the same leading normalization to every pattern
+                    # before comparing, so strip it before treating the positive
+                    # pattern string as a literal path for the removal test.
+                    pos_parts = tuple(_strip_one_leading(pos).split("/"))
+                    negatives = [
+                        neg for neg in negatives
+                        if not _relative_matches_workspace_glob(
+                            pos_parts, neg, cells, work)
+                    ]
+                    positives.append(pos)
+        if not _matches_any(positives):
+            return False
+        return not _matches_any(negatives)
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
@@ -1225,10 +1275,75 @@ def _config_allowed(config_path: Path, repo_root: Optional[Path]) -> bool:
     return _is_within(real, repo_root)
 
 
+_VITE_CONFIG_NAMES = (
+    "vite.config.ts", "vite.config.js", "vite.config.mjs",
+    "vite.config.cjs", "vite.config.mts", "vite.config.cts",
+)
+
+
+def _vitest_proven_by_manifest(manifest: dict) -> bool:
+    """True when a ``package.json`` manifest proves Vitest is the test runner — so a
+    bare ``vite.config.*`` (which Vitest loads as its config) may be adopted. Proof is
+    ``vitest`` in any dependency map or a script that invokes it. Without such proof an
+    ordinary Vite *application* (which also has a ``vite.config.*`` but no tests) MUST
+    NOT be treated as a test project."""
+    for key in ("dependencies", "devDependencies",
+                "peerDependencies", "optionalDependencies"):
+        deps = manifest.get(key)
+        if isinstance(deps, dict) and "vitest" in deps:
+            return True
+    scripts = manifest.get("scripts")
+    if isinstance(scripts, dict):
+        for val in scripts.values():
+            if isinstance(val, str) and "vitest" in val:
+                return True
+    return False
+
+
+def _package_json_runner(search_dir: Path, is_spec: bool,
+                         repo_root: Optional[Path]) -> Optional[Tuple[str, Path]]:
+    """Fallback runner detection from ``search_dir/package.json`` when no dedicated
+    ``jest.config.*``/``vitest.config.*`` file is present:
+
+    * Jest reads its config from a top-level ``"jest"`` object in ``package.json``, so a
+      package whose only Jest configuration is that key is still a Jest project.
+    * Vitest, only when the manifest *proves* it is in use (see
+      :func:`_vitest_proven_by_manifest`), loads ``vite.config.*`` as its config.
+
+    The manifest is read bounded and parsed strictly (npm/Node ``JSON.parse``
+    semantics via ``_reject_json_constant``); any malformed/oversized/non-object
+    manifest fails closed (``None``). Both the manifest and any adopted
+    ``vite.config.*`` are subject to repository containment. (``is_spec`` is
+    irrelevant here — Jest/Vitest both run ``.spec`` files; Playwright has no
+    ``package.json`` config form.)"""
+    manifest_path = search_dir / "package.json"
+    if not _config_allowed(manifest_path, repo_root):
+        return None
+    text = _read_manifest_text(manifest_path)
+    if text is None:
+        return None
+    try:
+        manifest = json.loads(text, parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    if isinstance(manifest.get("jest"), dict):
+        return ("npx jest --no-coverage --runTestsByPath", search_dir)
+    if _vitest_proven_by_manifest(manifest):
+        for name in _VITE_CONFIG_NAMES:
+            cfg = search_dir / name
+            if cfg.exists() and _config_allowed(cfg, repo_root):
+                return ("npx vitest run", search_dir)
+    return None
+
+
 def _find_runner_here(search_dir: Path, is_spec: bool, repo_root: Optional[Path]) -> Optional[Tuple[str, Path]]:
     """Return the runner ``(command_prefix, search_dir)`` for the highest-priority
     runner config present in ``search_dir`` and allowed by containment, else
-    ``None``. Playwright is only considered for ``.spec`` files."""
+    ``None``. Playwright is only considered for ``.spec`` files. A dedicated config
+    file wins; otherwise ``package.json`` is consulted for an inline Jest config or a
+    proven-Vitest ``vite.config.*``."""
     for command, names, spec_only in _RUNNER_CONFIGS:
         if spec_only and not is_spec:
             continue
@@ -1236,7 +1351,7 @@ def _find_runner_here(search_dir: Path, is_spec: bool, repo_root: Optional[Path]
             cfg = search_dir / name
             if cfg.exists() and _config_allowed(cfg, repo_root):
                 return (command, search_dir)
-    return None
+    return _package_json_runner(search_dir, is_spec, repo_root)
 
 
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:

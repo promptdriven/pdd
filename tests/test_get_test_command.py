@@ -1200,24 +1200,51 @@ class TestWorkspaceMembershipHardening:
             assert _package_matches_workspace(("packages", "app"), [glob]) is True, glob
 
     def test_membership_semantics_are_source_dependent(self):
-        """npm/yarn/lerna (``@npmcli/map-workspaces``) treat an exclusion as terminal
-        (any-exclude-wins) — a later broad positive does NOT re-include — while pnpm
-        (``@pnpm/matcher``) is order-dependent (last-match-wins, re-inclusion). The
-        ``ordered`` flag selects the algorithm; direct callers default to pnpm."""
-        # A broad positive after a specific exclusion.
-        globs = ["packages/app", "!packages/app", "packages/*"]
-        assert _package_matches_workspace(("packages", "app"), globs, ordered=False) is False
-        assert _package_matches_workspace(("packages", "app"), globs, ordered=True) is True
+        """Both npm/yarn/lerna (``@npmcli/map-workspaces``) and pnpm (``@pnpm/matcher``)
+        honor re-inclusion, but DIFFERENTLY: npm's ``appendNegatedPatterns`` drops an
+        earlier negation wholesale when a later positive's pattern-string matches it
+        (re-including the sibling too), while pnpm decides per-path (last matching
+        pattern wins, sibling stays excluded). The ``ordered`` flag selects the
+        algorithm; direct callers default to pnpm. Verified against @npmcli/map-workspaces
+        source (a later specific positive removes the earlier negation)."""
         # A specific re-inclusion after a broad exclusion.
         reinc = ["packages/**", "!packages/legacy/**", "packages/legacy/app"]
+        # The named package is re-included by BOTH.
         assert _package_matches_workspace(
-            ("packages", "legacy", "app"), reinc, ordered=False) is False  # npm excludes
+            ("packages", "legacy", "app"), reinc, ordered=False) is True   # npm
         assert _package_matches_workspace(
-            ("packages", "legacy", "app"), reinc, ordered=True) is True   # pnpm re-includes
-        # Both algorithms agree on a plain positive and a trailing exclusion.
+            ("packages", "legacy", "app"), reinc, ordered=True) is True    # pnpm
+        # The SIBLING differs: npm drops the whole negation (member); pnpm keeps it out.
+        assert _package_matches_workspace(
+            ("packages", "legacy", "other"), reinc, ordered=False) is True   # npm re-includes subtree
+        assert _package_matches_workspace(
+            ("packages", "legacy", "other"), reinc, ordered=True) is False   # pnpm still excludes
+        # A later positive equal to an earlier exclusion removes it under npm.
+        undo = ["packages/*", "!packages/app", "packages/app"]
+        assert _package_matches_workspace(("packages", "app"), undo, ordered=False) is True
+        assert _package_matches_workspace(("packages", "app"), undo, ordered=True) is True
+        # Both agree on a plain positive and a never-undone trailing exclusion.
         assert _package_matches_workspace(("packages", "app"), ["packages/*"], ordered=False) is True
         assert _package_matches_workspace(
             ("packages", "app", "test", "x"), ["packages/**", "!**/test/**"], ordered=False) is False
+        assert _package_matches_workspace(
+            ("packages", "app", "test", "x"), ["packages/**", "!**/test/**"], ordered=True) is False
+
+    def test_node_modules_is_never_a_workspace_member(self):
+        """A package inside any ``node_modules/`` is never a workspace member, even under
+        a broad ``**``: npm appends ``**/node_modules/**`` to its ignore set and
+        pnpm/yarn skip ``node_modules`` during discovery. A leaf dir literally named
+        ``node_modules`` (nothing inside it) is not itself excluded."""
+        for ordered in (True, False):
+            assert _package_matches_workspace(
+                ("node_modules", "dep"), ["**"], ordered=ordered) is False, ordered
+            assert _package_matches_workspace(
+                ("packages", "app", "node_modules", "x"), ["**"], ordered=ordered) is False, ordered
+            assert _package_matches_workspace(
+                ("packages", "app"), ["**"], ordered=ordered) is True, ordered
+        # A leaf directory literally named node_modules is matchable.
+        assert _package_matches_workspace(
+            ("packages", "node_modules"), ["packages/*"], ordered=False) is True
 
     def test_jest_config_extensions_include_cjs_and_json(self):
         """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
@@ -1381,6 +1408,48 @@ class TestWorkspaceMembershipHardening:
         cmd, returned_dir = _detect_ts_test_runner(link / "tests" / "foo.test.ts")
         assert "npx jest" in cmd
         assert returned_dir == repo.resolve()
+
+    def test_package_json_jest_key_detected_without_dedicated_config(self, tmp_path):
+        """Jest reads config from a top-level ``"jest"`` object in ``package.json``, so a
+        package with only that key (no ``jest.config.*``) and a nested ``.test.ts`` is a
+        Jest project — it must not fall through to ``npx tsx``."""
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / "package.json").write_text('{"jest": {"testEnvironment": "node"}}')
+        (repo / "src" / "a.test.ts").write_text("test('x', () => {})")
+        cmd, cwd = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+        assert "npx jest" in cmd and "--runTestsByPath" in cmd, cmd
+        assert cwd == repo.resolve()
+        # A package.json WITHOUT a jest object (and no config) is not a Jest project.
+        (repo / "package.json").write_text('{"name": "x"}')
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+        # A non-object jest value is ignored (fails closed, not a Jest project).
+        (repo / "package.json").write_text('{"jest": "some/path"}')
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+
+    def test_vite_config_adopted_only_when_vitest_is_proven(self, tmp_path):
+        """Vitest loads ``vite.config.*`` as its config, but only a manifest that PROVES
+        Vitest (a ``vitest`` dependency or a script invoking it) makes a ``vite.config.*``
+        a test runner. An ordinary Vite-only app (``vite.config.ts`` but no vitest) is
+        NOT a test project and must not be adopted."""
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / ".git").mkdir()
+        (repo / "vite.config.ts").write_text("export default {}")
+        (repo / "src" / "a.test.ts").write_text("test('x', () => {})")
+        # Vite-only (no vitest) → not a test project.
+        (repo / "package.json").write_text('{"devDependencies": {"vite": "^5"}}')
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+        # vitest in devDependencies → adopt vite.config.ts as Vitest config.
+        (repo / "package.json").write_text('{"devDependencies": {"vitest": "^1"}}')
+        cmd, cwd = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+        assert "npx vitest run" in cmd, cmd
+        assert cwd == repo.resolve()
+        # A script invoking vitest also proves it.
+        (repo / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
+        cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+        assert "npx vitest run" in cmd2, cmd2
 
     def test_symlink_to_foreign_checkout_is_refused(self, tmp_path):
         """A symlink whose target is itself a git checkout must not be adopted.
