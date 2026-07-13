@@ -28,13 +28,18 @@
      - `shlex.quote` yields a self-contained shell word, so a placeholder is safe as a
        standalone word AND when concatenated with ordinary literal characters on either
        side (`{file}.out`, `./{file}` substitute correctly). It returns `None` (caller
-       falls through) for any template it cannot fill safely, because callers run the
-       result with `bash -lc` / `shell=True`: a multiline template (here-document
-       body), any template containing `$`, a backtick, or `(`/`)` (command-substitution,
-       parameter/arithmetic expansion, or subshell/process-substitution contexts), or a
-       placeholder inside the template's own quotes, immediately after a backslash, or
-       inside a shell comment (a `#` starting at a word boundary or after a `;`/`&`/`|`
-       control operator).
+       falls through) for any template where non-placeholder syntax could make `bash`
+       expand the command or change its word count — refuse the template whenever it:
+       is multiline (here-document body); contains `$`, a backtick, or `(`/`)`
+       (command-substitution, parameter/arithmetic expansion, or subshell/
+       process-substitution); contains a brace-expansion or pathname-expansion
+       metacharacter (`{`, `}`, `*`, `?`, `[`, `]`, `~`) OUTSIDE a placeholder token
+       (an unquoted `{a,b}` or glob would re-split/expand into a different word count,
+       and `shlex.quote` leaves a value's `,` unquoted so a value inside a template
+       brace would re-split); or places a placeholder inside the template's own quotes,
+       immediately after a backslash, or inside a shell comment (a `#` starting at a
+       word boundary or after a `;`/`&`/`|` control operator). It also rejects an empty
+       placeholder key and an escaped placeholder (`\{file}`).
 
   3) Function `get_run_command_for_file(file_path: str) -> str`:
      - Accepts a file path.
