@@ -306,7 +306,10 @@ class TestShellSafeSubstitute:
                     # option-bearing wrappers whose operands hide the shell command
                     "timeout 5 bash -c {file}", "env -i bash -c {file}",
                     "nice -n 5 bash -c {file}", "command -- sh -c {file}",
-                    "nohup bash -lc {file}"):
+                    "nohup bash -lc {file}",
+                    # value piped or here-string'd into a shell (re-evaluated as code)
+                    'printf "%s" {file} | bash', "printf %s {file} | sh",
+                    "bash <<< {file}", "sh < {file}"):
             assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
         # Safe: the shell runs the FILE (value is a filename, single-quoted); a mid-word
         # `#` is literal; a non-shell `-c` option is fine.
@@ -318,9 +321,13 @@ class TestShellSafeSubstitute:
         # A wrapper around a NON-shell command (no `-c`) is still safe.
         assert shell_safe_substitute(
             "timeout 5 python {file}", {"{file}": "/t.py"}) == "timeout 5 python /t.py"
+        # A pipe into a NON-shell command is safe (grep does not re-evaluate the value).
+        assert shell_safe_substitute(
+            "printf %s {file} | grep x", {"{file}": "a"}) == "printf %s a | grep x"
         # Prove the bypasses the guard prevents are genuine (naive forms inject).
         for naive_tpl, marker in (("eval {V}", "PWN_EVAL"), ("bash -lc {V}", "PWN_LC"),
-                                  ("env bash -c {V}", "PWN_ENV")):
+                                  ("env bash -c {V}", "PWN_ENV"),
+                                  ('printf "%s" {V} | bash', "PWN_PIPE")):
             with tempfile.TemporaryDirectory() as d:
                 naive = naive_tpl.replace("{V}", shlex.quote("$(touch %s)" % marker))
                 subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)

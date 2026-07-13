@@ -23,19 +23,23 @@ def _is_dash_c_option(tok: str) -> bool:
 def _feeds_value_into_reevaluation(template: str) -> bool:
     """True when ``template`` would RE-EVALUATE an inserted value as code — so a
     ``shlex.quote``-d ``$(...)`` in the value would still execute at the second parse.
-    The value is unsafe when a command clause runs ``eval`` or a shell with ``-c``
-    (``bash -c {file}``, ``bash -lc {file}``). To stay robust against option-bearing
-    command WRAPPERS whose operands make the effective-command position ambiguous
-    (``timeout 5 bash -c``, ``env -i bash -c``, ``nice -n 5 bash -c``), a clause is
-    refused CONSERVATIVELY when it contains BOTH a shell name and a ``-c``-bearing option,
-    or an ``eval`` token — anywhere in the clause. A bare ``sh {file}`` / ``bash {file}``
-    (run the *file* as a script — the shipped Shell/Bash/Zsh templates) has no ``-c`` and
-    stays SAFE; a non-shell ``-c`` option (``pytest -c cfg``) has no shell and stays safe.
+    The value is unsafe when a shell RE-EVALUATES it as code, whether it arrives as a
+    ``-c`` argument (``bash -c {file}``, ``bash -lc {file}``, ``timeout 5 bash -c`` — a
+    shell hidden behind an option-bearing wrapper) OR as STDIN piped into a shell
+    (``printf %s {file} | bash``) OR via a here-string / here-document redirect
+    (``bash <<< {file}``). Detection is conservative:
 
-    Comment parsing is disabled so a mid-word ``#`` (``echo a#b``, which Bash does NOT
-    treat as a comment) cannot hide a later ``&& bash -c`` clause. An unparseable template
-    fails closed (True). Called only after ``$``/backtick/``()``/brace/glob/newline forms
-    are already refused, so the tokenizer sees a simple command line."""
+    * an ``eval`` token anywhere → unsafe;
+    * a clause containing both a shell name and a ``-c``-bearing option → unsafe;
+    * a re-evaluating shell name anywhere in the template together with a pipe ``|`` or an
+      input redirect / here-string (``<``) → unsafe (the value could flow into it).
+
+    A bare ``sh {file}`` / ``bash {file}`` (run the *file* as a script — the shipped
+    Shell/Bash/Zsh templates) has no ``-c``, pipe, or ``<``, so it stays SAFE; a non-shell
+    ``-c`` option (``pytest -c cfg``) has no shell and stays safe. Comment parsing is
+    disabled so a mid-word ``#`` (``echo a#b``) cannot hide a later clause. An unparseable
+    template fails closed (True). Called only after ``$``/backtick/``()``/brace/glob/
+    newline forms are already refused, so the tokenizer sees a simple command line."""
     try:
         lex = shlex.shlex(template, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
@@ -50,10 +54,16 @@ def _feeds_value_into_reevaluation(template: str) -> bool:
         clauses.append(clause)
     except ValueError:
         return True
+    all_bases = [t.split("/")[-1] for clause in clauses for t in clause]
+    if "eval" in all_bases:
+        return True
+    has_shell = any(b in _REEVAL_SHELLS for b in all_bases)
+    # A shell that could RECEIVE the value as code via a pipe or an input
+    # redirect/here-string — the ``-c`` check would miss both.
+    if has_shell and ("|" in template or "<" in template):
+        return True
     for toks in clauses:
         bases = [t.split("/")[-1] for t in toks]
-        if "eval" in bases:
-            return True
         if any(b in _REEVAL_SHELLS for b in bases) \
                 and any(_is_dash_c_option(t) for t in toks):
             return True
