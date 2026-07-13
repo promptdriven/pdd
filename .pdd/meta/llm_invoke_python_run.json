@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-07-13T07:59:05.132035+00:00",
+  "timestamp": "2026-07-13T17:44:40.602335+00:00",
   "exit_code": 0,
   "tests_passed": 362,
   "tests_failed": 0,
-  "coverage": 0.0,
+  "coverage": 71.0,
   "test_hash": "4aaae7e8dc472e0fb280e9d773dce17ae806ee959c232badc1fb922011df1fb9",
   "test_files": {
     "test_llm_invoke.py": "4aaae7e8dc472e0fb280e9d773dce17ae806ee959c232badc1fb922011df1fb9"
