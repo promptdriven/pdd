@@ -787,6 +787,7 @@ def sync_main(
                 steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                 agentic_mode=agentic_mode,
                 compress=compress,
+                fresh=fresh,
                 evidence=evidence,
                 snapshot_context=snapshot_context,
             )
@@ -1283,6 +1284,7 @@ def sync_main(
                     review_examples=review_examples,
                     evidence=evidence,
                     compress=compress,
+                    fresh=fresh,
                     local=local,
                     context_config=resolved_config,
                     context_override=context_override,
@@ -1291,7 +1293,6 @@ def sync_main(
                     agentic_mode=agentic_mode,
                     snapshot_context=snapshot_context,
                     compressed_context=compressed_context,
-                    fresh=fresh,
                 )
 
                 # Post-sync: auto-submit example to cloud on success (multi-step path)

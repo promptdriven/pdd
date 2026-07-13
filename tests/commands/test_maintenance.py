@@ -61,45 +61,6 @@ def _make_cli(command, ctx_obj):
 
 class TestSyncCommand:
 
-    def test_sync_basic(self, runner, base_ctx_obj):
-        """sync dispatches to sync_main with correct arguments."""
-        mock_result = ({"success": True}, 0.05, "gpt-4")
-        cli = _make_cli(sync, base_ctx_obj)
-
-        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
-            result = runner.invoke(cli, [
-                "sync", "my_module",
-                "--max-attempts", "5",
-                "--budget", "15.0",
-                "--skip-verify",
-                "--skip-tests",
-                "--target-coverage", "85.0",
-                "--no-steer",
-            ], catch_exceptions=False)
-
-            assert result.exit_code == 0
-            mock_sm.assert_called_once()
-            kw = mock_sm.call_args.kwargs
-            assert kw["basename"] == "my_module"
-            assert kw["max_attempts"] == 5
-            assert kw["budget"] == 15.0
-            assert kw["skip_verify"] is True
-            assert kw["skip_tests"] is True
-            assert kw["target_coverage"] == 85.0
-            assert kw["no_steer"] is True
-            # one_session defaults to False for non-URL
-            assert kw["one_session"] is False
-
-    def test_sync_dry_run(self, runner, base_ctx_obj):
-        """sync --dry-run forwards dry_run=True to sync_main."""
-        mock_result = ({"dry_run": True}, 0.0, "none")
-        cli = _make_cli(sync, base_ctx_obj)
-
-        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
-            result = runner.invoke(cli, ["sync", "calc", "--dry-run"], catch_exceptions=False)
-            assert result.exit_code == 0
-            assert mock_sm.call_args.kwargs["dry_run"] is True
-
     def test_sync_fresh_flag_forwarded(self, runner, base_ctx_obj):
         """`pdd sync --fresh` forwards fresh=True to sync_main; default is
         fresh=False so mature modules regenerate surgically (#1938 Pillar A)."""
@@ -144,6 +105,45 @@ class TestSyncCommand:
         assert result.exit_code != 0
         assert "single-module sync" in result.output
         mock_agentic.assert_not_called()
+
+    def test_sync_basic(self, runner, base_ctx_obj):
+        """sync dispatches to sync_main with correct arguments."""
+        mock_result = ({"success": True}, 0.05, "gpt-4")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+            result = runner.invoke(cli, [
+                "sync", "my_module",
+                "--max-attempts", "5",
+                "--budget", "15.0",
+                "--skip-verify",
+                "--skip-tests",
+                "--target-coverage", "85.0",
+                "--no-steer",
+            ], catch_exceptions=False)
+
+            assert result.exit_code == 0
+            mock_sm.assert_called_once()
+            kw = mock_sm.call_args.kwargs
+            assert kw["basename"] == "my_module"
+            assert kw["max_attempts"] == 5
+            assert kw["budget"] == 15.0
+            assert kw["skip_verify"] is True
+            assert kw["skip_tests"] is True
+            assert kw["target_coverage"] == 85.0
+            assert kw["no_steer"] is True
+            # one_session defaults to False for non-URL
+            assert kw["one_session"] is False
+
+    def test_sync_dry_run(self, runner, base_ctx_obj):
+        """sync --dry-run forwards dry_run=True to sync_main."""
+        mock_result = ({"dry_run": True}, 0.0, "none")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+            result = runner.invoke(cli, ["sync", "calc", "--dry-run"], catch_exceptions=False)
+            assert result.exit_code == 0
+            assert mock_sm.call_args.kwargs["dry_run"] is True
 
     def test_sync_without_basename_dispatches_global_sync_not_durable(
         self,
