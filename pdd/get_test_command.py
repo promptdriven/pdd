@@ -142,47 +142,56 @@ def _has_complete_bracket_class(raw: str) -> bool:
     return False
 
 
+def _is_range_body(body: str) -> bool:
+    """True when ``body`` (the content of a ``{...}``) is a real minimatch brace
+    *range*: ``X..Y`` or ``X..Y..Z`` where the two endpoints are BOTH signed
+    integers or BOTH single characters, and the optional step ``Z`` is an integer.
+
+    Multi-character non-integer endpoints (``foo..bar``), non-integer numeric-looking
+    endpoints (``1.0..3.0``), and empty endpoints (``..``) are NOT ranges — minimatch
+    leaves them literal — so they are NOT flagged."""
+    parts = body.split("..")
+    if len(parts) not in (2, 3):
+        return False
+
+    def _is_int(text: str) -> bool:
+        digits = text[1:] if text[:1] in "+-" else text
+        return bool(digits) and digits.isdigit()
+
+    start, end = parts[0], parts[1]
+    endpoints_ok = (_is_int(start) and _is_int(end)) or (
+        len(start) == 1 and len(end) == 1)
+    if not endpoints_ok:
+        return False
+    return len(parts) == 2 or _is_int(parts[2])
+
+
 def _has_brace_range(raw: str) -> bool:
-    """True when ``raw`` contains a minimatch numeric/alphabetic *range* — a ``..``
-    inside a brace group that is NOT a comma alternation (``{1..3}``, ``{a..c}``,
-    ``{01..03}``, ``{1..9..2}``), which a comma-only expander emits literally.
+    """True when ``raw`` contains a real minimatch brace *range* — a ``{...}`` group
+    whose body matches range grammar (see ``_is_range_body``): ``{1..3}``, ``{a..c}``,
+    ``{01..03}``, ``{1..9..2}``. A comma-only expander emits these literally, so they
+    fail closed.
 
-    A ``..`` is NOT a range, and so is NOT flagged, when it is:
-      * outside any brace (a dir named ``foo..bar``);
-      * inside an *unbalanced* brace (``{foo..bar`` — literal); or
-      * inside a brace group that also has a top-level comma (``{foo..bar,baz}`` is
-        an alternation whose ``..`` is a literal part of one option — the comma
-        expander already handles it correctly).
-
-    Nesting is tracked per level, so a range nested inside an alternation
-    (``{a,{1..3}}``) is still flagged. A balanced ``${...}`` group is opaque (its
-    ``..`` is literal, not a range), so ``${1..3}`` is NOT flagged."""
-    # Each stack frame tracks, for one open brace level: whether a top-level comma
-    # and whether a top-level ``..`` have been seen, whether the previous char at
-    # this level was a ``.``, and whether this group (or an ancestor) is a ``${...}``
-    # opaque region.
+    Not flagged: a ``..`` outside any brace (dir ``foo..bar``); a comma-alternation
+    or multi-character body (``{foo..bar,baz}``, ``{foo..bar}``, ``{1.0..3.0}``);
+    an opaque ``${1..3}``; or an unbalanced ``{foo..bar``. Only *leaf* groups (no
+    nested ``{``) can be ranges — a range body holds no braces — so per-``}`` body
+    inspection is limited to leaves, keeping the whole scan linear. A range nested
+    inside an alternation (``{a,{1..3}}``) is still caught as the inner leaf."""
+    # Each frame: [open_index, opaque, has_inner_brace]. A ``${...}`` (or any group
+    # inside one) is opaque; its body is literal, never a range.
     stack: list = []
     prev = ""
-    for ch in raw:
+    for i, ch in enumerate(raw):
         if ch == "{":
-            opaque = prev == "$" or (bool(stack) and stack[-1][3])
-            stack.append([False, False, False, opaque])
-        elif ch == "}":
+            opaque = prev == "$" or (bool(stack) and stack[-1][1])
             if stack:
-                has_comma, has_range, _, opaque = stack.pop()
-                if has_range and not has_comma and not opaque:
-                    return True  # balanced, a ``..``, no comma, not opaque → range
-        elif stack and not stack[-1][3]:  # ignore content of an opaque ${...}
-            top = stack[-1]
-            if ch == ",":
-                top[0] = True
-                top[2] = False
-            elif ch == ".":
-                if top[2]:
-                    top[1] = True
-                top[2] = True
-            else:
-                top[2] = False
+                stack[-1][2] = True  # parent now has a nested brace → not a leaf
+            stack.append([i, opaque, False])
+        elif ch == "}" and stack:
+            open_i, opaque, has_inner = stack.pop()
+            if not opaque and not has_inner and _is_range_body(raw[open_i + 1:i]):
+                return True
         prev = ch
     return False  # an unbalanced '{' left open never closes → literal, not a range
 
@@ -233,21 +242,25 @@ def _concrete_pattern_unsupported(pattern: str) -> bool:
         wildcard plus a literal ``(`` — the direct matcher agrees — so it is NOT
         rejected.
 
-    (The astral ``?`` divergence — minimatch counts a non-BMP char as two UTF-16
-    code units — is handled precisely per aligned segment in
-    ``_relative_matches_workspace_glob``, not here, so a ``?`` in a segment that
-    never meets an astral path segment is not needlessly rejected.)
+    Bracket classes and extglobs cannot cross a ``/`` (a class/group is confined to
+    one path segment), so they are checked PER ``/``-delimited segment — otherwise a
+    ``[`` in one segment and a ``]`` in another (``foo[/bar]``, which minimatch reads
+    literally) would be misread as a class. Brace ranges are checked on the whole
+    pattern (a brace body may legitimately contain ``/``).
+
+    (The astral ``?`` divergence is handled directly in ``_wildcard_segment_match``,
+    which matches over UTF-16 code units, so nothing about astral characters is
+    rejected here.)
 
     Failing closed only forgoes crossing a workspace boundary (the leaf still uses
     its nearest ``package.json``); it never adopts a foreign config. Real workspace
     globs use ``*``/``**``/``{,}`` — not these — so legitimate declarations are
     unaffected.
     """
-    if _has_complete_bracket_class(pattern):
-        return True
-    if _has_brace_range(pattern):
-        return True
-    return _has_complete_extglob(pattern)
+    for segment in pattern.split("/"):
+        if _has_complete_bracket_class(segment) or _has_complete_extglob(segment):
+            return True
+    return _has_brace_range(pattern)
 
 
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
@@ -295,36 +308,6 @@ class TestCommand:
     cwd: Optional[Path] = None
 
 
-def _segment_has_astral(segment: str) -> bool:
-    """True when ``segment`` contains a non-BMP / "astral" character (code point
-    above U+FFFF), which minimatch counts as two UTF-16 code units."""
-    return any(ord(ch) > 0xFFFF for ch in segment)
-
-
-def _astral_question_mark_risk(pat_parts: list, rel: list) -> bool:
-    """True when matching ``pat_parts`` against path ``rel`` could align a ``?``
-    pattern segment with an astral path segment, whose UTF-16-unit (minimatch) vs
-    code-point counting diverges — so the caller must fail closed.
-
-    The check is *precise*: a risk exists only when some ``?``-bearing pattern
-    segment could actually match (code-point-wise) some astral path segment. A
-    ``?``-segment whose own literal/length structure can never match a given astral
-    segment (e.g. ``ap?`` against a one-character emoji, while a ``**`` or ``*``
-    consumes that segment) is NOT a risk and is not rejected — this holds whether or
-    not the pattern contains ``**``, so ``packages/ap?/**`` still matches
-    ``("packages", "app", "😀")``.
-    """
-    astral_segs = [r for r in rel if _segment_has_astral(r)]
-    if not astral_segs:
-        return False
-    for p in pat_parts:
-        if p == "**" or "?" not in p:
-            continue
-        if any(_wildcard_segment_match(r, p) for r in astral_segs):
-            return True
-    return False
-
-
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
                                      cell_budget: Optional[list] = None) -> bool:
     """Match a package's path segments against a single workspace glob pattern.
@@ -363,8 +346,8 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
         raise _PatternBudgetError
     rel = list(rel_parts)
     n, m = len(rel), len(pat_parts)
-    if _astral_question_mark_risk(pat_parts, rel):
-        raise _PatternBudgetError  # `?` may meet an astral segment → fail closed
+    # (``?`` now matches over UTF-16 code units in ``_wildcard_segment_match``, giving
+    # exact minimatch parity for astral characters — no separate astral guard needed.)
     # Charge this match's DP-table size against a shared aggregate budget so that
     # many long globs against a deep path cannot sum to tens of millions of cells.
     if cell_budget is not None:
@@ -391,28 +374,49 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
     return dp[0][0]
 
 
+def _utf16_units(text: str) -> list:
+    """Return ``text`` as a list of UTF-16 code units (ints). A non-BMP / astral
+    character becomes its two-unit surrogate pair, matching how minimatch (a JS
+    regex) counts characters — so a single ``?`` matches one unit and an emoji needs
+    ``??``."""
+    units: list = []
+    for ch in text:
+        code = ord(ch)
+        if code > 0xFFFF:
+            code -= 0x10000
+            units.append(0xD800 + (code >> 10))
+            units.append(0xDC00 + (code & 0x3FF))
+        else:
+            units.append(code)
+    return units
+
+
 def _wildcard_segment_match(name: str, pat: str) -> bool:
     """Match one path segment ``name`` against one glob segment ``pat`` in the
     matcher's *own* supported language — literal characters plus ``*`` (any run,
-    including empty) and ``?`` (exactly one character) — and NOTHING else.
+    including empty) and ``?`` (exactly one UTF-16 code unit) — and NOTHING else.
 
-    Every other character, including ``[ ] ( ) { } ^ ! $`` and ``.``, is treated as
-    a literal. Unsupported minimatch constructs (real ``[...]`` classes, extglobs,
-    ranges) never reach here — they fail membership closed at the guard — so this
-    deliberately does NOT delegate to ``fnmatch``, whose ``[...]``/``[^…]``
-    reinterpretation and OS case-folding diverge from minimatch on the literal
-    bracket forms this matcher intentionally permits (e.g. a dir named ``[^]``).
+    Matching is over UTF-16 code units so ``?`` has exact minimatch parity even for
+    astral characters (``?`` matches one surrogate unit; an emoji needs ``??``).
+    Every other character, including ``[ ] ( ) { } ^ ! $`` and ``.``, is a literal.
+    Unsupported minimatch constructs (real ``[...]`` classes, extglobs, ranges) never
+    reach here — they fail membership closed at the guard — so this deliberately does
+    NOT delegate to ``fnmatch``, whose ``[...]``/``[^…]`` reinterpretation and OS
+    case-folding diverge from minimatch on the literal bracket forms this matcher
+    intentionally permits (e.g. a dir named ``[^]``).
 
     Linear-space greedy two-pointer with single-star backtracking: no recursion, no
     regex, O(len(name) * number of ``*``) time and O(1) space."""
+    q, star = 0x3F, 0x2A  # ord('?'), ord('*') — always wildcards in a glob
+    name_u, pat_u = _utf16_units(name), _utf16_units(pat)
     s = p = 0
     star_p = star_s = -1
-    ns, npat = len(name), len(pat)
+    ns, npat = len(name_u), len(pat_u)
     while s < ns:
-        if p < npat and (pat[p] == "?" or pat[p] == name[s]):
+        if p < npat and (pat_u[p] == q or pat_u[p] == name_u[s]):
             s += 1
             p += 1
-        elif p < npat and pat[p] == "*":
+        elif p < npat and pat_u[p] == star:
             star_p, star_s = p, s
             p += 1
         elif star_p != -1:
@@ -421,7 +425,7 @@ def _wildcard_segment_match(name: str, pat: str) -> bool:
             s = star_s
         else:
             return False
-    while p < npat and pat[p] == "*":
+    while p < npat and pat_u[p] == star:
         p += 1
     return p == npat
 
