@@ -22,6 +22,7 @@ from pdd.get_test_command import (
     _lexical_repo_root,
     _find_expandable_brace,
     _has_complete_bracket_class,
+    _has_complete_extglob,
     _MAX_GLOB_LENGTH,
     _MAX_BRACE_SCAN_WORK,
     _MAX_MATCH_CELLS,
@@ -1110,6 +1111,52 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("a",), [huge]) is False
         # The linear bracket scanner itself does not choke on the raw string either.
         assert _has_complete_bracket_class("[" * 100000) is False
+
+    def test_leading_slash_comment_is_normalized_before_classification(self):
+        """A leading ``/`` (or ``//`` / ``.//``) is normalized the SAME way for
+        comment classification as for matching, so ``/#*`` is recognized as a
+        minimatch comment (matches nothing) instead of being matched literally into a
+        false member. A leading ``/`` on a real glob is still just normalized away."""
+        assert _package_matches_workspace(("#evil", "package"), ["/#*"]) is False
+        assert _package_matches_workspace(("#evil",), ["//#*"]) is False
+        assert _package_matches_workspace(("#evil",), [".//#*"]) is False
+        assert _package_matches_workspace(("packages", "app"), ["/packages/*"]) is True
+
+    def test_generated_dollar_brace_adjacency_still_expands(self):
+        """A ``$`` produced as a brace option must not be mistaken for an opaque
+        ``${...}`` when it lands before another brace. ``{$,x}{a,b}`` expands to
+        ``$a``/``$b``/``xa``/``xb`` (genuine ``${...}`` spans are masked out before
+        expansion), so the exclusion actually fires."""
+        assert sorted(_expand_braces("{$,x}{a,b}")) == ["$a", "$b", "xa", "xb"]
+        globs = ["packages/**", "!packages/{$,x}{a,b}"]
+        assert _package_matches_workspace(("packages", "$a"), globs) is False
+        assert _package_matches_workspace(("packages", "xb"), globs) is False
+        assert _package_matches_workspace(("packages", "yy"), globs) is True
+        # A genuine balanced ${...} is still opaque (masked, restored literally).
+        assert _expand_braces("packages/${foo,bar}") == ["packages/${foo,bar}"]
+
+    def test_astral_question_mark_only_fails_closed_on_feasible_alignment(self):
+        """The astral-``?`` fail-closed triggers only when a ``?`` segment could
+        actually match an astral segment — even with ``**`` present. ``ap?`` cannot
+        match a one-character emoji, so ``packages/ap?/**`` still matches
+        ``("packages", "app", "😀")``; a lone ``?`` opposite the emoji still fails
+        closed."""
+        emoji = "\U0001F600"
+        assert _package_matches_workspace(
+            ("packages", "app", emoji), ["packages/ap?/**"]) is True
+        assert _package_matches_workspace(
+            ("packages", emoji, "app"), ["packages/?/**"]) is False
+
+    def test_incomplete_extglob_marker_is_not_rejected(self):
+        """An *incomplete* extglob marker (``foo?(bar`` with no ``)``) is minimatch's
+        ``?`` wildcard plus a literal ``(`` — the direct matcher agrees — so it must
+        match, not be rejected. A *complete* extglob group still fails closed."""
+        assert _package_matches_workspace(
+            ("packages", "foox(bar"), ["packages/foo?(bar"]) is True
+        assert _has_complete_extglob("packages/foo?(bar") is False
+        assert _has_complete_extglob("packages/@(a|b)") is True
+        assert _package_matches_workspace(
+            ("packages", "foo"), ["packages/*", "!packages/@(foo|bar)"]) is False
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
