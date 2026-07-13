@@ -40,9 +40,9 @@ class JudgmentResult:
 CALL_SITE_NAMES = ("ingest", "transform", "export_csv", "audit_log")
 
 _CALL_SITE_TUPLE_HANDLING_PATTERN = re.compile(
-    r"\b(?:unpack|destructur\w*|capture|assign|use|check|inspect|handle|"
+    r"\b(?:unpack\w*|destructur\w*|capture|assign|use|check|inspect|handle|"
     r"update|adapt|adjust|modify)\b.{0,120}\b(?:is_valid|reason)\b|"
-    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack|destructur\w*|capture|"
+    r"\b(?:is_valid|reason)\b.{0,120}\b(?:unpack\w*|destructur\w*|capture|"
     r"assign|use|check|inspect|handle|update|adapt|adjust|modify)\b",
     re.IGNORECASE | re.DOTALL,
 )
@@ -296,6 +296,14 @@ class TestDeterministicChangeJudges:
         )
         assert not copied_inputs.passed
         assert "tuple" in copied_inputs.reasoning
+
+    def test_call_site_judge_accepts_inflected_unpack_before_tuple_name(self) -> None:
+        judgment = _judge_call_site_names(
+            "ingest, transform, export_csv, and audit_log each call validate_record. "
+            "Each caller unpacks the result and branches on is_valid."
+        )
+
+        assert judgment.passed
 
     def test_retry_bound_judge_requires_numeric_limit(self) -> None:
         judgment = _judge_retry_bound("Retry up to 3 times before failing.")
