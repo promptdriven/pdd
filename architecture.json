@@ -8582,6 +8582,77 @@
     }
   },
   {
+    "reason": "Provides explicit PDD Cloud authentication commands, including deliberate interactive login in otherwise non-interactive environments.",
+    "description": "Defines the auth login, status, logout, token, and clear-cache Click commands while preserving bounded keyring and JWT-cache behavior.",
+    "dependencies": [],
+    "priority": 70,
+    "filename": "commands/auth_python.prompt",
+    "filepath": "pdd/commands/auth.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "commands": [
+          {"name": "auth login", "description": "Authenticate explicitly with PDD Cloud"},
+          {"name": "auth status", "description": "Display current authentication state"},
+          {"name": "auth logout", "description": "Clear cached and stored authentication"},
+          {"name": "auth token", "description": "Output the current JWT for scripting"},
+          {"name": "auth clear-cache", "description": "Delete the cached JWT token"}
+        ]
+      }
+    },
+    "position": {
+      "x": 13050,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Registers analysis-oriented CLI commands, including non-interactive user-story validation through detect --stories.",
+    "description": "Defines the detect, conflicts, bug, crash, and trace Click commands and delegates their work to the corresponding prompt-owned orchestration modules.",
+    "dependencies": [],
+    "priority": 70,
+    "filename": "commands/analysis_python.prompt",
+    "filepath": "pdd/commands/analysis.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "commands": [
+          {
+            "name": "detect",
+            "description": "Detect prompt changes or validate user stories"
+          },
+          {
+            "name": "conflicts",
+            "description": "Detect conflicts between prompts"
+          },
+          {
+            "name": "bug",
+            "description": "Run agentic or manual bug analysis"
+          },
+          {
+            "name": "crash",
+            "description": "Analyze and optionally repair a crashing program"
+          },
+          {
+            "name": "trace",
+            "description": "Trace a code line back to its prompt source"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13100,
+      "y": 2000
+    }
+  },
+  {
     "reason": "Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.",
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
     "dependencies": [

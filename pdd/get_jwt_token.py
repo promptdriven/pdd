@@ -52,14 +52,17 @@ class UserCancelledError(AuthError):
 def _is_noninteractive() -> bool:
     """Return True when the process cannot safely prompt a human.
 
-    Used to refuse GitHub device-flow OAuth in CI/Cloud Build/Docker contexts
-    where no one can enter the verification code. Driven by explicit env vars
-    only: device flow writes to stdout, so a non-TTY stdin alone is not a
+    Used to refuse GitHub device-flow OAuth in unattended CI/Cloud Build/Docker
+    contexts. ``PDD_ALLOW_INTERACTIVE`` is an explicit opt-in and therefore
+    takes precedence over the non-interactive flags. Driven by explicit env
+    vars only: device flow writes to stdout, so a non-TTY stdin alone is not a
     reliable signal. Callers that must run non-interactively (e.g. story
     validation) set ``PDD_NO_INTERACTIVE=1`` for the duration of the
     auth-sensitive work instead of relying on TTY detection here.
     """
     truthy = ("1", "true", "yes", "on")
+    if os.environ.get("PDD_ALLOW_INTERACTIVE", "").strip().lower() in truthy:
+        return False
     if os.environ.get("PDD_NO_INTERACTIVE", "").strip().lower() in truthy:
         return True
     if os.environ.get("CI", "").strip().lower() in truthy:

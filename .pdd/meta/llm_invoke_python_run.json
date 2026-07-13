@@ -1,17 +1,11 @@
 {
-  "timestamp": "2026-06-04T20:30:11.771286+00:00",
+  "timestamp": "2026-07-13T07:59:05.132035+00:00",
   "exit_code": 0,
-  "tests_passed": 375,
+  "tests_passed": 362,
   "tests_failed": 0,
-  "coverage": 90.0,
-  "test_hash": "1979352422b5ea80ee7f2ea14a8a2c20ab880d02fd1d2365d8dd54050d2f5f18",
+  "coverage": 0.0,
+  "test_hash": "4aaae7e8dc472e0fb280e9d773dce17ae806ee959c232badc1fb922011df1fb9",
   "test_files": {
-    "test_llm_invoke.py": "1979352422b5ea80ee7f2ea14a8a2c20ab880d02fd1d2365d8dd54050d2f5f18",
-    "test_llm_invoke_csv_model_registration.py": "1583b5e076fe5227a11f3d1079034ab4a21bc6131a3433f37bd68e35a99ba49e",
-    "test_llm_invoke_grounding.py": "e219903b03ea56b821cfaaf18b8f279bdddf9d59729daf86a3456bee7bbe2ecb",
-    "test_llm_invoke_integration.py": "2eb4bd2565761a4148762c6fb73c887cb6e12ff962742e05f5c2d4d62b47aaf9",
-    "test_llm_invoke_nested_schema.py": "c983a19874abacc3e0ea9d6ca2ec87495960d2dd96d4e93be4039ed1bc995b9b",
-    "test_llm_invoke_retry_cost.py": "bfdfe7b814b78813f86b8bc6d081831daf531187feff66358260f6282925958c",
-    "test_llm_invoke_vertex_retry.py": "eafe91ba9376dc7e2da36faf3cd2de3cef50f70cf1c4fc5655e373deb7f50c26"
+    "test_llm_invoke.py": "4aaae7e8dc472e0fb280e9d773dce17ae806ee959c232badc1fb922011df1fb9"
   }
 }

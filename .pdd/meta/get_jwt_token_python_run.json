@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T08:16:26.919016+00:00",
+  "exit_code": 0,
+  "tests_passed": 38,
+  "tests_failed": 0,
+  "coverage": 0.0,
+  "test_hash": "d14e6504e35c7fe88715e92ed113dc562ffa8a5608c692b83157317b9052316c",
+  "test_files": {
+    "test_get_jwt_token.py": "d14e6504e35c7fe88715e92ed113dc562ffa8a5608c692b83157317b9052316c"
+  }
+}

@@ -176,7 +176,15 @@ def login(browser: Optional[bool]):
             console.print(f"[red]An unexpected error occurred: {e}[/red]")
             sys.exit(1)
 
-    asyncio.run(run_login())
+    previous_allow_interactive = os.environ.get("PDD_ALLOW_INTERACTIVE")
+    os.environ["PDD_ALLOW_INTERACTIVE"] = "1"
+    try:
+        asyncio.run(run_login())
+    finally:
+        if previous_allow_interactive is None:
+            os.environ.pop("PDD_ALLOW_INTERACTIVE", None)
+        else:
+            os.environ["PDD_ALLOW_INTERACTIVE"] = previous_allow_interactive
 
 
 @auth_group.command("status")

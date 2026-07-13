@@ -25,15 +25,17 @@ These tests exercise:
 """
 from __future__ import annotations
 
+import io
 import os
 
 import pytest
+from click.testing import CliRunner
 
 import pdd.user_story_tests as ust
+from pdd.cli import cli
 from pdd import get_jwt_token as gjt_module
 from pdd.core import cloud
 from pdd.core.cloud import (
-    CloudConfig,
     FIREBASE_API_KEY_ENV,
     GITHUB_CLIENT_ID_ENV,
     PDD_JWT_TOKEN_ENV,
@@ -47,6 +49,15 @@ PROVIDER_KEY_ENVS = (
     "GOOGLE_API_KEY",
     "GROQ_API_KEY",
     "MISTRAL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "COHERE_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "PERPLEXITYAI_API_KEY",
+    "VERTEX_CREDENTIALS",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
     "PDD_MODEL_DEFAULT",
 )
 
@@ -143,7 +154,12 @@ def test_story_validation_noninteractive_decision_matrix(monkeypatch):
 
     monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
     assert ust._story_validation_noninteractive() is False  # explicit opt-in
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("PDD_NO_INTERACTIVE", "1")
+    assert ust._story_validation_noninteractive() is False  # opt-in remains explicit
     monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
 
     for truthy in ("1", "true", "yes", "on", "ON", " Yes "):
         monkeypatch.setenv("PDD_NO_INTERACTIVE", truthy)
@@ -207,17 +223,12 @@ def test_story_validation_respects_real_tty(tmp_path, monkeypatch):
 # Real device-flow guard, end to end (the exact #1923 decision point)
 # -----------------------------------------------------------------------------
 
-def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch):
-    """End-to-end: real run_user_story_tests -> real detect_change/llm_invoke
-    cloud auth -> real get_jwt_token guard. With cloud enabled and no cached
-    credentials in a non-TTY run, GitHub device authentication must never start.
+def test_detect_stories_cli_non_tty_never_starts_device_flow(tmp_path, monkeypatch):
+    """Exercise the real top-level ``pdd detect --stories`` auth boundary.
 
-    This is a genuine regression guard: if the forcing of PDD_NO_INTERACTIVE is
-    removed from run_user_story_tests (reintroducing the bug), the env-only
-    device-flow guard is reached and the trapped ``DeviceFlow`` flips
-    ``device_flow_started`` to True, failing the assertion below. With the fix,
-    the guard refuses device flow, cloud auth returns None, the local fallback
-    also stays non-interactive, and validation fails closed.
+    ``PDD_ISSUE_1923_TEST_PRE_FIX=1`` is a test-only RED-evidence switch: it
+    simulates the pre-fix missing story-validation scope while retaining every
+    assertion below. The normal test uses the real non-TTY decision helper.
     """
     prompts_dir, stories_dir = _make_story_repo(tmp_path)
 
@@ -228,8 +239,10 @@ def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch
     for key in PROVIDER_KEY_ENVS:
         monkeypatch.delenv(key, raising=False)
 
-    # Force non-interactive decision deterministically (don't depend on runner TTY).
-    monkeypatch.setattr(ust, "_story_validation_noninteractive", lambda: True)
+    # Controlled baseline for concise TDD evidence. This is intentionally not a
+    # production switch: it only replaces the owning guard from inside this test.
+    if os.environ.get("PDD_ISSUE_1923_TEST_PRE_FIX") == "1":
+        monkeypatch.setattr(ust, "_story_validation_noninteractive", lambda: False)
 
     # Both JWT caches miss and there is no stored refresh token, so the real
     # get_jwt_token reaches the device-flow branch unless the guard stops it.
@@ -239,17 +252,26 @@ def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch
         gjt_module.FirebaseAuthenticator, "_get_stored_refresh_token", lambda self: None
     )
 
-    device_flow_started = {"value": False}
+    device_flow_calls = {"request": 0, "poll": 0}
 
-    class _TrapDeviceFlow:
-        def __init__(self, *_args, **_kwargs):
-            device_flow_started["value"] = True
-            raise AssertionError(
-                "device-flow authentication must not start for non-interactive "
-                "story validation"
-            )
+    async def _trap_request_device_code(_self):
+        device_flow_calls["request"] += 1
+        raise AssertionError(
+            "device-flow authentication must not request a code for "
+            "non-interactive story validation"
+        )
 
-    monkeypatch.setattr(gjt_module, "DeviceFlow", _TrapDeviceFlow)
+    async def _trap_poll_for_token(_self, *_args, **_kwargs):
+        device_flow_calls["poll"] += 1
+        raise AssertionError(
+            "device-flow authentication must not poll in non-interactive "
+            "story validation"
+        )
+
+    monkeypatch.setattr(
+        gjt_module.DeviceFlow, "request_device_code", _trap_request_device_code
+    )
+    monkeypatch.setattr(gjt_module.DeviceFlow, "poll_for_token", _trap_poll_for_token)
 
     # Defensive: ensure the local fallback can never make a real model call.
     import pdd.llm_invoke as llm_invoke_module
@@ -261,14 +283,48 @@ def test_story_validation_non_tty_never_starts_device_flow(tmp_path, monkeypatch
         llm_invoke_module.litellm, "completion", _no_completion, raising=False
     )
 
-    passed, results, _cost, _model = ust.run_user_story_tests(
-        prompts_dir=prompts_dir, stories_dir=stories_dir, quiet=True
+    class _NonTTYInput(io.BytesIO):
+        """Click input stream that records the real ``isatty`` decision."""
+
+        isatty_checked = False
+
+        def isatty(self):
+            self.isatty_checked = True
+            return False
+
+    stdin = _NonTTYInput(b"")
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--no-core-dump",
+            "detect",
+            "--stories",
+            "--prompts-dir",
+            prompts_dir,
+            "--stories-dir",
+            stories_dir,
+        ],
+        input=stdin,
     )
 
-    # Core assertion: no device authentication was started.
-    assert device_flow_started["value"] is False
-    # And validation failed closed (missing creds) rather than passing/hanging.
-    assert passed is False
-    assert results and results[0]["passed"] is False
+    # The real Click-isolated stdin, not pytest's capture stream, drove the
+    # decision. This remains deterministic with ordinary pytest and pytest -s.
+    assert stdin.isatty_checked is True
+    assert device_flow_calls == {"request": 0, "poll": 0}
+    assert result.exit_code != 0
+
+    output = result.output
+    assert "PDD_JWT_TOKEN" in output
+    assert "model API credentials" in output
+    assert "pdd auth login" in output
+    for interactive_text in (
+        "https://github.com/login/device",
+        "To authenticate, visit:",
+        "Enter code:",
+        "Opening browser for authentication",
+        "Waiting for authentication",
+    ):
+        assert interactive_text not in output
+
     # The scoped env is restored after the run.
     assert os.environ.get("PDD_NO_INTERACTIVE") is None

@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-13T08:18:29.698872+00:00",
+  "command": "test",
+  "prompt_hash": "4f9edbbe1daf05a4b248c693c84a34a5af524901714930a1a99e88a8577912c1",
+  "code_hash": "4bd3d81ace06fd311092795bc47e8ba84e25c24da35029adcc4401edcec3afc9",
+  "example_hash": "d1e77e2ab5a5b6f3c400a8a68a73bb633f6d45e39dd4a90306dcc18c729d9000",
+  "test_hash": "56d45f4b80dab36fdfac94fc4ae4b2011d02c0b5a30b2de538360a05fcda5454",
+  "test_files": {
+    "test_auth.py": "56d45f4b80dab36fdfac94fc4ae4b2011d02c0b5a30b2de538360a05fcda5454"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/get_jwt_token_example.py": "76a87c8257cb1f4cfdc2edff6225c752432afb3a5e352fcb016d08d8eae16e01",
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/commands/__init___example.py": "cc6e0de7d94b1dddda35d9c8ecb800710263d928191f1d4cb2400bae36c31cb4",
+    "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1"
+  }
+}
