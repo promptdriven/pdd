@@ -36,8 +36,5 @@ This module wraps `diskcache.Cache` with version-pinned cache key derivation and
 9. Module is side-effect-free except for reads/writes to the cache directory and the `importlib.metadata` lookup at construction time.
 10. Tests and examples MUST import from `pdd.sync_evidence_cache`.
 
-% Dependencies
-<include>context/python_preamble.prompt</include>
-
 % Deliverables
 - Code: `pdd/sync_evidence_cache.py`

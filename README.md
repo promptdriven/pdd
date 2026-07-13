@@ -1160,7 +1160,7 @@ pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
 - Uses git integration to detect changes and determine incremental vs full regeneration
 - Accumulates tests over time rather than replacing them (in a single test file per target)
 - Automatically handles dependencies between steps
-- **Compressed Context Telemetry**: Sync results and logs record whether compressed context was requested, the effective value after CLI and `.pddrc` resolution, whether it was actually applied for each phase, the source inputs used to build it, and whether the run fell back to agentic repair. This makes replay and benchmark comparisons distinguish normal sync from compressed-context sync.
+- **Compressed Context Telemetry**: Sync results and logs record whether compressed context was requested, the effective value after CLI and `.pddrc` resolution, whether it was actually applied for each phase, the source inputs used to build it, and whether the run fell back to agentic repair. This makes replay and benchmark comparisons distinguish normal sync from compressed-context sync. Agentic sync runs also emit a `context_manifest.json` sidecar alongside the run evidence, recording the ordered list of `ContextPacket` IDs processed during the run plus aggregate run-level telemetry: input/output token counts, provider call count, evidence cache hit/miss counts, time-to-first-progress, and wall-clock duration. See `docs/evidence_manifest.md` for the full schema.
 
 **Robust State Management**:
 - **Fingerprint Files**: Maintains `.pdd/meta/{basename}_{language}.json` with operation history

@@ -237,8 +237,9 @@ changes. The cache directory is `$PDD_CACHE_DIR/sync_evidence`
 When a must-have `ContextSlot` (priority above the truncation threshold) cannot fit
 within the per-phase hard token budget, assembly raises `InsufficientContextError`
 with `phase`, `budget`, `required_tokens`, and `packet_id` fields. The orchestrator
-catches this error and routes to a scope-reduction retry rather than silently clipping
-high-priority content.
+surfaces this error as a hard failure: the module is recorded as failed immediately and
+no automatic scope-reduction retry is attempted. The user must reduce scope or increase
+the per-phase budget to resolve the error.
 
 ### Story Regression Coverage
 
