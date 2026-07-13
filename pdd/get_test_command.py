@@ -19,6 +19,7 @@ import stat
 
 from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
+from .get_run_command import shell_safe_substitute
 
 
 # Upper bound on how many concrete patterns a single workspace glob may expand
@@ -217,18 +218,17 @@ def _raw_glob_unsupported(raw: str) -> bool:
     return "\\" in raw
 
 
+_LEADING_PREFIX_RE = re.compile(r"^\.?/+")
+
+
 def _strip_one_leading(pattern: str) -> str:
-    """Strip exactly ONE leading prefix token — npm normalizes a leading run of
-    ``/`` OR a single ``./``, once — and return the remainder. A prefix left over
-    afterward is SIGNIFICANT: ``/./x`` normalizes to ``./x`` (needing a literal ``.``
-    segment) and ``././x`` keeps its second ``./``, so neither collapses to ``x`` and
-    falsely matches a plain ``x`` package. (One pass, matching @npmcli/map-workspaces
-    rather than independently stripping ``/`` and then ``./``.)"""
-    if pattern.startswith("./"):
-        return pattern[2:]
-    if pattern.startswith("/"):
-        return pattern.lstrip("/")
-    return pattern
+    """Apply npm's leading normalization exactly once: strip an optional leading
+    ``.`` immediately followed by the entire leading run of ``/`` (the ``^\\.?/+``
+    that ``@npmcli/map-workspaces`` uses). So ``./x``, ``.//x``, ``/x``, ``//x`` all
+    become ``x``, while a prefix left OVER is significant — ``/./x`` normalizes to
+    ``./x`` (needing a literal ``.`` segment) and ``././x`` keeps its second ``./`` —
+    so neither collapses to ``x`` and falsely matches a plain ``x`` package."""
+    return _LEADING_PREFIX_RE.sub("", pattern, count=1)
 
 
 def _effective_leading(pattern: str) -> str:
@@ -484,6 +484,17 @@ def _wildcard_segment_match(name: str, pat: str) -> bool:
     """Convenience wrapper: match segment strings by converting to UTF-16 units. See
     :func:`_wildcard_units_match`."""
     return _wildcard_units_match(_utf16_units(name), _utf16_units(pat))
+
+
+def _workspace_source_is_pnpm(ancestor: Path) -> bool:
+    """True when ``ancestor`` declares its workspace via ``pnpm-workspace.yaml`` (even
+    a dangling symlink). pnpm's ``@pnpm/matcher`` evaluates include/exclude in
+    DECLARATION ORDER (last matching pattern wins — a later positive re-includes),
+    whereas npm/yarn's ``@npmcli/map-workspaces`` and lerna glob the positives and
+    remove the negatives as a set (an exclusion is terminal; a later broad positive
+    does NOT re-include). See ``_package_matches_workspace``'s ``ordered`` argument."""
+    pnpm_path = ancestor / "pnpm-workspace.yaml"
+    return pnpm_path.exists() or pnpm_path.is_symlink()
 
 
 def _workspace_globs_for(ancestor: Path, cache: Optional[dict] = None) -> list:
@@ -920,14 +931,20 @@ def _expand_braces(pattern: str, budget: Optional[list] = None,
 def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                                cell_budget: Optional[list] = None,
                                work_budget: Optional[list] = None,
-                               expand_budget: Optional[list] = None) -> bool:
+                               expand_budget: Optional[list] = None,
+                               ordered: bool = True) -> bool:
     """Return True when ``rel_parts`` matches the workspace globs' include/exclude
-    semantics, evaluated **in declaration order** (last matching pattern wins): a
-    positive pattern includes, a ``!`` exclusion excludes, and a later positive
-    *re-includes* a previously-excluded path. This matches both npm's
-    ``@npmcli/map-workspaces`` and pnpm's ``@pnpm/matcher`` (a later
-    ``packages/legacy/app`` after ``!packages/legacy/**`` re-includes that package);
-    treating every exclusion as permanent would wrongly deny such a member.
+    semantics. The algorithm depends on the declaring tool (``ordered``):
+
+    * ``ordered=True`` (pnpm's ``@pnpm/matcher``): evaluate in DECLARATION ORDER, last
+      matching pattern wins — a positive includes, a ``!`` exclusion excludes, and a
+      *later* positive RE-INCLUDES a previously-excluded path
+      (``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` includes
+      ``packages/legacy/app``). This is the default for direct callers.
+    * ``ordered=False`` (npm/yarn's ``@npmcli/map-workspaces`` and lerna): a member
+      matches at least one positive AND no ``!`` exclusion — exclusion is TERMINAL, so
+      a later broad positive does NOT re-include
+      (``["packages/app", "!packages/app", "packages/*"]`` EXCLUDES ``packages/app``).
 
     Brace alternations are expanded before matching (a raw glob matches when any of
     its expansions does). The brace-expansion count (``expand_budget``), the
@@ -951,7 +968,9 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # set at each package boundary cannot sum to tens of millions of cells);
         # otherwise a fresh per-call budget is used (direct/standalone callers).
         cells = cell_budget if cell_budget is not None else [_MAX_MATCH_CELLS]
-        member = False
+        member = False           # ordered (pnpm): last-match-wins accumulator
+        matched_positive = False  # unordered (npm/lerna): any positive matched?
+        matched_negative = False  # unordered (npm/lerna): any exclusion matched?
         for raw in globs:
             # Do NOT strip surrounding whitespace: workspace tools treat it
             # literally, so `" packages/* "` is a package literally named with
@@ -995,13 +1014,18 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             for pat in expanded:
                 if _concrete_pattern_unsupported(pat):
                     raise _PatternBudgetError
-            # Order-dependent: if this raw glob matches (any expansion), it sets
-            # membership to its polarity — a later positive can re-include a path an
-            # earlier ``!`` excluded, and vice versa.
-            if any(_relative_matches_workspace_glob(rel_parts, p, cells, work)
-                   for p in expanded):
+            matches = any(_relative_matches_workspace_glob(rel_parts, p, cells, work)
+                          for p in expanded)
+            if matches:
+                # ordered (pnpm): last matching pattern's polarity wins, so a later
+                # positive re-includes. unordered (npm/lerna): accumulate — an
+                # exclusion is terminal regardless of a later broad positive.
                 member = not negated
-        return member
+                if negated:
+                    matched_negative = True
+                else:
+                    matched_positive = True
+        return member if ordered else (matched_positive and not matched_negative)
     except (_PatternBudgetError, RecursionError):
         # Pathological pattern from an untrusted manifest (brace bomb, ``**``
         # wall, or deep nesting) → cannot be evaluated safely, so membership is
@@ -1035,12 +1059,16 @@ def _workspace_root_for(package_dir: Path, cache: Optional[dict] = None,
     for _ in range(80):
         globs = _workspace_globs_for(ancestor, cache)
         if globs:
+            # pnpm evaluates include/exclude in order (re-inclusion); npm/yarn/lerna
+            # treat an exclusion as terminal. Pick the algorithm by declaring source.
+            ordered = _workspace_source_is_pnpm(ancestor)
             try:
                 rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
             except (ValueError, OSError, RuntimeError):
                 rel_parts = ()
             if rel_parts and _package_matches_workspace(
-                    rel_parts, globs, cell_budget, work_budget, expand_budget):
+                    rel_parts, globs, cell_budget, work_budget, expand_budget,
+                    ordered=ordered):
                 return ancestor
         if (ancestor / ".git").exists():
             break
@@ -1139,10 +1167,23 @@ def _lexical_repo_root(test_path: Path) -> Optional[Path]:
 
 
 _RUNNER_CONFIGS = (
-    # (command prefix, (config filenames...), spec_only)
-    ("npx playwright test", ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs"), True),
-    ("npx jest --no-coverage --runTestsByPath", ("jest.config.js", "jest.config.ts", "jest.config.mjs"), False),
-    ("npx vitest run", ("vitest.config.ts", "vitest.config.js", "vitest.config.mjs"), False),
+    # (command prefix, (config filenames — in the runner's documented priority
+    # order...), spec_only). Each runner supports the full set of JS/TS module
+    # extensions (`.js`/`.mjs`/`.cjs`) plus `.json` (Jest) and TS variants
+    # (`.ts`/`.mts`/`.cts`); omitting a supported extension causes a real config to
+    # be missed and the test to fall back to `npx tsx` or stop at its boundary.
+    ("npx playwright test",
+     ("playwright.config.ts", "playwright.config.js", "playwright.config.mjs",
+      "playwright.config.cjs", "playwright.config.mts", "playwright.config.cts"),
+     True),
+    ("npx jest --no-coverage --runTestsByPath",
+     ("jest.config.js", "jest.config.mjs", "jest.config.cjs", "jest.config.json",
+      "jest.config.ts", "jest.config.mts", "jest.config.cts"),
+     False),
+    ("npx vitest run",
+     ("vitest.config.ts", "vitest.config.js", "vitest.config.mjs",
+      "vitest.config.cjs", "vitest.config.mts", "vitest.config.cts"),
+     False),
 )
 
 
@@ -1397,11 +1438,15 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            # Shell-quote the substituted path: callers run this command string with
-            # ``shell=True``, so an unquoted path with spaces or shell metacharacters
-            # (e.g. ``/repo/$(touch PWN)/a.test.ts``) would be re-split or executed
-            # via command substitution — a command-injection vector.
-            return TestCommand(command=csv_cmd.replace('{file}', shlex.quote(str(test_file))))
+            # Shell-quote the substituted path via a shell-lexical-aware single pass:
+            # callers run this string with ``shell=True``, so an unquoted path with
+            # metacharacters (``/repo/$(touch PWN)/a.test.ts``) would be re-split or
+            # command-substituted. ``shlex.quote`` is only safe at a bare word, so a
+            # CSV template that quotes ``{file}`` (``mocha "{file}"``) is refused
+            # (fall through to smart detection) rather than made injectable.
+            substituted = shell_safe_substitute(csv_cmd, {'{file}': str(test_file)})
+            if substituted is not None:
+                return TestCommand(command=substituted)
 
     # 3. Smart detection
     if resolved_language:

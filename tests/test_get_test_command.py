@@ -25,6 +25,7 @@ from pdd.get_test_command import (
     _has_complete_bracket_class,
     _has_complete_extglob,
     _MAX_GLOB_LENGTH,
+    _RUNNER_CONFIGS,
     _MAX_BRACE_SCAN_WORK,
     _MAX_MATCH_CELLS,
     _MAX_BRACE_EXPANSION,
@@ -1186,17 +1187,45 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(("packages", "a"), ["packages/[^]]"]) is False
 
     def test_leading_prefix_normalized_exactly_once(self):
-        """npm applies leading normalization exactly ONCE — a single leading ``./``
-        OR a leading run of ``/``. A residual ``./`` afterward is significant, so
+        """npm's leading normalization is exactly ``^\\.?/+`` (an optional leading dot
+        then the entire leading slash run, once). A prefix left OVER is significant, so
         ``/./packages/*`` (→ ``./packages/*``), ``//./packages/*``, and
-        ``././packages/*`` do NOT match ``packages/app``, while a single ``./`` or a
-        leading ``/`` does. (Independently stripping ``/`` and then ``./`` would
-        wrongly collapse ``/./packages/*`` to ``packages/*``.)"""
+        ``././packages/*`` do NOT match ``packages/app``. A single leading ``./`` or a
+        leading slash run — including ``.//`` and ``.///`` (dot + all slashes) — does."""
         for glob in ("/./packages/*", "//./packages/*", "././packages/*",
                      ".//./packages/*"):
             assert _package_matches_workspace(("packages", "app"), [glob]) is False, glob
-        for glob in ("packages/*", "./packages/*", "/packages/*", "//packages/*"):
+        for glob in ("packages/*", "./packages/*", "/packages/*", "//packages/*",
+                     ".//packages/*", ".///packages/*", "///packages/*"):
             assert _package_matches_workspace(("packages", "app"), [glob]) is True, glob
+
+    def test_membership_semantics_are_source_dependent(self):
+        """npm/yarn/lerna (``@npmcli/map-workspaces``) treat an exclusion as terminal
+        (any-exclude-wins) — a later broad positive does NOT re-include — while pnpm
+        (``@pnpm/matcher``) is order-dependent (last-match-wins, re-inclusion). The
+        ``ordered`` flag selects the algorithm; direct callers default to pnpm."""
+        # A broad positive after a specific exclusion.
+        globs = ["packages/app", "!packages/app", "packages/*"]
+        assert _package_matches_workspace(("packages", "app"), globs, ordered=False) is False
+        assert _package_matches_workspace(("packages", "app"), globs, ordered=True) is True
+        # A specific re-inclusion after a broad exclusion.
+        reinc = ["packages/**", "!packages/legacy/**", "packages/legacy/app"]
+        assert _package_matches_workspace(
+            ("packages", "legacy", "app"), reinc, ordered=False) is False  # npm excludes
+        assert _package_matches_workspace(
+            ("packages", "legacy", "app"), reinc, ordered=True) is True   # pnpm re-includes
+        # Both algorithms agree on a plain positive and a trailing exclusion.
+        assert _package_matches_workspace(("packages", "app"), ["packages/*"], ordered=False) is True
+        assert _package_matches_workspace(
+            ("packages", "app", "test", "x"), ["packages/**", "!**/test/**"], ordered=False) is False
+
+    def test_jest_config_extensions_include_cjs_and_json(self):
+        """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
+        `jest.config.cjs` must be detected as a Jest project, not fall back to tsx."""
+        jest = next(c[1] for c in _RUNNER_CONFIGS if "jest" in c[0])
+        for name in ("jest.config.js", "jest.config.mjs", "jest.config.cjs",
+                     "jest.config.json", "jest.config.ts"):
+            assert name in jest, name
 
     def test_json_manifest_rejects_nonstandard_constants(self, tmp_path):
         """``NaN``/``Infinity``/``-Infinity`` are accepted by Python's ``json`` but

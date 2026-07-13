@@ -3,7 +3,61 @@
 import os
 import csv
 import shlex
+from typing import Dict, Optional
 from pdd.path_resolution import get_default_resolver
+
+
+def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str]:
+    """Substitute ``{placeholder}`` tokens in a shell-command ``template`` with
+    shell-quoted values in a SINGLE left-to-right pass, or return ``None`` when the
+    template is unsafe.
+
+    ``shlex.quote`` wraps a value in single quotes, which only neutralizes shell
+    metacharacters when the placeholder occupies a *standalone, unquoted bare word*.
+    A template that nests a placeholder inside its own single/double quotes or
+    backticks (``printf %s "{file}"``, even ``" {file} "``), or adjoins it to another
+    token (``{file}x``), would let the inserted quotes become literal and still
+    execute a ``$(...)``/backtick in the value — so any such placeholder makes the
+    whole template unsafe (``None``). Substitution is single-pass, so a value that
+    itself contains a ``{...}`` token is never rescanned as a placeholder.
+    """
+    out: list = []
+    i, n = 0, len(template)
+    in_single = in_double = in_back = False
+    at_word_boundary = True  # position could begin an unquoted bare word
+    while i < n:
+        placeholder = next(
+            (k for k in values if template.startswith(k, i)), None)
+        if placeholder is not None:
+            end = i + len(placeholder)
+            after = template[end] if end < n else " "
+            if (in_single or in_double or in_back) or not at_word_boundary \
+                    or not after.isspace():
+                return None
+            out.append(shlex.quote(values[placeholder]))
+            i = end
+            at_word_boundary = False
+            continue
+        char = template[i]
+        if char == "\\" and not in_single:
+            out.append(char)
+            if i + 1 < n:
+                out.append(template[i + 1])
+                i += 2
+            else:
+                i += 1
+            at_word_boundary = False
+            continue
+        if char == "'" and not in_double and not in_back:
+            in_single = not in_single
+        elif char == '"' and not in_single and not in_back:
+            in_double = not in_double
+        elif char == "`" and not in_single:
+            in_back = not in_back
+        out.append(char)
+        at_word_boundary = char.isspace() and not (in_single or in_double or in_back)
+        i += 1
+    return "".join(out)
 
 
 def get_run_command(extension: str) -> str:
@@ -76,5 +130,8 @@ def get_run_command_for_file(file_path: str) -> str:
     # Shell-quote the substituted path: callers run this command with `bash -lc`
     # / `shell=True`, so an unquoted path with spaces or shell metacharacters
     # (e.g. `/repo/$(touch PWN)/x.py`) would be re-split or executed via command
-    # substitution — a command-injection vector.
-    return run_command_template.replace('{file}', shlex.quote(file_path))
+    # substitution. But `shlex.quote` is only safe when `{file}` is a standalone bare
+    # word — a CSV template that quotes it (`printf %s "{file}"`) would let the value's
+    # `$(...)` still execute — so refuse such a template (return '' = no command).
+    substituted = shell_safe_substitute(run_command_template, {'{file}': file_path})
+    return substituted if substituted is not None else ''

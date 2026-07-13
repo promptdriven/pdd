@@ -14,6 +14,8 @@ import os
 import shlex
 from pathlib import Path
 
+from .get_run_command import shell_safe_substitute
+
 
 def _load_language_format_by_name() -> dict:
     """Load language_format.csv into a dict keyed by lowercase language name."""
@@ -55,11 +57,15 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
     if lang in lang_formats:
         csv_cmd = lang_formats[lang].get('run_test_command', '').strip()
         if csv_cmd:
-            # Shell-quote the substituted path: this command is executed with
-            # ``shell=True`` by pdd callers, so an unquoted path with spaces or
-            # shell metacharacters (e.g. ``$()``/``;``) would be re-split or run
-            # via command substitution — a command-injection vector.
-            return csv_cmd.replace('{file}', shlex.quote(unit_test_file))
+            # Shell-quote the substituted path via a shell-lexical-aware single pass:
+            # this command is executed with ``shell=True`` by pdd callers, so an
+            # unquoted path with metacharacters (``$()``/``;``) would be re-split or
+            # command-substituted. ``shlex.quote`` is only safe at a bare word, so a
+            # CSV template that quotes ``{file}`` is refused (None → fall through to
+            # the Python fallback / agentic mode) rather than made injectable.
+            substituted = shell_safe_substitute(csv_cmd, {'{file}': unit_test_file})
+            if substituted is not None:
+                return substituted
 
     # 2. Hardcoded Python fallback
     if lang == "python":

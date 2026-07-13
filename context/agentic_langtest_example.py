@@ -6,6 +6,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from pdd.get_run_command import shell_safe_substitute
+
 
 def _which(cmd: str) -> bool:
     """Checks if a command-line tool exists in the system's PATH.
@@ -71,18 +73,22 @@ def default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None:
        shell-quoted).
     3. Otherwise `None`, so agentic mode handles test discovery/execution.
 
-    The command is executed by callers with `bash -lc` / `shell=True`, so every
-    path spliced into it MUST be shell-quoted (`shlex.quote`). Bare double quotes
-    are NOT enough — `"$(...)"` is still expanded inside double quotes — so an
-    unquoted path with spaces or shell metacharacters (`$()`, `;`, …) would be
-    re-split or run as a command-injection vector.
+    The command is executed by callers with `bash -lc` / `shell=True`, so the test
+    path MUST be shell-quoted (`shlex.quote`) AND the `{file}` placeholder MUST be a
+    standalone bare word: `shlex.quote` wraps its value in single quotes, which only
+    neutralize metacharacters at a bare word — a CSV template that quotes the
+    placeholder (`mocha "{file}"`) would leave the single quotes literal and still
+    execute a `$(...)` in the path. `shell_safe_substitute` enforces this and returns
+    None for an unsafe template (fall through to the Python fallback / agentic mode).
     """
     lang = lang.lower()
 
     # 1. CSV lookup by language name.
     csv_cmd = _run_test_command_for_language(lang)
     if csv_cmd:
-        return csv_cmd.replace("{file}", shlex.quote(unit_test_file))
+        substituted = shell_safe_substitute(csv_cmd, {"{file}": unit_test_file})
+        if substituted is not None:
+            return substituted
 
     # 2. Hardcoded Python fallback.
     if lang == "python":
