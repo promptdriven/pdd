@@ -21,7 +21,11 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import build_agentic_task_instruction, run_agentic_task
+from .agentic_common import (
+    _sanitize_comment_body,
+    build_agentic_task_instruction,
+    run_agentic_task,
+)
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
@@ -1974,7 +1978,12 @@ def _run_single_dry_run(
         cmd.append("--local")
     cmd.extend(["sync", basename, "--dry-run", "--agentic", "--no-steer"])
 
-    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    env = {
+        **os.environ,
+        "PDD_FORCE": "1",
+        "CI": "1",
+        "PDD_AGENTIC_BACKGROUND_SAFE": "1",
+    }
     if local:
         env["PDD_FORCE_LOCAL"] = "1"
 
@@ -1989,7 +1998,9 @@ def _run_single_dry_run(
         )
         if result.returncode == 0:
             return True, ""
-        return False, result.stderr or result.stdout or f"Exit code {result.returncode}"
+        output = result.stderr or result.stdout or f"Exit code {result.returncode}"
+        marker = _extract_provider_environment_marker(output)
+        return False, marker or output
     except subprocess.TimeoutExpired:
         return False, "Dry-run timed out after 60s"
     except Exception as e:
@@ -2065,10 +2076,12 @@ def _llm_fix_dry_run_failure(
         timeout=FIX_DRY_RUN_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
         stall_timeout=FIX_DRY_RUN_STALL_SECONDS,  # Issue #1714: no-progress abort
         reasoning_time=reasoning_time,
+        background_safe=True,
     )
 
     if not llm_success:
-        return False, None, llm_cost, f"LLM failed to suggest fix: {llm_output}"
+        marker = _extract_provider_environment_marker(llm_output)
+        return False, None, llm_cost, marker or f"LLM failed to suggest fix: {llm_output}"
 
     # Parse SYNC_CMD from response
     cmd_match = re.search(r"SYNC_CMD:\s*(.+)", llm_output)
@@ -2088,7 +2101,12 @@ def _llm_fix_dry_run_failure(
 
     # Run the suggested command directly via shell from project root.
     # This handles relative cd paths, chained cd's, etc. naturally.
-    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    env = {
+        **os.environ,
+        "PDD_FORCE": "1",
+        "CI": "1",
+        "PDD_AGENTIC_BACKGROUND_SAFE": "1",
+    }
     if local:
         env["PDD_FORCE_LOCAL"] = "1"
     try:
@@ -2129,11 +2147,12 @@ def _llm_fix_dry_run_failure(
         return True, effective_cwd, llm_cost, ""
     else:
         err_output = result.stderr or result.stdout or f"Exit code {result.returncode}"
+        marker = _extract_provider_environment_marker(err_output)
         return (
             False,
             None,
             llm_cost,
-            f"LLM suggested command failed: {err_output[:500]}",
+            marker or f"LLM suggested command failed: {err_output[:500]}",
         )
 
 
@@ -2205,6 +2224,11 @@ def _run_dry_run_validation(
             module_targets[basename] = target
             continue
 
+        provider_marker = _extract_provider_environment_marker(err_output)
+        if provider_marker:
+            errors.append(provider_marker)
+            continue
+
         # 3. Dry-run failed — try LLM fallback
         if not quiet:
             console.print(
@@ -2246,7 +2270,9 @@ def _run_dry_run_validation(
                     f"[green]LLM resolved {basename} → cwd: {rel}[/green]"
                 )
         else:
-            errors.append(f"{basename}: {llm_err or err_output}")
+            detail = llm_err or err_output
+            marker = _extract_provider_environment_marker(detail)
+            errors.append(marker or f"{basename}: {detail}")
 
     all_valid = len(errors) == 0
     return all_valid, module_cwds, module_targets, errors, total_llm_cost
@@ -2854,6 +2880,7 @@ def run_agentic_sync(
                 timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
                 stall_timeout=IDENTIFY_MODULES_STALL_SECONDS,  # Issue #1714: no-progress abort
                 reasoning_time=reasoning_time,
+                background_safe=True,
             )
 
             if not llm_success:
@@ -3036,7 +3063,8 @@ def run_agentic_sync(
 
     if not all_valid:
         error_detail = "\n".join(dry_run_errors)
-        msg = f"Dry-run validation failed:\n{error_detail}"
+        provider_marker = _extract_provider_environment_marker(error_detail)
+        msg = provider_marker or f"Dry-run validation failed:\n{error_detail}"
         if not quiet:
             console.print(f"[red]{msg}[/red]")
         if use_github_state:
@@ -3166,11 +3194,70 @@ def run_agentic_sync(
 
 def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) -> None:
     """Post an error comment on the GitHub issue."""
+    trusted_payload = message.removeprefix("LLM failed to identify modules: ")
+    marker = _extract_provider_environment_marker(trusted_payload)
+    if marker and marker == trusted_payload:
+        clean_message = (
+            marker
+            + "\n\nProvider setup needs attention. Fix provider installation/auth/update "
+            "state, switch provider, or use non-interactive configuration, then retry."
+        )
+    else:
+        clean_message = _sanitize_agentic_sync_error(message)
     body = (
         "## PDD Agentic Sync - Error\n\n"
-        f"```\n{message[:1000]}\n```\n"
+        f"```\n{clean_message[:1000]}\n```\n"
     )
+    body = _sanitize_comment_body(body)
     _run_gh_command([
         "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
         "-X", "POST", "-f", f"body={body}",
     ])
+
+
+_ANSI_CSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_ORPHAN_OSC_RE = re.compile(r"\x1b\][^\n]*")
+_CARET_CSI_RE = re.compile(r"(?:\^\[|\\e|\\033)\[[0-?]*[ -/]*[@-~]")
+_TERMINAL_GLYPH_RE = re.compile(
+    r"[\u2800-\u28ff\u2500-\u257f\u2700-\u27bf\u23f5\u2191]"
+)
+_TERMINAL_NOISE_LINE_RE = re.compile(
+    r"(?:auto[- ]?update|update available|permission required|press enter|"
+    r"trust this workspace|bypass permissions|shift\+tab|esc to interrupt|"
+    r"read and execute instructions|helper|keyboard shortcut|footer|cursor)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_agentic_sync_error(message: str) -> str:
+    """Render provider failures as readable, non-interactive public text."""
+    text = _ANSI_CSI_RE.sub("", message or "")
+    text = _ORPHAN_OSC_RE.sub("", text)
+    text = _CARET_CSI_RE.sub("", text)
+    clean_lines: List[str] = []
+    for line in text.splitlines():
+        line = _TERMINAL_GLYPH_RE.sub("", line)
+        line = "".join(ch for ch in line if ch in "\t" or ord(ch) >= 32)
+        if _TERMINAL_NOISE_LINE_RE.search(line):
+            continue
+        line = line.strip()
+        if line:
+            clean_lines.append(line)
+    return _sanitize_comment_body("\n".join(clean_lines))
+
+
+_PROVIDER_ENVIRONMENT_MARKER_RE = re.compile(
+    r'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:'
+    r'\{"provider":"(?:claude|anthropic|codex|openai|gemini|google|agy|opencode|unknown)",'
+    r'"reason":"(?:interactive_ui|trust_prompt|permission_prompt|update_prompt|authentication|update_required|non_interactive_required|runtime_unavailable)"\}'
+)
+
+
+def _extract_provider_environment_marker(text: str) -> Optional[str]:
+    """Return one exact full-line trusted marker, rejecting embedded prose."""
+    matches = {
+        line
+        for line in (text or "").splitlines()
+        if _PROVIDER_ENVIRONMENT_MARKER_RE.fullmatch(line)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None

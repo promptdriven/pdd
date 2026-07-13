@@ -66,6 +66,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
+          }
+        ],
         "dataclasses": [
           {
             "name": "SteerEntry",
@@ -113,7 +119,7 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False, background_safe=False) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -247,12 +253,6 @@
               "INTERACTIVE_ONLY",
               "UNSUPPORTED"
             ]
-          }
-        ],
-        "typeAliases": [
-          {
-            "name": "TaskClass",
-            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
           }
         ]
       }
@@ -7705,7 +7705,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False, local: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {

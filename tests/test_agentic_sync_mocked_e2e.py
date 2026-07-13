@@ -25,7 +25,6 @@ AsyncSyncRunner -> real child ``pdd sync`` subprocesses end to end.
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -68,6 +67,25 @@ if [ "$CLAUDE_SHIM_MODE" = "fail" ]; then
   {PYTHON} -c 'import json; print(json.dumps({{"type": "result", "is_error": True, "result": "Mock provider failure injected for failure-path testing.", "total_cost_usd": 0.0}}))'
   exit 0
 fi
+if [ "$CLAUDE_SHIM_MODE" = "echo-provider-phrase" ]; then
+  {PYTHON} -c 'import json; print(json.dumps({{"type": "result", "is_error": True, "result": "A user-authored test quoted All agent providers failed; this is ordinary output.", "total_cost_usd": 0.0}}))'
+  exit 0
+fi
+if [ "$CLAUDE_SHIM_MODE" = "echo-interactive-phrases" ]; then
+  RESULT='A test fixture says: Trust this workspace? Permission required; press Enter to continue; update available.
+MODULES_TO_SYNC: ["greeter"]
+DEPS_VALID: true
+DEPS_CORRECTIONS: []'
+  RESULT="$RESULT" {PYTHON} -c 'import json, os; print(json.dumps({{"type": "result", "subtype": "success", "is_error": False, "result": os.environ["RESULT"], "total_cost_usd": 0.01}}))'
+  exit 0
+fi
+if [ "$CLAUDE_SHIM_MODE" = "interactive-ui" ]; then
+  printf '\033[?25l\342\240\213 Trust this workspace?\n'
+  printf '^[[2K\342\234\246 Permission required: press Enter to continue\n'
+  printf '\342\224\214 Auto-update available \342\224\220\n'
+  sleep 30
+  exit 0
+fi
 if printf '%s' "$PROMPT" | grep -q "MODULES_TO_SYNC"; then
   RESULT='Analysis complete. The issue requests the greeter feature, which maps to greeter and its dependency textutil in architecture.json.
 
@@ -108,6 +126,10 @@ exit 86
 PDD_SHIM = """#!/bin/sh
 # Route child `pdd` invocations back to this test's interpreter.
 printf 'pdd %s\\n' "$*" >> "$E2E_LOG_DIR/pdd_calls.log"
+if [ "$PDD_DRY_RUN_PROVIDER_FAILURE" = "1" ] && printf '%s' "$*" | grep -q -- '--dry-run'; then
+  printf '%s\\n' 'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:{{"provider":"anthropic","reason":"trust_prompt"}}' >&2
+  exit 78
+fi
 exec {PYTHON} -m pdd "$@"
 """
 
@@ -242,11 +264,13 @@ def harness(tmp_path):
     return h
 
 
-def run_sync(h, *extra_args, shim_mode=None, timeout=420):
+def run_sync(h, *extra_args, shim_mode=None, timeout=420, dry_run_provider_failure=False):
     """Invoke the real CLI entry point (`pdd sync <issue-url> ...`)."""
     env = dict(h.env)
     if shim_mode:
         env["CLAUDE_SHIM_MODE"] = shim_mode
+    if dry_run_provider_failure:
+        env["PDD_DRY_RUN_PROVIDER_FAILURE"] = "1"
     return subprocess.run(
         [sys.executable, "-m", "pdd", "--force", "--local",
          "sync", ISSUE_URL, "--no-steer", *extra_args],
@@ -319,6 +343,69 @@ def test_identification_failure_posts_error_comment(harness):
     # No partial state was left behind.
     assert not (harness.project / ".pdd" / "agentic_sync_state.json").exists()
     assert_no_billing(harness)
+
+
+def test_interactive_provider_ui_fails_fast_with_trusted_sanitized_comment(harness):
+    """A background sync must kill interactive provider UI promptly and post
+    only the trusted marker plus actionable, terminal-safe recovery text."""
+    result = run_sync(harness, shim_mode="interactive-ui", timeout=12)
+
+    assert result.returncode != 0
+    writes = read_log(harness, "gh_writes.log")
+    assert (
+        'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:{"provider":"anthropic",'
+        '"reason":"trust_prompt"}'
+    ) in writes
+    assert "fix provider installation/auth/update state" in writes.lower()
+    assert "switch provider" in writes.lower()
+    assert "non-interactive configuration" in writes.lower()
+    forbidden = (
+        "^[[", "\\033", "\u280b", "\u2726", "\u250c", "Auto-update",
+        "Permission required", "press Enter", "?25l",
+    )
+    assert all(token not in writes for token in forbidden), writes
+    assert_no_billing(harness)
+
+
+def test_quoted_provider_failure_text_is_not_promoted_to_trusted_failure(harness):
+    result = run_sync(harness, shim_mode="echo-provider-phrase")
+
+    assert result.returncode != 0
+    writes = read_log(harness, "gh_writes.log")
+    assert "A user-authored test quoted All agent providers failed" in writes
+    assert "Provider setup needs attention" not in writes
+    assert "fix provider installation/auth/update state" not in writes.lower()
+    assert_no_billing(harness)
+
+
+def test_real_dry_run_validation_propagates_exact_provider_marker(harness):
+    result = run_sync(harness, dry_run_provider_failure=True)
+
+    assert result.returncode != 0
+    writes = read_log(harness, "gh_writes.log")
+    marker = (
+        'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:{"provider":"anthropic",'
+        '"reason":"trust_prompt"}'
+    )
+    assert f"\n{marker}\n" in writes
+    assert "Dry-run validation failed" not in writes
+    assert "LLM failed to suggest fix" not in writes
+    assert "fix provider installation/auth/update state" in writes.lower()
+    assert "switch provider" in writes.lower()
+    assert "non-interactive configuration" in writes.lower()
+
+
+def test_plain_provider_output_quoting_ui_phrases_remains_ordinary(harness):
+    result = run_sync(
+        harness,
+        "--dry-run",
+        "--no-github-state",
+        shim_mode="echo-interactive-phrases",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dry run complete" in result.stdout
+    assert "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1" not in result.stdout
 
 
 def test_branch_diff_detection_skips_llm(harness):
