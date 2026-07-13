@@ -82,11 +82,30 @@ _MAX_MATCH_CELLS = 2_000_000
 # expand to a handful of short patterns — orders of magnitude under this bound.
 _MAX_BRACE_SCAN_WORK = 8_000_000
 
-# Extglob prefixes (``?(``/``*(``/``+(``/``@(``/``!(``). minimatch expands these
-# but the per-segment ``fnmatch`` matcher treats them literally, so a workspace
-# glob using one fails membership closed rather than under-/over-matching. See
-# the guard in ``_package_matches_workspace``.
-_EXTGLOB_MARKERS = ("?(", "*(", "+(", "@(", "!(")
+# Extglob prefix characters: one of these immediately before ``(`` (``?(``/``*(``/
+# ``+(``/``@(``/``!(``) opens a minimatch extglob. minimatch expands these but the
+# direct matcher does not, so a *complete* extglob group fails membership closed.
+_EXTGLOB_PREFIXES = "?*+@!"
+
+
+def _has_complete_extglob(pattern: str) -> bool:
+    """True when ``pattern`` contains a *complete* extglob group — an extglob prefix
+    (``?*+@!``) immediately followed by ``(`` and later a matching ``)``.
+
+    An *incomplete* marker (``foo?(bar`` with no ``)``) is NOT flagged: minimatch
+    reads it as the supported ``?`` wildcard plus a literal ``(``, exactly as the
+    direct matcher does, so rejecting it would needlessly refuse a legitimate glob.
+    A single linear scan: once any ``X(`` marker is seen, the next ``)`` completes a
+    group."""
+    seen_marker = False
+    prev = ""
+    for ch in pattern:
+        if ch == "(" and prev in _EXTGLOB_PREFIXES:
+            seen_marker = True
+        elif ch == ")" and seen_marker:
+            return True
+        prev = ch
+    return False
 
 
 def _has_complete_bracket_class(raw: str) -> bool:
@@ -184,6 +203,17 @@ def _raw_glob_unsupported(raw: str) -> bool:
     return "\\" in raw
 
 
+def _effective_leading(pattern: str) -> str:
+    """Return ``pattern`` with the SAME leading normalization the matcher applies —
+    all leading ``/`` and at most one leading ``./`` removed — so a caller can
+    classify the effective first segment (e.g. a ``#`` comment) consistently with
+    matching. A second/further leading ``.`` segment is significant and is kept."""
+    eff = pattern.lstrip("/")
+    if eff.startswith("./"):
+        eff = eff[2:].lstrip("/")
+    return eff
+
+
 def _concrete_pattern_unsupported(pattern: str) -> bool:
     """Return True when a fully brace-*expanded* (concrete) pattern uses a minimatch
     construct this matcher does not implement with faithful parity, so the whole
@@ -197,8 +227,11 @@ def _concrete_pattern_unsupported(pattern: str) -> bool:
         (``{1..3}``, ``{a..c}``, ``{01..03}``, ``{1..9..2}``), which a comma-only
         expander emits literally. A literal ``..`` outside braces, inside a comma
         alternation, or inside an opaque ``${...}`` is fine and NOT rejected.
-      * extglobs (``?(…)``/``*(…)``/``+(…)``/``@(…)``/``!(…)``) — ``fnmatch`` treats
-        them literally, so an extglob exclusion fails to exclude.
+      * a *complete* extglob group (``?(…)``/``*(…)``/``+(…)``/``@(…)``/``!(…)`` with
+        a matching ``)``), which minimatch expands but the direct matcher does not.
+        An *incomplete* marker (``foo?(bar`` with no ``)``) is minimatch's ``?``
+        wildcard plus a literal ``(`` — the direct matcher agrees — so it is NOT
+        rejected.
 
     (The astral ``?`` divergence — minimatch counts a non-BMP char as two UTF-16
     code units — is handled precisely per aligned segment in
@@ -214,7 +247,7 @@ def _concrete_pattern_unsupported(pattern: str) -> bool:
         return True
     if _has_brace_range(pattern):
         return True
-    return any(marker in pattern for marker in _EXTGLOB_MARKERS)
+    return _has_complete_extglob(pattern)
 
 
 def _read_manifest_text(path: Path, max_bytes: int = _MAX_MANIFEST_BYTES) -> Optional[str]:
@@ -271,25 +304,25 @@ def _segment_has_astral(segment: str) -> bool:
 def _astral_question_mark_risk(pat_parts: list, rel: list) -> bool:
     """True when matching ``pat_parts`` against path ``rel`` could align a ``?``
     pattern segment with an astral path segment, whose UTF-16-unit (minimatch) vs
-    code-point (``fnmatch``) counting diverges — so the caller must fail closed.
+    code-point counting diverges — so the caller must fail closed.
 
-    The check is *precise*, not merely "a ``?`` and an astral char both appear":
-      * with no ``**`` the alignment is strictly positional (``*``/``?``/literal each
-        consume exactly one segment), so a risk exists only when the segment counts
-        match and a ``?`` segment sits opposite an astral segment;
-      * a ``**`` makes alignment flexible, so any ``?`` segment could reach an astral
-        segment → conservatively fail closed.
-    A ``?`` that can only ever meet BMP segments (e.g. ``a??`` opposite ``app`` while
-    ``*`` consumes the astral segment) is therefore not needlessly rejected.
+    The check is *precise*: a risk exists only when some ``?``-bearing pattern
+    segment could actually match (code-point-wise) some astral path segment. A
+    ``?``-segment whose own literal/length structure can never match a given astral
+    segment (e.g. ``ap?`` against a one-character emoji, while a ``**`` or ``*``
+    consumes that segment) is NOT a risk and is not rejected — this holds whether or
+    not the pattern contains ``**``, so ``packages/ap?/**`` still matches
+    ``("packages", "app", "😀")``.
     """
-    if not any(_segment_has_astral(seg) for seg in rel):
+    astral_segs = [r for r in rel if _segment_has_astral(r)]
+    if not astral_segs:
         return False
-    if not any("?" in p for p in pat_parts):
-        return False
-    if "**" in pat_parts:
-        return True
-    return len(pat_parts) == len(rel) and any(
-        "?" in p and _segment_has_astral(r) for p, r in zip(pat_parts, rel))
+    for p in pat_parts:
+        if p == "**" or "?" not in p:
+            continue
+        if any(_wildcard_segment_match(r, p) for r in astral_segs):
+            return True
+    return False
 
 
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str,
@@ -607,14 +640,6 @@ def _find_expandable_brace(pattern: str, limit: int,
         if pattern[i] != "{":
             i += 1
             continue
-        if i > 0 and pattern[i - 1] == "$":
-            # A balanced ``${...}`` is a shell-style group that minimatch's
-            # brace-expansion treats as fully literal (opaque) — nested braces
-            # included. Skip the WHOLE group (not just one character, which would let
-            # a nested ``{b,c}`` expand) and keep scanning for later independent
-            # braces. An unbalanced ``${...`` is literal to end of string.
-            i = _skip_balanced_braces(pattern, i, work)
-            continue
         depth, end = 0, -1
         for j in range(i, n):
             work[0] -= 1
@@ -640,10 +665,57 @@ def _find_expandable_brace(pattern: str, limit: int,
     return None
 
 
+_DOLLAR_MASK = "\x00"
+
+
+def _mask_dollar_braces(pattern: str, work: list) -> Tuple[str, list]:
+    """Replace every *balanced* ``${...}`` span (a ``{`` immediately preceded by a
+    literal ``$``, nested braces included) with an inert ``\\x00N\\x00`` placeholder,
+    returning the masked string and the list of removed literal spans.
+
+    This is done BEFORE brace expansion so the expander never sees a ``$`` adjacent
+    to a ``{``. Otherwise an option could generate that adjacency — expanding
+    ``{$,x}{a,b}`` produces ``${a,b}``, whose ``{a,b}`` is NOT a shell group and MUST
+    still expand — and a naive "``$`` precedes ``{``" opacity check on the worklist
+    string would wrongly freeze it. An *unbalanced* ``${`` is left as a literal
+    ``${`` (the later brace still expands). Each character is charged against
+    ``work``."""
+    literals: list = []
+    out: list = []
+    i, n = 0, len(pattern)
+    while i < n:
+        work[0] -= 1
+        if work[0] < 0:
+            raise _BraceBudgetError
+        if pattern[i] == "$" and i + 1 < n and pattern[i + 1] == "{":
+            end = _skip_balanced_braces(pattern, i + 1, work)
+            if end > i + 2:  # a matching '}' was found → balanced ${...}
+                out.append(f"{_DOLLAR_MASK}{len(literals)}{_DOLLAR_MASK}")
+                literals.append(pattern[i:end])
+                i = end
+                continue
+        out.append(pattern[i])
+        i += 1
+    return "".join(out), literals
+
+
+def _restore_dollar_braces(pattern: str, literals: list) -> str:
+    """Substitute ``\\x00N\\x00`` placeholders back with their original ``${...}``
+    literal spans."""
+    if not literals:
+        return pattern
+    return re.sub(
+        rf"{_DOLLAR_MASK}(\d+){_DOLLAR_MASK}",
+        lambda mo: literals[int(mo.group(1))],
+        pattern,
+    )
+
+
 def _expand_braces(pattern: str, budget: Optional[list] = None,
                    work: Optional[list] = None) -> list:
     """Expand ``{a,b}`` brace alternations (as npm/Yarn workspace globs use) into
-    concrete patterns. Unbalanced or single-option braces are left literal.
+    concrete patterns. Unbalanced or single-option braces are left literal, and a
+    balanced ``${...}`` is opaque (masked out before expansion, restored after).
 
     Expansion is *iterative* (a worklist, not recursion) and bounded by a shared
     ``budget`` — a single-element mutable list holding the number of finished
@@ -662,6 +734,11 @@ def _expand_braces(pattern: str, budget: Optional[list] = None,
         budget = [_MAX_BRACE_EXPANSION]
     if work is None:
         work = [_MAX_BRACE_SCAN_WORK]
+    if _DOLLAR_MASK in pattern:
+        # The mask sentinel cannot appear in a real path/glob; if it does the input
+        # cannot be masked safely → fail closed.
+        raise _PatternBudgetError
+    pattern, literals = _mask_dollar_braces(pattern, work)
 
     def _emit(value: str) -> None:
         budget[0] -= 1
@@ -684,7 +761,7 @@ def _expand_braces(pattern: str, budget: Optional[list] = None,
         prefix, suffix = pat[:start], pat[end + 1:]
         for option in options:
             worklist.append(prefix + option + suffix)
-    return out
+    return [_restore_dollar_braces(p, literals) for p in out]
 
 
 def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
@@ -741,14 +818,15 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                 # mis-classified (e.g. treating ``!!!packages/foo`` as a literal and
                 # falsely proving membership).
                 raise _PatternBudgetError
-            # A *positive* pattern whose effective form (after an optional leading
-            # ``./``) begins with ``#`` is a minimatch comment: it matches nothing,
-            # so it must not be fnmatch-ed literally into a false member. Skip it.
+            # A *positive* pattern whose effective form is a minimatch comment (a
+            # leading ``#``) matches nothing, so it must not be matched literally into
+            # a false member. Classify it AFTER the SAME leading normalization the
+            # matcher applies (strip leading ``/`` and at most one ``./``) so ``/#*``
+            # and ``.//#*`` are recognized as comments too, not just ``#*``/``./#*``.
             # (A ``!``-exclusion body starting with ``#`` is left to match its literal
             # ``#`` — the safe direction, since a spurious exclusion only removes a
             # member, never adds one.)
-            if not negated and (
-                    body[2:] if body.startswith("./") else body).startswith("#"):
+            if not negated and _effective_leading(body).startswith("#"):
                 continue
             expanded = _expand_braces(body, budget, work)
             # Validate the CONCRETE (expanded) patterns, not the raw glob: brace
