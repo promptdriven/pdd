@@ -23,6 +23,7 @@ from pdd.sync_core import (
     run_profile,
 )
 from pdd.sync_core.runner import (
+    _copy_vitest_dependencies,
     _local_javascript_imports,
     _collect_vitest_at_base,
     _load_vitest_toolchain_descriptor,
@@ -220,6 +221,103 @@ def test_vitest_rejects_unbound_alternate_loader_transitively(tmp_path: Path) ->
         )
 
 
+@pytest.mark.parametrize(
+    "loader",
+    [
+        "const req = require; req('./helper.cjs');",
+        (
+            "import { createRequire } from 'node:module'; "
+            "const req = createRequire(import.meta.url); req('./helper.cjs');"
+        ),
+        (
+            "import { createRequire as makeRequire } from 'node:module'; "
+            "const req = makeRequire(import.meta.url); req('./helper.cjs');"
+        ),
+        (
+            "const { createRequire: makeRequire } = require('node:module'); "
+            "const req = makeRequire(import.meta.url); req('./helper.cjs');"
+        ),
+        "let req; req = require; req('./helper.cjs');",
+    ],
+)
+def test_vitest_binds_statically_proven_commonjs_loader_aliases(
+    tmp_path: Path, loader: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    helper = root / "tests/helper.cjs"
+    helper.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        f"{loader}\nimport {{ test }} from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add static CommonJS alias")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths)
+    helper.write_text("module.exports = 'changed';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change CommonJS helper")
+
+    assert vitest_validator_config_digest(root, "HEAD", paths) != before
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        "let req = require; req = unknown; req('./helper.cjs');",
+        "const req = enabled ? require : unknown; req('./helper.cjs');",
+        (
+            "import { createRequire } from 'node:module'; "
+            "const req = createRequire(runtimeUrl); req('./helper.cjs');"
+        ),
+        "const req = require; const box = { req }; box.req('./helper.cjs');",
+        "const box = getLoader(); box.load('./helper.cjs');",
+    ],
+)
+def test_vitest_rejects_dynamic_or_ambiguous_loader_aliases(
+    tmp_path: Path, loader: str
+) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "tests/helper.cjs").write_text("module.exports = 1;\n", encoding="utf-8")
+    (root / "tests/widget.test.ts").write_text(
+        f"{loader}\nimport {{ test }} from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add ambiguous CommonJS alias")
+
+    with pytest.raises(ValueError, match="alias|loader|dynamic|provenance"):
+        vitest_validator_config_digest(
+            root, "HEAD", (PurePosixPath("tests/widget.test.ts"),)
+        )
+
+
+def test_vitest_binds_commonjs_alias_in_transitive_local_helper(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    helper = root / "tests/fixture.cjs"
+    helper.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    (root / "tests/loader.cjs").write_text(
+        "const req = require; module.exports = req('./fixture.cjs');\n",
+        encoding="utf-8",
+    )
+    (root / "tests/widget.test.ts").write_text(
+        "import './loader.cjs';\nimport { test } from 'vitest';\n"
+        "test('widget works', () => {});\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add transitive CommonJS alias")
+    paths = (PurePosixPath("tests/widget.test.ts"),)
+    before = vitest_validator_config_digest(root, "HEAD", paths)
+    helper.write_text("module.exports = 'changed';\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "change transitive CommonJS helper")
+
+    assert vitest_validator_config_digest(root, "HEAD", paths) != before
+
+
 def test_vitest_rejects_nonregular_git_closure_members(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path)
     target = tmp_path / "outside.ts"
@@ -394,6 +492,108 @@ def test_vitest_toolchain_entrypoint_is_copied_into_phase_tree(
     assert phase.entrypoint.read_bytes() == descriptor.entrypoint.read_bytes()
     assert (phase_root / "node_modules/.vite-temp").is_dir()
     assert (phase_root / "node_modules/.vite").is_dir()
+
+
+def test_vitest_phase_rejects_dependency_mutated_during_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    dependency = descriptor.dependencies / "vitest/dependency.js"
+    dependency.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    def corrupt_copy(source: Path, destination: Path) -> None:
+        _copy_vitest_dependencies(source, destination)
+        (destination / "vitest/dependency.js").write_text(
+            "module.exports = 'attacker';\n", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(
+        "pdd.sync_core.runner._copy_vitest_dependencies", corrupt_copy
+    )
+    with pytest.raises(ValueError, match="identity|member|copied"):
+        _prepare_vitest_toolchain(phase_root, descriptor)
+
+
+def test_vitest_phase_rejects_source_mutated_after_descriptor_capture(
+    tmp_path: Path,
+) -> None:
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    dependency = runner.parent / "dependency.js"
+    dependency.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
+    dependency.write_text("module.exports = 'attacker';\n", encoding="utf-8")
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    with pytest.raises(ValueError, match="identity|changed|member"):
+        _prepare_vitest_toolchain(phase_root, descriptor)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "dependency-bytes",
+        "dependency-mode",
+        "dependency-symlink",
+        "dependency-missing",
+        "dependency-extra",
+        "launcher-bytes",
+        "lockfile-bytes",
+        "native-bytes",
+    ],
+)
+def test_vitest_rechecks_exact_staged_descriptor_before_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    root, _commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    config = _runner_config(tmp_path, runner)
+    dependency = runner.parent / "dependency.js"
+    dependency.write_text("module.exports = 'trusted';\n", encoding="utf-8")
+    descriptor = _load_vitest_toolchain_descriptor(root, config)
+    phase = _prepare_vitest_toolchain(root, descriptor)
+    copied_dependency = phase.entrypoint.parent / "dependency.js"
+    if mutation == "dependency-bytes":
+        copied_dependency.write_text("attacker\n", encoding="utf-8")
+    elif mutation == "dependency-mode":
+        copied_dependency.chmod(0o600)
+    elif mutation == "dependency-symlink":
+        copied_dependency.unlink()
+        copied_dependency.symlink_to(tmp_path / "outside")
+    elif mutation == "dependency-missing":
+        copied_dependency.unlink()
+    elif mutation == "dependency-extra":
+        (phase.entrypoint.parent / "extra.js").write_text("attacker\n", encoding="utf-8")
+    elif mutation == "launcher-bytes":
+        phase.launcher.write_bytes(b"attacker")
+    elif mutation == "lockfile-bytes":
+        phase.lockfile.write_bytes(b"attacker")
+    else:
+        phase.native_runtime[0].write_bytes(b"attacker")
+
+    monkeypatch.setattr(
+        "pdd.sync_core.runner.run_supervised",
+        lambda *_args, **_kwargs: pytest.fail("mutated phase reached execution"),
+    )
+    execution, identities = _run_vitest(
+        root,
+        (PurePosixPath("tests/widget.test.ts"),),
+        2,
+        config,
+        phase_toolchain=phase,
+    )
+
+    assert execution.outcome is EvidenceOutcome.ERROR
+    assert "identity" in execution.detail.lower() or "member" in execution.detail.lower()
+    assert not identities
 
 
 def test_vitest_result_channel_is_not_disclosed_to_candidate(
