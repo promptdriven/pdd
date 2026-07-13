@@ -2184,7 +2184,9 @@ def _run_vitest(
         home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
         reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
-        result_fifo = temporary / f"result-{os.urandom(16).hex()}.fifo"
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
         os.mkfifo(result_fifo, mode=0o600)
         read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
         result_fd = 198

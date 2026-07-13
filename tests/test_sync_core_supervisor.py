@@ -17,11 +17,43 @@ from pdd.sync_core.supervisor import (
     _linked_libraries,
     _limited_command,
     _live_processes,
+    _private_result_command,
     _sandbox_library_path,
     _sandbox_command,
     _runtime_directories,
     run_supervised,
 )
+
+
+def test_private_result_wrapper_unlinks_channel_before_candidate(
+    tmp_path: Path,
+) -> None:
+    """Exercise the pre-exec channel handoff without a Linux sandbox."""
+    channel = tmp_path / "channel"
+    channel.mkdir(mode=0o700)
+    fifo = channel / "result.fifo"
+    os.mkfifo(fifo, mode=0o600)
+    read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    result_fd = 17
+    candidate = [
+        sys.executable,
+        "-c",
+        f"import os;os.write({result_fd},b'trusted-result')",
+    ]
+
+    completed = subprocess.run(
+        _private_result_command(candidate, fifo, result_fd),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    try:
+        assert completed.returncode == 0, completed.stderr
+        assert not fifo.exists()
+        assert os.read(read_fd, 1024) == b"trusted-result"
+    finally:
+        os.close(read_fd)
 
 
 def test_runtime_closure_ignores_synthetic_argv_interpreter_prefix(
@@ -110,7 +142,7 @@ def test_linux_sandbox_fails_closed_for_root_caller(
     assert surviving is False
 
 
-def test_linux_sandbox_opens_checker_result_fifo_after_sudo(
+def test_linux_sandbox_opens_and_unlinks_checker_fifo_before_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
@@ -123,7 +155,9 @@ def test_linux_sandbox_opens_checker_result_fifo_after_sudo(
         "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
     )
 
-    fifo = tmp_path / "checker.fifo"
+    channel = tmp_path / "channel"
+    channel.mkdir(mode=0o700)
+    fifo = channel / "checker.fifo"
     os.mkfifo(fifo)
     argv, profile = _sandbox_command(
         ["/bin/true"], (tmp_path,), result_fifo=fifo, result_fd=198
@@ -132,10 +166,16 @@ def test_linux_sandbox_opens_checker_result_fifo_after_sudo(
     assert profile is None
     assert argv[:3] == ["sudo", "-n", "-E"]
     assert "-C" not in argv[:6]
-    bwrap = json.loads(argv[-4])
-    assert bwrap[bwrap.index("--preserve-fds") + 1] == "196"
-    assert json.loads(argv[-3])
-    assert argv[-2:] == [str(fifo), "198"]
+    bwrap = json.loads(argv[-2])
+    assert "--preserve-fds" not in bwrap
+    assert json.loads(argv[-1])
+    assert str(channel) in bwrap
+    separator = bwrap.index("--")
+    candidate_argv = bwrap[separator + 1:]
+    assert str(fifo) in candidate_argv
+    wrapper = candidate_argv[candidate_argv.index("-c") + 1]
+    assert "os.open(path,os.O_WRONLY);os.unlink(path)" in wrapper
+    assert candidate_argv.index(str(fifo)) < candidate_argv.index("/bin/true")
 
 
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
