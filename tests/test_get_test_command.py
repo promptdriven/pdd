@@ -1246,6 +1246,19 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "node_modules"), ["packages/*"], ordered=False) is True
 
+    def test_npm_positive_comment_participates_in_negation_removal(self):
+        """Under npm's ``appendNegatedPatterns`` a positive pattern — INCLUDING a
+        ``#`` comment — whose pattern string is matched by an earlier negation removes
+        that negation, even though a comment never matches a concrete path itself. So
+        ``["packages/**", "!**", "#noop"]`` re-includes ``packages/app`` under npm.
+        pnpm ignores the comment (its last matching pattern is still ``!**``)."""
+        globs = ["packages/**", "!**", "#noop"]
+        assert _package_matches_workspace(("packages", "app"), globs, ordered=False) is True
+        assert _package_matches_workspace(("packages", "app"), globs, ordered=True) is False
+        # A positive comment never matches a concrete path on its own.
+        assert _package_matches_workspace(("#noop",), ["#noop"], ordered=False) is False
+        assert _package_matches_workspace(("#noop",), ["#noop"], ordered=True) is False
+
     def test_jest_config_extensions_include_cjs_and_json(self):
         """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
         `jest.config.cjs` must be detected as a Jest project, not fall back to tsx."""
@@ -1446,10 +1459,18 @@ class TestWorkspaceMembershipHardening:
         cmd, cwd = _detect_ts_test_runner(repo / "src" / "a.test.ts")
         assert "npx vitest run" in cmd, cmd
         assert cwd == repo.resolve()
-        # A script invoking vitest also proves it.
-        (repo / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
-        cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
-        assert "npx vitest run" in cmd2, cmd2
+        # A script invoking vitest also proves it (including via a runner wrapper).
+        for script in ("vitest run", "npx vitest", "pnpm exec vitest",
+                       "./node_modules/.bin/vitest"):
+            (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
+            cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+            assert cmd2 is not None and "npx vitest run" in cmd2, (script, cmd2)
+        # A script that merely MENTIONS the substring "vitest" without invoking it does
+        # NOT prove Vitest — it must not be adopted (semantic token, not substring).
+        for script in ("echo no-vitest-installed", "cat vitest.config.ts",
+                       "echo run-vitest-later"):
+            (repo / "package.json").write_text('{"scripts": {"test": "%s"}}' % script)
+            assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
 
     def test_symlink_to_foreign_checkout_is_refused(self, tmp_path):
         """A symlink whose target is itself a git checkout must not be adopted.

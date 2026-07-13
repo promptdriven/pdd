@@ -53,7 +53,10 @@ Returns guidance if required tools are missing.
 - Kept for API compatibility.
 
 % Dependencies
-<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
+<pdd>This module imports `shell_safe_substitute` from `pdd.get_run_command` to fill the
+`{file}` placeholder of a CSV `run_test_command` template with a shell-quoted value
+(single-pass, refusing an unsafe template by returning `None`). It has no other internal
+PDD dependencies.</pdd>
 
 % Deliverables
 - Code: `pdd/agentic_langtest.py`

@@ -227,6 +227,25 @@ class TestShellSafeSubstitute:
                            capture_output=True, text=True, timeout=10)
             assert "PWN_HD" in os.listdir(d), "expected the naive heredoc form to inject"
 
+    def test_expansion_and_operator_comment_contexts_are_refused(self):
+        """Command-evaluation contexts — arithmetic `$(( ))`, command substitution
+        `$( )`, parameter expansion `${ }`, backticks, and `(...)` subshells /
+        process substitution — plus a `#` comment that starts right after a `;`/`&`/`|`
+        control operator are not ordinary word contexts and are refused (None). Proven
+        with real `bash -lc` execution of the naive forms."""
+        for tpl in ("printf X:$(({file}))", "echo $({file})", "echo ${x:-{file}}",
+                    "( {file} )", "cat <({file})", "run `{file}`",
+                    "printf SAFE;# {file}", "printf X&# {file}", "printf X|# {file}"):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+        # A `#` that is mid-word (not a comment) must NOT cause refusal.
+        assert shell_safe_substitute("echo a#b {file}", {"{file}": "x"}) == "echo a#b x"
+        # Prove the arithmetic-context exploit the guard prevents is genuine.
+        with tempfile.TemporaryDirectory() as d:
+            naive = "printf X:$((" + shlex.quote("$(touch PWN_AR >&2)") + "))"
+            subprocess.run(["bash", "-lc", naive], cwd=d,
+                           capture_output=True, text=True, timeout=10)
+            assert "PWN_AR" in os.listdir(d), "expected the naive arithmetic form to inject"
+
     def test_values_are_not_rescanned_for_other_placeholders(self):
         """Substitution is single-pass: a value that itself contains another
         placeholder's text is inserted verbatim (single-quoted), never re-expanded.
