@@ -21,6 +21,7 @@ from pdd.get_test_command import (
     _relative_matches_workspace_glob,
     _lexical_repo_root,
     _find_expandable_brace,
+    _has_complete_bracket_class,
     _MAX_BRACE_SCAN_WORK,
     _MAX_MATCH_CELLS,
     _MAX_BRACE_EXPANSION,
@@ -969,6 +970,69 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "1"), ["packages/**", "!packages/{1..3}"]) is False
         assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
+
+    def test_dollar_brace_is_literal_not_expanded(self):
+        """minimatch's brace-expansion treats a ``{`` immediately preceded by ``$``
+        (shell-style ``${...}``) as literal, never expanding it. Expanding it would
+        falsely prove membership for an independent ``$foo`` leaf."""
+        assert _expand_braces("packages/${foo,bar}") == ["packages/${foo,bar}"]
+        assert _package_matches_workspace(
+            ("packages", "$foo"), ["packages/${foo,bar}"]) is False
+        # A real brace elsewhere in the same pattern still expands.
+        assert sorted(_expand_braces("${a,b}/{c,d}")) == [
+            "${a,b}/c", "${a,b}/d",
+        ]
+
+    def test_double_dot_in_comma_alternation_is_not_a_range(self):
+        """A ``..`` inside a brace group that also has a top-level comma is a literal
+        part of one alternation option, not a range, and must not be rejected: both
+        ``packages/foo..bar`` and ``packages/baz`` are members of
+        ``packages/{foo..bar,baz}``. An unbalanced ``{foo..bar`` is literal too. A
+        *pure* range (no comma) still fails closed."""
+        assert _package_matches_workspace(
+            ("packages", "foo..bar"), ["packages/{foo..bar,baz}"]) is True
+        assert _package_matches_workspace(
+            ("packages", "baz"), ["packages/{foo..bar,baz}"]) is True
+        assert _package_matches_workspace(
+            ("packages", "{foo..bar"), ["packages/{foo..bar"]) is True
+        # Pure range (no comma), including nested inside an alternation, fails closed.
+        assert _package_matches_workspace(
+            ("packages", "1"), ["packages/**", "!packages/{1..3}"]) is False
+        assert _package_matches_workspace(("packages", "2"), ["packages/{a,{1..3}}"]) is False
+
+    def test_astral_question_mark_is_checked_per_aligned_segment(self):
+        """The astral-``?`` fail-closed applies only when a ``?`` segment can align
+        with an astral path segment — not merely because both appear somewhere. With
+        no ``**`` the alignment is positional, so ``packages/*/a??`` matches
+        ``packages/😀/app`` (``*`` consumes the emoji, ``a??`` matches ``app``)."""
+        emoji = "\U0001F600"
+        assert _package_matches_workspace(
+            ("packages", emoji, "app"), ["packages/*/a??"]) is True
+        # A `?` that actually aligns with the astral segment still fails closed.
+        assert _package_matches_workspace(("packages", emoji), ["packages/?"]) is False
+        assert _package_matches_workspace(
+            ("packages", "app", emoji), ["packages/app/?"]) is False
+        # `**` makes alignment flexible → conservatively fail closed.
+        assert _package_matches_workspace(
+            ("packages", emoji, "app"), ["packages/**/a?"]) is False
+
+    def test_empty_bracket_class_is_not_treated_as_a_class(self):
+        """``[]``, ``[!]``, ``[^]`` are empty (invalid) classes — no content between
+        the optional negation marker and ``]`` — that both fnmatch and minimatch
+        treat literally. The guard must NOT flag them as character classes (which
+        would fail the whole membership check closed); a non-empty class still is."""
+        # Guard: empty groups are not classes; a group with content is.
+        assert _has_complete_bracket_class("packages/[]") is False
+        assert _has_complete_bracket_class("packages/[!]") is False
+        assert _has_complete_bracket_class("packages/[^]") is False
+        assert _has_complete_bracket_class("packages/[^a]") is True
+        assert _has_complete_bracket_class("packages/[ab]") is True
+        # A dir literally named ``[]``/``[!]`` matches its literal glob (fnmatch and
+        # minimatch agree); a real class still fails membership closed.
+        assert _package_matches_workspace(("packages", "[]"), ["packages/[]"]) is True
+        assert _package_matches_workspace(("packages", "[!]"), ["packages/[!]"]) is True
+        assert _package_matches_workspace(("packages", "a"), ["packages/[^a]"]) is False
+        assert _package_matches_workspace(("packages", "b"), ["packages/[ab]"]) is False
 
     def test_symlinked_test_dir_escaping_repo_is_refused(self, tmp_path):
         """A test dir symlinked outside the repo must not adopt an out-of-repo config."""
