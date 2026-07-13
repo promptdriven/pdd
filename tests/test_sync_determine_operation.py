@@ -9696,3 +9696,123 @@ def test_get_pdd_file_paths_unsafe_owner_row_does_not_suppress_ambiguity(tmp_pat
     )
     with pytest.raises(sync_determine_module.AmbiguousModuleError):
         get_pdd_file_paths("nested/widget", "python", "prompts")
+
+
+# ---------------------------------------------------------------------------
+# Round-13 review hardening: git worktree authority must not be redirected by
+# inherited GIT_* env or served stale from a process cache; architecture
+# SELECTION must apply the same language-extension eligibility as ambiguity
+# enumeration; and finalization must reject existing-directory destinations.
+# ---------------------------------------------------------------------------
+
+
+def test_enclosing_git_root_ignores_inherited_git_env_redirect(tmp_path, monkeypatch):
+    """r13 F1: a caller-inherited GIT_WORK_TREE=/ (or GIT_DIR to a foreign repo) must
+    NOT make _enclosing_git_root report an attacker-chosen worktree for a non-repository
+    directory — repo-selection env is stripped from the git subprocess."""
+    import sync_determine_operation as sync_determine_module
+    non_repo = tmp_path / "not_a_repo"
+    non_repo.mkdir()
+    # A real repo elsewhere, wired in via inherited env.
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", "/")
+    # Without the env scrub, git would report "/" as the worktree root.
+    assert sync_determine_module._enclosing_git_root(non_repo) is None
+
+
+def test_enclosing_git_root_not_stale_after_repo_removed(tmp_path):
+    """r13 F1: a positive result must not remain authoritative after the repository is
+    removed in the same process (no stale process-wide cache)."""
+    import shutil
+    import sync_determine_operation as sync_determine_module
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    first = sync_determine_module._enclosing_git_root(repo)
+    assert first is not None and first.resolve() == repo.resolve()
+    shutil.rmtree(repo / ".git")
+    assert sync_determine_module._enclosing_git_root(repo) is None
+
+
+def test_get_pdd_file_paths_git_env_redirect_still_rejects_escaping_alias(tmp_path, monkeypatch):
+    """r13 F1: end-to-end — with GIT_WORK_TREE=/ inherited, an escaping prompt symlink in
+    a NON-repository project is still rejected, so authority cannot be smuggled in via
+    env and a later update cannot overwrite the target."""
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=foreign, check=True)
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+    victim = root / "victim.py"
+    original = "SECRET = 1\n"
+    victim.write_text(original, encoding="utf-8")
+    try:
+        (root / "prompts" / "credits_python.prompt").symlink_to("../victim.py")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", "/")
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+    assert victim.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_selection_respects_language_extension(tmp_path, monkeypatch):
+    """r13 F2: architecture SELECTION must apply the same language-extension gate as the
+    ambiguity enumeration. A Python request whose exact-filename row targets a `.ts` file
+    must not be chosen over the `.py` legacy row that the choices prefer."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.ts"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        _P("architecture.json"), "nested/widget", "python"
+    )
+    assert choices == ["other/nested/widget.py"]
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    # Selection must AGREE with the choice (the .py row), not return the wrong-language .ts.
+    assert paths["code"].resolve(strict=False) == (tmp_path / "other" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_rejects_existing_directory_code_destination(tmp_path, monkeypatch):
+    """r13 F3: an outputs.code.path pointing at an EXISTING directory is not a writable
+    artifact file — reject it instead of returning the directory (later IsADirectoryError)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        code:\n          path: "docs"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafeOutputPathError):
+        get_pdd_file_paths("widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_rejects_existing_directory_prompt_destination(tmp_path, monkeypatch):
+    """r13 F3: an outputs.prompt.path pointing at an EXISTING directory must be rejected
+    rather than returned as the prompt file."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        prompt:\n          path: "docs"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("widget", "python", "prompts")

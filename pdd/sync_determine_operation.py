@@ -487,7 +487,26 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     return None
 
 
-@lru_cache(maxsize=2048)
+# Git environment variables that REDIRECT which repository/worktree Git operates on.
+# A caller-inherited GIT_WORK_TREE=/ (or a GIT_DIR pointing at a foreign repository)
+# would otherwise make `rev-parse --show-toplevel` report an attacker-chosen root, so
+# an escaping symlink would be judged repository-contained (R13 F1). They are stripped
+# from the subprocess environment so worktree authority derives ONLY from the queried
+# directory's own on-disk `.git`.
+_GIT_REPO_SELECTION_ENV = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_PREFIX",
+    "GIT_NAMESPACE",
+)
+
+
 def _validated_git_worktree_root(directory: str) -> Optional[str]:
     """Resolved worktree root reported by Git for ``directory``, else ``None``.
 
@@ -496,9 +515,17 @@ def _validated_git_worktree_root(directory: str) -> Optional[str]:
     ``.git`` directory (or a planted ``.git`` file) makes ``rev-parse`` fail, so a
     symlink escaping into such a tree is still rejected (R8, R12 F2). The reported
     top-level is resolved (``os.path.realpath``) so the boundary is comparable to a
-    resolved alias target. Cached per absolute directory for the process; callers
-    only reach it on a leaf-symlink root escape, so the subprocess is rare.
+    resolved alias target.
+
+    Repository-selection environment variables (``GIT_DIR``/``GIT_WORK_TREE``/... ,
+    see :data:`_GIT_REPO_SELECTION_ENV`) are stripped so a caller-inherited redirect
+    cannot make Git report a foreign/`/` root and thereby grant alias authority to an
+    escaping symlink (R13 F1). NOT cached: the query is off the normal path (only a
+    leaf-symlink root escape reaches it) and a per-process cache would keep granting
+    authority after a repository is removed or replaced mid-process, so each call
+    re-asks Git about the CURRENT on-disk state.
     """
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_REPO_SELECTION_ENV}
     try:
         result = subprocess.run(
             ["git", "-C", directory, "rev-parse", "--show-toplevel"],
@@ -506,6 +533,7 @@ def _validated_git_worktree_root(directory: str) -> Optional[str]:
             text=True,
             check=False,
             timeout=10,
+            env=env,
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
@@ -1769,8 +1797,35 @@ def _get_filepath_from_architecture(
         # path to an unrelated same-leaf module. Flat basenames are unaffected (their
         # ambiguity is already handled upstream).
         path_qualified = bool(basename) and "/" in basename
+        # The requested language's canonical code extension (e.g. python -> "py").
+        # Selection must gate a row's filepath extension with the SAME predicate the
+        # ambiguity enumeration uses (R13 F2): otherwise an exact-filename row whose
+        # code target is a DIFFERENT language (e.g. `nested/widget_python.prompt` ->
+        # `widget.ts`) is excluded from the ambiguity count yet chosen here first,
+        # returning a wrong-language output that disagrees with the `.py` choice.
+        _selection_lang_ext = (get_extension(language).lstrip(".").lower() if language else "")
+
+        def _row_language_matches(module: Dict[str, Any]) -> bool:
+            """Whether a row's filepath extension matches the requested language.
+
+            Mirrors the ambiguity enumeration's gate exactly: with a known language
+            extension, a non-empty string filepath whose suffix differs (including an
+            extensionless target) is ineligible. A null/empty filepath, or no known
+            language extension, imposes no constraint (left to the other gates).
+            """
+            if not _selection_lang_ext:
+                return True
+            fpv = module.get("filepath")
+            if not isinstance(fpv, str) or not fpv.strip():
+                return True
+            return (
+                PurePosixPath(fpv.replace("\\", "/")).suffix.lstrip(".").lower()
+                == _selection_lang_ext
+            )
 
         def _aligns(module: Dict[str, Any]) -> bool:
+            if not _row_language_matches(module):
+                return False
             if not path_qualified:
                 return True
             return _module_filepath_matches_basename(
@@ -2077,7 +2132,8 @@ def _get_filepath_from_architecture(
                 ]
                 safe_matches = [
                     module for module in matching_modules
-                    if _module_filepath_matches_basename(
+                    if _row_language_matches(module)
+                    and _module_filepath_matches_basename(
                         module.get("filepath"), basename, context_name=context_name,
                         pddrc_anchor=architecture_path.parent,
                     )
@@ -3161,7 +3217,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     _ensure_output_within_root(
                         _reanchored, _governing_root, _artifact
                     )
-                    if Path(_reanchored).resolve(strict=False) == _governing_resolved:
+                    _resolved_artifact = Path(_reanchored).resolve(strict=False)
+                    if _resolved_artifact == _governing_resolved:
+                        raise UnsafeOutputPathError(_reanchored, _governing_root, _artifact)
+                    # R13 F3: an EXISTING non-regular-file destination (a directory, or a
+                    # fifo/socket/device) is not a writable artifact FILE — returning it
+                    # would surface downstream as an IsADirectoryError or a bogus
+                    # "file exists" sync decision. Reject it with a clear path error. A
+                    # nonexistent path (to be generated) or a regular file / contained
+                    # symlink-to-regular-file is still allowed.
+                    if _resolved_artifact.exists() and not _resolved_artifact.is_file():
                         raise UnsafeOutputPathError(_reanchored, _governing_root, _artifact)
             # Rebuild test_files from the ANCHORED test directory rather than trusting
             # a list globbed before anchoring (which, from a parent CWD, would glob the
@@ -3208,6 +3273,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if "{" in str(_prompt) or "}" in str(_prompt):
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 if Path(_prompt).resolve(strict=False) == _governing_resolved:
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                # R13 F3: an EXISTING non-regular-file prompt destination (e.g. an
+                # `outputs.prompt.path` pointing at a real directory) is not a prompt
+                # FILE — reject it rather than hand back a directory a later read/update
+                # would choke on. A discovered approved alias is a symlink to a regular
+                # file (is_file() follows the link) and stays allowed.
+                _prompt_leaf_resolved = Path(_prompt).resolve(strict=False)
+                if _prompt_leaf_resolved.exists() and not _prompt_leaf_resolved.is_file():
                     raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
