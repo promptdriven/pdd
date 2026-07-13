@@ -24,8 +24,10 @@ import tempfile
 import threading
 import tomllib
 import xml.etree.ElementTree as ET
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import wraps
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -177,6 +179,10 @@ PLAYWRIGHT_CONFIG_NAMES = (
     "playwright.config.js", "playwright.config.cjs", "playwright.config.mjs",
     "playwright.config.ts", "playwright.config.cts", "playwright.config.mts",
 )
+_PLAYWRIGHT_HOST_TEMP_PARENT = Path("/var/tmp")
+_PLAYWRIGHT_TEMP_FAILURE_DIGEST = hashlib.sha256(
+    b"playwright-temporary-directory"
+).hexdigest()
 
 PLAYWRIGHT_TOOLCHAIN_ROLES = {
     "launcher", "entrypoint", "dependencies", "browser_runtime",
@@ -212,6 +218,10 @@ class PlaywrightToolchainRoles:
         return tuple(
             (path.resolve(strict=True), path) for path in self.native_runtime
         )
+
+
+class _PlaywrightTemporaryDirectoryError(Exception):
+    """Mark an OSError from a checker-owned Playwright temporary directory."""
 
 
 @dataclass(frozen=True)
@@ -4417,6 +4427,111 @@ def _playwright_protected_worktree_identity(
     return digest.hexdigest()
 
 
+def _playwright_host_temp_parent() -> Path:
+    """Return a writable host temp parent outside the sandbox's host-backed tmp."""
+    try:
+        parent = _PLAYWRIGHT_HOST_TEMP_PARENT.resolve(strict=True)
+        sandbox_tmp = Path("/tmp").resolve(strict=True)
+        parent_metadata = parent.stat()
+    except OSError as exc:
+        raise RuntimeError("trusted Playwright temp parent is unavailable") from exc
+    if not stat.S_ISDIR(parent_metadata.st_mode) or not os.access(
+        parent, os.W_OK | os.X_OK
+    ):
+        raise RuntimeError("trusted Playwright temp parent is not writable")
+    if parent == sandbox_tmp or parent.is_relative_to(sandbox_tmp):
+        raise RuntimeError("trusted Playwright temp parent aliases sandbox /tmp")
+    return parent
+
+
+class _PlaywrightTemporaryDirectory:
+    """Normalize OSErrors from one checker-owned temporary directory lifecycle."""
+
+    def __init__(self, prefix: str, parent: Path) -> None:
+        self._prefix = prefix
+        self._parent = parent
+        self._stack = ExitStack()
+
+    def __enter__(self) -> str:
+        try:
+            return self._stack.enter_context(
+                tempfile.TemporaryDirectory(prefix=self._prefix, dir=self._parent)
+            )
+        except OSError as exc:
+            raise _PlaywrightTemporaryDirectoryError(
+                f"Playwright temporary directory failed: {exc}"
+            ) from exc
+
+    def __exit__(self, exc_type, exc_value, traceback) -> bool | None:
+        try:
+            return self._stack.__exit__(exc_type, exc_value, traceback)
+        except OSError as exc:
+            raise _PlaywrightTemporaryDirectoryError(
+                f"Playwright temporary directory failed: {exc}"
+            ) from exc
+
+
+def _playwright_temporary_directory(
+    prefix: str, parent: Path,
+) -> _PlaywrightTemporaryDirectory:
+    """Create one checker-owned temporary directory lifecycle wrapper."""
+    return _PlaywrightTemporaryDirectory(prefix, parent)
+
+
+def _normalize_playwright_temp_errors(outcome: EvidenceOutcome):
+    """Return a decorator that turns checker temporary lifecycle failures into evidence."""
+    def decorate(function):
+        @wraps(function)
+        def guarded(*args, **kwargs):
+            try:
+                return function(*args, **kwargs)
+            except _PlaywrightTemporaryDirectoryError as exc:
+                return RunnerExecution(
+                    "playwright", outcome, _PLAYWRIGHT_TEMP_FAILURE_DIGEST, str(exc)
+                ), ()
+        return guarded
+    return decorate
+
+
+def _playwright_sandbox_destination_error(
+    roles: PlaywrightToolchainRoles,
+    native_bindings: tuple[tuple[Path, Path], ...],
+) -> str | None:
+    """Reject manifest destinations that collide with the bounded sandbox /tmp bind."""
+    try:
+        literal_sandbox_tmp = Path("/tmp")
+        resolved_sandbox_tmp = literal_sandbox_tmp.resolve(strict=True)
+        for destination in roles.readable_roots:
+            if destination == resolved_sandbox_tmp or destination.is_relative_to(
+                resolved_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination resolves into sandbox /tmp: "
+                    f"{destination}"
+                )
+        for _source, destination in native_bindings:
+            lexical = Path(os.path.normpath(destination))
+            if lexical == literal_sandbox_tmp or lexical.is_relative_to(
+                literal_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination lexically aliases sandbox /tmp: "
+                    f"{destination}"
+                )
+            resolved_parent = destination.parent.resolve(strict=True)
+            if resolved_parent == resolved_sandbox_tmp or resolved_parent.is_relative_to(
+                resolved_sandbox_tmp
+            ):
+                return (
+                    "Playwright toolchain destination parent resolves into sandbox /tmp: "
+                    f"{destination}"
+                )
+    except OSError as exc:
+        return f"cannot validate Playwright toolchain sandbox destinations: {exc}"
+    return None
+
+
+@_normalize_playwright_temp_errors(EvidenceOutcome.ERROR)
 def _run_playwright_in_tree(
     root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
@@ -4455,11 +4570,28 @@ def _run_playwright_in_tree(
             "playwright-untrusted", command_error,
         ), ()
     roles = _toolchain_manifest_roles(config.playwright_toolchain_manifest)
+    native_bindings = roles.native_bindings
+    destination_error = _playwright_sandbox_destination_error(
+        roles, native_bindings
+    )
+    if destination_error is not None:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            "playwright-untrusted", destination_error,
+        ), ()
     try:
         config_path, _source = _playwright_config(root, "HEAD")
     except ValueError as exc:
         return RunnerExecution("playwright", EvidenceOutcome.ERROR, "playwright-config", str(exc)), ()
-    with tempfile.TemporaryDirectory(prefix="pdd-trusted-playwright-") as directory:
+    try:
+        host_temp_parent = _playwright_host_temp_parent()
+    except RuntimeError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.ERROR, "playwright-temp", str(exc)
+        ), ()
+    with _playwright_temporary_directory(
+        "pdd-trusted-playwright-", host_temp_parent
+    ) as directory:
         temporary = Path(directory)
         scratch = temporary / "scratch"
         home = scratch / "home"
@@ -4519,7 +4651,7 @@ def _run_playwright_in_tree(
             writable_bindings=((sandbox_tmp, Path("/tmp")),),
             temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
-            readable_bindings=roles.native_bindings,
+            readable_bindings=native_bindings,
             result_fifo=result_fifo,
             result_fd=result_fd,
         )
@@ -4601,6 +4733,7 @@ def _run_playwright_in_tree(
     return RunnerExecution("playwright", outcome, digest, detail), identities
 
 
+@_normalize_playwright_temp_errors(EvidenceOutcome.COLLECTION_ERROR)
 def _run_playwright(
     root: Path, paths: tuple[PurePosixPath, ...], timeout_seconds: int,
     config: RunnerConfig, expected: tuple[str, ...] | None = None,
@@ -4621,7 +4754,16 @@ def _run_playwright(
             "cannot resolve exact Playwright phase commit",
         ), ()
     commit = resolved.stdout.strip()
-    with tempfile.TemporaryDirectory(prefix="pdd-playwright-phase-") as directory:
+    try:
+        host_temp_parent = _playwright_host_temp_parent()
+    except RuntimeError as exc:
+        return RunnerExecution(
+            "playwright", EvidenceOutcome.COLLECTION_ERROR,
+            hashlib.sha256(commit.encode()).hexdigest(), str(exc),
+        ), ()
+    with _playwright_temporary_directory(
+        "pdd-playwright-phase-", host_temp_parent
+    ) as directory:
         phase_root = Path(directory) / "repository"
         cloned = subprocess.run(
             ["git", "clone", "-q", "--no-local", "--no-checkout",

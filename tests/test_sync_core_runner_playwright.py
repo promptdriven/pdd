@@ -5,6 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -32,6 +34,7 @@ from pdd.sync_core.runner import (
     _playwright_reported_failure_detail,
     _playwright_result,
     _playwright_runtime_prefix,
+    _playwright_host_temp_parent,
     _toolchain_manifest_identity,
     _playwright_toolchain_identity,
     playwright_validator_config_digest,
@@ -209,6 +212,7 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
     browsers.mkdir(exist_ok=True)
     package = dependencies / "@playwright/test"
     package.mkdir(parents=True, exist_ok=True)
+    (package / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
     installed_entrypoint = package / f"cli{entrypoint.suffix}"
     if entrypoint.resolve() != installed_entrypoint.resolve():
         installed_entrypoint.write_bytes(entrypoint.read_bytes())
@@ -236,6 +240,30 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
 
 def _manifest_entrypoint(manifest: Path) -> Path:
     return Path(json.loads(manifest.read_text(encoding="utf-8"))["roles"]["entrypoint"])
+
+
+@pytest.fixture
+def trusted_toolchain_dir() -> Iterator[Path]:
+    """Provide a deterministic synthetic toolchain outside sandbox-backed /tmp."""
+    with tempfile.TemporaryDirectory(
+        prefix="pdd-test-playwright-toolchain-",
+        dir=_playwright_host_temp_parent(),
+    ) as directory:
+        yield Path(directory)
+
+
+def _trusted_playwright_config(
+    toolchain_dir: Path, fake: Path,
+) -> RunnerConfig:
+    """Build one externally declared synthetic Playwright toolchain config."""
+    manifest = _toolchain_manifest(
+        toolchain_dir / "trusted-toolchain", Path(sys.executable), fake
+    )
+    return RunnerConfig(
+        timeout_seconds=2,
+        playwright_command=(sys.executable, str(_manifest_entrypoint(manifest))),
+        playwright_toolchain_manifest=manifest,
+    )
 
 
 @pytest.mark.skipif(
@@ -541,6 +569,364 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert temp_directories[0] == Path("/tmp")
 
 
+def test_playwright_checker_temp_roots_cannot_alias_sandbox_tmp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep every checker mount source outside the host path bound to /tmp."""
+    root, commit = _repository(tmp_path)
+    phase_roots: list[Path] = []
+    scratch_roots: list[Path] = []
+    fifo_roots: list[Path] = []
+    readable_roots: list[tuple[Path, ...]] = []
+    readable_bindings: list[tuple[tuple[Path, Path], ...]] = []
+    tmp_sources: list[Path] = []
+    tmp_destinations: list[Path] = []
+
+    def supervised(command, *, cwd, writable_roots, writable_bindings, **kwargs):
+        phase_roots.append(cwd)
+        scratch_roots.append(writable_roots[0])
+        readable_roots.append(kwargs["readable_roots"])
+        readable_bindings.append(kwargs["readable_bindings"])
+        fifo_roots.append(Path(kwargs["result_fifo"]).parent)
+        source, destination = writable_bindings[0]
+        tmp_sources.append(source)
+        tmp_destinations.append(destination)
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    _envelope, executions = _run(root, commit, commit, _fake_playwright(tmp_path))
+
+    assert executions[0].outcome is EvidenceOutcome.PASS
+    assert len(phase_roots) == 3
+    assert len(readable_roots) == len(phase_roots)
+    assert len(readable_bindings) == len(phase_roots)
+    assert all(len(roots) == 6 for roots in readable_roots)
+    assert all(len(bindings) == 1 for bindings in readable_bindings)
+    sandbox_tmp = Path("/tmp").resolve()
+    for path in (*phase_roots, *scratch_roots, *fifo_roots):
+        assert not path.resolve().is_relative_to(sandbox_tmp)
+    for roots in readable_roots:
+        for path in roots:
+            assert not path.resolve().is_relative_to(sandbox_tmp)
+    for bindings in readable_bindings:
+        for _source, destination in bindings:
+            assert not destination.resolve().is_relative_to(sandbox_tmp)
+    for source, destination in zip(tmp_sources, tmp_destinations, strict=True):
+        assert destination == Path("/tmp")
+        assert source.resolve() != sandbox_tmp
+        assert not source.resolve().is_relative_to(sandbox_tmp)
+        assert not sandbox_tmp.is_relative_to(source.resolve())
+
+
+def test_playwright_checker_temp_parent_rejects_sandbox_tmp_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Do not fall back to /tmp when the trusted parent aliases it."""
+    monkeypatch.setattr(runner_module, "_PLAYWRIGHT_HOST_TEMP_PARENT", Path("/tmp"))
+
+    with pytest.raises(RuntimeError, match="aliases sandbox /tmp"):
+        _playwright_host_temp_parent()
+
+
+def test_playwright_rejects_tmp_toolchain_destination_before_supervision(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manifest mount destination must not collide with bounded sandbox /tmp."""
+    root, commit = _repository(tmp_path)
+    fake = _fake_playwright(tmp_path)
+    config = _trusted_playwright_config(trusted_toolchain_dir, fake)
+    manifest = config.playwright_toolchain_manifest
+    assert manifest is not None
+    browser_runtime = Path("/tmp") / f"pdd-playwright-{os.urandom(16).hex()}"
+    browser_runtime.mkdir()
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["browser_runtime"] = str(browser_runtime)
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    def must_not_supervise(*_args, **_kwargs):
+        raise AssertionError("/tmp-rooted toolchain must fail before supervision")
+
+    monkeypatch.setattr(runner_module, "run_supervised", must_not_supervise)
+    try:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root,
+            (PurePosixPath("tests/widget.spec.ts"),),
+            2,
+            config,
+            expected_commit=commit,
+        )
+    finally:
+        shutil.rmtree(browser_runtime)
+
+    assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert "sandbox /tmp" in execution.detail
+
+
+def test_playwright_rejects_native_runtime_lexically_in_tmp(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject a /tmp native destination even when its target is outside /tmp."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+    manifest = config.playwright_toolchain_manifest
+    assert manifest is not None
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    native = Path(payload["roles"]["native_runtime"][0])
+    link = Path("/tmp") / f"pdd-playwright-{os.urandom(16).hex()}"
+    link.symlink_to(os.path.relpath(native, link.parent.resolve()))
+    payload["roles"]["native_runtime"] = [str(link)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    def must_not_supervise(*_args, **_kwargs):
+        raise AssertionError("/tmp-native destination must fail before supervision")
+
+    monkeypatch.setattr(runner_module, "run_supervised", must_not_supervise)
+    try:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root,
+            (PurePosixPath("tests/widget.spec.ts"),),
+            2,
+            config,
+            expected_commit=commit,
+        )
+    finally:
+        link.unlink()
+
+    assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert "lexically aliases sandbox /tmp" in execution.detail
+
+
+def test_playwright_allows_tmp_native_source_bound_outside_tmp(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Permit an outside destination whose final native symlink targets /tmp."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+    manifest = config.playwright_toolchain_manifest
+    assert manifest is not None
+    source = Path("/tmp") / f"pdd-playwright-{os.urandom(16).hex()}.so"
+    source.write_bytes(b"synthetic-native-runtime")
+    destination = trusted_toolchain_dir / "native-runtime.so"
+    destination.symlink_to(os.path.relpath(source, destination.parent.resolve()))
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["native_runtime"] = [str(destination)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    supervised = False
+
+    def run_supervised(command, **kwargs):
+        nonlocal supervised
+        supervised = True
+        assert kwargs["readable_bindings"] == ((source.resolve(), destination),)
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(runner_module, "run_supervised", run_supervised)
+    try:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root,
+            (PurePosixPath("tests/widget.spec.ts"),),
+            2,
+            config,
+            expected_commit=commit,
+        )
+    finally:
+        destination.unlink()
+        source.unlink()
+
+    assert supervised
+    assert execution.outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_uses_one_native_binding_snapshot(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Use one native binding evaluation for validation and supervision."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+    original = runner_module.PlaywrightToolchainRoles.native_bindings
+    evaluations = 0
+
+    def counted_native_bindings(self):
+        nonlocal evaluations
+        evaluations += 1
+        if evaluations > 1:
+            raise AssertionError("native bindings must not be recomputed")
+        return original.__get__(self, type(self))
+
+    def run_supervised(command, **kwargs):
+        assert kwargs["readable_bindings"]
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(
+        runner_module.PlaywrightToolchainRoles,
+        "native_bindings",
+        property(counted_native_bindings),
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", run_supervised)
+    execution, _identities = runner_module._run_playwright_in_tree(
+        root,
+        (PurePosixPath("tests/widget.spec.ts"),),
+        2,
+        config,
+        expected_commit=commit,
+    )
+
+    assert evaluations == 1
+    assert execution.outcome is EvidenceOutcome.PASS
+
+
+def test_playwright_rejects_native_destination_parent_aliasing_tmp(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject an outside spelling whose native destination parent aliases /tmp."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+    manifest = config.playwright_toolchain_manifest
+    assert manifest is not None
+    source = Path("/tmp") / f"pdd-playwright-{os.urandom(16).hex()}.so"
+    source.write_bytes(b"synthetic-native-runtime")
+    alias = trusted_toolchain_dir / "tmp-alias"
+    alias.symlink_to("/tmp", target_is_directory=True)
+    destination = alias / source.name
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["native_runtime"] = [str(destination)]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    def must_not_supervise(*_args, **_kwargs):
+        raise AssertionError("/tmp parent alias must fail before supervision")
+
+    monkeypatch.setattr(runner_module, "run_supervised", must_not_supervise)
+    try:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root,
+            (PurePosixPath("tests/widget.spec.ts"),),
+            2,
+            config,
+            expected_commit=commit,
+        )
+    finally:
+        alias.unlink()
+        source.unlink()
+
+    assert execution.outcome is EvidenceOutcome.COLLECTION_ERROR
+    assert "parent resolves into sandbox /tmp" in execution.detail
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("phase", EvidenceOutcome.COLLECTION_ERROR),
+        ("trusted", EvidenceOutcome.ERROR),
+    ],
+)
+def test_playwright_temp_creation_failure_is_normalized(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    target: str, expected: EvidenceOutcome,
+) -> None:
+    """Creation failures remain non-passing evidence in both Playwright lifecycles."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise PermissionError("temporary directory denied")
+
+    monkeypatch.setattr(runner_module.tempfile, "TemporaryDirectory", unavailable)
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    if target == "phase":
+        execution, _identities = runner_module._run_playwright(
+            root, paths, 2, config
+        )
+    else:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root, paths, 2, config, expected_commit=commit
+        )
+
+    assert execution.outcome is expected
+    assert "temporary directory" in execution.detail
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("phase", EvidenceOutcome.COLLECTION_ERROR),
+        ("trusted", EvidenceOutcome.ERROR),
+    ],
+)
+def test_playwright_temp_cleanup_failure_is_normalized(
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    target: str, expected: EvidenceOutcome,
+) -> None:
+    """Cleanup failures remain non-passing evidence in both Playwright lifecycles."""
+    root, commit = _repository(tmp_path)
+    config = _trusted_playwright_config(
+        trusted_toolchain_dir, _fake_playwright(tmp_path)
+    )
+    original = runner_module.tempfile.TemporaryDirectory
+
+    class CleanupFailureTemporaryDirectory:
+        """Delegate setup, then model a checker temporary cleanup failure."""
+
+        def __init__(self, *args, **kwargs):
+            self._temporary = original(*args, **kwargs)
+
+        def __enter__(self):
+            return self._temporary.__enter__()
+
+        def __exit__(self, *args):
+            self._temporary.__exit__(*args)
+            raise PermissionError("temporary directory cleanup denied")
+
+    def supervised(command, **kwargs):
+        _write_private_result(kwargs, {
+            "tests": [{"identity": IDENTITY, "status": "passed"}],
+        })
+        return subprocess.CompletedProcess(command, 0, "", ""), False
+
+    monkeypatch.setattr(
+        runner_module.tempfile, "TemporaryDirectory", CleanupFailureTemporaryDirectory
+    )
+    monkeypatch.setattr(runner_module, "run_supervised", supervised)
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    if target == "phase":
+        execution, _identities = runner_module._run_playwright(
+            root, paths, 2, config
+        )
+    else:
+        execution, _identities = runner_module._run_playwright_in_tree(
+            root, paths, 2, config, expected_commit=commit
+        )
+
+    assert execution.outcome is expected
+    assert "temporary directory" in execution.detail
+
+
+def test_playwright_temp_body_oserror_propagates_unchanged() -> None:
+    """Do not normalize a body OSError when temporary cleanup succeeds."""
+    with pytest.raises(FileNotFoundError, match="body failure"):
+        with runner_module._playwright_temporary_directory(
+            "pdd-test-playwright-", _playwright_host_temp_parent()
+        ):
+            raise FileNotFoundError("body failure")
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -649,42 +1035,48 @@ def _run(
 ):
     command = fake if isinstance(fake, tuple) else (sys.executable, str(fake))
     entrypoint = Path(command[1])
-    manifest_root = root.parent if entrypoint.is_relative_to(root) else entrypoint.parent
-    declared = entrypoint.name
-    if entrypoint.is_relative_to(root):
-        declared = "protected-playwright-tool"
-        (manifest_root / declared).write_bytes(b"protected")
-    manifest = _toolchain_manifest(manifest_root, Path(command[0]), manifest_root / declared)
-    if not entrypoint.is_relative_to(root):
-        command = (command[0], str(_manifest_entrypoint(manifest)))
-    paths = (PurePosixPath("tests/widget.spec.ts"),)
-    try:
-        config_digest = playwright_validator_config_digest(
-            root, base, paths, code_under_test_paths
+    with tempfile.TemporaryDirectory(
+        prefix="pdd-test-playwright-toolchain-",
+        dir=_playwright_host_temp_parent(),
+    ) as directory:
+        manifest_root = Path(directory)
+        manifest_entrypoint = entrypoint
+        if entrypoint.is_relative_to(root):
+            manifest_entrypoint = manifest_root / "protected-playwright-tool"
+            manifest_entrypoint.write_bytes(b"protected")
+        manifest = _toolchain_manifest(
+            manifest_root, Path(command[0]), manifest_entrypoint
         )
-    except ValueError:
-        config_digest = "invalid-playwright-config"
-    obligation = VerificationObligation(
-        "playwright", "test", "playwright", config_digest, ("REQ-1",), paths,
-        code_under_test_paths=code_under_test_paths,
-    )
-    profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
-    return run_profile(
-        root,
-        profile,
-        RunBinding("snapshot-v1", base, head),
-        AttestationIssue(
-            AttestationSigner("trusted-ci", b"p" * 32),
-            "id",
-            "nonce",
-            datetime(2026, 7, 10, tzinfo=timezone.utc),
-        ),
-        config=RunnerConfig(
-            timeout_seconds=timeout,
-            playwright_command=command,
-            playwright_toolchain_manifest=manifest,
-        ),
-    )
+        if not entrypoint.is_relative_to(root):
+            command = (command[0], str(_manifest_entrypoint(manifest)))
+        paths = (PurePosixPath("tests/widget.spec.ts"),)
+        try:
+            config_digest = playwright_validator_config_digest(
+                root, base, paths, code_under_test_paths
+            )
+        except ValueError:
+            config_digest = "invalid-playwright-config"
+        obligation = VerificationObligation(
+            "playwright", "test", "playwright", config_digest, ("REQ-1",), paths,
+            code_under_test_paths=code_under_test_paths,
+        )
+        profile = VerificationProfile(UNIT, (obligation,), ("REQ-1",), "profile-v1")
+        return run_profile(
+            root,
+            profile,
+            RunBinding("snapshot-v1", base, head),
+            AttestationIssue(
+                AttestationSigner("trusted-ci", b"p" * 32),
+                "id",
+                "nonce",
+                datetime(2026, 7, 10, tzinfo=timezone.utc),
+            ),
+            config=RunnerConfig(
+                timeout_seconds=timeout,
+                playwright_command=command,
+                playwright_toolchain_manifest=manifest,
+            ),
+        )
 
 
 @pytest.mark.parametrize(
@@ -1180,11 +1572,13 @@ def test_toolchain_manifest_identity_is_relocation_stable_with_relative_symlink(
 
 
 def test_playwright_production_run_requires_and_rechecks_toolchain_manifest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, trusted_toolchain_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, commit = _repository(tmp_path)
     runner = _fake_playwright(tmp_path)
-    manifest = _toolchain_manifest(tmp_path / "protected-toolchain", Path(sys.executable), runner)
+    manifest = _toolchain_manifest(
+        trusted_toolchain_dir / "protected-toolchain", Path(sys.executable), runner
+    )
     installed = _manifest_entrypoint(manifest)
     original_supervised = runner_module.run_supervised
 
@@ -1229,9 +1623,9 @@ def test_playwright_rechecks_one_identity_after_the_complete_protocol(
         result = original(*args, **kwargs)
         calls += 1
         if calls == 3:
-            installed = next(
-                tmp_path.glob("**/node_modules/@playwright/test/cli*")
-            )
+            manifest = args[3].playwright_toolchain_manifest
+            assert manifest is not None
+            installed = _manifest_entrypoint(manifest)
             installed.write_text(
                 installed.read_text(encoding="utf-8") + "# post-run drift\n"
             )
