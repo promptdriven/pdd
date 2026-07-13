@@ -410,6 +410,10 @@ def _segments_dp_match(rel: list, pat_parts: list, work: list,
     n, m = len(rel), len(pat_parts)
     rel_units = [_utf16_units(r) for r in rel]
     rel_is_dot = [r.startswith(".") for r in rel]
+    # A ``.`` or ``..`` path segment is special in minimatch: NO wildcard or globstar
+    # matches it — only the IDENTICAL literal segment does. (Relevant when a raw pattern
+    # STRING like ``packages/./x`` is matched as a path during npm's pruning.)
+    rel_is_dotdir = [r in (".", "..") for r in rel]
     pat_units = [None if p == "**" else _utf16_units(p) for p in pat_parts]
     pat_is_dot = [p.startswith(".") for p in pat_parts]
     # dp[i][j] is True when rel[i:] matches pat_parts[j:].
@@ -420,7 +424,10 @@ def _segments_dp_match(rel: list, pat_parts: list, work: list,
         dp[n][j] = pat_parts[j] == "**" and dp[n][j + 1]
     for i in range(n - 1, -1, -1):
         for j in range(m - 1, -1, -1):
-            if pat_parts[j] == "**":
+            if rel_is_dotdir[i]:
+                # ``.``/``..`` matches ONLY an identical literal pattern segment.
+                dp[i][j] = (pat_parts[j] == rel[i]) and dp[i + 1][j + 1]
+            elif pat_parts[j] == "**":
                 # ``**`` matches zero segments (advance pattern) or one-or-more
                 # (consume rel[i], stay on the same ``**``). Under dot:false a
                 # leading-dot segment is not consumed by ``**``.
@@ -496,6 +503,9 @@ def _wildcard_units_match(name_u: list, pat_u: list,
         else:
             return False
     while p < npat and pat_u[p] == star:
+        work[0] -= 1  # charge trailing-star runs too (a long ``*``-wall is unbounded here)
+        if work[0] < 0:
+            raise _PatternBudgetError
         p += 1
     return p == npat
 
@@ -1010,11 +1020,12 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         for raw in globs:
             # Do NOT strip surrounding whitespace: workspace tools treat it
             # literally, so `" packages/* "` is a package literally named with
-            # spaces (a non-match), not a broader `packages/*`. Normalizing it
-            # would falsely prove membership. Skip only an exactly-empty entry.
+            # spaces (a non-match), not a broader `packages/*`. An EMPTY entry is kept
+            # (not skipped): under npm's ``appendNegatedPatterns`` an empty positive
+            # pattern-string can still match and remove a prior negation
+            # (``["packages/**", "!**", ""]`` re-includes ``packages/**``), even though it
+            # never matches a non-empty leaf path.
             raw = str(raw)
-            if not raw:
-                continue
             # Cheap length guard FIRST — before any O(len) syntax scan — so a hostile
             # megabyte-long glob is rejected without a quadratic pre-scan.
             if len(raw) > _MAX_GLOB_LENGTH:
@@ -1066,11 +1077,12 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         if ordered:
             # pnpm (@pnpm/matcher): evaluate in DECLARATION ORDER; the last pattern
             # that matches this path decides — a later positive RE-INCLUDES a path an
-            # earlier ``!`` excluded, per-path. A positive comment matches no path.
+            # earlier ``!`` excluded, per-path. pnpm treats ``#`` LITERALLY (only a
+            # leading ``!`` is special), so a ``#app`` pattern matches a directory named
+            # ``#app`` and re-inclusion works — the npm-preprocessing comment rule does
+            # NOT apply here.
             member = False
-            for negated, _body, expanded, is_comment in parsed:
-                if is_comment and not negated:
-                    continue
+            for negated, _body, expanded, _is_comment in parsed:
                 if _matches_any(expanded):
                     member = not negated
             return member
@@ -1405,35 +1417,79 @@ def _clause_invokes_vitest(tokens: list) -> bool:
     return False
 
 
+def _strip_shell_comments(script: str) -> str:
+    """Remove Bash ``#`` comments from ``script``, preserving quote/escape/newline
+    provenance that a token-only view loses. A ``#`` starts a comment ONLY when it is
+    unquoted, unescaped, and at a word boundary (start of string, or after unquoted
+    whitespace or a control operator); it then runs to the end of THAT line (the
+    newline is kept). A quoted (``"# x"``), escaped (``\\#``), or mid-word (``a#b``)
+    ``#`` is literal and preserved."""
+    out: list = []
+    in_single = in_double = False
+    at_boundary = True
+    i, n = 0, len(script)
+    while i < n:
+        c = script[i]
+        if c == "\\" and not in_single:
+            out.append(c)
+            if i + 1 < n:
+                out.append(script[i + 1])
+                i += 2
+            else:
+                i += 1
+            at_boundary = False
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+            out.append(c)
+            at_boundary = False
+            i += 1
+            continue
+        if c == '"' and not in_single:
+            in_double = not in_double
+            out.append(c)
+            at_boundary = False
+            i += 1
+            continue
+        if c == "#" and not in_single and not in_double and at_boundary:
+            while i < n and script[i] != "\n":  # comment to end of THIS line
+                i += 1
+            continue
+        out.append(c)
+        at_boundary = c.isspace() or c in ";&|<>()"
+        i += 1
+    return "".join(out)
+
+
 def _script_invokes_vitest(script: str) -> bool:
     """True when a package.json script actually INVOKES vitest as a command (in
     executable position, or via a supported ``npx``/``pnpm``/``yarn``/``bun`` runner),
-    not merely mentioning the string. The script is tokenized with a QUOTE- and
-    ESCAPE-aware shell lexer and split into command clauses on unquoted control operators
-    (``;`` ``&`` ``&&`` ``|`` ``||``), so ``echo x\\; vitest`` stays one clause (the
-    escaped ``;`` is a literal argument, not a boundary) and ``echo 'a; b' vitest`` is
-    not mis-split. Comment handling is word-boundary aware, matching Bash: a token that
-    BEGINS with ``#`` starts a comment to end of line (``echo hi # vitest`` does NOT
-    prove), while a mid-word ``#`` is literal (``echo a#b && npx vitest`` DOES prove). An
-    oversized script (a manifest padding attack) and a malformed (unbalanced-quote) script
-    both fail closed."""
+    not merely mentioning the string. Bash ``#`` comments are removed first with full
+    quote/escape/newline provenance (see :func:`_strip_shell_comments`) — so a quoted or
+    escaped ``#`` is literal, a mid-word ``#`` is literal (``echo a#b && npx vitest``
+    proves), and an unquoted comment ends only its own line. Each line is then split into
+    command clauses on unquoted control operators (``;`` ``&`` ``&&`` ``|`` ``||``) with a
+    QUOTE-/ESCAPE-aware lexer, so ``echo x\\; vitest`` stays one clause. An oversized
+    script (a manifest padding attack) and a malformed (unbalanced-quote) script both fail
+    closed."""
     if len(script) > _MAX_SCRIPT_LEN:
         return False
     try:
-        lex = shlex.shlex(script, posix=True, punctuation_chars=True)
-        lex.whitespace_split = True
-        lex.commenters = ""  # handle '#' by word boundary below (mid-word '#' is literal)
-        clause: list = []
-        for tok in lex:
-            if tok.startswith("#"):
-                break  # a word-starting '#' comments the rest of the line
-            if tok in _CLAUSE_OPERATORS:
-                if _clause_invokes_vitest(clause):
-                    return True
-                clause = []
-            else:
-                clause.append(tok)
-        return _clause_invokes_vitest(clause)
+        for line in _strip_shell_comments(script).split("\n"):
+            lex = shlex.shlex(line, posix=True, punctuation_chars=True)
+            lex.whitespace_split = True
+            lex.commenters = ""  # comments already stripped above
+            clause: list = []
+            for tok in lex:
+                if tok in _CLAUSE_OPERATORS:
+                    if _clause_invokes_vitest(clause):
+                        return True
+                    clause = []
+                else:
+                    clause.append(tok)
+            if _clause_invokes_vitest(clause):
+                return True
+        return False
     except ValueError:
         return False
 

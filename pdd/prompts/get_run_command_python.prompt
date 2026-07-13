@@ -38,8 +38,13 @@
        and `shlex.quote` leaves a value's `,` unquoted so a value inside a template
        brace would re-split); or places a placeholder inside the template's own quotes,
        immediately after a backslash, or inside a shell comment (a `#` starting at a
-       word boundary or after a `;`/`&`/`|` control operator). It also rejects an empty
-       placeholder key and an escaped placeholder (`\{file}`).
+       word boundary or after a `;`/`&`/`|` control operator); or RE-EVALUATES the value
+       as code — an `eval`; a shell run with `-c` (`bash -c`, a combined `-lc`, or a
+       shell behind an option-bearing wrapper like `timeout 5 bash -c`); or the value
+       piped / here-string fed into a shell as stdin (`printf %s {file} | bash`,
+       `bash <<< {file}`). (A bare `sh {file}`/`bash {file}` that runs the *file* as a
+       script, and a non-shell `-c` such as `pytest -c cfg`, stay safe.) It also rejects
+       an empty placeholder key and an escaped placeholder (`\{file}`).
 
   3) Function `get_run_command_for_file(file_path: str) -> str`:
      - Accepts a file path.

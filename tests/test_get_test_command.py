@@ -1308,6 +1308,36 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "app"), ["packages/*"], ordered=False) is True
 
+    def test_dot_and_dotdot_segments_match_only_identical_literals(self):
+        """A ``.`` or ``..`` path segment (which appears when a raw pattern-STRING like
+        ``packages/./x`` is matched as a path during npm's pruning) is matched ONLY by an
+        identical literal pattern segment — never by a wildcard or ``**``. So for
+        ``["packages/.*/*", "!packages/.*/**", "packages/./x"]`` the positive
+        ``packages/./x`` does NOT match ``packages/.*/**`` (``.*`` cannot consume ``.``),
+        the negation survives, and ``packages/.shadow/y`` stays excluded."""
+        g = ["packages/.*/*", "!packages/.*/**", "packages/./x"]
+        assert _package_matches_workspace(
+            ("packages", ".shadow", "y"), g, ordered=False) is False
+        # A `.` path segment is not matched by a wildcard/globstar, only by literal `.`.
+        assert _relative_matches_workspace_glob((".",), ".*") is False
+        assert _relative_matches_workspace_glob((".",), "**") is False
+        assert _relative_matches_workspace_glob((".",), ".") is True
+        assert _relative_matches_workspace_glob(("..",), "*") is False
+        assert _relative_matches_workspace_glob(("..",), "..") is True
+
+    def test_terminal_star_run_is_budget_charged(self):
+        """A long trailing run of ``*`` in the segment matcher is charged against the
+        shared work budget (a prior unbudgeted terminal-star scan could reach ~10^8
+        iterations under the cell cap). A pathological long-star + brace + globstar glob
+        fails membership closed instead of hanging."""
+        import time
+        glob = "?" + "*" * 4000 + "{a,b}" * 4 + "/**"
+        deep = tuple("x" for _ in range(200))
+        t0 = time.time()
+        result = _package_matches_workspace(deep, [glob], ordered=False)
+        assert (time.time() - t0) < 2.0, "pathological star-wall must stay bounded"
+        assert result in (True, False)  # decided within budget, not hung
+
     def test_npm_pruning_collapses_empty_and_trailing_slash_segments(self):
         """minimatch collapses repeated/trailing ``/`` for the pattern-vs-pattern
         comparison, so a positive ``packages//app`` (or ``packages/app/``) still matches
@@ -1318,6 +1348,25 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "app"),
             ["packages/**", "!packages/*", "packages/app/"], ordered=False) is True
+
+    def test_pnpm_treats_hash_literally(self):
+        """pnpm (``@pnpm/matcher``) treats ``#`` LITERALLY — only a leading ``!`` is
+        special — so a ``#app`` pattern matches a directory named ``#app`` and a later
+        ``#app`` re-includes it after ``!#app``. The npm-preprocessing comment rule does
+        NOT apply to pnpm (ordered)."""
+        assert _package_matches_workspace(("#app",), ["#app"], ordered=True) is True
+        assert _package_matches_workspace(
+            ("#app",), ["!#app", "#app"], ordered=True) is True
+        assert _package_matches_workspace(
+            ("#app",), ["**", "!#app"], ordered=True) is False
+
+    def test_npm_empty_positive_pattern_removes_prior_negation(self):
+        """Under npm's ``appendNegatedPatterns`` an EMPTY positive pattern-string is
+        preserved (not dropped) and can still match+remove a prior negation, even though
+        it never matches a non-empty leaf. ``["packages/**", "!**", ""]`` therefore drops
+        ``!**`` and ``packages/app`` is a member."""
+        assert _package_matches_workspace(
+            ("packages", "app"), ["packages/**", "!**", ""], ordered=False) is True
 
     def test_npm_removal_compares_raw_unexpanded_positive_string(self):
         """npm's ``appendNegatedPatterns`` compares the RAW positive pattern STRING
@@ -1436,14 +1485,18 @@ class TestWorkspaceMembershipHardening:
         # The linear bracket scanner itself does not choke on the raw string either.
         assert _has_complete_bracket_class("[" * 100000) is False
 
-    def test_leading_slash_comment_is_normalized_before_classification(self):
-        """A leading ``/`` (or ``//`` / ``.//``) is normalized the SAME way for
-        comment classification as for matching, so ``/#*`` is recognized as a
-        minimatch comment (matches nothing) instead of being matched literally into a
-        false member. A leading ``/`` on a real glob is still just normalized away."""
+    def test_leading_slash_normalized_before_hash_and_glob_matching(self):
+        """A leading ``/`` (or ``//`` / ``.//``) is normalized the SAME way for a
+        ``#``-pattern as for any other glob. In pnpm (the default) and npm FINAL matching
+        ``#`` is LITERAL, so ``//#*`` normalizes to ``#*`` and matches a directory named
+        ``#evil`` — the leading slashes are removed, not left to break the match. A
+        two-segment path still fails a one-segment pattern on segment count."""
+        # Normalized to `#*`; matches the single-segment `#evil` literally.
+        assert _package_matches_workspace(("#evil",), ["//#*"]) is True
+        assert _package_matches_workspace(("#evil",), [".//#*"]) is True
+        # `/#*` -> `#*` (one segment) cannot match a two-segment path.
         assert _package_matches_workspace(("#evil", "package"), ["/#*"]) is False
-        assert _package_matches_workspace(("#evil",), ["//#*"]) is False
-        assert _package_matches_workspace(("#evil",), [".//#*"]) is False
+        # A leading `/` on a real glob is still just normalized away.
         assert _package_matches_workspace(("packages", "app"), ["/packages/*"]) is True
 
     def test_generated_dollar_brace_adjacency_still_expands(self):
@@ -1596,15 +1649,22 @@ class TestWorkspaceMembershipHardening:
             (repo / "package.json").write_text(
                 '{"devDependencies": {"vite": "^5", "vitest": %s}}' % bad)
             assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, bad
-        # A mid-word '#' is literal (Bash), so a later real vitest clause still proves;
-        # a leading-'#' comment clause does not.
-        (repo / "package.json").write_text(
-            json.dumps({"scripts": {"test": "echo a#b && npx vitest"}}))
-        cmd4, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
-        assert cmd4 is not None and "npx vitest run" in cmd4, cmd4
-        (repo / "package.json").write_text(
-            json.dumps({"scripts": {"test": "echo hi # npx vitest"}}))
-        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+        # '#' comment provenance (Bash-accurate): a mid-word, QUOTED, or ESCAPED '#' is
+        # literal so a later vitest clause still proves; an unquoted comment ends only its
+        # own line.
+        for script in ("echo a#b && npx vitest",           # mid-word
+                       'echo "# harmless" && npx vitest',   # quoted
+                       r"echo \#harmless && npx vitest",     # escaped
+                       "echo hi # comment\nnpx vitest"):     # comment ends at newline
+            (repo / "package.json").write_text(
+                json.dumps({"scripts": {"test": script}}))
+            cmd4, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
+            assert cmd4 is not None and "npx vitest run" in cmd4, script
+        # A genuine leading-'#' comment does NOT prove.
+        for script in ("echo hi # npx vitest", "# npx vitest"):
+            (repo / "package.json").write_text(
+                json.dumps({"scripts": {"test": script}}))
+            assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
         # A script invoking the vitest BINARY proves it — directly, via a direct package
         # runner (npx/bunx), via an explicit exec subcommand (pnpm exec / bun x), or with
         # a `--` options terminator (npm exec -- vitest).
