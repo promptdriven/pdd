@@ -1220,7 +1220,12 @@ def test_default_runtime_digest_cache_invalidates_changed_native_bytes(
     monkeypatch.setattr(runner_module, "_default_runtime_closure_paths", provider)
     monkeypatch.setattr(runner_module, "_runtime_digest_cache", {})
     first = runner_module._released_runtime_closure_digest()
+    original_stat = native.stat()
     native.write_bytes(b"native-v2")
+    os.utime(
+        native,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
     assert runner_module._released_runtime_closure_digest() != first
 
 
