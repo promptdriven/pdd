@@ -42,6 +42,7 @@ The script does not import the PDD package; it operates on repo file conventions
 3. **Basename Extraction**: Implement `_basename_from_path` that dispatches across prompt, context, logic, and test path patterns, applying `EXCLUDED_MODULE_BASENAMES` consistently to all four categories.
 4. **Include Extraction**:
     - `_extract_include_refs(content)` returns a list of `(normalized_path, selected_defs)` tuples.
+    - Parse canonical body-form `<include>path</include>`, body-form `<include path="declared">fallback</include>`, self-closing `<include path="declared" />`, and `<include-many>` syntax. `path=` overrides the include body whenever it is present, including when selectors are also present; never track the fallback body in that case.
     - `selected_defs` is `None` when there is no `select=` attribute OR when the selector is not of the supported `def:<name>` form (conservative fallback).
     - Multiple selectors are comma-separated inside the attribute value; whitespace is stripped.
 5. **AST Function Diffing**:
@@ -50,7 +51,10 @@ The script does not import the PDD package; it operates on repo file conventions
 6. **Reverse Dependency Resolution**:
     - Walk both `prompts/` and `pdd/prompts/` if they exist.
     - For each prompt file, derive its own basename via `_prompt_basename_from_path` and skip prompts whose basename can't be derived.
-    - For each `(include_path, selected_defs)` ref, match against every changed file using three path strategies: full path match, suffix match, or basename match. Selector filtering only applies when the path matched and `selected_defs` is non-None.
+    - Resolve each normalized include to exact in-repository candidates with deterministic precedence: repository-relative, including-prompt-relative, then the canonical source projection formed by removing the `prompts` path component (for example, `pdd/prompts/frontend/components/PromptSelector_typescriptreact.prompt` plus `./CreatePromptModal.tsx` projects to `pdd/frontend/components/CreatePromptModal.tsx`). Prefer the first existing candidate. For a deleted target with no existing candidate, match only when exactly one valid candidate is in the changed-path set; multiple matches are genuinely ambiguous and must fail closed.
+    - Never use suffix or bare-basename matching for reverse dependencies; directory identity is mandatory so same-named files cannot collide across modules.
+    - Compute the complete transitive reverse-dependency closure from changed leaves through included prompts or text artifacts to every outer consumer. Use deterministic traversal with a per-closure visited set so cycles terminate and each source is inspected at most once per consumer.
+    - Selector filtering only applies after an exact resolved path matched and `selected_defs` is non-None. Unknown AST diffs remain conservative as described above.
 7. **Execution Flow**:
     - Fetch changed files via `git diff --name-only <diff-base> -- pdd/ prompts/ context/ tests/`.
     - Direct basename extraction across the changed file list (skipping excluded basenames).
