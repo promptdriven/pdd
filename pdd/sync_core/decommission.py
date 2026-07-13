@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from .git_io import read_git_blob
 from .types import UnitId
+
+if TYPE_CHECKING:
+    from .manifest import OwnershipRule, UnitManifest
+
+
+_EXPECTED_MANAGED_PATH = PurePosixPath(".pdd/expected-managed.json")
+_OWNERSHIP_PATH = PurePosixPath(".pdd/sync-ownership.json")
 
 
 @dataclass(frozen=True)
@@ -100,3 +108,61 @@ def load_expected_registry(
             raise ValueError("expected-managed registry contains a duplicate unit")
         units.add(unit)
     return units
+
+
+def control_transition_invalid(
+    root: Path,
+    base_ref: str,
+    head_ref: str,
+    base_ownership: tuple[OwnershipRule, ...],
+    head_ownership: tuple[OwnershipRule, ...],
+) -> list[str]:
+    """Reject removal or weakening of protected denominator controls."""
+    invalid: list[str] = []
+    base_ownership_blob = read_git_blob(root, base_ref, _OWNERSHIP_PATH)
+    head_ownership_blob = read_git_blob(root, head_ref, _OWNERSHIP_PATH)
+    if base_ownership_blob is not None and head_ownership_blob is None:
+        invalid.append(f"{head_ref}: protected sync ownership policy is missing")
+    elif base_ownership_blob is not None:
+        removed = set(base_ownership) - set(head_ownership)
+        for rule in sorted(removed, key=lambda item: item.pattern):
+            invalid.append(
+                f"{head_ref}: protected sync ownership rule was removed or weakened: "
+                f"{rule.pattern}"
+            )
+
+    base_expected = read_git_blob(root, base_ref, _EXPECTED_MANAGED_PATH)
+    head_expected = read_git_blob(root, head_ref, _EXPECTED_MANAGED_PATH)
+    if base_expected is not None and head_expected is None:
+        invalid.append(f"{head_ref}: protected expected-managed registry is missing")
+    return invalid
+
+
+def enforce_head_fixed_point(
+    transition: UnitManifest,
+    stable_head: UnitManifest,
+    control_invalid: list[str],
+) -> UnitManifest:
+    """Require the candidate head to be a valid next protected base."""
+    invalid = list(transition.invalid_reasons)
+    invalid.extend(control_invalid)
+    invalid.extend(
+        f"{stable_head.head_ref}: fixed-point: {reason}"
+        for reason in stable_head.invalid_reasons
+    )
+    stable_managed = {unit.unit_id for unit in stable_head.managed_units}
+    if stable_managed != set(stable_head.expected_managed):
+        invalid.append(
+            f"{stable_head.head_ref}: fixed-point managed units do not match "
+            "the protected expected-managed registry"
+        )
+    return replace(
+        transition,
+        invalid_reasons=tuple(invalid),
+        unaccounted_tracked_paths=tuple(
+            sorted(
+                set(transition.unaccounted_tracked_paths)
+                | set(stable_head.unaccounted_tracked_paths)
+            )
+        ),
+    )

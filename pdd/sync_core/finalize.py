@@ -275,6 +275,15 @@ def finalize_unit(
     manifest = build_unit_manifest(
         repository_root, base_ref=base_sha, head_ref=head_sha
     )
+    managed_ids = {unit.unit_id for unit in manifest.managed_units}
+    if (
+        manifest.invalid_reasons
+        or manifest.unaccounted_tracked_paths
+        or managed_ids != set(manifest.expected_managed)
+    ):
+        raise ValueError(
+            "canonical finalization requires a valid protected candidate manifest"
+        )
     matches = [
         unit
         for unit in manifest.managed_units

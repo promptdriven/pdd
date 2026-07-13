@@ -15,6 +15,8 @@ import yaml
 
 from .decommission import (
     DecommissionTombstone,
+    control_transition_invalid,
+    enforce_head_fixed_point,
     load_expected_registry,
     load_tombstones,
 )
@@ -958,29 +960,32 @@ def build_unit_manifest(
     base = _tree_manifest(
         repository_root, base_ref, repository_id, language_registry, ownership
     )
-    head = _tree_manifest(
-        repository_root,
-        head_ref,
-        repository_id,
-        language_registry,
-        ownership,
-        set(base.entries),
-    )
+    head = _tree_manifest(repository_root, head_ref, repository_id,
+                          language_registry, ownership, set(base.entries))
     try:
         tombstones = load_tombstones(repository_root, base_ref)
-        load_tombstones(repository_root, head_ref)
+        head_tombstones = load_tombstones(repository_root, head_ref)
         expected_registry = load_expected_registry(
             repository_root, base_ref, repository_id
         )
-        load_expected_registry(repository_root, head_ref, repository_id)
+        head_expected_registry = load_expected_registry(
+            repository_root, head_ref, repository_id
+        )
     except ValueError as exc:
         raise ManifestError(str(exc)) from exc
-    return _assemble_manifest(
-        repository_id,
-        language_registry.digest(),
-        base,
-        head,
-        tombstones,
-        expected_registry,
-        ownership,
+    transition = _assemble_manifest(repository_id, language_registry.digest(),
+                                    base, head, tombstones, expected_registry,
+                                    ownership)
+    if base_ref == head_ref:
+        return transition
+
+    head_ownership = _ownership_rules(repository_root, head_ref)
+    stable_base = _tree_manifest(repository_root, head_ref, repository_id,
+                                 language_registry, head_ownership)
+    stable = _assemble_manifest(repository_id, language_registry.digest(),
+                                stable_base, stable_base, head_tombstones,
+                                head_expected_registry, head_ownership)
+    control_invalid = control_transition_invalid(
+        repository_root, base_ref, head_ref, ownership, head_ownership
     )
+    return enforce_head_fixed_point(transition, stable, control_invalid)
