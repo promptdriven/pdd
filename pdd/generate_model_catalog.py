@@ -1344,7 +1344,7 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
-        # GPT-5.6 direct OpenAI API twin of the chatgpt/gpt-5.6 subscription
+        # GPT-5.6 direct OpenAI API twin of the chatgpt/gpt-5.6-sol subscription
         # default (Issue #1986 sec. 4). Ships so the direct OPENAI_API_KEY /
         # llm_invoke selection path can resolve 5.6 from the catalog. No
         # reviewed Arena/DeepSWE score is available yet, so this is a
@@ -1715,7 +1715,7 @@ def _mandatory_rows_missing_from(
 # API twins; empty api_key marks device-flow (codex login) auth, like the
 # github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
 _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
-    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.6", "input": "0.0",
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.6-sol", "input": "0.0",
      "output": "0.0", "coding_arena_elo": "0", "model_rank_score": "17001",
      "model_rank_source": "platform-default", "base_url": "", "api_key": "",
      "max_reasoning_tokens": "0", "structured_output": "True",

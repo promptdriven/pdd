@@ -329,7 +329,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
         "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
-        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.6",
+        "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.6-sol",
     }
     assert all(
         r["provider"] == "OpenAI ChatGPT"
@@ -698,7 +698,7 @@ def test_opus_48_azure_ai_seeded_when_litellm_unaware():
 
 def test_gpt_5_6_openai_api_row_seeded_as_platform_default():
     """Issue #1986 sec.4: the direct OpenAI API gpt-5.6 twin of the
-    chatgpt/gpt-5.6 subscription default is seeded so the OPENAI_API_KEY /
+    chatgpt/gpt-5.6-sol subscription default is seeded so the OPENAI_API_KEY /
     llm_invoke selection path can resolve 5.6 from the catalog. It carries no
     reviewed Arena score (elo 0), so it must survive via the platform-default
     allowance rather than being dropped by the raw-ELO cutoff."""
@@ -733,7 +733,7 @@ def test_gpt_5_6_openai_api_row_deduped_once_litellm_knows_it():
 
 def test_build_rows_retains_openai_gpt_5_6_platform_default():
     """A full regeneration keeps the OpenAI gpt-5.6 platform-default row and its
-    distinct chatgpt/gpt-5.6 subscription twin. Guards the divergence where
+    distinct chatgpt/gpt-5.6-sol subscription twin. Guards the divergence where
     _add_score_fields would rescore the API row to 'none' and the cutoff drop
     it, leaving the committed CSV unreproducible."""
     rows = gmc.build_rows()
@@ -741,7 +741,7 @@ def test_build_rows_retains_openai_gpt_5_6_platform_default():
     assert len(api) == 1, "regeneration must retain exactly one OpenAI gpt-5.6 row"
     assert api[0]["api_key"] == "OPENAI_API_KEY"
     assert api[0]["model_rank_source"] == "platform-default"
-    sub = [r for r in rows if r.get("model") == "chatgpt/gpt-5.6"]
+    sub = [r for r in rows if r.get("model") == "chatgpt/gpt-5.6-sol"]
     assert len(sub) == 1 and sub[0]["provider"] == "OpenAI ChatGPT"
 
 
@@ -749,7 +749,7 @@ def test_committed_csv_includes_openai_gpt_5_6_api_row():
     """Issue #1986 sec.4: the committed CSV carries the direct OpenAI API
     gpt-5.6 row (OPENAI_API_KEY billed, platform-default, ranked above gpt-5.5),
     kept in its own provider/credential boundary distinct from the
-    chatgpt/gpt-5.6 device-flow subscription row (empty api_key)."""
+    chatgpt/gpt-5.6-sol device-flow subscription row (empty api_key)."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
@@ -760,7 +760,7 @@ def test_committed_csv_includes_openai_gpt_5_6_api_row():
     for line in text.splitlines():
         if line.startswith("OpenAI,gpt-5.6,"):
             assert line.split(",")[8] == "OPENAI_API_KEY", line
-        if line.startswith("OpenAI ChatGPT,chatgpt/gpt-5.6,"):
+        if line.startswith("OpenAI ChatGPT,chatgpt/gpt-5.6-sol,"):
             assert line.split(",")[8] == "", line
 
 

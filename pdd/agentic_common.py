@@ -201,6 +201,7 @@ def _provider_harness_id(provider: str) -> str:
 
 
 _PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+_CODEX_GPT_5_6_MIN_VERSION: Tuple[int, int, int] = (0, 144, 0)
 
 
 def _provider_cli_binary_name(provider: str) -> Optional[str]:
@@ -249,6 +250,33 @@ def _get_provider_cli_version(provider: str) -> str:
             version = ""
     _PROVIDER_CLI_VERSION_CACHE[provider] = version
     return version
+
+
+def _codex_gpt_5_6_version_error(
+    model: str,
+    version_output: Optional[str] = None,
+) -> Optional[str]:
+    """Return an upgrade diagnostic when a known-old Codex CLI selects GPT-5.6."""
+    if not str(model or "").strip().lower().startswith("gpt-5.6"):
+        return None
+    raw_version = (
+        _get_provider_cli_version("openai")
+        if version_output is None
+        else str(version_output)
+    )
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", raw_version)
+    if match is None:
+        # Custom wrappers may not expose a parseable version. Preserve their
+        # existing runtime behavior and let the CLI surface any model error.
+        return None
+    installed = tuple(int(part) for part in match.groups())
+    if installed >= _CODEX_GPT_5_6_MIN_VERSION:
+        return None
+    return (
+        f"GPT-5.6 requires Codex CLI >= 0.144.0, but '{raw_version.strip()}' "
+        "is installed. Upgrade with `npm install -g @openai/codex@latest` "
+        "and retry."
+    )
 
 
 def _publish_agentic_model_provenance(
@@ -7357,6 +7385,9 @@ def _run_with_provider(
         # Codex --model is a top-level flag; keep it before the subcommand so
         # the final "-" remains the explicit stdin prompt operand.
         codex_model = env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT
+        codex_version_error = _codex_gpt_5_6_version_error(codex_model)
+        if codex_version_error:
+            return False, codex_version_error, 0.0, codex_model
         cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",

@@ -5314,32 +5314,20 @@ class TestSelectModelCandidates:
         (GOOGLE_APPLICATION_CREDENTIALS → ANTHROPIC_API_KEY) and the API
         endpoint, defeating the deployment's intent."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/claude-opus-4-6", df
-        )
-        # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
-        assert candidates[0]["model"] != "claude-opus-4-6", (
-            "vertex_ai/ prefix must not silently match direct Anthropic row"
-        )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        with pytest.raises(ValueError, match="refusing to select a surrogate"):
+            llm_mod._select_model_candidates(
+                0.5, "vertex_ai/claude-opus-4-6", df
+            )
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
         must NOT silently resolve to a `gemini/`-prefixed Direct Gemini API
         row. Different provider, different credentials, different endpoint."""
         df = self._make_cross_provider_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/gemini-3-flash-preview", df
-        )
-        # CSV has no `Google Vertex AI,gemini-3-flash-preview` (bare) row.
-        # The `Google Gemini,gemini/gemini-3-flash-preview` row exists but
-        # is from a different provider. Provider-aware alias should NOT
-        # match it. Surrogate-base fires.
-        assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
-            "vertex_ai/ prefix must not silently match direct Gemini row"
-        )
+        with pytest.raises(ValueError, match="Google Vertex AI"):
+            llm_mod._select_model_candidates(
+                0.5, "vertex_ai/gemini-3-flash-preview", df
+            )
 
     def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
         """Positive companion to the negative tests: when the configured
@@ -5495,6 +5483,21 @@ class TestAlternativeBaseLookups:
         assert llm_mod._alternative_base_lookups(
             "gemini/gemini-3.1-pro-preview"
         ) == [("gemini-3.1-pro-preview", "Google Gemini")]
+
+    def test_strips_openai_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "openai/gpt-5.6"
+        ) == [("gpt-5.6", "OpenAI")]
+
+    def test_strips_azure_openai_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "azure/gpt-5.6"
+        ) == [("gpt-5.6", "Azure OpenAI")]
+
+    def test_strips_chatgpt_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "chatgpt/gpt-5.6-sol"
+        ) == [("gpt-5.6-sol", "OpenAI ChatGPT")]
 
     def test_bare_name_emits_each_provider_pair(self, llm_mod):
         alts = llm_mod._alternative_base_lookups("gemini-3.1-pro-preview")
@@ -6564,6 +6567,63 @@ class TestReasoningParameters:
 
         assert "reasoning_effort" in captured_kwargs
         assert captured_kwargs["reasoning_effort"] == "high"
+
+    def test_gpt5_responses_honors_explicit_xhigh_effort(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", "gpt-5.6"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_REASONING_EFFORT", "xhigh")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-5.6")
+
+        mock_response = MagicMock()
+        mock_response.output_text = "result"
+        mock_response.output = []
+        mock_response.usage = MagicMock(input_tokens=1, output_tokens=1)
+        captured_kwargs = {}
+
+        def capture_response(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "responses", side_effect=capture_response):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs["reasoning"] == {
+            "effort": "xhigh",
+            "summary": "auto",
+        }
+
+    def test_gpt5_responses_rejects_invalid_explicit_effort(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "effort", "OpenAI", "gpt-5.6"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("PDD_REASONING_EFFORT", "turbo")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-5.6")
+
+        with pytest.raises(ValueError, match="PDD_REASONING_EFFORT must be one of"):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.8,
+                use_cloud=False,
+            )
 
     def test_adaptive_reasoning_anthropic(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on an Anthropic row must send the new

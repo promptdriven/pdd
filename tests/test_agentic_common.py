@@ -2938,6 +2938,62 @@ def test_get_provider_cli_version_probes_binary(monkeypatch):
     assert _get_provider_cli_version("opencode") == ""
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol"])
+def test_known_old_codex_cli_fails_before_gpt_5_6(model):
+    import pdd.agentic_common as ac
+
+    message = ac._codex_gpt_5_6_version_error(model, "codex-cli 0.143.9")
+
+    assert message is not None
+    assert ">= 0.144.0" in message
+    assert "@openai/codex@latest" in message
+
+
+@pytest.mark.parametrize(
+    ("model", "version"),
+    [
+        ("gpt-5.6-sol", "codex-cli 0.144.0"),
+        ("gpt-5.6-sol", "codex 1.2.3"),
+        ("gpt-5.6-sol", "company-codex-wrapper"),
+        ("gpt-5.5", "codex-cli 0.143.9"),
+    ],
+)
+def test_codex_cli_version_gate_allows_supported_or_unrelated_models(model, version):
+    import pdd.agentic_common as ac
+
+    assert ac._codex_gpt_5_6_version_error(model, version) is None
+
+
+def test_codex_old_cli_gate_prevents_inference_subprocess(tmp_path, monkeypatch):
+    import pdd.agentic_common as ac
+
+    prompt = tmp_path / "task.prompt"
+    prompt.write_text("Do the task", encoding="utf-8")
+    monkeypatch.delenv("CODEX_MODEL", raising=False)
+    monkeypatch.setattr(
+        ac,
+        "_get_provider_cli_version",
+        lambda provider: "codex-cli 0.143.9",
+    )
+
+    def _unexpected_inference(*args, **kwargs):
+        raise AssertionError("old Codex CLI must be rejected before inference")
+
+    monkeypatch.setattr(ac, "_subprocess_run_spooled", _unexpected_inference)
+
+    success, message, cost, model = ac._run_with_provider(
+        "openai",
+        prompt,
+        tmp_path,
+        cli_path="/bin/codex",
+    )
+
+    assert success is False
+    assert ">= 0.144.0" in message
+    assert cost == 0.0
+    assert model == "gpt-5.6-sol"
+
+
 def test_provider_cli_binary_name_mapping():
     assert _provider_cli_binary_name("anthropic") == "claude"
     assert _provider_cli_binary_name("openai") == "codex"
