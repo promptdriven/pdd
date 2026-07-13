@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
+from .alias_policy import load_committed_aliases, load_protected_aliases
 from .evidence_store import (
     encode_attestation,
     evidence_relpath,
@@ -21,6 +22,7 @@ from .evidence_store import (
 from .fingerprint_store import FingerprintStore, encode_fingerprint
 from .git_io import resolve_git_commit
 from .manifest import build_unit_manifest
+from .path_policy import PathPolicy
 from .runner import (
     TRUSTED_RUNNER_VERSION,
     AttestationIssue,
@@ -73,12 +75,13 @@ def preflight_legacy_mutation(paths: dict[str, Path] | None = None) -> None:
 def canonical_root_for_paths(paths: dict[str, Path] | None) -> Path | None:
     """Return the opted-in Git root for legacy path-based callers."""
     # pylint: disable=import-outside-toplevel
-    from ..continuous_sync import canonical_sync_enabled, repository_root
+    from ..continuous_sync import canonical_sync_enabled, lexical_repository_root
 
     start = Path(paths.get("prompt", Path.cwd())) if paths else Path.cwd()
-    if not canonical_sync_enabled(start):
+    root = lexical_repository_root(start)
+    if not canonical_sync_enabled(root):
         return None
-    return repository_root(start)
+    return root
 
 
 def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
@@ -92,8 +95,9 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
         protected_base = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA")
         if not protected_base:
             raise ValueError("canonical sync requires PDD_SYNC_PROTECTED_BASE_SHA")
-        prompt = Path(paths["prompt"]).resolve()
-        module = PurePosixPath(prompt.relative_to(root).as_posix())
+        module = lexical_managed_module(
+            root, Path(paths["prompt"]), base_ref=protected_base, head_ref="HEAD"
+        )
         finalize_unit(
             root,
             module,
@@ -106,6 +110,29 @@ def finalize_legacy_paths(paths: dict[str, Path] | None) -> bool:
             f"trusted canonical finalization failed: {exc}"
         ) from exc
     return True
+
+
+def lexical_managed_module(
+    root: Path, prompt: Path, *, base_ref: str, head_ref: str
+) -> PurePosixPath:
+    """Return a policy-validated prompt's lexical repository identity."""
+    repository_root = Path(root).resolve()
+    lexical_prompt = Path(os.path.abspath(prompt))
+    try:
+        module = PurePosixPath(lexical_prompt.relative_to(repository_root).as_posix())
+    except ValueError as exc:
+        raise ValueError("canonical prompt path escapes project root") from exc
+    base_aliases = load_committed_aliases(repository_root, base_ref)
+    head_aliases = load_committed_aliases(repository_root, head_ref)
+    if base_aliases != head_aliases:
+        raise ValueError("candidate changed protected alias policy")
+    policy = PathPolicy(
+        repository_root,
+        approved_aliases=base_aliases,
+        base_ref=base_ref,
+        head_ref=head_ref,
+    )
+    return policy.resolve(module).logical_relpath
 
 
 def attestation_signer_from_environment() -> AttestationIssuer:
@@ -358,7 +385,9 @@ def finalize_unit(
         PlannedWrite(evidence_relpath(attestation_id), encode_attestation(envelope), "100644"),
         PlannedWrite(fingerprint, encode_fingerprint(record), "100644"),
     )
-    manager = TransactionManager(repository_root)
+    manager = TransactionManager(
+        repository_root, approved_aliases=load_protected_aliases(repository_root, manifest)
+    )
     manager.prepare(transaction_id, writes)
     transaction = manager.commit(transaction_id)
     return FinalizeResult(transaction, attestation_id, fingerprint)

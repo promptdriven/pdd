@@ -1238,7 +1238,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             prompt_path_obj = Path(prompt_path)
             prompt_filename_for_lookup = Path(prompt_path).name
             try:
-                prompt_filename_for_lookup = str(prompt_path_obj.resolve().relative_to(prompts_root.resolve())).replace(os.sep, "/")
+                lexical_prompt = Path(os.path.abspath(prompt_path_obj))
+                lexical_prompts_root = Path(os.path.abspath(prompts_root))
+                prompt_filename_for_lookup = str(
+                    lexical_prompt.relative_to(lexical_prompts_root)
+                ).replace(os.sep, "/")
             except ValueError:
                 pass
             arch_filepath, _ = _get_filepath_from_architecture(
@@ -1790,6 +1794,15 @@ def _validated_report_live_includes(
     return True, resolved
 
 
+def _lexical_canonical_root(prompt_path: Path) -> Optional[Path]:
+    """Return an active canonical root without resolving the prompt leaf."""
+    lexical_prompt = Path(os.path.abspath(prompt_path))
+    from pdd.continuous_sync import canonical_sync_enabled, lexical_repository_root
+
+    root = lexical_repository_root(lexical_prompt)
+    return root if canonical_sync_enabled(root) else None
+
+
 def extract_include_deps(
     prompt_path: Path,
     dependency_root: Optional[Path] = None,
@@ -1802,7 +1815,7 @@ def extract_include_deps(
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
     Only includes dependencies that exist on disk.
     """
-    from pdd.continuous_sync import canonical_sync_enabled, repository_root
+    from pdd.sync_core.alias_policy import load_committed_aliases
     from pdd.sync_core.includes import (
         IncludeGraphError,
         build_include_closure,
@@ -1810,7 +1823,8 @@ def extract_include_deps(
     )
     from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
-    if not canonical_sync_enabled(prompt_path):
+    canonical_root = _lexical_canonical_root(prompt_path)
+    if canonical_root is None:
         if resolved_live_dependencies is not None:
             dependencies: Dict[str, str] = {}
             for _declared, dependency in resolved_live_dependencies:
@@ -1859,13 +1873,21 @@ def extract_include_deps(
                     key = str(dependency)
                 dependencies[key] = digest
         return dependencies
-    canonical_root = repository_root(prompt_path)
     if not prompt_path.exists():
         raise FileNotFoundError(prompt_path)
     try:
-        prompt_relpath = prompt_path.resolve().relative_to(canonical_root)
+        lexical_prompt = Path(os.path.abspath(prompt_path))
+        prompt_relpath = lexical_prompt.relative_to(canonical_root)
+        protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") or "HEAD"
+        approved_aliases = load_committed_aliases(canonical_root, protected_ref)
         closure = build_include_closure(
-            PurePosixPath(prompt_relpath.as_posix()), PathPolicy(canonical_root)
+            PurePosixPath(prompt_relpath.as_posix()),
+            PathPolicy(
+                canonical_root,
+                approved_aliases=approved_aliases,
+                base_ref=protected_ref,
+                head_ref="HEAD",
+            ),
         )
     except (ValueError, IncludeGraphError, PathPolicyError) as exc:
         raise ValueError(f"canonical include closure failed: {prompt_path}") from exc
@@ -1927,7 +1949,13 @@ def calculate_prompt_hash(
         if hash_version == 1 else
         [reference.path for reference in parse_include_references(prompt_content)]
     )
-    if references and resolved_live_dependencies is not None:
+    lexical_root = _lexical_canonical_root(prompt_path)
+    if references and lexical_root is not None:
+        dependencies = extract_include_deps(prompt_path, version=hash_version)
+        resolved_dependencies = [
+            (lexical_root / dependency).resolve() for dependency in dependencies
+        ]
+    elif references and resolved_live_dependencies is not None:
         validated_dependencies = list(resolved_live_dependencies)
         if hash_version == 1:
             by_declaration = dict(validated_dependencies)
@@ -1967,7 +1995,7 @@ def calculate_prompt_hash(
         for dependency in resolved_dependencies:
             hasher.update(dependency.read_bytes())
     elif hash_version == 2:
-        anchor = prompt_path.resolve().parent
+        anchor = Path(os.path.abspath(prompt_path)).parent
         for dependency in sorted(resolved_dependencies):
             try:
                 key = dependency.relative_to(anchor).as_posix()
