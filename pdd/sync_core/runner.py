@@ -54,7 +54,12 @@ PYTEST_PROTECTED_FLAGS = (
 )
 _CHECKER_PYTEST_PROBE = Path(__file__).with_name("pytest_probe.py").resolve()
 _runtime_digest_cache: dict[
-    str, tuple[tuple[tuple[str, Path], ...], tuple[tuple[str, str, int, int], ...], str]
+    str,
+    tuple[
+        tuple[tuple[str, Path], ...],
+        tuple[tuple[str, str, int, int, int], ...],
+        str,
+    ],
 ] = {}
 
 
@@ -645,12 +650,15 @@ _default_runtime_closure_paths = _released_runtime_closure_paths
 
 def _runtime_manifest(
     entries: tuple[tuple[str, Path], ...]
-) -> tuple[tuple[str, str, int, int], ...]:
+) -> tuple[tuple[str, str, int, int, int], ...]:
     """Return byte-change-sensitive metadata without rereading runtime bytes."""
-    return tuple(
-        (name, str(path), path.stat().st_mtime_ns, path.stat().st_size)
-        for name, path in entries
-    )
+    manifest = []
+    for name, path in entries:
+        stat = path.stat()
+        manifest.append(
+            (name, str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        )
+    return tuple(manifest)
 
 
 def _hash_runtime_entry(entry: tuple[str, Path]) -> tuple[str, bytes] | None:
