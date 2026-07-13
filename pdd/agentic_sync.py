@@ -13,15 +13,27 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import build_agentic_task_instruction, run_agentic_task
+from .agentic_common import (
+    _PROVIDER_ENVIRONMENT_PROVIDERS,
+    _PROVIDER_ENVIRONMENT_REASONS,
+    _PROVIDER_FAILURE_SINK_ENV,
+    _PROVIDER_FAILURE_TOKEN_ENV,
+    _consume_provider_failure_sink,
+    _publish_provider_failure_sink,
+    _sanitize_comment_body,
+    build_agentic_task_instruction,
+    run_agentic_task,
+)
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
@@ -73,7 +85,6 @@ console = Console()
 _GLOBAL_SYNC_NOOP_OPERATIONS = {"nothing", "all_synced"}
 _GLOBAL_SYNC_TIER1_OPERATIONS = {"generate", "auto-deps"}
 _SYNC_DETERMINE_LOGGER_NAME = "pdd.sync_determine_operation"
-
 
 def _is_github_issue_url(s: str) -> bool:
     """Check if a string looks like a GitHub issue URL."""
@@ -1956,40 +1967,75 @@ def _build_targeted_dep_graph(
 
 
 def _run_single_dry_run(
-    basename: str, cwd: Path, quiet: bool = False, local: bool = False
+    basename: str,
+    cwd: Path,
+    quiet: bool = False,
+    local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, str]:
     """Run pdd sync <basename> --dry-run from the given cwd.
 
     Returns:
         Tuple of (success, stderr_output).
     """
-    pdd_exe = _find_pdd_executable()
-    if pdd_exe:
-        cmd = [pdd_exe]
-    else:
-        cmd = [sys.executable, "-m", "pdd"]
+    # Use this installed package/interpreter, rather than a PATH-resolved
+    # executable that arbitrary test/user code could replace while inheriting
+    # the private typed-failure capability.
+    cmd = [sys.executable, "-m", "pdd"]
 
     cmd.append("--force")
     if local:
         cmd.append("--local")
     cmd.extend(["sync", basename, "--dry-run", "--agentic", "--no-steer"])
 
-    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    env = {
+        **os.environ,
+        "PDD_FORCE": "1",
+        "CI": "1",
+        "PDD_AGENTIC_BACKGROUND_SAFE": "1",
+    }
     if local:
         env["PDD_FORCE_LOCAL"] = "1"
 
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-        )
+        with tempfile.TemporaryDirectory(prefix="pdd-provider-failure-") as channel_dir:
+            sink = Path(channel_dir) / "failure.json"
+            token = secrets.token_urlsafe(32)
+            env[_PROVIDER_FAILURE_SINK_ENV] = str(sink)
+            env[_PROVIDER_FAILURE_TOKEN_ENV] = token
+            result = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+            )
+            if result.returncode != 0 and sink.is_file():
+                try:
+                    payload = json.loads(sink.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = None
+                if (
+                    isinstance(payload, dict)
+                    and set(payload) == {"version", "kind", "token", "provider", "reason"}
+                    and payload.get("version") == 1
+                    and payload.get("kind") == "provider_environment_failure"
+                    and secrets.compare_digest(str(payload.get("token", "")), token)
+                    and payload.get("provider") in _PROVIDER_ENVIRONMENT_PROVIDERS
+                    and payload.get("reason") in _PROVIDER_ENVIRONMENT_REASONS
+                    and trusted_failures is not None
+                ):
+                    trusted_failures.append(
+                        (str(payload["provider"]), str(payload["reason"]))
+                    )
         if result.returncode == 0:
             return True, ""
-        return False, result.stderr or result.stdout or f"Exit code {result.returncode}"
+        output = "\n".join(
+            part for part in (result.stdout, result.stderr) if part
+        ) or f"Exit code {result.returncode}"
+        marker = _extract_provider_environment_marker(output)
+        return False, marker or output
     except subprocess.TimeoutExpired:
         return False, "Dry-run timed out after 60s"
     except Exception as e:
@@ -2004,6 +2050,7 @@ def _llm_fix_dry_run_failure(
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
     local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, Optional[Path], float, str]:
     """Ask the LLM to suggest the correct cwd/command when dry-run fails.
 
@@ -2056,7 +2103,7 @@ def _llm_fix_dry_run_failure(
         attempted_cwd=str(project_root),
     )
 
-    llm_success, llm_output, llm_cost, _ = run_agentic_task(
+    llm_result = run_agentic_task(
         instruction=prompt,
         cwd=project_root,
         verbose=verbose,
@@ -2065,10 +2112,18 @@ def _llm_fix_dry_run_failure(
         timeout=FIX_DRY_RUN_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
         stall_timeout=FIX_DRY_RUN_STALL_SECONDS,  # Issue #1714: no-progress abort
         reasoning_time=reasoning_time,
+        background_safe=True,
     )
+    llm_success, llm_output, llm_cost, _ = llm_result
 
     if not llm_success:
-        return False, None, llm_cost, f"LLM failed to suggest fix: {llm_output}"
+        trusted_failure = getattr(
+            llm_result, "provider_environment_failure", None
+        )
+        if trusted_failures is not None and isinstance(trusted_failure, tuple):
+            trusted_failures.append(trusted_failure)
+        marker = _extract_provider_environment_marker(llm_output)
+        return False, None, llm_cost, marker or f"LLM failed to suggest fix: {llm_output}"
 
     # Parse SYNC_CMD from response
     cmd_match = re.search(r"SYNC_CMD:\s*(.+)", llm_output)
@@ -2088,7 +2143,12 @@ def _llm_fix_dry_run_failure(
 
     # Run the suggested command directly via shell from project root.
     # This handles relative cd paths, chained cd's, etc. naturally.
-    env = {**os.environ, "PDD_FORCE": "1", "CI": "1"}
+    env = {
+        **os.environ,
+        "PDD_FORCE": "1",
+        "CI": "1",
+        "PDD_AGENTIC_BACKGROUND_SAFE": "1",
+    }
     if local:
         env["PDD_FORCE_LOCAL"] = "1"
     try:
@@ -2129,11 +2189,12 @@ def _llm_fix_dry_run_failure(
         return True, effective_cwd, llm_cost, ""
     else:
         err_output = result.stderr or result.stdout or f"Exit code {result.returncode}"
+        marker = _extract_provider_environment_marker(err_output)
         return (
             False,
             None,
             llm_cost,
-            f"LLM suggested command failed: {err_output[:500]}",
+            marker or f"LLM suggested command failed: {err_output[:500]}",
         )
 
 
@@ -2144,6 +2205,7 @@ def _run_dry_run_validation(
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
     local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, Dict[str, Path], Dict[str, str], List[str], float]:
     """Run dry-run validation for each module with LLM fallback.
 
@@ -2186,9 +2248,10 @@ def _run_dry_run_validation(
             continue
 
         # 2. Run dry-run with the resolved target from the owning cwd.
-        ok, err_output = _run_single_dry_run(
-            target, cwd, quiet=quiet, local=local
-        )
+        dry_run_kwargs: Dict[str, Any] = {"quiet": quiet, "local": local}
+        if trusted_failures is not None:
+            dry_run_kwargs["trusted_failures"] = trusted_failures
+        ok, err_output = _run_single_dry_run(target, cwd, **dry_run_kwargs)
 
         if ok:
             contract_errors = _prompt_contract_errors_for_module(
@@ -2205,6 +2268,11 @@ def _run_dry_run_validation(
             module_targets[basename] = target
             continue
 
+        provider_marker = _extract_provider_environment_marker(err_output)
+        if provider_marker:
+            errors.append(provider_marker)
+            continue
+
         # 3. Dry-run failed — try LLM fallback
         if not quiet:
             console.print(
@@ -2219,6 +2287,7 @@ def _run_dry_run_validation(
             verbose=verbose,
             reasoning_time=reasoning_time,
             local=local,
+            trusted_failures=trusted_failures,
         )
         total_llm_cost += llm_cost
 
@@ -2246,7 +2315,9 @@ def _run_dry_run_validation(
                     f"[green]LLM resolved {basename} → cwd: {rel}[/green]"
                 )
         else:
-            errors.append(f"{basename}: {llm_err or err_output}")
+            detail = llm_err or err_output
+            marker = _extract_provider_environment_marker(detail)
+            errors.append(marker or f"{basename}: {detail}")
 
     all_valid = len(errors) == 0
     return all_valid, module_cwds, module_targets, errors, total_llm_cost
@@ -2676,6 +2747,7 @@ def run_agentic_sync(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    provider_failure_sink = _consume_provider_failure_sink()
     _clear_nested_pddrc_cache()
     # 1. Check gh CLI
     if not _check_gh_cli():
@@ -2845,7 +2917,7 @@ def run_agentic_sync(
                 console.print("[bold]Identifying modules to sync via LLM...[/bold]")
 
             # 8. Call LLM
-            llm_success, llm_output, llm_cost, provider = run_agentic_task(
+            llm_result = run_agentic_task(
                 instruction=prompt,
                 cwd=project_root,
                 verbose=verbose,
@@ -2854,12 +2926,18 @@ def run_agentic_sync(
                 timeout=IDENTIFY_MODULES_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
                 stall_timeout=IDENTIFY_MODULES_STALL_SECONDS,  # Issue #1714: no-progress abort
                 reasoning_time=reasoning_time,
+                background_safe=True,
             )
+            llm_success, llm_output, llm_cost, provider = llm_result
 
             if not llm_success:
                 msg = f"LLM failed to identify modules: {llm_output}"
                 if use_github_state:
                     _post_error_comment(owner, repo, issue_number, msg)
+                _publish_provider_failure_sink(
+                    provider_failure_sink,
+                    getattr(llm_result, "provider_environment_failure", None),
+                )
                 return False, msg, llm_cost, provider
 
             # 9. Parse LLM response
@@ -3022,6 +3100,7 @@ def run_agentic_sync(
     if not quiet:
         console.print("[bold]Running dry-run validation for each module...[/bold]")
 
+    trusted_validation_failures: List[Tuple[str, str]] = []
     all_valid, module_cwds, module_targets, dry_run_errors, dry_run_cost = (
         _run_dry_run_validation(
             modules=modules_to_sync,
@@ -3030,17 +3109,23 @@ def run_agentic_sync(
             verbose=verbose,
             reasoning_time=reasoning_time,
             local=local,
+            trusted_failures=trusted_validation_failures,
         )
     )
     llm_cost += dry_run_cost
 
     if not all_valid:
         error_detail = "\n".join(dry_run_errors)
-        msg = f"Dry-run validation failed:\n{error_detail}"
+        provider_marker = _extract_provider_environment_marker(error_detail)
+        msg = provider_marker or f"Dry-run validation failed:\n{error_detail}"
         if not quiet:
             console.print(f"[red]{msg}[/red]")
         if use_github_state:
             _post_error_comment(owner, repo, issue_number, msg)
+        if trusted_validation_failures:
+            _publish_provider_failure_sink(
+                provider_failure_sink, trusted_validation_failures[0]
+            )
         return False, msg, llm_cost, provider
 
     if not quiet:
@@ -3166,11 +3251,70 @@ def run_agentic_sync(
 
 def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) -> None:
     """Post an error comment on the GitHub issue."""
+    trusted_payload = message.removeprefix("LLM failed to identify modules: ")
+    marker = _extract_provider_environment_marker(trusted_payload)
+    if marker and marker == trusted_payload:
+        clean_message = (
+            marker
+            + "\n\nProvider setup needs attention. Fix provider installation/auth/update "
+            "state, switch provider, or use non-interactive configuration, then retry."
+        )
+    else:
+        clean_message = _sanitize_agentic_sync_error(message)
     body = (
         "## PDD Agentic Sync - Error\n\n"
-        f"```\n{message[:1000]}\n```\n"
+        f"```\n{clean_message[:1000]}\n```\n"
     )
+    body = _sanitize_comment_body(body)
     _run_gh_command([
         "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
         "-X", "POST", "-f", f"body={body}",
     ])
+
+
+_ANSI_CSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_ORPHAN_OSC_RE = re.compile(r"\x1b\][^\n]*")
+_CARET_CSI_RE = re.compile(r"(?:\^\[|\\e|\\033)\[[0-?]*[ -/]*[@-~]")
+_TERMINAL_GLYPH_RE = re.compile(
+    r"[\u2800-\u28ff\u2500-\u257f\u2700-\u27bf\u23f5\u2191]"
+)
+_TERMINAL_NOISE_LINE_RE = re.compile(
+    r"(?:auto[- ]?update|update available|permission required|press enter|"
+    r"trust this workspace|bypass permissions|shift\+tab|esc to interrupt|"
+    r"read and execute instructions|helper|keyboard shortcut|footer|cursor)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_agentic_sync_error(message: str) -> str:
+    """Render provider failures as readable, non-interactive public text."""
+    text = _ANSI_CSI_RE.sub("", message or "")
+    text = _ORPHAN_OSC_RE.sub("", text)
+    text = _CARET_CSI_RE.sub("", text)
+    clean_lines: List[str] = []
+    for line in text.splitlines():
+        line = _TERMINAL_GLYPH_RE.sub("", line)
+        line = "".join(ch for ch in line if ch in "\t" or ord(ch) >= 32)
+        if _TERMINAL_NOISE_LINE_RE.search(line):
+            continue
+        line = line.strip()
+        if line:
+            clean_lines.append(line)
+    return _sanitize_comment_body("\n".join(clean_lines))
+
+
+_PROVIDER_ENVIRONMENT_MARKER_RE = re.compile(
+    r'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:'
+    r'\{"provider":"(?:claude|anthropic|codex|openai|gemini|google|agy|opencode|unknown)",'
+    r'"reason":"(?:interactive_ui|trust_prompt|permission_prompt|update_prompt|authentication|update_required|non_interactive_required|runtime_unavailable)"\}'
+)
+
+
+def _extract_provider_environment_marker(text: str) -> Optional[str]:
+    """Return one exact full-line trusted marker, rejecting embedded prose."""
+    matches = {
+        line
+        for line in (text or "").splitlines()
+        if _PROVIDER_ENVIRONMENT_MARKER_RE.fullmatch(line)
+    }
+    return next(iter(matches)) if len(matches) == 1 else None

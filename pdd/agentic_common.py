@@ -5,6 +5,7 @@ import functools
 import errno
 import hashlib
 import importlib.resources
+import io
 import logging
 import os
 import signal
@@ -14,6 +15,7 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 import re
@@ -45,6 +47,57 @@ UsageSource = str
 _HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+_PROVIDER_FAILURE_SINK_ENV = "PDD_PROVIDER_FAILURE_SINK"
+_PROVIDER_FAILURE_TOKEN_ENV = "PDD_PROVIDER_FAILURE_TOKEN"
+_PROVIDER_FAILURE_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,256}")
+
+
+def _consume_provider_failure_sink() -> Optional[Tuple[Path, str]]:
+    raw_path = os.environ.pop(_PROVIDER_FAILURE_SINK_ENV, "")
+    token = os.environ.pop(_PROVIDER_FAILURE_TOKEN_ENV, "")
+    path = Path(raw_path) if raw_path else None
+    if (
+        path is None
+        or not path.is_absolute()
+        or path.exists()
+        or not path.parent.is_dir()
+        or not _PROVIDER_FAILURE_TOKEN_RE.fullmatch(token)
+    ):
+        return None
+    return path, token
+
+
+def _publish_provider_failure_sink(
+    sink: Optional[Tuple[Path, str]], failure: object
+) -> None:
+    if sink is None or not isinstance(failure, tuple) or len(failure) != 2:
+        return
+    path, token = sink
+    provider, reason = failure
+    if provider not in _PROVIDER_ENVIRONMENT_PROVIDERS:
+        return
+    if reason not in _PROVIDER_ENVIRONMENT_REASONS:
+        return
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    payload = {
+        "version": 1,
+        "kind": "provider_environment_failure",
+        "token": token,
+        "provider": provider,
+        "reason": reason,
+    }
+    try:
+        descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"), ensure_ascii=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class EffortCapability(str, Enum):
@@ -1165,6 +1218,7 @@ class AgenticTaskResult(tuple):
         cli_version: str = "",
         model_id: Optional[str] = None,
         cumulative_cost_usd: Optional[float] = None,
+        provider_environment_failure: Optional[Tuple[str, str]] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
@@ -1176,6 +1230,7 @@ class AgenticTaskResult(tuple):
         result._cli_version = cli_version
         result._model_id = model_id
         result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
+        result._provider_environment_failure = provider_environment_failure
         return result
 
     def __iter__(self):
@@ -1225,6 +1280,11 @@ class AgenticTaskResult(tuple):
     def cumulative_cost_usd(self) -> float:
         return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
 
+    @property
+    def provider_environment_failure(self) -> Optional[Tuple[str, str]]:
+        """Trusted in-process provider/runtime classification, when present."""
+        return getattr(self, "_provider_environment_failure", None)
+
     def meets_usage_contract(self) -> bool:
         """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
         return _meets_usage_contract(self)
@@ -1260,8 +1320,22 @@ class _ProviderRunResult(tuple):
         usage: AgenticUsage = None,
         requested_effort: Optional[str] = None,
         effective_effort: Optional[str] = None,
+        provider_environment_reason: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
+        result = tuple.__new__(
+            cls,
+            (
+                success,
+                output_text,
+                cost_usd,
+                model,
+                usage,
+                requested_effort,
+                effective_effort,
+            ),
+        )
+        result._provider_environment_reason = provider_environment_reason
+        return result
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -1277,6 +1351,10 @@ class _ProviderRunResult(tuple):
     @property
     def effective_effort(self) -> Optional[str]:
         return tuple.__getitem__(self, 6)
+
+    @property
+    def provider_environment_reason(self) -> Optional[str]:
+        return getattr(self, "_provider_environment_reason", None)
 
 
 @dataclass
@@ -4904,6 +4982,7 @@ def run_agentic_task(
     task_class: Optional[str] = None,
     before_attempt: Optional[Callable[[str, int], None]] = None,
     single_provider_attempt: bool = False,
+    background_safe: bool = False,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4952,6 +5031,7 @@ def run_agentic_task(
         Four-value unpacking remains supported for legacy callers; structured
         consumers can read ``result.usage`` or ``result[4]``.
     """
+    provider_failure_sink = _consume_provider_failure_sink()
     normalized_claude_policy = (
         validate_claude_policy(
             claude_policy,
@@ -5062,6 +5142,7 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        provider_environment_failure: Optional[Tuple[str, str]] = None
         harness_capabilities = _load_harness_capabilities()
         total_cost = 0.0
 
@@ -5130,7 +5211,16 @@ def run_agentic_task(
                     reasoning_time=reasoning_time,
                     claude_policy=normalized_claude_policy,
                     stall_timeout=stall_timeout,
+                    background_safe=background_safe,
                 )
+                environment_reason = getattr(
+                    provider_result, "provider_environment_reason", None
+                )
+                if (
+                    isinstance(environment_reason, str)
+                    and environment_reason in _PROVIDER_ENVIRONMENT_REASONS
+                ):
+                    provider_environment_failure = (provider, environment_reason)
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
@@ -5479,13 +5569,18 @@ def run_agentic_task(
                 break
 
         failure_cost = total_cost if routing_policy is not None else 0.0
+        if provider_environment_failure is not None:
+            failure_output = _provider_environment_marker(*provider_environment_failure)
+        else:
+            failure_output = f"All agent providers failed: {'; '.join(provider_errors)}"
         failure_result = AgenticTaskResult(
             False,
-            f"All agent providers failed: {'; '.join(provider_errors)}",
+            failure_output,
             failure_cost,
             "",
             None,
             cumulative_cost_usd=cumulative_cost_usd,
+            provider_environment_failure=provider_environment_failure,
         )
 
         _emit_routing_outcome(
@@ -5584,8 +5679,15 @@ def run_agentic_task(
                 )
                 if fallback_result is not None:
                     last_result = fallback_result
+            _publish_provider_failure_sink(
+                provider_failure_sink,
+                getattr(last_result, "provider_environment_failure", None),
+            )
             return last_result
 
+        _publish_provider_failure_sink(
+            provider_failure_sink, provider_environment_failure
+        )
         return failure_result
 
     finally:
@@ -5891,6 +5993,109 @@ def _strip_anthropic_creds_for_claude_subprocess(
     return True
 
 
+_PROVIDER_ENVIRONMENT_MARKER = "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1"
+_PROVIDER_ENVIRONMENT_PROVIDERS = frozenset({
+    "claude", "anthropic", "codex", "openai", "gemini", "google", "agy",
+    "opencode", "unknown",
+})
+_PROVIDER_ENVIRONMENT_REASONS = frozenset({
+    "interactive_ui", "trust_prompt", "permission_prompt", "update_prompt",
+    "authentication", "update_required", "non_interactive_required",
+    "runtime_unavailable",
+})
+
+
+def _provider_environment_marker(provider: str, reason: str) -> str:
+    """Return the strict, producer-owned provider-environment marker line."""
+    safe_provider = (
+        provider if provider in _PROVIDER_ENVIRONMENT_PROVIDERS else "unknown"
+    )
+    safe_reason = (
+        reason if reason in _PROVIDER_ENVIRONMENT_REASONS else "runtime_unavailable"
+    )
+    return _PROVIDER_ENVIRONMENT_MARKER + ":" + json.dumps(
+        {"provider": safe_provider, "reason": safe_reason},
+        separators=(",", ":"),
+    )
+
+
+_INTERACTIVE_PROVIDER_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
+    (
+        "trust_prompt",
+        re.compile(
+            r"(?:trust|approve)\s+(?:this\s+)?(?:workspace|folder|repository)",
+            re.I,
+        ),
+    ),
+    (
+        "permission_prompt",
+        re.compile(
+            r"(?:permission\s+required|allow\s+(?:this|access)|"
+            r"press\s+enter\s+to\s+continue)",
+            re.I,
+        ),
+    ),
+    (
+        "update_prompt",
+        re.compile(
+            r"(?:auto[- ]?update|update\s+(?:available|now)|restart\s+to\s+update)",
+            re.I,
+        ),
+    ),
+    (
+        "authentication",
+        re.compile(
+            r"(?:authentication\s+required|sign\s+in\s+to\s+continue|run\s+/login)",
+            re.I,
+        ),
+    ),
+    (
+        "non_interactive_required",
+        re.compile(
+            r"(?:requires?\s+(?:a\s+)?tty|interactive\s+(?:mode|required)|"
+            r"cannot\s+run\s+headless)",
+            re.I,
+        ),
+    ),
+)
+
+
+def _interactive_provider_reason(text: str) -> Optional[str]:
+    """Classify trusted subprocess bytes that prove a provider opened UI."""
+    terminal_structure = bool(
+        re.search(
+            r"(?:\x1b(?:\[|\])|\^\[\[|\\033\[|[\u2800-\u28ff\u2500-\u257f\u2700-\u27bf])",
+            text,
+        )
+    )
+    if not terminal_structure:
+        return None
+    for reason, pattern in _INTERACTIVE_PROVIDER_PATTERNS:
+        if pattern.search(text):
+            return reason
+    return None
+
+
+_STRUCTURED_PROVIDER_JSON_KEY_RE = re.compile(
+    r'^\{\s*"(?:type|subtype|is_error|result|total_cost_usd|usage|modelUsage)"\s*:'
+)
+
+
+def _is_structured_provider_json_prefix(text: str) -> bool:
+    """Recognize a provider JSON result frame without trusting its value text.
+
+    Claude's captured ``--output-format json`` result may arrive in arbitrary
+    chunks and may contain leading whitespace. Once an object frame exposes a
+    known provider-result key as its first top-level key, its quoted values are
+    data, not terminal UI. JSON-looking text inside an earlier untrusted value
+    cannot bless the frame.
+    """
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("{"):
+        return False
+    return bool(_STRUCTURED_PROVIDER_JSON_KEY_RE.search(stripped[:8192]))
+
+
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
     """Wrapper around subprocess that uses Popen for proper process group cleanup.
@@ -5908,6 +6113,105 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
         text=text,
         start_new_session=start_new_session,
     )
+    # Background provider calls need to react to an interactive prompt while
+    # the child is still running. Reader threads keep both pipes drained and
+    # expose only a producer-owned reason attribute; provider-authored text is
+    # never itself accepted as the structured failure marker.
+    real_capture_pipes = (
+        isinstance(proc.stdout, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+        and isinstance(proc.stderr, (io.TextIOBase, io.BufferedIOBase, io.RawIOBase))
+    )
+    if capture_output and start_new_session and real_capture_pipes:
+        stdout_chunks: List[Any] = []
+        stderr_chunks: List[Any] = []
+        interactive_reason: List[str] = []
+        interactive_seen = threading.Event()
+
+        def _read_pipe(
+            pipe: Any, chunks: List[Any], *, allow_structured_json: bool = False
+        ) -> None:
+            tail = ""
+            stream_prefix = ""
+            structured_json_frame = False
+            while True:
+                raw_chunk = (
+                    pipe.buffer.read1(4096)
+                    if text and hasattr(pipe, "buffer")
+                    else pipe.read1(4096)
+                    if hasattr(pipe, "read1")
+                    else pipe.read(4096)
+                )
+                if not raw_chunk:
+                    break
+                chunk = (
+                    raw_chunk.decode("utf-8", errors="replace")
+                    if text and isinstance(raw_chunk, bytes)
+                    else raw_chunk
+                )
+                chunks.append(chunk)
+                decoded = (
+                    chunk
+                    if isinstance(chunk, str)
+                    else chunk.decode("utf-8", errors="replace")
+                )
+                if allow_structured_json and not structured_json_frame:
+                    stream_prefix = (stream_prefix + decoded)[:8192]
+                    structured_json_frame = _is_structured_provider_json_prefix(
+                        stream_prefix
+                    )
+                tail = (tail + decoded)[-8192:]
+                reason = (
+                    None
+                    if structured_json_frame
+                    else _interactive_provider_reason(tail)
+                )
+                if reason and not interactive_seen.is_set():
+                    interactive_reason.append(reason)
+                    interactive_seen.set()
+
+        if proc.stdin is not None:
+            if input is not None:
+                proc.stdin.write(input)
+            proc.stdin.close()
+        readers = [
+            threading.Thread(
+                target=_read_pipe,
+                args=(proc.stdout, stdout_chunks),
+                kwargs={"allow_structured_json": True},
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_read_pipe, args=(proc.stderr, stderr_chunks), daemon=True
+            ),
+        ]
+        for reader in readers:
+            reader.start()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        timed_out = False
+        while proc.poll() is None:
+            if interactive_seen.wait(0.05):
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+        if proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            proc.kill()
+        proc.wait(timeout=5)
+        for reader in readers:
+            reader.join(timeout=1)
+        stdout = ("" if text else b"").join(stdout_chunks)
+        stderr = ("" if text else b"").join(stderr_chunks)
+        if timed_out:
+            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+        result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        if interactive_reason:
+            result.pdd_provider_environment_reason = interactive_reason[0]
+        return result
+
     try:
         stdout, stderr = proc.communicate(input=input, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -7126,6 +7430,7 @@ def _run_with_provider(
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
     stall_timeout: Optional[float] = None,
+    background_safe: bool = False,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
@@ -7218,7 +7523,11 @@ def _run_with_provider(
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
-        if _claude_code_interactive_enabled(env):
+        effective_background_safe = background_safe or (
+            env.get("PDD_AGENTIC_BACKGROUND_SAFE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
+        if _claude_code_interactive_enabled(env) and not effective_background_safe:
             if reasoning_effort:
                 env = dict(env)
                 env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
@@ -7446,6 +7755,21 @@ def _run_with_provider(
 
     result_is_spooled = isinstance(result, _SpooledCompletedProcess)
     try:
+        provider_environment_reason = getattr(
+            result, "pdd_provider_environment_reason", None
+        )
+        if (
+            isinstance(result, subprocess.CompletedProcess)
+            and isinstance(provider_environment_reason, str)
+            and provider_environment_reason in _PROVIDER_ENVIRONMENT_REASONS
+        ):
+            return _ProviderRunResult(
+                False,
+                "Provider runtime requires interactive configuration.",
+                0.0,
+                None,
+                provider_environment_reason=provider_environment_reason,
+            )
         if result.returncode != 0:
             if provider == "openai":
                 if result_is_spooled:

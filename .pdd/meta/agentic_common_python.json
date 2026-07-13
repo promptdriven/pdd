@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-13T19:39:43.543731+00:00",
+  "command": "fix",
+  "prompt_hash": "bdbb8b3cda6bc934b1b98bd95c21be041e44c58519db61678e0acc02452081d4",
+  "code_hash": "8c9f4f37e30827c8af5a7008662f837455ab9eb266bd30ad96912bf31070b9eb",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/llm_invoke.py": "2c423dbe12dd22d1acfca6c658bfef36eaf3b016626ae4a2845576500bfcb54b",
+    "pdd/agentic_common.py": "8c9f4f37e30827c8af5a7008662f837455ab9eb266bd30ad96912bf31070b9eb",
+    "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+    "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1"
+  }
+}

@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -781,6 +782,96 @@ def test_validate_command_wires_protected_jest_runner_config(
     call = mocked_finalize.call_args
     assert call.kwargs["signer"] is signer
     assert call.kwargs["config"].jest_command == (os.sys.executable, str(external))
+
+
+def test_validate_command_wires_protected_vitest_runner_config(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    toolchain = tmp_path / "trusted-tools"
+    external = toolchain / "node_modules/vitest/vitest.py"
+    external.parent.mkdir(parents=True)
+    external.write_text("print('trusted vitest')\n")
+    launcher = toolchain / "python"
+    shutil.copy2(os.sys.executable, launcher)
+    launcher.chmod(0o755)
+    lockfile = toolchain / "package-lock.json"
+    lockfile.write_text("{}\n", encoding="utf-8")
+    manifest = toolchain / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "roles": {
+                    "launcher": str(launcher),
+                    "entrypoint": str(external),
+                    "dependencies": str(toolchain / "node_modules"),
+                    "native_runtime": [str(launcher)],
+                    "lockfile": str(lockfile),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--vitest-command",
+                f"{launcher} {external}",
+                "--vitest-toolchain-manifest",
+                str(manifest),
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    call = mocked_finalize.call_args
+    assert call.kwargs["signer"] is signer
+    assert call.kwargs["config"].vitest_command == (str(launcher), str(external))
+    assert call.kwargs["config"].vitest_toolchain_manifest == manifest
+
+
+def test_validate_command_requires_vitest_command_and_manifest_together(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    external = tmp_path / "trusted-tools/vitest.py"
+    external.parent.mkdir()
+    external.write_text("print('trusted vitest')\n", encoding="utf-8")
+    monkeypatch.chdir(root)
+
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=object(),
+    ):
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--vitest-command",
+                f"{os.sys.executable} {external}",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "manifest" in result.output.lower()
 
 
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(

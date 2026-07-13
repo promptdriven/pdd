@@ -1,25 +1,29 @@
 """Trusted validator adapters and pass-only normalized evidence outcomes."""
 # pylint: disable=too-many-lines,too-many-boolean-expressions,too-many-locals
-# pylint: disable=too-many-arguments
+# pylint: disable=too-many-branches,too-many-statements,too-many-return-statements
+# pylint: disable=too-many-arguments,too-many-positional-arguments,line-too-long
 
 from __future__ import annotations
 
-import hashlib
 import ast
 import configparser
 import concurrent.futures
+import hashlib
+import importlib.metadata
 import json
 import os
 import platform
 import re
+import select
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 import xml.etree.ElementTree as ET
-import importlib.metadata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -32,7 +36,7 @@ from .trust import (
     AttestationRequest,
 )
 from .isolation import untrusted_child_environment
-from .git_io import read_git_blob
+from .git_io import read_git_blob, read_git_regular_blob
 from .types import (
     EvidenceOutcome,
     ObligationEvidence,
@@ -100,6 +104,71 @@ _JAVASCRIPT_SUFFIXES = (
     ".jsx",
     ".json",
 )
+VITEST_CONFIG_PATHS = (
+    PurePosixPath("vitest.config.json"),
+    PurePosixPath("package.json"),
+)
+VITEST_DYNAMIC_CONFIG_NAMES = (
+    "vitest.config.js",
+    "vitest.config.cjs",
+    "vitest.config.mjs",
+    "vitest.config.ts",
+    "vitest.config.cts",
+    "vitest.config.mts",
+)
+VITEST_TOOLCHAIN_ROLES = {
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+}
+VITEST_GRAMMAR_VERSIONS = {
+    "tree-sitter": "0.25.2",
+    "tree-sitter-javascript": "0.25.0",
+    "tree-sitter-typescript": "0.23.2",
+}
+VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
+VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class VitestToolchainMember:
+    """Captured no-follow identity for one typed toolchain member."""
+
+    role: str
+    relative_path: PurePosixPath
+    kind: str
+    mode: int
+    content_digest: str | None = None
+    link_target: str | None = None
+
+
+@dataclass(frozen=True)
+# pylint: disable=too-many-instance-attributes
+class VitestToolchainDescriptor:
+    """Validated immutable identity and typed external Vitest role closure."""
+
+    manifest: Path
+    launcher: Path
+    entrypoint: Path
+    dependencies: Path
+    native_runtime: tuple[Path, ...]
+    lockfile: Path
+    identity: str
+    dependencies_identity: str
+    members: tuple[VitestToolchainMember, ...]
+
+
+@dataclass(frozen=True)
+class VitestPhaseToolchain:
+    """Copied executable Vitest launcher and package closure for one phase."""
+
+    launcher: Path
+    entrypoint: Path
+    lockfile: Path
+    native_runtime: tuple[Path, ...]
+    readable_roots: tuple[Path, ...]
+    readable_bindings: tuple[tuple[Path, Path], ...]
+    dependencies: Path
+    controller: Path
+    descriptor: VitestToolchainDescriptor
 
 
 @dataclass(frozen=True)
@@ -108,6 +177,10 @@ class RunnerConfig:
 
     timeout_seconds: int = 300
     jest_command: tuple[str, ...] | None = None
+    vitest_command: tuple[str, ...] | None = None
+    vitest_toolchain_manifest: Path | None = None
+    vitest_toolchain_identity: str | None = None
+    adapter_identities: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -665,8 +738,7 @@ def _local_javascript_imports(
             + source_path.as_posix()
         )
     import_pattern = re.compile(
-        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]"
-        r"(\.{1,2}/[^'\"]+)['\"]"
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]([^'\"]+)['\"]"
     )
     imports = [
         match.group(1)
@@ -675,16 +747,84 @@ def _local_javascript_imports(
     ]
     resolved: set[PurePosixPath] = set()
     for item in imports:
-        candidate = _normalize_repo_relative_path(
-            source_path.parent / PurePosixPath(item)
-        )
-        if candidate is None:
-            continue
-        candidates = list(_javascript_path_candidates(candidate))
-        resolved.update(
-            path for path in candidates if read_git_blob(root, ref, path) is not None
-        )
+        resolved.update(_resolve_javascript_specifier(root, ref, source_path, item))
     return resolved
+
+
+def _nearest_package_scope(
+    root: Path, ref: str, source_path: PurePosixPath,
+) -> tuple[PurePosixPath, bytes] | None:
+    """Return the nearest committed package manifest enclosing a source file."""
+    directory = source_path.parent
+    while True:
+        manifest = directory / "package.json"
+        raw = read_git_regular_blob(root, ref, manifest)
+        if raw is not None:
+            return directory, raw
+        if directory == PurePosixPath("."):
+            return None
+        directory = directory.parent
+
+
+def _package_mapping_target(
+    root: Path, ref: str, source_path: PurePosixPath, specifier: str
+) -> PurePosixPath | None:
+    """Resolve an exact mapping relative to the source file's package scope."""
+    scoped_manifest = _nearest_package_scope(root, ref, source_path)
+    raw = scoped_manifest[1] if scoped_manifest is not None else None
+    if raw is None:
+        if specifier.startswith("#"):
+            raise ValueError(f"package import mapping is missing: {specifier}")
+        return None
+    scope = scoped_manifest[0]
+    try:
+        package = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("package.json mapping source is invalid") from exc
+    if not isinstance(package, dict):
+        raise ValueError("package.json mapping source must be an object")
+    name = package.get("name")
+    key = None
+    mappings = None
+    if specifier.startswith("#"):
+        key, mappings = specifier, package.get("imports", {})
+    elif isinstance(name, str) and (specifier == name or specifier.startswith(name + "/")):
+        key = "." if specifier == name else "./" + specifier[len(name) + 1:]
+        mappings = package.get("exports", {})
+    else:
+        return None
+    if isinstance(mappings, str) and key == ".":
+        target = mappings
+    elif isinstance(mappings, dict) and key in mappings:
+        target = mappings[key]
+    else:
+        raise ValueError(f"package mapping is missing: {specifier}")
+    if isinstance(target, dict):
+        raise ValueError(f"package mapping conditions are not supported: {specifier}")
+    if not isinstance(target, str) or not target.startswith("./") or "*" in target:
+        raise ValueError(f"package mapping is not one static local file: {specifier}")
+    candidate = _normalize_repo_relative_path(scope / PurePosixPath(target))
+    if candidate is None or candidate == PurePosixPath("."):
+        raise ValueError(f"package mapping escapes repository: {specifier}")
+    if read_git_regular_blob(root, ref, candidate) is None:
+        raise ValueError(f"package mapping target is missing: {specifier}")
+    return candidate
+
+
+def _resolve_javascript_specifier(
+    root: Path, ref: str, source_path: PurePosixPath, specifier: str
+) -> set[PurePosixPath]:
+    """Resolve only literal repository paths and deterministic package mappings."""
+    if specifier.startswith(("./", "../")):
+        candidate = _normalize_repo_relative_path(source_path.parent / PurePosixPath(specifier))
+        if candidate is None:
+            raise ValueError(f"JavaScript import escapes repository: {specifier}")
+        return {
+            path for path in _javascript_path_candidates(candidate)
+            if read_git_regular_blob(root, ref, path) is not None
+        }
+    mapped = _package_mapping_target(root, ref, source_path, specifier)
+    return {mapped} if mapped is not None else set()
 
 
 def _normalize_repo_relative_path(path: PurePosixPath) -> PurePosixPath | None:
@@ -719,7 +859,7 @@ def _read_javascript_support_blob(
     if normalized is None:
         return path, None
     for candidate in _javascript_path_candidates(normalized):
-        source = read_git_blob(root, ref, candidate)
+        source = read_git_regular_blob(root, ref, candidate)
         if source is not None:
             return candidate, source
     return normalized, None
@@ -746,6 +886,9 @@ def _jest_support_closure(
         if source is None:
             raise ValueError(f"Jest support path is missing: {path.as_posix()}")
         paths.add(path)
+        scoped_manifest = _nearest_package_scope(root, ref, path)
+        if scoped_manifest is not None:
+            paths.add(scoped_manifest[0] / "package.json")
         if path.suffix == ".json":
             try:
                 nested_config = json.loads(source.decode("utf-8"))
@@ -772,6 +915,523 @@ def jest_validator_config_digest(
     """Hash static Jest config and executable local support closure."""
     digest = hashlib.sha256()
     for path, content in _jest_support_closure(
+        root, ref, test_paths, code_under_test_paths
+    ):
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest()
+
+
+def _vitest_config(root: Path, ref: str) -> tuple[PurePosixPath, dict[str, object]]:
+    """Load the only supported, static Vitest configuration forms."""
+    for name in VITEST_DYNAMIC_CONFIG_NAMES:
+        if read_git_blob(root, ref, PurePosixPath(name)) is not None:
+            raise ValueError("dynamic Vitest configuration is not supported")
+    config_path = VITEST_CONFIG_PATHS[0]
+    content = read_git_blob(root, ref, config_path)
+    if content is None:
+        config_path = VITEST_CONFIG_PATHS[1]
+        content = read_git_blob(root, ref, config_path)
+    if content is None:
+        raise ValueError("no static Vitest configuration is present")
+    try:
+        parsed = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Vitest configuration must be valid JSON") from exc
+    if config_path.name == "package.json":
+        parsed = parsed.get("vitest") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        raise ValueError("Vitest configuration must be a JSON object")
+    return config_path, parsed
+
+
+def _vitest_config_references(config: object) -> set[PurePosixPath]:
+    """Find static local Vitest setup and transform support modules."""
+    if not isinstance(config, dict):
+        raise ValueError("Vitest configuration must be a JSON object")
+    for key in ("workspace", "projects", "plugins", "globalSetup"):
+        if config.get(key):
+            raise ValueError(f"Vitest {key} is not bound by this adapter")
+    resolve = config.get("resolve", {})
+    if resolve and not isinstance(resolve, dict):
+        raise ValueError("Vitest resolve must be an object")
+    if isinstance(resolve, dict) and resolve.get("alias"):
+        raise ValueError("Vitest resolve.alias is not bound by this adapter")
+    test_config = config.get("test", {})
+    if not isinstance(test_config, dict):
+        raise ValueError("Vitest test configuration must be an object")
+    for key in (
+        "workspace", "projects", "plugins", "globalSetup", "snapshotEnvironment",
+        "snapshotSerializers", "snapshotResolver", "runner", "pool", "environment",
+        "reporters", "coverage",
+    ):
+        if test_config.get(key):
+            raise ValueError(f"Vitest {key} is not bound by this adapter")
+    if test_config.get("alias"):
+        raise ValueError("Vitest test.alias is not bound by this adapter")
+    for key in (
+        "testNamePattern", "shard", "watch", "related", "changed", "retry",
+        "retries", "repeat", "sequence", "update", "updateSnapshot",
+    ):
+        if key in test_config:
+            raise ValueError(f"Vitest {key} is not allowed by this adapter")
+    references: set[PurePosixPath] = set()
+    setup = test_config.get("setupFiles", [])
+    if isinstance(setup, str):
+        setup = [setup]
+    if not isinstance(setup, list):
+        raise ValueError("Vitest setupFiles must be an array")
+    for value in setup:
+        if not isinstance(value, str):
+            raise ValueError("Vitest setupFiles entry must be a static local path")
+        path = _jest_local_path(value)
+        if path is None:
+            raise ValueError("Vitest setup plugin is not bound by this adapter")
+        references.add(path)
+    transforms = config.get("transform", {})
+    if not isinstance(transforms, dict):
+        raise ValueError("Vitest transform must be an object")
+    for value in transforms.values():
+        if not isinstance(value, str):
+            raise ValueError("Vitest transform entry must be a static local path")
+        path = _jest_local_path(value)
+        if path is None:
+            raise ValueError("Vitest transform is not bound by this adapter")
+        references.add(path)
+    return references
+
+
+def _vitest_parser(language_name: str):
+    """Return a parser backed only by the exact wheel-provisioned grammars."""
+    try:
+        for distribution, expected in VITEST_GRAMMAR_VERSIONS.items():
+            actual = importlib.metadata.version(distribution)
+            if actual != expected:
+                raise ValueError(
+                    f"{distribution} grammar version {actual!r} != {expected!r}"
+                )
+        from tree_sitter import Language, Parser  # pylint: disable=import-outside-toplevel
+        from tree_sitter_javascript import (  # pylint: disable=import-outside-toplevel
+            language as javascript_language,
+        )
+        from tree_sitter_typescript import (  # pylint: disable=import-outside-toplevel
+            language_tsx,
+            language_typescript,
+        )
+
+        grammar = {
+            "javascript": javascript_language,
+            "typescript": language_typescript,
+            "tsx": language_tsx,
+        }[language_name]
+        return Parser(Language(grammar()))
+    except (
+        ImportError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        importlib.metadata.PackageNotFoundError,
+    ) as exc:
+        raise ValueError("Vitest JavaScript parser is unavailable") from exc
+
+
+def _vitest_ast_imports(
+    root: Path, ref: str, source_path: PurePosixPath, source: bytes
+) -> set[PurePosixPath]:
+    # pylint: disable=too-many-locals,too-many-nested-blocks
+    """Resolve static loaders through a positive lexical capability model."""
+    language_name = (
+        "tsx" if source_path.suffix == ".tsx"
+        else "typescript" if source_path.suffix in {".ts", ".cts", ".mts"}
+        else "javascript"
+    )
+    tree = _vitest_parser(language_name).parse(source)
+    if tree.root_node.has_error:
+        raise ValueError(f"Vitest support source is not valid JavaScript/TypeScript: {source_path}")
+    nodes = []
+    pending = [tree.root_node]
+    while pending:
+        node = pending.pop()
+        nodes.append(node)
+        pending.extend(node.named_children)
+
+    def node_text(node) -> bytes:
+        return source[node.start_byte:node.end_byte]
+
+    def static_string(node) -> str | None:
+        raw = node_text(node)
+        if node.type == "template_string" and b"${" not in raw:
+            return raw[1:-1].decode("utf-8")
+        if node.type == "string":
+            try:
+                value = ast.literal_eval(raw.decode("utf-8"))
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError("Vitest module loader string is invalid") from exc
+            return value if isinstance(value, str) else None
+        return None
+
+    def call_parts(node):
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        return function, tuple(arguments.named_children if arguments else ())
+
+    values: list[str] = []
+    loader_aliases = {"require"}
+    factory_aliases: set[str] = set()
+    module_namespace_aliases: set[str] = set()
+    allowed_capability_nodes: set[tuple[int, int]] = set()
+    recognized_factory_calls: set[tuple[int, int]] = set()
+    uninitialized_bindings: dict[str, object] = {}
+
+    def allow(node) -> None:
+        allowed_capability_nodes.add((node.start_byte, node.end_byte))
+
+    def identifier_name(node) -> str | None:
+        if node is None or node.type != "identifier":
+            return None
+        return node_text(node).decode("utf-8")
+
+    def descendants(parent, node_type: str):
+        return (
+            child for child in nodes
+            if child.type == node_type
+            and parent.start_byte <= child.start_byte < parent.end_byte
+        )
+
+    def is_assignment_value(node) -> bool:
+        parent = node.parent
+        while parent is not None and parent.type == "parenthesized_expression":
+            node, parent = parent, parent.parent
+        if parent is None:
+            return False
+        field = (
+            "value" if parent.type == "variable_declarator"
+            else "right" if parent.type == "assignment_expression"
+            else None
+        )
+        return field is not None and parent.child_by_field_name(field) == node
+
+    forbidden_identifiers = {b"eval", b"Function", b"Reflect"}
+    forbidden_properties = {
+        b"_load", b"require", b"mainModule",
+        b"getBuiltinModule", b"binding", b"dlopen", b"constructor",
+        b"__proto__", b"apply", b"call", b"bind", b"eval", b"Function",
+    }
+    for node in nodes:
+        raw = node_text(node)
+        if node.type == "identifier" and b"\\" in raw:
+            raise ValueError("Vitest escaped loader capability is not bound")
+        if node.type == "identifier" and raw in forbidden_identifiers:
+            raise ValueError("Vitest ambient loader capability is not bound")
+        if (
+            node.type == "identifier"
+            and raw in {b"globalThis", b"global"}
+            and (
+                is_assignment_value(node)
+                or node.parent is not None
+                and node.parent.type == "subscript_expression"
+            )
+        ):
+            raise ValueError("Vitest global capability alias is not bound")
+        if node.type in {"property_identifier", "shorthand_property_identifier"}:
+            if raw in forbidden_properties:
+                raise ValueError("Vitest reflective loader capability is not bound")
+        if node.type == "subscript_expression" and (
+            is_assignment_value(node)
+            or node.parent is not None
+            and node.parent.type == "call_expression"
+            and node.parent.child_by_field_name("function") == node
+        ):
+            raise ValueError("Vitest computed callable capability is not bound")
+        if (
+            node.type == "identifier"
+            and raw == b"process"
+            and is_assignment_value(node)
+        ):
+            raise ValueError("Vitest process capability alias is not bound")
+
+    for node in nodes:
+        if node.type != "import_statement":
+            continue
+        target = node.child_by_field_name("source")
+        if target is None:
+            continue
+        value = static_string(target)
+        if value in {"module", "node:module"}:
+            for identifier in descendants(node, "identifier"):
+                parent = identifier.parent
+                if parent is not None and parent.type in {
+                    "import_clause", "namespace_import"
+                }:
+                    module_namespace_aliases.add(
+                        node_text(identifier).decode("utf-8")
+                    )
+                    allow(identifier)
+            for specifier in descendants(node, "import_specifier"):
+                name = specifier.child_by_field_name("name")
+                identifiers = [
+                    child for child in specifier.named_children
+                    if child.type == "identifier"
+                ]
+                if name is not None and node_text(name) == b"createRequire":
+                    alias = identifiers[-1]
+                    factory_aliases.add(node_text(alias).decode("utf-8"))
+                    for identifier in identifiers:
+                        allow(identifier)
+
+    assignments = sorted(
+        (node for node in nodes if node.type in {
+            "variable_declarator", "assignment_expression"
+        }),
+        key=lambda item: (item.start_byte, -item.end_byte),
+    )
+    for node in assignments:
+        left = node.child_by_field_name(
+            "name" if node.type == "variable_declarator" else "left"
+        )
+        right = node.child_by_field_name(
+            "value" if node.type == "variable_declarator" else "right"
+        )
+        if left is None:
+            continue
+        left_name = identifier_name(left)
+        if right is None:
+            if left_name is not None and node.type == "variable_declarator":
+                uninitialized_bindings[left_name] = left
+            continue
+        right_raw = node_text(right)
+        right_name = identifier_name(right)
+        if left_name is not None and right_name in loader_aliases:
+            if left_name in loader_aliases:
+                raise ValueError("Vitest loader capability is reassigned or shadowed")
+            loader_aliases.add(left_name)
+            allow(left)
+            allow(right)
+            prior = uninitialized_bindings.pop(left_name, None)
+            if prior is not None:
+                allow(prior)
+            continue
+        if left.type == "object_pattern" and right.type == "call_expression":
+            function, arguments = call_parts(right)
+            module_name = static_string(arguments[0]) if len(arguments) == 1 else None
+            if (
+                function is not None
+                and node_text(function) == b"require"
+                and module_name in {"module", "node:module"}
+            ):
+                recognized = False
+                for pattern in left.named_children:
+                    if pattern.type == "pair_pattern":
+                        children = pattern.named_children
+                        value_node = pattern.child_by_field_name("value")
+                        if (
+                            children
+                            and node_text(children[0]) == b"createRequire"
+                            and value_node is not None
+                            and value_node.type == "identifier"
+                        ):
+                            factory_aliases.add(node_text(value_node).decode("utf-8"))
+                            allow(value_node)
+                            allow(children[0])
+                            recognized = True
+                    elif (
+                        pattern.type == "shorthand_property_identifier_pattern"
+                        and node_text(pattern) == b"createRequire"
+                    ):
+                        factory_aliases.add("createRequire")
+                        allow(pattern)
+                        recognized = True
+                if recognized:
+                    allow(function)
+                    continue
+        if right.type == "call_expression":
+            function, arguments = call_parts(right)
+            function_name = identifier_name(function)
+            module_name = static_string(arguments[0]) if len(arguments) == 1 else None
+            if (
+                left_name is not None
+                and function_name in loader_aliases
+                and module_name in {"module", "node:module"}
+            ):
+                module_namespace_aliases.add(left_name)
+                allow(left)
+                allow(function)
+                continue
+            if left_name is not None and function_name in factory_aliases:
+                if len(arguments) != 1 or node_text(arguments[0]) != b"import.meta.url":
+                    raise ValueError("Vitest createRequire alias operand is dynamic")
+                if left_name in loader_aliases:
+                    raise ValueError("Vitest loader capability is reassigned or shadowed")
+                loader_aliases.add(left_name)
+                allow(left)
+                allow(function)
+                recognized_factory_calls.add((right.start_byte, right.end_byte))
+                continue
+            if (
+                function_name in loader_aliases
+                and len(arguments) == 1
+                and static_string(arguments[0]) is not None
+            ):
+                continue
+        del right_raw
+
+    for node in nodes:
+        node_raw = node_text(node)
+        if (
+            node_raw == b"_load"
+            and node.type not in {"string", "comment", "template_string"}
+        ):
+            raise ValueError("Vitest internal module loader is not bound")
+        if node.type == "member_expression":
+            property_node = node.child_by_field_name("property")
+            property_text = node_text(property_node) if property_node is not None else b""
+            if property_text in {b"_load", b"require", b"createRequire"}:
+                raise ValueError("Vitest internal module loader is not bound")
+        if node.type == "subscript_expression" and any(
+            marker in node_raw
+            for marker in (
+                b"require", b"createRequire", b"_load", b"glob",
+                b"module", b"Module",
+            )
+        ):
+            raise ValueError("Vitest computed module loader is not bound")
+        target = None
+        if node.type in {"import_statement", "export_statement"}:
+            target = node.child_by_field_name("source")
+        elif node.type == "call_expression":
+            function, arguments = call_parts(node)
+            function_text = node_text(function) if function is not None else b""
+            if function is not None and function.type == "member_expression":
+                property_node = function.child_by_field_name("property")
+                property_text = (
+                    node_text(property_node)
+                    if property_node is not None else b""
+                )
+                local_operand = any(
+                    (value := static_string(argument)) is not None
+                    and value.startswith(("./", "../"))
+                    for argument in arguments
+                )
+                carries_provenance = property_text in {b"apply", b"call", b"bind"} and any(
+                    re.search(
+                        rb"\b" + re.escape(name.encode()) + rb"\b",
+                        function_text
+                        + b" "
+                        + b" ".join(node_text(item) for item in arguments),
+                    )
+                    for name in loader_aliases | factory_aliases | {"createRequire"}
+                )
+                if (
+                    property_text in {
+                        b"require", b"createRequire", b"glob", b"globEager",
+                        b"load", b"_load",
+                    }
+                    or local_operand
+                    or carries_provenance
+                ):
+                    raise ValueError("Vitest alternate module loader is not bound")
+            function_name = identifier_name(function)
+            if function_name in factory_aliases:
+                if (node.start_byte, node.end_byte) not in recognized_factory_calls:
+                    raise ValueError("Vitest createRequire alias provenance is ambiguous")
+                continue
+            if function is not None and (
+                function_text == b"import" or function_name in loader_aliases
+            ):
+                if len(arguments) != 1:
+                    raise ValueError("Vitest dynamic module loader is unsupported")
+                target = arguments[0]
+                allow(function)
+            elif function is not None and function.type == "identifier":
+                local_operand = any(
+                    (value := static_string(argument)) is not None
+                    and value.startswith(("./", "../"))
+                    for argument in arguments
+                )
+                if local_operand:
+                    raise ValueError("Vitest loader alias provenance is unknown")
+        if target is None:
+            continue
+        value = static_string(target)
+        if value is None:
+            raise ValueError("Vitest dynamic module loader is unsupported")
+        if value.startswith(("./", "../", "#")) or _package_mapping_target(
+            root, ref, source_path, value
+        ) is not None:
+            values.append(value)
+    capability_names = (
+        loader_aliases | factory_aliases | module_namespace_aliases
+        | {"require", "createRequire"}
+    )
+    for node in nodes:
+        if node.type != "identifier":
+            continue
+        if identifier_name(node) == "module":
+            parent = node.parent
+            if parent is not None and parent.type == "member_expression":
+                obj = parent.child_by_field_name("object")
+                prop = parent.child_by_field_name("property")
+                if obj == node and prop is not None and node_text(prop) == b"exports":
+                    continue
+            raise ValueError("Vitest module capability provenance is ambiguous")
+        if identifier_name(node) not in capability_names:
+            continue
+        if (node.start_byte, node.end_byte) not in allowed_capability_nodes:
+            raise ValueError("Vitest loader capability provenance is ambiguous")
+    resolved: set[PurePosixPath] = set()
+    for value in values:
+        matches = list(_resolve_javascript_specifier(root, ref, source_path, value))
+        if not matches:
+            raise ValueError(f"Vitest static module is missing: {value}")
+        resolved.update(matches)
+    return resolved
+
+
+def _vitest_support_closure(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Return static config and transitive local Vitest support modules."""
+    config_path, config = _vitest_config(root, ref)
+    products = set(code_under_test_paths)
+    paths = {config_path}
+    if read_git_blob(root, ref, PurePosixPath("package.json")) is not None:
+        paths.add(PurePosixPath("package.json"))
+    pending = list(test_paths) + list(_vitest_config_references(config))
+    visited: set[PurePosixPath] = set()
+    while pending:
+        path = pending.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        path, source = _read_javascript_support_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Vitest support path is missing: {path.as_posix()}")
+        source = read_git_regular_blob(root, ref, path)
+        if source is None:
+            raise ValueError(f"Vitest support path is missing: {path.as_posix()}")
+        if path in products:
+            continue
+        paths.add(path)
+        scoped_manifest = _nearest_package_scope(root, ref, path)
+        if scoped_manifest is not None:
+            paths.add(scoped_manifest[0] / "package.json")
+        if path.suffix != ".json":
+            pending.extend(_vitest_ast_imports(root, ref, path, source) - visited)
+    return tuple(
+        (path, read_git_regular_blob(root, ref, path))
+        for path in sorted(paths)
+        if read_git_blob(root, ref, path) is not None
+    )
+
+
+def vitest_validator_config_digest(
+    root: Path, ref: str, test_paths: tuple[PurePosixPath, ...],
+    code_under_test_paths: tuple[PurePosixPath, ...] = (),
+) -> str:
+    """Hash static Vitest config and executable local support closure."""
+    digest = hashlib.sha256()
+    for path, content in _vitest_support_closure(
         root, ref, test_paths, code_under_test_paths
     ):
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -833,6 +1493,31 @@ def _jest_support_digest(
         closure = _jest_support_closure(root, ref, tests, product)
     except ValueError:
         return "invalid-jest-closure", ()
+    digest = hashlib.sha256()
+    for path, content in closure:
+        digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
+    return digest.hexdigest(), tuple(path for path, _content in closure)
+
+
+def _vitest_support_digest(
+    root: Path, ref: str, profile: VerificationProfile
+) -> tuple[str, tuple[PurePosixPath, ...]]:
+    """Hash the protected static Vitest support closure for a profile."""
+    tests = tuple(
+        path
+        for obligation in profile.obligations
+        if obligation.validator_id == "vitest"
+        for path in obligation.artifact_paths
+    )
+    products = tuple(
+        path for obligation in profile.obligations
+        if obligation.validator_id == "vitest"
+        for path in obligation.code_under_test_paths
+    )
+    try:
+        closure = _vitest_support_closure(root, ref, tests, products)
+    except ValueError:
+        return "invalid-vitest-closure", ()
     digest = hashlib.sha256()
     for path, content in closure:
         digest.update(path.as_posix().encode() + b"\0" + content + b"\0")
@@ -923,6 +1608,16 @@ def runner_identity_digest(
             "<test-path>",
         ],
         "pytest_environment": {"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        "vitest_command": [
+            "<node>",
+            "<local-vitest-binary>",
+            "run",
+            "<protected-test-path>",
+            "--config=<protected-config-path>",
+            "--reporter=json",
+            "--outputFile=<trusted-temp-path>",
+        ],
+        "vitest_environment": {"NODE_ENV": "test"},
         "obligations": [
             {
                 "id": item.obligation_id,
@@ -941,11 +1636,19 @@ def runner_identity_digest(
         support_closure_digest = _support_digest(root, ref, profile)[0]
         jest_support_digest = _jest_support_digest(root, ref, profile)[0]
         payload["support_closure_digest"] = hashlib.sha256(
-            (support_closure_digest + jest_support_digest).encode()
+            (
+                support_closure_digest
+                + jest_support_digest
+                + _vitest_support_digest(root, ref, profile)[0]
+            ).encode()
         ).hexdigest()
-        payload["validator_command_digest"] = _validator_command_identity_digest(
+        adapter_identities = config.adapter_identities or _capture_adapter_identities(
             root, config
-        )
+        )[0]
+        payload["validator_command_digest"] = hashlib.sha256(json.dumps(
+            adapter_identities, separators=(",", ":")
+        ).encode()).hexdigest()
+        payload["adapter_identities"] = list(adapter_identities)
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -963,10 +1666,484 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
 def _file_identity(path: Path) -> str:
     """Return a stable identity digest for an executable validator file."""
     try:
-        data = path.read_bytes()
-    except OSError:
+        return _validator_tree_identity(path)
+    except (OSError, ValueError):
         data = b"<unreadable>"
     return hashlib.sha256(str(path).encode() + b"\0" + data).hexdigest()
+
+
+def _update_validator_path_identity(
+    digest: "hashlib._Hash", path: Path, logical: str, active: set[Path]
+) -> None:
+    """Hash one path without traversing a symlink as a directory entry."""
+    metadata = path.lstat()
+    mode = metadata.st_mode & 0o7777
+    digest.update(logical.encode() + b"\0" + str(mode).encode() + b"\0")
+    if path.is_symlink():
+        target_text = os.readlink(path)
+        digest.update(b"symlink\0" + target_text.encode() + b"\0")
+        target = path.resolve(strict=True)
+        if target in active:
+            raise ValueError(f"validator toolchain symlink cycle: {path}")
+        _update_validator_path_identity(
+            digest, target, logical + "->target", active | {target}
+        )
+        return
+    if path.is_file():
+        digest.update(b"file\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+        return
+    if path.is_dir():
+        digest.update(b"directory\0")
+        with os.scandir(path) as entries:
+            children = sorted(entries, key=lambda item: item.name)
+        for child in children:
+            if child.name in VITEST_CACHE_NAMES:
+                continue
+            _update_validator_path_identity(
+                digest,
+                Path(child.path),
+                f"{logical}/{child.name}" if logical else child.name,
+                active,
+            )
+        return
+    raise ValueError(f"validator toolchain role is not a file or directory: {path}")
+
+
+def _validator_tree_identity(root: Path) -> str:
+    """Hash modes, links, targets, and bytes with cache exclusion and no link walk."""
+    digest = hashlib.sha256()
+    canonical = root.absolute()
+    _update_validator_path_identity(digest, canonical, "", {canonical})
+    return digest.hexdigest()
+
+
+def _member_content_digest(path: Path) -> str:
+    """Hash one regular member without following a replacement symlink."""
+    digest = hashlib.sha256()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest()
+
+
+def _capture_vitest_member(
+    path: Path, role: str, relative_path: PurePosixPath,
+) -> VitestToolchainMember:
+    """Capture exact lstat type, mode, link spelling, and regular bytes."""
+    metadata = path.lstat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if stat.S_ISLNK(metadata.st_mode):
+        return VitestToolchainMember(
+            role, relative_path, "symlink", mode,
+            link_target=os.readlink(path),
+        )
+    if stat.S_ISREG(metadata.st_mode):
+        return VitestToolchainMember(
+            role, relative_path, "file", mode,
+            content_digest=_member_content_digest(path),
+        )
+    if stat.S_ISDIR(metadata.st_mode):
+        return VitestToolchainMember(role, relative_path, "directory", mode)
+    raise ValueError(f"Vitest toolchain member has unsupported type: {path}")
+
+
+def _capture_vitest_tree(
+    root: Path, role: str, *, validate_links: bool = True,
+) -> tuple[VitestToolchainMember, ...]:
+    """Capture a complete cache-excluding tree without traversing links."""
+    captured = [_capture_vitest_member(root, role, PurePosixPath("."))]
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            children = sorted(entries, key=lambda item: item.name)
+        for child in children:
+            if child.name in VITEST_CACHE_NAMES:
+                continue
+            path = Path(child.path)
+            relative = PurePosixPath(path.relative_to(root).as_posix())
+            member = _capture_vitest_member(path, role, relative)
+            captured.append(member)
+            if member.kind == "directory":
+                pending.append(path)
+            elif member.kind == "symlink" and validate_links:
+                target = path.resolve(strict=True)
+                if not _path_is_relative_to(target, root.resolve()):
+                    raise ValueError(
+                        f"Vitest dependency symlink escapes captured closure: {relative}"
+                    )
+    return tuple(sorted(captured, key=lambda item: item.relative_path.as_posix()))
+
+
+def _vitest_members_identity(
+    members: tuple[VitestToolchainMember, ...],
+) -> str:
+    """Hash an immutable typed member manifest, not live staged bytes."""
+    payload = [
+        {
+            "role": member.role,
+            "path": member.relative_path.as_posix(),
+            "kind": member.kind,
+            "mode": member.mode,
+            "digest": member.content_digest,
+            "target": member.link_target,
+        }
+        for member in members
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _descriptor_vitest_members(
+    launcher: Path,
+    entrypoint: Path,
+    dependencies: Path,
+    native_runtime: tuple[Path, ...],
+    lockfile: Path,
+) -> tuple[VitestToolchainMember, ...]:
+    """Capture every typed role and the complete dependency membership."""
+    members = list(_capture_vitest_tree(dependencies, "dependencies"))
+    members.extend((
+        _capture_vitest_member(launcher, "launcher", PurePosixPath(".")),
+        _capture_vitest_member(entrypoint, "entrypoint", PurePosixPath(".")),
+        _capture_vitest_member(lockfile, "lockfile", PurePosixPath(".")),
+    ))
+    members.extend(
+        _capture_vitest_member(path, "native_runtime", PurePosixPath(str(index)))
+        for index, path in enumerate(native_runtime)
+    )
+    return tuple(sorted(
+        members,
+        key=lambda item: (item.role, item.relative_path.as_posix()),
+    ))
+
+
+def _manifest_regular_path(value: object, role: str) -> Path:
+    """Return one canonical non-symlink regular manifest role path."""
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError(f"Vitest toolchain role {role} must be an absolute path")
+    path = Path(value)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Vitest toolchain role {role} must be a regular file")
+    return path.resolve(strict=True)
+
+
+def _load_vitest_toolchain_descriptor(
+    root: Path, config: RunnerConfig
+) -> VitestToolchainDescriptor:
+    """Parse, type-check, command-match, and identity one Vitest descriptor."""
+    command = config.vitest_command
+    manifest = config.vitest_toolchain_manifest
+    if command is None:
+        raise ValueError("Vitest command and toolchain manifest are required together")
+    command_error = _vitest_command_error(root, command)
+    if command_error is not None:
+        raise ValueError(command_error)
+    if manifest is None:
+        raise ValueError("Vitest command and toolchain manifest are required together")
+    manifest = manifest.expanduser()
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("Vitest toolchain manifest must be a regular file")
+    if _path_is_relative_to(manifest.resolve(), root.resolve()):
+        raise ValueError("Vitest toolchain manifest must be external to candidate checkout")
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Vitest toolchain manifest is invalid") from exc
+    if not isinstance(payload, dict) or set(payload) != {"version", "roles"}:
+        raise ValueError("Vitest toolchain manifest must declare version and typed roles")
+    roles = payload.get("roles")
+    if payload.get("version") != 1 or not isinstance(roles, dict):
+        raise ValueError("Vitest toolchain manifest roles schema is invalid")
+    if set(roles) != VITEST_TOOLCHAIN_ROLES:
+        raise ValueError("Vitest toolchain manifest roles are incomplete")
+    launcher = _manifest_regular_path(roles["launcher"], "launcher")
+    entrypoint = _manifest_regular_path(roles["entrypoint"], "entrypoint")
+    lockfile = _manifest_regular_path(roles["lockfile"], "lockfile")
+    dependency_value = roles["dependencies"]
+    if not isinstance(dependency_value, str) or not Path(dependency_value).is_absolute():
+        raise ValueError("Vitest toolchain dependencies must be an absolute directory")
+    dependency_path = Path(dependency_value)
+    if dependency_path.is_symlink() or not dependency_path.is_dir():
+        raise ValueError("Vitest toolchain dependencies must be a directory")
+    dependencies = dependency_path.resolve(strict=True)
+    try:
+        entrypoint.relative_to(dependencies)
+    except ValueError as exc:
+        raise ValueError("Vitest entrypoint must be inside dependencies role") from exc
+    native_values = roles["native_runtime"]
+    if not isinstance(native_values, list) or not native_values:
+        raise ValueError("Vitest native_runtime role must be a non-empty path array")
+    native_runtime = tuple(
+        _manifest_regular_path(value, "native_runtime") for value in native_values
+    )
+    command_paths = tuple(Path(part).expanduser().resolve(strict=True) for part in command)
+    if command_paths[0] != launcher:
+        raise ValueError("Vitest launcher role does not match command launcher")
+    if command_paths[1] != entrypoint:
+        raise ValueError("Vitest entrypoint role does not match command entrypoint")
+    if not os.access(launcher, os.X_OK):
+        raise ValueError("Vitest toolchain launcher is not executable")
+    for role_path in (launcher, entrypoint, dependencies, *native_runtime, lockfile):
+        if _path_is_relative_to(role_path, root.resolve()):
+            raise ValueError("Vitest toolchain roles must be external to candidate checkout")
+    members = _descriptor_vitest_members(
+        launcher, entrypoint, dependencies, native_runtime, lockfile
+    )
+    dependency_members = tuple(
+        member for member in members if member.role == "dependencies"
+    )
+    dependencies_identity = _vitest_members_identity(dependency_members)
+    identity = hashlib.sha256(json.dumps({
+        "members": _vitest_members_identity(members),
+        "launch_policy": {
+            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+        },
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if config.vitest_toolchain_identity not in {None, identity}:
+        raise ValueError("Vitest toolchain changed across protocol execution")
+    return VitestToolchainDescriptor(
+        manifest.resolve(), launcher, entrypoint, dependencies, native_runtime,
+        lockfile, identity, dependencies_identity, members,
+    )
+
+
+def _copy_vitest_dependencies(source: Path, destination: Path) -> None:
+    """Copy a package closure without following links or copying caches."""
+    source_mode = stat.S_IMODE(source.lstat().st_mode)
+    destination.mkdir(mode=source_mode)
+
+    def copy_directory(source_fd: int, destination_fd: int) -> None:
+        for name in sorted(os.listdir(source_fd)):
+            if name in VITEST_CACHE_NAMES:
+                continue
+            metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            mode = stat.S_IMODE(metadata.st_mode)
+            if stat.S_ISDIR(metadata.st_mode):
+                child_source = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    os.mkdir(name, mode=mode, dir_fd=destination_fd)
+                    child_destination = os.open(
+                        name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd
+                    )
+                    try:
+                        copy_directory(child_source, child_destination)
+                        os.fchmod(child_destination, mode)
+                    finally:
+                        os.close(child_destination)
+                finally:
+                    os.close(child_source)
+            elif stat.S_ISLNK(metadata.st_mode):
+                os.symlink(
+                    os.readlink(name, dir_fd=source_fd),
+                    name,
+                    dir_fd=destination_fd,
+                )
+            elif stat.S_ISREG(metadata.st_mode):
+                child_source = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    child_destination = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        mode,
+                        dir_fd=destination_fd,
+                    )
+                    try:
+                        while chunk := os.read(child_source, 1024 * 1024):
+                            os.write(child_destination, chunk)
+                        os.fchmod(child_destination, mode)
+                    finally:
+                        os.close(child_destination)
+                finally:
+                    os.close(child_source)
+            else:
+                raise ValueError(
+                    f"Vitest toolchain member has unsupported type: {name}"
+                )
+
+    source_fd = os.open(
+        source,
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            copy_directory(source_fd, destination_fd)
+            os.fchmod(destination_fd, source_mode)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+
+
+def _vitest_role_members(
+    descriptor: VitestToolchainDescriptor, role: str,
+) -> tuple[VitestToolchainMember, ...]:
+    """Return the captured immutable members for one typed role."""
+    return tuple(member for member in descriptor.members if member.role == role)
+
+
+def _assert_vitest_members(
+    actual: tuple[VitestToolchainMember, ...],
+    expected: tuple[VitestToolchainMember, ...],
+    context: str,
+) -> None:
+    """Fail when current bytes, modes, types, links, or membership differ."""
+    if actual != expected:
+        raise ValueError(f"Vitest {context} member identity mismatch")
+
+
+def _verify_vitest_descriptor_source(
+    descriptor: VitestToolchainDescriptor,
+) -> None:
+    """Verify live source roles against the previously captured descriptor."""
+    current = _descriptor_vitest_members(
+        descriptor.launcher,
+        descriptor.entrypoint,
+        descriptor.dependencies,
+        descriptor.native_runtime,
+        descriptor.lockfile,
+    )
+    _assert_vitest_members(current, descriptor.members, "source")
+
+
+def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
+    """Copy one regular descriptor member with no-follow source semantics."""
+    source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        destination_fd = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode
+        )
+        try:
+            while chunk := os.read(source_fd, 1024 * 1024):
+                os.write(destination_fd, chunk)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+    destination.chmod(mode)
+
+
+def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
+    """Verify the executable copy against captured descriptor identity."""
+    descriptor = phase.descriptor
+    dependency_members = _capture_vitest_tree(
+        phase.dependencies, "dependencies", validate_links=False
+    )
+    _assert_vitest_members(
+        dependency_members,
+        _vitest_role_members(descriptor, "dependencies"),
+        "copied dependencies",
+    )
+    singleton_paths = {
+        "launcher": phase.launcher,
+        "entrypoint": phase.entrypoint,
+        "lockfile": phase.lockfile,
+    }
+    for role, path in singleton_paths.items():
+        actual = (_capture_vitest_member(path, role, PurePosixPath(".")),)
+        _assert_vitest_members(
+            actual, _vitest_role_members(descriptor, role), f"copied {role}"
+        )
+    actual_native = tuple(
+        _capture_vitest_member(path, "native_runtime", PurePosixPath(str(index)))
+        for index, path in enumerate(phase.native_runtime)
+    )
+    _assert_vitest_members(
+        actual_native,
+        _vitest_role_members(descriptor, "native_runtime"),
+        "copied native runtime",
+    )
+    expected_controller = {
+        PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
+    } | {
+        PurePosixPath("native") / str(index)
+        for index in range(len(phase.native_runtime))
+    }
+    actual_controller = {
+        PurePosixPath(path.relative_to(phase.controller).as_posix())
+        for path in phase.controller.rglob("*")
+    }
+    if actual_controller != expected_controller:
+        raise ValueError("Vitest copied controller member identity mismatch")
+
+
+def _prepare_vitest_toolchain(
+    root: Path, descriptor: VitestToolchainDescriptor
+) -> VitestPhaseToolchain:
+    """Copy identity-checked launcher and dependency bytes into one phase."""
+    _verify_vitest_descriptor_source(descriptor)
+    destination = root / "node_modules"
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("Vitest phase tree already contains candidate node_modules")
+    _copy_vitest_dependencies(descriptor.dependencies, destination)
+    (destination / ".vite-temp").mkdir()
+    (destination / ".vite").mkdir()
+    controller = root / ".pdd-vitest-toolchain"
+    controller.mkdir(mode=0o700)
+    launcher = controller / "launcher"
+    launcher_member = _vitest_role_members(descriptor, "launcher")[0]
+    _copy_vitest_regular(descriptor.launcher, launcher, launcher_member.mode)
+    lockfile = controller / "lockfile"
+    lockfile_member = _vitest_role_members(descriptor, "lockfile")[0]
+    _copy_vitest_regular(descriptor.lockfile, lockfile, lockfile_member.mode)
+    native_directory = controller / "native"
+    native_directory.mkdir(mode=0o700)
+    native_runtime = []
+    for index, source in enumerate(descriptor.native_runtime):
+        destination_native = native_directory / str(index)
+        member = _vitest_role_members(descriptor, "native_runtime")[index]
+        _copy_vitest_regular(source, destination_native, member.mode)
+        native_runtime.append(destination_native)
+    entrypoint = destination / descriptor.entrypoint.relative_to(
+        descriptor.dependencies
+    )
+    if not entrypoint.is_file() or entrypoint.is_symlink():
+        raise ValueError("copied Vitest entrypoint is not a regular file")
+    phase = VitestPhaseToolchain(
+        launcher=launcher,
+        entrypoint=entrypoint,
+        lockfile=lockfile,
+        native_runtime=tuple(native_runtime),
+        readable_roots=(),
+        readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
+        dependencies=destination,
+        controller=controller,
+        descriptor=descriptor,
+    )
+    _verify_vitest_phase_toolchain(phase)
+    current = _load_vitest_toolchain_descriptor(
+        root,
+        RunnerConfig(
+            vitest_command=(str(descriptor.launcher), str(descriptor.entrypoint)),
+            vitest_toolchain_manifest=descriptor.manifest,
+            vitest_toolchain_identity=descriptor.identity,
+        ),
+    )
+    if current.identity != descriptor.identity:
+        raise ValueError("Vitest toolchain changed during phase setup")
+    _verify_vitest_phase_toolchain(phase)
+    return phase
 
 
 def _command_part_identity(root: Path, part: str) -> str:
@@ -986,12 +2163,76 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
             _command_part_identity(root, part) for part in config.jest_command
         ]
         payload["jest_toolchain"] = [
-            _directory_identity(path)
+            _validator_tree_identity(path)
             for path in _jest_toolchain_roots(config.jest_command)
         ]
+    if config.vitest_command is not None:
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            payload["vitest"] = {
+                "command": [str(descriptor.launcher), str(descriptor.entrypoint)],
+                "identity": descriptor.identity,
+            }
+        except (OSError, ValueError):
+            payload["vitest"] = "invalid-vitest-toolchain"
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _adapter_capture_error_identity(adapter: str, error: BaseException) -> str:
+    """Return a stable, non-executable record of one adapter capture failure."""
+    payload = {
+        "adapter": adapter,
+        "error_type": type(error).__name__,
+        "message": str(error),
+    }
+    return "error:" + hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
+def _capture_adapter_identities(
+    root: Path, config: RunnerConfig,
+) -> tuple[tuple[tuple[str, str], ...], dict[str, str]]:
+    """Capture stable success/error identities for configured JS adapters once."""
+    identities: list[tuple[str, str]] = []
+    errors: dict[str, str] = {}
+    if config.jest_command is not None:
+        try:
+            error = _protected_command_error(root, config.jest_command)
+            if error is not None:
+                raise ValueError(error)
+            identities.append(("jest", hashlib.sha256(json.dumps({
+                "argv": [_command_part_identity(root, part) for part in config.jest_command],
+                "toolchain": [
+                    _validator_tree_identity(path)
+                    for path in _jest_toolchain_roots(config.jest_command)
+                ],
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors["jest"] = str(exc)
+            identities.append(("jest", _adapter_capture_error_identity("jest", exc)))
+    if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            identities.append(("vitest", hashlib.sha256(json.dumps({
+                "toolchain": descriptor.identity,
+                "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            errors["vitest"] = str(exc)
+            identities.append(("vitest", _adapter_capture_error_identity("vitest", exc)))
+    return tuple(sorted(identities)), errors
+
+
+def _verify_adapter_identities(root: Path, config: RunnerConfig) -> None:
+    """Verify live configured adapter bytes against the captured identities."""
+    captured, errors = _capture_adapter_identities(root, config)
+    if errors:
+        raise ValueError("configured adapter identity recapture failed")
+    if config.adapter_identities and captured != config.adapter_identities:
+        raise ValueError("configured adapter content identity changed")
 
 
 def _measured_python_runtime() -> dict[str, str]:
@@ -1049,9 +2290,15 @@ def _runtime_manifest(
     """Return byte-change-sensitive metadata without rereading runtime bytes."""
     manifest = []
     for name, path in entries:
-        stat = path.stat()
+        metadata = path.stat()
         manifest.append(
-            (name, str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+            (
+                name,
+                str(path),
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+                metadata.st_size,
+            )
         )
     return tuple(manifest)
 
@@ -1293,19 +2540,6 @@ def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     return None
 
 
-def _directory_identity(root: Path) -> str:
-    """Hash every regular file in an external validator package directory."""
-    digest = hashlib.sha256()
-    try:
-        paths = sorted(path for path in root.rglob("*") if path.is_file())
-        for path in paths:
-            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-            digest.update(path.read_bytes() + b"\0")
-    except OSError:
-        return _file_identity(root)
-    return digest.hexdigest()
-
-
 def _jest_toolchain_roots(command: tuple[str, ...]) -> tuple[Path, ...]:
     """Return external package roots needed by an absolute Jest entry point."""
     roots: set[Path] = set()
@@ -1372,13 +2606,24 @@ def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None
                 "absolute digest-bound external path"
             )
         path_operands.append(path if path.is_absolute() else root / path)
-    for operand in path_operands:
+    for index, operand in enumerate(path_operands):
         resolved = operand.resolve()
+        if not resolved.exists() or not resolved.is_file() or resolved.is_symlink():
+            return "explicit validator command path is missing or not a regular file"
+        if index == 0 and not os.access(resolved, os.X_OK):
+            return "explicit validator command executable is not executable"
         if _path_is_relative_to(resolved, candidate_root):
             return "explicit validator command inside the candidate checkout is not trusted"
-        if not resolved.is_file():
-            return "explicit validator command path is missing"
     return None
+
+
+def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Require exactly one absolute launcher and entrypoint for Vitest."""
+    if len(command) != 2:
+        return "Vitest command must contain exactly an absolute launcher and entrypoint"
+    if any(part.startswith("-") for part in command):
+        return "Vitest command cannot contain launcher flags or controls"
+    return _protected_command_error(root, command)
 
 
 _JEST_REPORTER = """class PddTrustedReporter {
@@ -1550,6 +2795,280 @@ def _run_jest(
             ), ()
         outcome, detail, identities = _jest_result(output, result.returncode, expected)
         return RunnerExecution("jest", outcome, digest, detail), identities
+
+
+def _vitest_command(config: RunnerConfig) -> tuple[str, ...] | None:
+    """Return an explicit local Vitest argv prefix; never invoke an npm script."""
+    if config.vitest_command is not None:
+        return config.vitest_command
+    return None
+
+
+def _vitest_environment(home: Path) -> dict[str, str]:
+    """Return a credential-free, non-ambient environment for Vitest."""
+    return untrusted_child_environment(
+        drop={"PYTHONPATH", "PYTHONHOME", "PDD_PATH"}
+    ) | {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / "config"),
+        "XDG_CACHE_HOME": str(home / "cache"),
+        "NODE_ENV": "test",
+    }
+
+
+def _vitest_result(
+    root: Path, output: Path, returncode: int, expected: tuple[str, ...] | None
+) -> tuple[EvidenceOutcome, str, tuple[str, ...]]:
+    """Validate Vitest JSON output and normalize every non-pass state."""
+    try:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("malformed Vitest reporter payload")
+        tests = payload.get("tests")
+        if tests is None:
+            results = payload.get("testResults")
+            if not isinstance(results, list):
+                raise ValueError("malformed Vitest reporter payload")
+            tests = [
+                {
+                    "identity": (
+                        Path(item["name"]).resolve().relative_to(root.resolve()).as_posix()
+                        + "::"
+                        + assertion.get("fullName", assertion["title"])
+                    ),
+                    "status": assertion["status"],
+                }
+                for item in results
+                for assertion in item["assertionResults"]
+            ]
+        if not isinstance(tests, list) or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("identity"), str)
+            and isinstance(item.get("status"), str)
+            for item in tests
+        ):
+            raise ValueError("malformed Vitest reporter payload")
+        prior_failures = any(
+            item.get("failureMessages")
+            for result in payload.get("testResults", [])
+            for item in result.get("assertionResults", [])
+        )
+    except (AttributeError, OSError, TypeError, ValueError, json.JSONDecodeError, KeyError):
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter produced malformed JSON", ()
+    identities = tuple(sorted(item["identity"] for item in tests))
+    if not identities:
+        return EvidenceOutcome.NOT_COLLECTED, "zero protected Vitest test identities collected", ()
+    if len(set(identities)) != len(identities):
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted duplicate test identities", ()
+    if expected is not None and identities != expected:
+        return EvidenceOutcome.QUARANTINED, "checked-head Vitest identities differ from protected base", identities
+    statuses = {item["status"] for item in tests}
+    if statuses - {"passed", "failed", "pending", "todo", "skipped", "disabled"}:
+        return EvidenceOutcome.COLLECTION_ERROR, "Vitest reporter emitted an unsupported status", identities
+    if returncode or "failed" in statuses or prior_failures:
+        return EvidenceOutcome.FAIL, "Vitest reported failed protected tests", identities
+    if statuses - {"passed"}:
+        return EvidenceOutcome.SKIP, "Vitest reported skipped or todo protected tests", identities
+    return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
+
+
+def _vitest_reporter_source(result_fd: int) -> str:
+    """Return a checker-owned reporter that writes only from the coordinator."""
+    return f"""import fs from 'node:fs';
+import path from 'node:path';
+const RESULT_FD = {result_fd};
+export default class PddTrustedVitestReporter {{
+  constructor() {{ this.tests = []; }}
+  onTestCaseResult(test) {{
+    const result = test.result();
+    const filename = path.relative(process.cwd(), test.module.moduleId);
+    this.tests.push({{
+      identity: filename + '::' + test.fullName,
+      status: result.state,
+      failureMessages: (result.errors || []).map((item) => item.stack || item.message),
+    }});
+  }}
+  onTestRunEnd() {{
+    fs.writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}}));
+  }}
+}}
+"""
+
+
+def _drain_result_pipe(
+    read_fd: int, finished: threading.Event, result: dict[str, object]
+) -> None:
+    """Drain the private FIFO while the child runs, discarding over-cap bytes."""
+    chunks: list[bytes] = []
+    size = 0
+    overflow = False
+    try:
+        while not finished.is_set():
+            ready, _write, _error = select.select((read_fd,), (), (), 0.05)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(read_fd, 1024 * 1024)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > VITEST_RESULT_MAX_BYTES:
+                overflow = True
+            elif not overflow:
+                chunks.append(chunk)
+        while True:
+            try:
+                chunk = os.read(read_fd, 1024 * 1024)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > VITEST_RESULT_MAX_BYTES:
+                overflow = True
+            elif not overflow:
+                chunks.append(chunk)
+    except OSError as exc:
+        result["error"] = exc
+    result["overflow"] = overflow
+    result["data"] = b"" if overflow else b"".join(chunks)
+
+
+def _run_vitest(
+    root: Path,
+    paths: tuple[PurePosixPath, ...],
+    timeout_seconds: int,
+    config: RunnerConfig,
+    expected: tuple[str, ...] | None = None,
+    command_root: Path | None = None,
+    phase_toolchain: VitestPhaseToolchain | None = None,
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    # pylint: disable=too-many-return-statements
+    """Run exact protected Vitest paths with a private coordinator reporter."""
+    tool_root = command_root or root
+    command_prefix = _vitest_command(config)
+    if command_prefix is None:
+        if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
+        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
+        if phase_toolchain is None:
+            phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
+        if phase_toolchain.descriptor.identity != descriptor.identity:
+            raise ValueError("Vitest copied descriptor identity mismatch")
+        _verify_vitest_phase_toolchain(phase_toolchain)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return RunnerExecution(
+            "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
+        ), ()
+    try:
+        config_path, _config_data = _vitest_config(root, "HEAD")
+    except ValueError as exc:
+        return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
+    with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
+        temporary = Path(directory)
+        scratch = temporary / "scratch"
+        home = scratch / "home"
+        home.mkdir(parents=True, mode=0o700)
+        output = temporary / "results.json"
+        reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
+        result_directory = temporary / f"channel-{os.urandom(16).hex()}"
+        result_directory.mkdir(mode=0o700)
+        result_fifo = result_directory / "result.fifo"
+        os.mkfifo(result_fifo, mode=0o600)
+        read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
+        result_fd = 198
+        reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
+        command = [
+            str(phase_toolchain.launcher),
+            *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
+            str(phase_toolchain.entrypoint),
+            "run",
+            *(path.as_posix() for path in paths),
+            f"--config={root / config_path}",
+            f"--reporter={reporter}",
+        ]
+        digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
+        before = _validator_tree_identity(root)
+        try:
+            cache_roots = tuple(
+                path for path in (
+                    root / "node_modules/.vite-temp", root / "node_modules/.vite"
+                ) if path.is_dir()
+            )
+            result, surviving = run_supervised(
+                command,
+                cwd=root,
+                timeout=timeout_seconds,
+                env=_vitest_environment(home),
+                writable_roots=(scratch, *cache_roots),
+                readable_roots=(reporter, *phase_toolchain.readable_roots),
+                readable_bindings=phase_toolchain.readable_bindings,
+                result_fifo=result_fifo,
+                result_fd=result_fd,
+            )
+        except (OSError, UnicodeError, ValueError) as exc:
+            drain_finished.set()
+            drain_thread.join(timeout=1)
+            os.close(read_fd)
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
+        drain_finished.set()
+        drain_thread.join(timeout=2)
+        try:
+            if "error" in drained:
+                raise drained["error"]
+            if drained.get("overflow"):
+                return RunnerExecution(
+                    "vitest", EvidenceOutcome.ERROR, digest,
+                    "Vitest result transport exceeded byte limit",
+                ), ()
+            output.write_bytes(drained.get("data", b""))
+        except OSError as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, digest,
+                f"Vitest result transport failed: {exc}",
+            ), ()
+        finally:
+            os.close(read_fd)
+        if result.returncode == 124:
+            return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
+        if surviving:
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
+        output_data = output.read_bytes()
+        if result.returncode in {126, 127} and not output_data:
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
+        if result.returncode and not output_data:
+            detail = (result.stderr or result.stdout or "Vitest exited without a result")[-2000:]
+            return RunnerExecution("vitest", EvidenceOutcome.FAIL, digest, detail), ()
+        if not output_data:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
+                "Vitest reporter produced no result",
+            ), ()
+        if _validator_tree_identity(root) != before:
+            return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
+        try:
+            _verify_vitest_phase_toolchain(phase_toolchain)
+            if _load_vitest_toolchain_descriptor(tool_root, replace(
+                config, vitest_toolchain_identity=descriptor.identity
+            )).identity != descriptor.identity:
+                raise ValueError("Vitest toolchain changed during phase")
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, digest,
+                f"Vitest toolchain recheck failed: {exc}",
+            ), ()
+        outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
+        return RunnerExecution("vitest", outcome, digest, detail), identities
 
 
 def _run_test_node(
@@ -1805,6 +3324,29 @@ def _dirty_jest_support(root: Path) -> set[str]:
     return dirty
 
 
+def _dirty_vitest_support(root: Path) -> set[str]:
+    """Return dirty executable modules that can change a Vitest run."""
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {"<unreadable-git-status>"}
+    dirty: set[str] = set()
+    for field in result.stdout.decode(errors="surrogateescape").split("\0"):
+        path = field[3:] if len(field) >= 4 else ""
+        relpath = PurePosixPath(path)
+        if (
+            relpath.name.startswith(("vitest.config.", "vite.config."))
+            or relpath.name == "package.json"
+            or relpath.suffix in {".js", ".cjs", ".mjs", ".ts", ".cts", ".mts", ".tsx", ".jsx"}
+        ):
+            dirty.add(path)
+    return dirty
+
+
 def _combine(
     obligation: VerificationObligation,
     executions: tuple[RunnerExecution, ...],
@@ -1836,7 +3378,7 @@ def _obligation_preflight(
 ) -> RunnerExecution | None:
     # pylint: disable=too-many-return-statements
     """Return a normalized fail-closed result before executing pytest."""
-    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest"}:
+    if obligation.kind.casefold() != "test" or obligation.validator_id not in {"pytest", "jest", "vitest"}:
         return RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
@@ -1850,6 +3392,11 @@ def _obligation_preflight(
             obligation.validator_config_digest,
             "test obligation declares no artifact paths",
         )
+    digest_function = {
+        "pytest": pytest_validator_config_digest,
+        "jest": jest_validator_config_digest,
+        "vitest": vitest_validator_config_digest,
+    }[obligation.validator_id]
     try:
         if obligation.validator_id == "pytest":
             expected_config_digests = {
@@ -1858,7 +3405,7 @@ def _obligation_preflight(
             }
         else:
             expected_config_digests = {
-                jest_validator_config_digest(
+                digest_function(
                     root,
                     ref,
                     obligation.artifact_paths,
@@ -1984,6 +3531,101 @@ def _collect_jest_at_base(
         return _run_jest(clone, paths, config.timeout_seconds, config)
 
 
+def _make_vitest_phase_read_only(root: Path) -> None:
+    """Protect phase inputs while retaining only declared Vitest cache writes."""
+    paths = sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True)
+    for path in paths:
+        relative = path.relative_to(root)
+        if ".git" in relative.parts or any(
+            name in relative.parts for name in VITEST_CACHE_NAMES
+        ):
+            continue
+        if relative.parts and relative.parts[0] in {
+            "node_modules", ".pdd-vitest-toolchain"
+        }:
+            continue
+        if path.is_symlink():
+            raise ValueError(f"copied Vitest phase contains symlink: {relative}")
+        executable = path.is_file() and bool(path.stat().st_mode & 0o111)
+        path.chmod(0o555 if path.is_dir() or executable else 0o444)
+    root.chmod(0o555)
+
+
+def _collect_vitest_at_base(
+    root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Run protected-base Vitest to establish independently derived identities."""
+    digest = hashlib.sha256(base_sha.encode()).hexdigest()
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(root, config)
+        with tempfile.TemporaryDirectory(
+            prefix="pdd-vitest-protected-base-"
+        ) as directory:
+            clone = Path(directory) / "repository"
+            cloned = subprocess.run(
+                ["git", "clone", "-q", "--no-local", "--no-checkout",
+                 str(root), str(clone)],
+                capture_output=True, text=True, check=False,
+            )
+            checked_out = cloned.returncode == 0 and subprocess.run(
+                ["git", "checkout", "-q", "--detach", base_sha],
+                cwd=clone, capture_output=True, check=False,
+            ).returncode == 0
+            if not checked_out:
+                return RunnerExecution(
+                    "protected-base-collection", EvidenceOutcome.COLLECTION_ERROR,
+                    digest, "cannot create protected-base Vitest clone",
+                ), ()
+            phase = _prepare_vitest_toolchain(clone, descriptor)
+            _make_vitest_phase_read_only(clone)
+            return _run_vitest(
+                clone, paths, config.timeout_seconds, config,
+                command_root=root, phase_toolchain=phase,
+            )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return RunnerExecution(
+            "protected-base-collection", EvidenceOutcome.ERROR, digest,
+            f"Vitest phase setup failed: {exc}",
+        ), ()
+
+
+def _run_vitest_at_commit(
+    root: Path, commit: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig,
+    expected: tuple[str, ...],
+) -> tuple[RunnerExecution, tuple[str, ...]]:
+    """Execute one fresh immutable exact-commit Vitest phase tree."""
+    digest = hashlib.sha256(commit.encode()).hexdigest()
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(root, config)
+        with tempfile.TemporaryDirectory(prefix="pdd-vitest-checked-head-") as directory:
+            clone = Path(directory) / "repository"
+            cloned = subprocess.run(
+                ["git", "clone", "-q", "--no-local", "--no-checkout",
+                 str(root), str(clone)],
+                capture_output=True, text=True, check=False,
+            )
+            checked_out = cloned.returncode == 0 and subprocess.run(
+                ["git", "checkout", "-q", "--detach", commit], cwd=clone,
+                capture_output=True, check=False,
+            ).returncode == 0
+            if not checked_out:
+                return RunnerExecution(
+                    "vitest", EvidenceOutcome.ERROR, digest,
+                    "cannot create checked-head Vitest clone",
+                ), ()
+            phase = _prepare_vitest_toolchain(clone, descriptor)
+            _make_vitest_phase_read_only(clone)
+            return _run_vitest(
+                clone, paths, config.timeout_seconds, config, expected,
+                command_root=root, phase_toolchain=phase,
+            )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return RunnerExecution(
+            "vitest", EvidenceOutcome.ERROR, digest,
+            f"Vitest phase setup failed: {exc}",
+        ), ()
+
+
 def _protected_node_ids(
     root: Path,
     obligation: VerificationObligation,
@@ -2057,16 +3699,44 @@ def _run_obligation_in_tree(
             root, base_sha, obligation.artifact_paths, config
         )
         if base_execution.outcome is not EvidenceOutcome.PASS:
+            return RunnerExecution(obligation.obligation_id, base_execution.outcome, base_execution.command_digest, base_execution.detail)
+        head_execution, _head_ids = _run_jest(root, obligation.artifact_paths, config.timeout_seconds, config, base_ids)
+        return RunnerExecution(obligation.obligation_id, head_execution.outcome, head_execution.command_digest, head_execution.detail)
+    if obligation.validator_id == "vitest":
+        profile = VerificationProfile(
+            UnitId("runner-closure", PurePosixPath("closure.prompt"), "typescript"),
+            (obligation,),
+            obligation.requirement_ids,
+            "closure",
+        )
+        _digest, support_paths = _vitest_support_digest(root, head_sha, profile)
+        protected_paths = tuple(
+            sorted(set(obligation.artifact_paths) | set(support_paths))
+        )
+        changed = _changed_paths(root, base_sha, head_sha, protected_paths)
+        changed.update(_dirty_vitest_support(root))
+        if changed:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.QUARANTINED,
+                obligation.validator_config_digest,
+                "candidate-modified Vitest support cannot solely certify itself: "
+                + ", ".join(sorted(changed)),
+            )
+        base_execution, base_ids = _collect_vitest_at_base(
+            root, base_sha, obligation.artifact_paths, config
+        )
+        if base_execution.outcome is not EvidenceOutcome.PASS:
             return RunnerExecution(
                 obligation.obligation_id,
                 base_execution.outcome,
                 base_execution.command_digest,
                 base_execution.detail,
             )
-        head_execution, _head_ids = _run_jest(
+        head_execution, _head_ids = _run_vitest_at_commit(
             root,
+            head_sha,
             obligation.artifact_paths,
-            config.timeout_seconds,
             config,
             base_ids,
         )
@@ -2136,11 +3806,10 @@ def run_obligation(
             "dirty checkout cannot receive committed-head evidence: "
             + ", ".join(dirty_all),
         )
-    dirty = (
-        _dirty_jest_support(root)
-        if obligation.validator_id == "jest"
-        else _dirty_pytest_support(root)
-    )
+    dirty = {
+        "jest": _dirty_jest_support,
+        "vitest": _dirty_vitest_support,
+    }.get(obligation.validator_id, _dirty_pytest_support)(root)
     if dirty:
         return RunnerExecution(
             obligation.obligation_id,
@@ -2157,6 +3826,26 @@ def run_obligation(
                 EvidenceOutcome.ERROR,
                 obligation.validator_config_digest,
                 command_error,
+            )
+    if obligation.validator_id == "vitest":
+        if config.vitest_command is None and (
+            root / "node_modules" / "vitest" / "vitest.mjs"
+        ).is_file():
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                "candidate node_modules Vitest runner is not trusted",
+            )
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            config = replace(config, vitest_toolchain_identity=descriptor.identity)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                f"Vitest toolchain validation failed: {exc}",
             )
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
@@ -2195,16 +3884,39 @@ def run_profile(
     config: RunnerConfig = RunnerConfig(),
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
+    adapter_identities, capture_errors = _capture_adapter_identities(root, config)
+    config = replace(config, adapter_identities=adapter_identities)
     executions = tuple(
-        run_obligation(
-            root,
-            obligation,
-            base_sha=binding.base_sha,
-            head_sha=binding.head_sha,
-            config=config,
+        RunnerExecution(
+            obligation.obligation_id,
+            EvidenceOutcome.ERROR,
+            "adapter-identity",
+            "configured adapter initial capture failed: "
+            + capture_errors[obligation.validator_id],
         )
+        if obligation.validator_id in capture_errors
+        else run_obligation(
+                root,
+                obligation,
+                base_sha=binding.base_sha,
+                head_sha=binding.head_sha,
+                config=config,
+            )
         for obligation in profile.obligations
     )
+    if config.adapter_identities and not capture_errors:
+        try:
+            _verify_adapter_identities(root, config)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            executions = tuple(
+                RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.ERROR,
+                    execution.command_digest,
+                    "configured adapter changed across protocol execution",
+                ) if obligation.validator_id in {"jest", "vitest"} else execution
+                for obligation, execution in zip(profile.obligations, executions)
+            )
     runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
     binding = AttestationBinding(
         profile.unit_id,
@@ -2214,6 +3926,7 @@ def run_profile(
         TRUSTED_RUNNER_VERSION,
         binding.base_sha,
         binding.head_sha,
+        adapter_identities=config.adapter_identities,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions
