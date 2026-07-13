@@ -1,17 +1,18 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:21.593685+00:00",
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-13T16:32:47.665783+00:00",
   "command": "regenerate-public",
-  "prompt_hash": "a8e7effb43b26e42006d3d2febfc38e0da7c1d53221ac4068d89b6d0c08ecfb5",
-  "code_hash": "a1e871896a289049c73df4071ec48fc47792ff6cab05332816ba702cd3bc1cb6",
-  "example_hash": null,
-  "test_hash": "5d759cb5c4491420c4ee01d6973f6d0493d02cfe1cdb0bfaf8cb540a868bc365",
+  "prompt_hash": "c44abb8c12b346a4be3add556f67775ba2fcd6b682086faf3adcfff734751f0d",
+  "code_hash": "41a24032cc40104d706f69363cd6ab0bcbf6d38a5497c524075b2893b1120d06",
+  "example_hash": "33b16476536f8c9424d3222ffc4a5cd5ecee6ad0589b2c66a4f3c7f1e265106c",
+  "test_hash": "093e6db0b9074d73d0a0c4eda4b3b251a06fb0a0b00009d6f21a96144f8a7d36",
   "test_files": {
-    "test_get_test_command.py": "5d759cb5c4491420c4ee01d6973f6d0493d02cfe1cdb0bfaf8cb540a868bc365"
+    "test_get_test_command.py": "093e6db0b9074d73d0a0c4eda4b3b251a06fb0a0b00009d6f21a96144f8a7d36"
   },
   "include_deps": {
     "pdd/agentic_langtest.py": "7cb0be38d526d0a630500185427a9f76666d2b79385f7333a7608eb1fb33cfc9",
-    "pdd/data/language_format.csv": "db3542c10a4c5c2a4a9bbe02558b4bd02fbb357fb243e33de4831d337484373e",
-    "pdd/get_language.py": "65004add40c93365c1cbd705a6ef24d5bda6f7016c3a67749b25e61122c50ce7"
+    "pdd/get_language.py": "1490ea5281a086896be3a3f20cc5b216cd79c7974bcf8a6bbd13129656dd8080",
+    "pdd/data/language_format.csv": "691a4e14b76c176269e34dbbf03167c8fa17b76be9212e4546750b0a80315ff9",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f"
   }
 }
