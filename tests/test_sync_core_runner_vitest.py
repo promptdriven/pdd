@@ -586,7 +586,7 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
     config = _runner_config(tmp_path, runner)
     descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
 
-    assert descriptor.launcher.name == "python"
+    assert descriptor.launcher.name == "node"
     assert descriptor.entrypoint == runner.resolve()
     assert descriptor.dependencies.name == "node_modules"
     assert descriptor.native_runtime[0].name == "runtime.bin"
@@ -1001,10 +1001,15 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     native.mkdir(parents=True, exist_ok=True)
     native_file = native / "runtime.bin"
     native_file.write_bytes(b"native")
-    launcher = toolchain / "bin/python"
+    launcher = toolchain / "bin/node"
     launcher.parent.mkdir(parents=True, exist_ok=True)
     if not launcher.exists():
-        shutil.copy2(sys.executable, launcher)
+        launcher.write_text(
+            "#!/bin/sh\n"
+            "[ \"$1\" = \"--disable-wasm-trap-handler\" ] && shift\n"
+            f"exec {sys.executable!s} \"$@\"\n",
+            encoding="utf-8",
+        )
         launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
@@ -1626,6 +1631,30 @@ def test_vitest_rejects_ambiguous_package_mapping_conditions(tmp_path: Path) -> 
         )
 
 
+def test_jest_package_import_mapping_binds_exact_helper(tmp_path: Path) -> None:
+    root, _commit = _repository(tmp_path)
+    (root / "package.json").write_text(
+        json.dumps({"imports": {"#fixture-helper": "./tests/mapped.js"}}),
+        encoding="utf-8",
+    )
+    (root / "jest.config.json").write_text("{}\n", encoding="utf-8")
+    (root / "tests/mapped.js").write_text("export const trusted = true;\n", encoding="utf-8")
+    (root / "tests/widget.test.js").write_text(
+        "import { trusted } from '#fixture-helper';\n"
+        "test('widget works', () => { expect(trusted).toBe(true); });\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add Jest package mapping")
+    paths = (PurePosixPath("tests/widget.test.js"),)
+    before = jest_validator_config_digest(root, "HEAD", paths)
+    (root / "tests/mapped.js").write_text("export const trusted = false;\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate Jest mapped support")
+
+    assert jest_validator_config_digest(root, "HEAD", paths) != before
+
+
 def test_vitest_result_fifo_drains_large_success_while_child_runs(
     tmp_path: Path,
 ) -> None:
@@ -1747,6 +1776,19 @@ def test_mixed_adapter_identities_survive_manifest_removal_and_round_trip(
     config.vitest_toolchain_manifest.unlink()
     restored = decode_attestation(attestation_payload(envelope))
     assert restored.binding.adapter_identities == envelope.binding.adapter_identities
+    decoded = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json,sys; from pdd.sync_core.evidence_store import decode_attestation; "
+            "print(json.dumps(decode_attestation(json.load(sys.stdin)).binding.adapter_identities))",
+        ],
+        input=json.dumps(attestation_payload(envelope)),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(decoded.stdout) == [list(item) for item in envelope.binding.adapter_identities]
     assert runner_identity_digest(
         profile,
         root=root,

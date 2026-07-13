@@ -79,12 +79,10 @@ def attestation_payload(envelope: AttestationEnvelope) -> dict[str, Any]:
         },
         "signature": envelope.signature,
     }
-    if binding.vitest_command is not None:
-        payload["binding"]["vitest_command"] = list(binding.vitest_command)
-    if binding.vitest_toolchain_manifest is not None:
-        payload["binding"]["vitest_toolchain_manifest"] = binding.vitest_toolchain_manifest
-    if binding.vitest_toolchain_identity is not None:
-        payload["binding"]["vitest_toolchain_identity"] = binding.vitest_toolchain_identity
+    if binding.adapter_identities:
+        payload["binding"]["adapter_identities"] = [
+            list(item) for item in binding.adapter_identities
+        ]
     return payload
 
 
@@ -116,17 +114,19 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             PurePosixPath(_string(subject_data, "prompt_relpath")),
             _string(subject_data, "language_id"),
         )
-        command_data = binding_data.get("vitest_command")
-        if command_data is not None and (
-            not isinstance(command_data, list)
-            or len(command_data) != 2
-            or not all(isinstance(item, str) and item for item in command_data)
+        identities_data = binding_data.get("adapter_identities", [])
+        if not isinstance(identities_data, list) or not all(
+            isinstance(item, list) and len(item) == 2
+            and all(isinstance(value, str) and value for value in item)
+            for item in identities_data
         ):
-            raise TypeError("vitest_command must be two non-empty strings")
-        for key in ("vitest_toolchain_manifest", "vitest_toolchain_identity"):
-            value = binding_data.get(key)
-            if value is not None and (not isinstance(value, str) or not value):
-                raise TypeError(f"{key} must be a non-empty string")
+            raise TypeError("adapter_identities must be non-empty string pairs")
+        adapter_identities = tuple((item[0], item[1]) for item in identities_data)
+        if (
+            tuple(sorted(adapter_identities)) != adapter_identities
+            or len(set(adapter_identities)) != len(adapter_identities)
+        ):
+            raise TypeError("adapter_identities must be sorted and unique")
         binding = AttestationBinding(
             subject,
             _string(binding_data, "snapshot_digest"),
@@ -135,9 +135,7 @@ def decode_attestation(payload: Mapping[str, Any]) -> AttestationEnvelope:
             _string(binding_data, "tool_version"),
             _string(binding_data, "base_sha"),
             _string(binding_data, "checked_sha"),
-            tuple(command_data) if command_data is not None else None,
-            binding_data.get("vitest_toolchain_manifest"),
-            binding_data.get("vitest_toolchain_identity"),
+            adapter_identities=adapter_identities,
         )
         results = tuple(
             ObligationEvidence(

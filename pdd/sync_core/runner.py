@@ -14,11 +14,13 @@ import json
 import os
 import platform
 import re
+import select
 import shlex
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, replace
@@ -123,6 +125,7 @@ VITEST_GRAMMAR_VERSIONS = {
     "tree-sitter-typescript": "0.23.2",
 }
 VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
+VITEST_RESULT_MAX_BYTES = 16 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -177,6 +180,7 @@ class RunnerConfig:
     vitest_command: tuple[str, ...] | None = None
     vitest_toolchain_manifest: Path | None = None
     vitest_toolchain_identity: str | None = None
+    adapter_identities: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -734,8 +738,7 @@ def _local_javascript_imports(
             + source_path.as_posix()
         )
     import_pattern = re.compile(
-        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]"
-        r"(\.{1,2}/[^'\"]+)['\"]"
+        r"(?:from\s+|import\s*\(|import\s+|require\s*\()['\"]([^'\"]+)['\"]"
     )
     imports = [
         match.group(1)
@@ -744,16 +747,69 @@ def _local_javascript_imports(
     ]
     resolved: set[PurePosixPath] = set()
     for item in imports:
-        candidate = _normalize_repo_relative_path(
-            source_path.parent / PurePosixPath(item)
-        )
-        if candidate is None:
-            continue
-        candidates = list(_javascript_path_candidates(candidate))
-        resolved.update(
-            path for path in candidates if read_git_blob(root, ref, path) is not None
-        )
+        resolved.update(_resolve_javascript_specifier(root, ref, source_path, item))
     return resolved
+
+
+def _package_mapping_target(
+    root: Path, ref: str, specifier: str
+) -> PurePosixPath | None:
+    """Resolve an exact static self-package/imports target, or reject ambiguity."""
+    raw = read_git_regular_blob(root, ref, PurePosixPath("package.json"))
+    if raw is None:
+        if specifier.startswith("#"):
+            raise ValueError(f"package import mapping is missing: {specifier}")
+        return None
+    try:
+        package = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("package.json mapping source is invalid") from exc
+    if not isinstance(package, dict):
+        raise ValueError("package.json mapping source must be an object")
+    name = package.get("name")
+    key = None
+    mappings = None
+    if specifier.startswith("#"):
+        key, mappings = specifier, package.get("imports", {})
+    elif isinstance(name, str) and (specifier == name or specifier.startswith(name + "/")):
+        key = "." if specifier == name else "./" + specifier[len(name) + 1:]
+        mappings = package.get("exports", {})
+    else:
+        return None
+    if isinstance(mappings, str) and key == ".":
+        target = mappings
+    elif isinstance(mappings, dict) and key in mappings:
+        target = mappings[key]
+    else:
+        raise ValueError(f"package mapping is missing: {specifier}")
+    if isinstance(target, dict):
+        if set(target) != {"default"}:
+            raise ValueError(f"package mapping conditions are ambiguous: {specifier}")
+        target = target["default"]
+    if not isinstance(target, str) or not target.startswith("./") or "*" in target:
+        raise ValueError(f"package mapping is not one static local file: {specifier}")
+    candidate = _normalize_repo_relative_path(PurePosixPath(target))
+    if candidate is None or candidate == PurePosixPath("."):
+        raise ValueError(f"package mapping escapes repository: {specifier}")
+    if read_git_regular_blob(root, ref, candidate) is None:
+        raise ValueError(f"package mapping target is missing: {specifier}")
+    return candidate
+
+
+def _resolve_javascript_specifier(
+    root: Path, ref: str, source_path: PurePosixPath, specifier: str
+) -> set[PurePosixPath]:
+    """Resolve only literal repository paths and deterministic package mappings."""
+    if specifier.startswith(("./", "../")):
+        candidate = _normalize_repo_relative_path(source_path.parent / PurePosixPath(specifier))
+        if candidate is None:
+            raise ValueError(f"JavaScript import escapes repository: {specifier}")
+        return {
+            path for path in _javascript_path_candidates(candidate)
+            if read_git_regular_blob(root, ref, path) is not None
+        }
+    mapped = _package_mapping_target(root, ref, specifier)
+    return {mapped} if mapped is not None else set()
 
 
 def _normalize_repo_relative_path(path: PurePosixPath) -> PurePosixPath | None:
@@ -1281,7 +1337,9 @@ def _vitest_ast_imports(
         value = static_string(target)
         if value is None:
             raise ValueError("Vitest dynamic module loader is unsupported")
-        if value.startswith(("./", "../")):
+        if value.startswith(("./", "../", "#")) or _package_mapping_target(
+            root, ref, value
+        ) is not None:
             values.append(value)
     capability_names = (
         loader_aliases | factory_aliases | module_namespace_aliases
@@ -1304,13 +1362,7 @@ def _vitest_ast_imports(
             raise ValueError("Vitest loader capability provenance is ambiguous")
     resolved: set[PurePosixPath] = set()
     for value in values:
-        candidate = _normalize_repo_relative_path(source_path.parent / PurePosixPath(value))
-        if candidate is None:
-            raise ValueError("Vitest module loader escapes repository")
-        matches = [
-            item for item in _javascript_path_candidates(candidate)
-            if read_git_blob(root, ref, item) is not None
-        ]
+        matches = list(_resolve_javascript_specifier(root, ref, source_path, value))
         if not matches:
             raise ValueError(f"Vitest static module is missing: {value}")
         resolved.update(matches)
@@ -1569,16 +1621,16 @@ def runner_identity_digest(
                 + _vitest_support_digest(root, ref, profile)[0]
             ).encode()
         ).hexdigest()
-        payload["validator_command_digest"] = _validator_command_identity_digest(
-            root, config
+        payload["validator_command_digest"] = (
+            hashlib.sha256(json.dumps(
+                config.adapter_identities, separators=(",", ":")
+            ).encode()).hexdigest()
+            if config.adapter_identities
+            else _validator_command_identity_digest(root, config)
         )
-        if config.vitest_toolchain_manifest is not None:
-            try:
-                payload["vitest_toolchain_identity"] = (
-                    _load_vitest_toolchain_descriptor(root, config).identity
-                )
-            except (OSError, ValueError):
-                payload["vitest_toolchain_identity"] = "invalid-vitest-toolchain"
+        payload["adapter_identities"] = list(config.adapter_identities) or list(
+            _capture_adapter_identities(root, config)
+        )
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -2117,6 +2169,38 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _capture_adapter_identities(
+    root: Path, config: RunnerConfig
+) -> tuple[tuple[str, str], ...]:
+    """Capture path-independent identities for every configured JS adapter."""
+    identities: list[tuple[str, str]] = []
+    if config.jest_command is not None:
+        error = _protected_command_error(root, config.jest_command)
+        if error is not None:
+            raise ValueError(error)
+        identities.append(("jest", hashlib.sha256(json.dumps({
+            "argv": [_command_part_identity(root, part) for part in config.jest_command],
+            "toolchain": [
+                _validator_tree_identity(path)
+                for path in _jest_toolchain_roots(config.jest_command)
+            ],
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+    if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
+        descriptor = _load_vitest_toolchain_descriptor(root, config)
+        identities.append(("vitest", hashlib.sha256(json.dumps({
+            "toolchain": descriptor.identity,
+            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+    return tuple(sorted(identities))
+
+
+def _verify_adapter_identities(root: Path, config: RunnerConfig) -> None:
+    """Verify live configured adapter bytes against the captured identities."""
+    captured = _capture_adapter_identities(root, config)
+    if config.adapter_identities and captured != config.adapter_identities:
+        raise ValueError("configured adapter content identity changed")
 
 
 def _measured_python_runtime() -> dict[str, str]:
@@ -2779,14 +2863,45 @@ export default class PddTrustedVitestReporter {{
 """
 
 
-def _read_result_pipe(read_fd: int) -> bytes:
-    """Read the complete checker-owned reporter pipe after the child exits."""
+def _drain_result_pipe(
+    read_fd: int, finished: threading.Event, result: dict[str, object]
+) -> None:
+    """Drain the private FIFO while the child runs, discarding over-cap bytes."""
     chunks: list[bytes] = []
-    while True:
-        chunk = os.read(read_fd, 1024 * 1024)
-        if not chunk:
-            return b"".join(chunks)
-        chunks.append(chunk)
+    size = 0
+    overflow = False
+    try:
+        while not finished.is_set():
+            ready, _write, _error = select.select((read_fd,), (), (), 0.05)
+            if not ready:
+                continue
+            try:
+                chunk = os.read(read_fd, 1024 * 1024)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                continue
+            size += len(chunk)
+            if size > VITEST_RESULT_MAX_BYTES:
+                overflow = True
+            elif not overflow:
+                chunks.append(chunk)
+        while True:
+            try:
+                chunk = os.read(read_fd, 1024 * 1024)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > VITEST_RESULT_MAX_BYTES:
+                overflow = True
+            elif not overflow:
+                chunks.append(chunk)
+    except OSError as exc:
+        result["error"] = exc
+    result["overflow"] = overflow
+    result["data"] = b"" if overflow else b"".join(chunks)
 
 
 def _run_vitest(
@@ -2833,10 +2948,17 @@ def _run_vitest(
         result_fifo = result_directory / "result.fifo"
         os.mkfifo(result_fifo, mode=0o600)
         read_fd = os.open(result_fifo, os.O_RDONLY | os.O_NONBLOCK)
+        drain_finished = threading.Event()
+        drained: dict[str, object] = {}
+        drain_thread = threading.Thread(
+            target=_drain_result_pipe, args=(read_fd, drain_finished, drained), daemon=True
+        )
+        drain_thread.start()
         result_fd = 198
         reporter.write_text(_vitest_reporter_source(result_fd), encoding="utf-8")
         command = [
             str(phase_toolchain.launcher),
+            *( ("--disable-wasm-trap-handler",) if sys.platform.startswith("linux") else () ),
             str(phase_toolchain.entrypoint),
             "run",
             *(path.as_posix() for path in paths),
@@ -2863,10 +2985,21 @@ def _run_vitest(
                 result_fd=result_fd,
             )
         except (OSError, UnicodeError, ValueError) as exc:
+            drain_finished.set()
+            drain_thread.join(timeout=1)
             os.close(read_fd)
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
+        drain_finished.set()
+        drain_thread.join(timeout=2)
         try:
-            output.write_bytes(_read_result_pipe(read_fd))
+            if "error" in drained:
+                raise drained["error"]
+            if drained.get("overflow"):
+                return RunnerExecution(
+                    "vitest", EvidenceOutcome.ERROR, digest,
+                    "Vitest result transport exceeded byte limit",
+                ), ()
+            output.write_bytes(drained.get("data", b""))
         except OSError as exc:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.ERROR, digest,
@@ -2878,6 +3011,11 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
+        if not output.read_bytes():
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
+                "Vitest reporter produced no result",
+            ), ()
         if result.returncode in {126, 127} and not output.read_bytes():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
         if result.returncode and not output.read_bytes():
@@ -3713,26 +3851,21 @@ def run_profile(
     config: RunnerConfig = RunnerConfig(),
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
-    initial_vitest_identity: str | None = None
-    initial_vitest_error: str | None = None
-    if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
-        try:
-            initial_vitest_identity = _load_vitest_toolchain_descriptor(
-                root, config
-            ).identity
-            config = replace(
-                config, vitest_toolchain_identity=initial_vitest_identity
-            )
-        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-            initial_vitest_error = f"Vitest toolchain initial capture failed: {exc}"
+    initial_adapter_error: str | None = None
+    try:
+        config = replace(
+            config, adapter_identities=_capture_adapter_identities(root, config)
+        )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        initial_adapter_error = f"configured adapter initial capture failed: {exc}"
     executions = tuple(
         RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
-            "vitest-toolchain",
-            initial_vitest_error,
+            "adapter-identity",
+            initial_adapter_error,
         )
-        if obligation.validator_id == "vitest" and initial_vitest_error is not None
+        if obligation.validator_id in {"jest", "vitest"} and initial_adapter_error is not None
         else run_obligation(
                 root,
                 obligation,
@@ -3742,19 +3875,17 @@ def run_profile(
             )
         for obligation in profile.obligations
     )
-    if initial_vitest_identity is not None:
+    if config.adapter_identities:
         try:
-            final_identity = _load_vitest_toolchain_descriptor(root, config).identity
+            _verify_adapter_identities(root, config)
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-            final_identity = None
-        if final_identity != initial_vitest_identity:
             executions = tuple(
                 RunnerExecution(
                     obligation.obligation_id,
                     EvidenceOutcome.ERROR,
                     execution.command_digest,
-                    "Vitest toolchain changed across protocol execution",
-                ) if obligation.validator_id == "vitest" else execution
+                    "configured adapter changed across protocol execution",
+                ) if obligation.validator_id in {"jest", "vitest"} else execution
                 for obligation, execution in zip(profile.obligations, executions)
             )
     runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
@@ -3766,10 +3897,7 @@ def run_profile(
         TRUSTED_RUNNER_VERSION,
         binding.base_sha,
         binding.head_sha,
-        config.vitest_command,
-        str(config.vitest_toolchain_manifest)
-        if config.vitest_toolchain_manifest else None,
-        config.vitest_toolchain_identity,
+        adapter_identities=config.adapter_identities,
     )
     results = tuple(
         ObligationEvidence(item.obligation_id, item.outcome) for item in executions

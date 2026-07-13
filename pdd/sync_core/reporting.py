@@ -167,10 +167,7 @@ def _evidence(
         != runner_identity_digest(
             profile, root=context.root, ref=context.manifest.head_ref,
             config=RunnerConfig(
-                vitest_command=binding.vitest_command,
-                vitest_toolchain_manifest=Path(binding.vitest_toolchain_manifest)
-                if binding.vitest_toolchain_manifest else None,
-                vitest_toolchain_identity=binding.vitest_toolchain_identity,
+                adapter_identities=binding.adapter_identities,
             ),
         )
         or binding.tool_version != TRUSTED_RUNNER_VERSION
