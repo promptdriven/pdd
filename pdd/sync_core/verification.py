@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
@@ -15,6 +15,11 @@ from .types import UnitId, VerificationObligation, VerificationProfile
 
 
 PROFILE_PATH = PurePosixPath(".pdd/verification-profiles.json")
+ROTATION_POLICY_PATH = PurePosixPath(".pdd/verification-profile-rotations.json")
+TRUST_POLICY_PATH = PurePosixPath(".pdd/attestation-trust.json")
+_HUMAN_OBLIGATION_ID = "threshold-human-attestation"
+_HUMAN_VALIDATOR_ID = "threshold-ed25519"
+_PLACEHOLDER_POLICY_DIGEST = "threshold-ed25519-v1"
 
 
 class VerificationProfileError(ValueError):
@@ -47,6 +52,16 @@ class _ProfileInput:
 
     requirements: tuple[str, ...]
     obligations: tuple[VerificationObligation, ...]
+
+
+@dataclass(frozen=True)
+class _PolicyRotationAuthorization:
+    """One protected, one-way authorization for a future trust-policy install."""
+
+    obligation_id: str
+    validator_id: str
+    from_config_digest: str
+    policy_path: PurePosixPath
 
 
 _REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
@@ -194,10 +209,127 @@ def _profile_digest(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _load_rotation_authorizations(
+    root: Path, protected_base_ref: str
+) -> tuple[_PolicyRotationAuthorization, ...]:
+    """Load narrowly-scoped profile rotation authority from the protected base."""
+    raw = read_git_blob(root, protected_base_ref, ROTATION_POLICY_PATH)
+    if raw is None:
+        return ()
+    try:
+        payload = json.loads(raw)
+        rows = payload["rotations"]
+        if payload.get("schema_version") != 1 or not isinstance(rows, list):
+            raise TypeError
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise VerificationProfileError("protected profile rotation policy is malformed") from exc
+
+    authorizations: list[_PolicyRotationAuthorization] = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {
+            "obligation_id",
+            "validator_id",
+            "from_config_digest",
+            "policy_path",
+        }:
+            raise VerificationProfileError("protected profile rotation rule is malformed")
+        authorization = _PolicyRotationAuthorization(
+            str(row["obligation_id"]),
+            str(row["validator_id"]),
+            str(row["from_config_digest"]),
+            PurePosixPath(str(row["policy_path"])),
+        )
+        if authorization != _PolicyRotationAuthorization(
+            _HUMAN_OBLIGATION_ID,
+            _HUMAN_VALIDATOR_ID,
+            _PLACEHOLDER_POLICY_DIGEST,
+            TRUST_POLICY_PATH,
+        ):
+            raise VerificationProfileError("protected profile rotation rule is not authorized")
+        authorizations.append(authorization)
+    if len(authorizations) != len(set(authorizations)):
+        raise VerificationProfileError("protected profile rotation rules are duplicated")
+    return tuple(authorizations)
+
+
+def _rotation_updates(
+    head: dict[UnitId, _ProfileInput],
+    protected: list[tuple[UnitId, VerificationObligation]],
+    target_digest: str,
+) -> dict[tuple[UnitId, str], VerificationObligation] | None:
+    """Return complete policy-bound updates, or reject a partial remap."""
+    updates: dict[tuple[UnitId, str], VerificationObligation] = {}
+    for unit_id, obligation in protected:
+        candidate = next(
+            (
+                item
+                for item in head.get(unit_id, _ProfileInput((), ())).obligations
+                if item.obligation_id == obligation.obligation_id
+            ),
+            None,
+        )
+        rotated = candidate and replace(
+            candidate, validator_config_digest=obligation.validator_config_digest
+        )
+        if (
+            candidate is None
+            or candidate.validator_config_digest != target_digest
+            or rotated != obligation
+        ):
+            return None
+        updates[(unit_id, obligation.obligation_id)] = candidate
+    return updates
+
+
+def _authorized_rotation_updates(
+    root: Path,
+    manifest: UnitManifest,
+    base: dict[UnitId, _ProfileInput],
+    head: dict[UnitId, _ProfileInput],
+    authorizations: tuple[_PolicyRotationAuthorization, ...],
+) -> tuple[dict[tuple[UnitId, str], VerificationObligation], list[str]]:
+    """Authorize only complete, policy-byte-bound protected obligation rotations."""
+    updates: dict[tuple[UnitId, str], VerificationObligation] = {}
+    invalid: list[str] = []
+    for authorization in authorizations:
+        protected = [
+            (unit_id, obligation)
+            for unit_id, profile in base.items()
+            if unit_id in set(manifest.expected_managed)
+            for obligation in profile.obligations
+            if obligation.obligation_id == authorization.obligation_id
+            and obligation.validator_id == authorization.validator_id
+            and obligation.validator_config_digest == authorization.from_config_digest
+        ]
+        if not protected:
+            invalid.append("authorized profile rotation has no protected obligations")
+            continue
+        unchanged = _rotation_updates(
+            head, protected, authorization.from_config_digest
+        )
+        if unchanged is not None:
+            continue
+        policy = read_git_blob(root, manifest.head_ref, authorization.policy_path)
+        if policy is None:
+            invalid.append("authorized profile rotation policy is absent from candidate")
+            continue
+        target_digest = hashlib.sha256(policy).hexdigest()
+        candidate_updates = _rotation_updates(head, protected, target_digest)
+        if candidate_updates is None:
+            invalid.append(
+                "authorized profile rotation must restamp every protected "
+                "human-attestation obligation"
+            )
+            continue
+        updates.update(candidate_updates)
+    return updates, invalid
+
+
 def _effective_profile(
     unit_id: UnitId,
     base: _ProfileInput | None,
     head: _ProfileInput | None,
+    authorized_updates: dict[tuple[UnitId, str], VerificationObligation],
 ) -> tuple[VerificationProfile, list[str]]:
     invalid: list[str] = []
     if base is None and head is not None:
@@ -206,16 +338,18 @@ def _effective_profile(
         )
         head = None
     base_requirements = set(base.requirements if base else ())
-    head_requirements = set(head.requirements if head else ())
-    if base_requirements - head_requirements:
+    if base_requirements - set(head.requirements if head else ()):
         invalid.append(f"{unit_id.prompt_relpath}: candidate removed protected requirements")
-    requirements = tuple(sorted(base_requirements | head_requirements))
+    requirements = tuple(sorted(base_requirements | set(head.requirements if head else ())))
     base_obligations = {item.obligation_id: item for item in (base.obligations if base else ())}
     head_obligations = {item.obligation_id: item for item in (head.obligations if head else ())}
     effective = dict(base_obligations)
     for obligation_id, obligation in head_obligations.items():
         protected = base_obligations.get(obligation_id)
         if protected is not None and protected != obligation:
+            if authorized_updates.get((unit_id, obligation_id)) == obligation:
+                effective[obligation_id] = obligation
+                continue
             invalid.append(
                 f"{unit_id.prompt_relpath}: candidate changed protected obligation "
                 f"{obligation_id}"
@@ -243,6 +377,14 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
     base, base_invalid = _load_inputs(root, manifest.base_ref, manifest.repository_id)
     head, head_invalid = _load_inputs(root, manifest.head_ref, manifest.repository_id)
     invalid = base_invalid + head_invalid
+    authorized_updates, rotation_invalid = _authorized_rotation_updates(
+        root,
+        manifest,
+        base,
+        head,
+        _load_rotation_authorizations(root, manifest.base_ref),
+    )
+    invalid.extend(rotation_invalid)
     profiles: list[VerificationProfile] = []
     expected = set(manifest.expected_managed)
     unknown = (set(base) | set(head)) - expected
@@ -254,7 +396,7 @@ def load_verification_profiles(root: Path, manifest: UnitManifest) -> ProfileSet
         if unit_id not in base and unit_id not in head:
             invalid.append(f"{unit_id.prompt_relpath}: verification profile is missing")
         profile, profile_invalid = _effective_profile(
-            unit_id, base.get(unit_id), head.get(unit_id)
+            unit_id, base.get(unit_id), head.get(unit_id), authorized_updates
         )
         profiles.append(profile)
         invalid.extend(profile_invalid)

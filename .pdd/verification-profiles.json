@@ -5248,6 +5248,22 @@
             "pdd/sync_core/supervisor.py"
           ],
           "required": true
+        },
+        {
+          "obligation_id": "pytest-signer-process",
+          "kind": "test",
+          "validator_id": "pytest",
+          "validator_config_digest": "7c29aa937a70b7db28c9353bbad309654e12d3fb4d317edf75b475bbc1880963",
+          "requirement_ids": [
+            "CONTRACT-SHA256:fb45ad84ba8adb320baadeb47cac7917626dfd0e44916e8ffd6709cd13ccb72e"
+          ],
+          "artifact_paths": [
+            "tests/test_sync_core_trust.py"
+          ],
+          "code_under_test_paths": [
+            "pdd/sync_core/signer_process.py"
+          ],
+          "required": true
         }
       ]
     },

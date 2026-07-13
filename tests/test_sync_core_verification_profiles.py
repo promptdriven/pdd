@@ -5,8 +5,6 @@ import hashlib
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from pdd.sync_core import build_unit_manifest, load_verification_profiles
 from pdd.sync_core.identity import initialize_repository_identity
 
@@ -118,7 +116,7 @@ def test_complete_protected_profile_has_full_coverage(tmp_path) -> None:
     commit = _commit(root, "profile")
     profiles = load_verification_profiles(root, _manifest(root, commit, commit))
     assert profiles.coverage == 1.0
-    assert profiles.invalid_reasons == ()
+    assert not profiles.invalid_reasons
 
 
 def test_missing_profile_is_explicit_and_incomplete(tmp_path) -> None:
@@ -180,7 +178,7 @@ def test_protected_authorization_rotates_human_policy_digest(tmp_path) -> None:
     head = _commit(root, "install policy and restamp profile")
 
     profiles = load_verification_profiles(root, _manifest(root, base, head))
-    assert profiles.invalid_reasons == ()
+    assert not profiles.invalid_reasons
     obligation = profiles.profiles[0].obligations[0]
     assert obligation.validator_config_digest == final_digest
 
