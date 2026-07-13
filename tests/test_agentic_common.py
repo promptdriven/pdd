@@ -38,6 +38,7 @@ from pdd.agentic_common import (
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _is_structured_provider_json_prefix,
     _parse_claude_interactive_reply,
     _run_claude_interactive_with_mcp,
     _run_interactive_pty_until_reply,
@@ -54,6 +55,17 @@ from pdd.agentic_common import (
     TASK_CLASS_REPO_SCALE,
     TASK_CLASS_SINGLE_FILE,
 )
+
+
+def test_structured_provider_json_prefix_requires_known_first_top_level_key():
+    assert _is_structured_provider_json_prefix(
+        '  \n { "type" : "result", "result": "quoted UI"'
+    )
+    assert not _is_structured_provider_json_prefix(
+        '{"message":"echoes \\\"result\\\": and ^[[2K Auto-update",'
+        '"type":"result"}'
+    )
+
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
@@ -2311,6 +2323,30 @@ def test_run_with_provider_interactive_uses_mcp_bridge_not_subprocess_run(
     assert kwargs["cwd"] == mock_cwd
     assert kwargs["timeout"] == 123
     assert kwargs["env"]["PDD_CLAUDE_CODE_MODE"] == "interactive"
+
+
+def test_run_with_provider_background_safe_bypasses_interactive_mcp(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_path.write_text("Do work", encoding="utf-8")
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(
+        {"result": "background reply", "total_cost_usd": 0.01}
+    )
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        success, output, _, _ = _run_with_provider(
+            "anthropic", prompt_path, mock_cwd, background_safe=True
+        )
+
+    assert success and output == "background reply"
+    bridge.assert_not_called()
+    assert "-p" in mock_subprocess.call_args.args[0]
 
 
 def test_run_agentic_task_accepts_short_zero_cost_interactive_reply(
@@ -9582,6 +9618,46 @@ def test_run_agentic_task_can_strip_git_worktree_env_for_nested_repo_tests(
     assert "GIT_WORK_TREE" not in env_passed
     assert "GIT_DIR" not in env_passed
     assert "GIT_INDEX_FILE" not in env_passed
+
+
+def test_run_agentic_task_combines_background_safe_with_stripped_git_env(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """The two keyword policies remain independent after their merge."""
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+    os.environ["GIT_DIR"] = "/some/other/repo/.git"
+    os.environ["GIT_INDEX_FILE"] = "/some/other/repo/.git/index"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+        result = run_agentic_task(
+            "instruction",
+            mock_cwd,
+            set_git_work_tree=False,
+            background_safe=True,
+        )
+
+    assert result.success is True
+    bridge.assert_not_called()
+    _args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" not in env_passed
+    assert "GIT_DIR" not in env_passed
+    assert "GIT_INDEX_FILE" not in env_passed
+
 
 # -----------------------------------------------------------------------------
 # Scope Guard Tests (_revert_out_of_scope_changes)
