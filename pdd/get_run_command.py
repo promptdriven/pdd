@@ -57,6 +57,15 @@ def _feeds_value_into_reevaluation(template: str) -> bool:
     all_bases = [t.split("/")[-1] for clause in clauses for t in clause]
     if "eval" in all_bases:
         return True
+    # ``env -S`` / ``env --split-string`` re-parses its argument(s) into a fresh command
+    # line, so a shell + ``-c`` can hide inside a quoted string beyond the top-level token
+    # scan (``env -S 'bash -c' {file}`` → ``bash -c '<path>'`` second-parses the path). No
+    # run/verify template needs ``env -S`` — refuse it.
+    if "env" in all_bases:
+        for clause in clauses:
+            if any(t.startswith("-S") or t == "--split-string"
+                   or t.startswith("--split-string=") for t in clause):
+                return True
     has_shell = any(b in _REEVAL_SHELLS for b in all_bases)
     # A shell that could RECEIVE the value as code via a pipe or an input
     # redirect/here-string — the ``-c`` check would miss both.
@@ -67,6 +76,19 @@ def _feeds_value_into_reevaluation(template: str) -> bool:
         if any(b in _REEVAL_SHELLS for b in bases) \
                 and any(_is_dash_c_option(t) for t in toks):
             return True
+        # A shell command STRING hidden inside a single quoted token (a wrapper's
+        # re-parsed argument) — re-tokenize each multi-word token and re-check.
+        for t in toks:
+            try:
+                sub = shlex.split(t)
+            except ValueError:
+                continue
+            sub_bases = [x.split("/")[-1] for x in sub]
+            if len(sub) > 1 and (
+                "eval" in sub_bases
+                or (any(b in _REEVAL_SHELLS for b in sub_bases)
+                    and any(_is_dash_c_option(x) for x in sub))):
+                return True
     return False
 
 

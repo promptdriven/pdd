@@ -1471,8 +1471,12 @@ def _script_invokes_vitest(script: str) -> bool:
     command clauses on unquoted control operators (``;`` ``&`` ``&&`` ``|`` ``||``) with a
     QUOTE-/ESCAPE-aware lexer, so ``echo x\\; vitest`` stays one clause. An oversized
     script (a manifest padding attack) and a malformed (unbalanced-quote) script both fail
-    closed."""
+    closed. A here-document / here-string (``<<``) is refused: its BODY is data, not
+    commands, so a ``vitest`` line inside a ``cat <<EOF … EOF`` block must NOT prove
+    Vitest, and reliably tracking heredoc body boundaries here is not worth the risk."""
     if len(script) > _MAX_SCRIPT_LEN:
+        return False
+    if "<<" in script:  # heredoc/here-string body text is not an executed command
         return False
     try:
         for line in _strip_shell_comments(script).split("\n"):
