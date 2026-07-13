@@ -125,6 +125,40 @@ def test_linux_sandbox_uses_privileged_namespace_setup_then_drops_uid(
     assert bwrap[bwrap.index("--ro-bind") + 1].startswith("@FD:")
 
 
+def test_linux_sandbox_maps_copied_runtime_to_manifest_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "getuid", lambda: 1234)
+    monkeypatch.setattr(os, "getgid", lambda: 2345)
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+    copied = tmp_path / "copied-native"
+    copied.write_bytes(b"descriptor-bound")
+    manifest_destination = Path("/opt/node/lib/libnode.so")
+
+    argv, _profile = _sandbox_command(
+        ["/bin/true"],
+        (tmp_path,),
+        readable_bindings=((copied, manifest_destination),),
+    )
+
+    bwrap = json.loads(argv[-2])
+    sources = json.loads(argv[-1])
+    destination_index = bwrap.index(str(manifest_destination))
+    assert bwrap[destination_index - 2] == "--ro-bind"
+    placeholder = bwrap[destination_index - 1]
+    assert sources[int(placeholder.removeprefix("@FD:").removesuffix("@"))] == str(
+        copied.resolve()
+    )
+
+
 def test_linux_sandbox_fails_closed_for_root_caller(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

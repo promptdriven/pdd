@@ -181,7 +181,6 @@ def test_vitest_ast_binds_static_template_loader_and_rejects_runtime_config(
     "loader",
     [
         "const p = './helper'; module.require(p);",
-        "import { createRequire } from 'node:module'; const load = createRequire(import.meta.url); load('./helper');",
         "import.meta.glob('./helpers/*.ts');",
     ],
 )
@@ -449,11 +448,11 @@ def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_ca
     dependency.chmod(0o644)
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != mode_identity
 
-    target = tmp_path / "external-target"
+    target = descriptor.dependencies / "linked-target"
     target.mkdir()
     (target / "native.bin").write_bytes(b"one")
     link = descriptor.dependencies / "linked-native"
-    link.symlink_to(target, target_is_directory=True)
+    link.symlink_to("linked-target", target_is_directory=True)
     linked_identity = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
     (target / "native.bin").write_bytes(b"two")
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != linked_identity

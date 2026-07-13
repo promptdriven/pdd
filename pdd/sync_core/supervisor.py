@@ -314,10 +314,11 @@ def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[list[str], Path | None]:
-    # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals,too-many-branches
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
         raise RuntimeError(
@@ -368,6 +369,8 @@ def _sandbox_command(
                 bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
+        for source, destination in readable_bindings:
+            bind("--ro-bind", source.resolve(), destination)
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
@@ -396,6 +399,7 @@ def run_supervised(
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    readable_bindings: tuple[tuple[Path, Path], ...] = (),
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
@@ -405,6 +409,7 @@ def run_supervised(
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
+            readable_bindings=readable_bindings,
             result_fifo=result_fifo, result_fd=result_fd,
         )
     except RuntimeError as exc:

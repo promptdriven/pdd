@@ -15,7 +15,7 @@ import os
 import platform
 import re
 import shlex
-import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -123,6 +123,18 @@ VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
 
 
 @dataclass(frozen=True)
+class VitestToolchainMember:
+    """Captured no-follow identity for one typed toolchain member."""
+
+    role: str
+    relative_path: PurePosixPath
+    kind: str
+    mode: int
+    content_digest: str | None = None
+    link_target: str | None = None
+
+
+@dataclass(frozen=True)
 # pylint: disable=too-many-instance-attributes
 class VitestToolchainDescriptor:
     """Validated immutable identity and typed external Vitest role closure."""
@@ -135,6 +147,7 @@ class VitestToolchainDescriptor:
     lockfile: Path
     identity: str
     dependencies_identity: str
+    members: tuple[VitestToolchainMember, ...]
 
 
 @dataclass(frozen=True)
@@ -143,7 +156,13 @@ class VitestPhaseToolchain:
 
     launcher: Path
     entrypoint: Path
+    lockfile: Path
+    native_runtime: tuple[Path, ...]
     readable_roots: tuple[Path, ...]
+    readable_bindings: tuple[tuple[Path, Path], ...]
+    dependencies: Path
+    controller: Path
+    descriptor: VitestToolchainDescriptor
 
 
 @dataclass(frozen=True)
@@ -907,60 +926,198 @@ def _vitest_config_references(config: object) -> set[PurePosixPath]:
 def _vitest_ast_imports(
     root: Path, ref: str, source_path: PurePosixPath, source: bytes
 ) -> set[PurePosixPath]:
-    """Resolve only AST-proven static local module loaders."""
+    # pylint: disable=too-many-locals,too-many-nested-blocks
+    """Resolve static loaders and positively proven CommonJS aliases."""
     tree = get_parser("typescript" if source_path.suffix in {".ts", ".tsx", ".cts", ".mts"} else "javascript").parse(source)
     if tree.root_node.has_error:
         raise ValueError(f"Vitest support source is not valid JavaScript/TypeScript: {source_path}")
-    values: list[str] = []
+    nodes = []
     pending = [tree.root_node]
     while pending:
         node = pending.pop()
+        nodes.append(node)
         pending.extend(node.named_children)
-        node_text = source[node.start_byte:node.end_byte]
-        if node.type == "identifier" and node_text == b"createRequire":
-            raise ValueError("Vitest createRequire aliases are not bound")
+
+    def node_text(node) -> bytes:
+        return source[node.start_byte:node.end_byte]
+
+    def static_string(node) -> str | None:
+        raw = node_text(node)
+        if node.type == "template_string" and b"${" not in raw:
+            return raw[1:-1].decode("utf-8")
+        if node.type == "string":
+            try:
+                value = ast.literal_eval(raw.decode("utf-8"))
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError("Vitest module loader string is invalid") from exc
+            return value if isinstance(value, str) else None
+        return None
+
+    def call_parts(node):
+        function = node.child_by_field_name("function")
+        arguments = node.child_by_field_name("arguments")
+        return function, tuple(arguments.named_children if arguments else ())
+
+    values: list[str] = []
+    loader_aliases = {"require"}
+    factory_aliases: set[str] = set()
+    recognized_factory_calls: set[tuple[int, int]] = set()
+
+    for node in nodes:
+        if node.type != "import_statement":
+            continue
+        target = node.child_by_field_name("source")
+        if target is None:
+            continue
+        value = static_string(target)
+        if value in {"module", "node:module"}:
+            for specifier in (
+                child for child in nodes
+                if child.type == "import_specifier"
+                and node.start_byte <= child.start_byte < node.end_byte
+            ):
+                name = specifier.child_by_field_name("name")
+                identifiers = [
+                    child for child in specifier.named_children
+                    if child.type == "identifier"
+                ]
+                if name is not None and node_text(name) == b"createRequire":
+                    factory_aliases.add(
+                        node_text(identifiers[-1]).decode("utf-8")
+                    )
+
+    assignments = sorted(
+        (node for node in nodes if node.type in {
+            "variable_declarator", "assignment_expression"
+        }),
+        key=lambda item: (item.start_byte, -item.end_byte),
+    )
+    for node in assignments:
+        left = node.child_by_field_name(
+            "name" if node.type == "variable_declarator" else "left"
+        )
+        right = node.child_by_field_name(
+            "value" if node.type == "variable_declarator" else "right"
+        )
+        if left is None:
+            continue
+        left_name = (
+            node_text(left).decode("utf-8") if left.type == "identifier" else None
+        )
+        if right is None:
+            continue
+        right_raw = node_text(right)
+        right_name = (
+            right_raw.decode("utf-8") if right.type == "identifier" else None
+        )
+        if left_name is not None and right_name in loader_aliases:
+            loader_aliases.add(left_name)
+            continue
+        if left.type == "object_pattern" and right.type == "call_expression":
+            function, arguments = call_parts(right)
+            module_name = static_string(arguments[0]) if len(arguments) == 1 else None
+            if (
+                function is not None
+                and node_text(function) == b"require"
+                and module_name in {"module", "node:module"}
+            ):
+                recognized = False
+                for pattern in left.named_children:
+                    if pattern.type == "pair_pattern":
+                        children = pattern.named_children
+                        value_node = pattern.child_by_field_name("value")
+                        if (
+                            children
+                            and node_text(children[0]) == b"createRequire"
+                            and value_node is not None
+                            and value_node.type == "identifier"
+                        ):
+                            factory_aliases.add(node_text(value_node).decode("utf-8"))
+                            recognized = True
+                    elif (
+                        pattern.type == "shorthand_property_identifier_pattern"
+                        and node_text(pattern) == b"createRequire"
+                    ):
+                        factory_aliases.add("createRequire")
+                        recognized = True
+                if recognized:
+                    continue
+        if right.type == "call_expression":
+            function, arguments = call_parts(right)
+            function_name = (
+                node_text(function).decode("utf-8")
+                if function is not None and function.type == "identifier" else None
+            )
+            if left_name is not None and function_name in factory_aliases:
+                if len(arguments) != 1 or node_text(arguments[0]) != b"import.meta.url":
+                    raise ValueError("Vitest createRequire alias operand is dynamic")
+                loader_aliases.add(left_name)
+                recognized_factory_calls.add((right.start_byte, right.end_byte))
+                continue
+            if (
+                function_name in loader_aliases
+                and len(arguments) == 1
+                and static_string(arguments[0]) is not None
+            ):
+                continue
+        provenance_names = loader_aliases | factory_aliases | {"createRequire"}
+        if (
+            left_name in provenance_names
+            or any(re.search(rb"\b" + re.escape(name.encode()) + rb"\b", right_raw)
+                   for name in provenance_names)
+        ):
+            raise ValueError("Vitest CommonJS loader alias provenance is ambiguous")
+
+    for node in nodes:
+        node_raw = node_text(node)
         if node.type == "subscript_expression" and any(
-            marker in node_text for marker in (b"require", b"createRequire", b"glob")
+            marker in node_raw for marker in (b"require", b"createRequire", b"glob")
         ):
             raise ValueError("Vitest computed module loader is not bound")
         target = None
         if node.type in {"import_statement", "export_statement"}:
             target = node.child_by_field_name("source")
         elif node.type == "call_expression":
-            function = node.child_by_field_name("function")
-            function_text = (
-                source[function.start_byte:function.end_byte]
-                if function is not None else b""
-            )
+            function, arguments = call_parts(node)
+            function_text = node_text(function) if function is not None else b""
             if function is not None and function.type == "member_expression":
                 property_node = function.child_by_field_name("property")
                 property_text = (
-                    source[property_node.start_byte:property_node.end_byte]
+                    node_text(property_node)
                     if property_node is not None else b""
                 )
-                if property_text in {b"require", b"createRequire", b"glob", b"globEager"}:
+                local_operand = any(
+                    (value := static_string(argument)) is not None
+                    and value.startswith(("./", "../"))
+                    for argument in arguments
+                )
+                if property_text in {b"require", b"createRequire", b"glob", b"globEager"} or local_operand:
                     raise ValueError("Vitest alternate module loader is not bound")
-            if function_text in {b"createRequire"}:
-                raise ValueError("Vitest createRequire aliases are not bound")
-            if function is not None and function_text in {b"import", b"require"}:
-                arguments = node.child_by_field_name("arguments")
-                named = arguments.named_children if arguments is not None else []
-                if len(named) != 1:
+            function_name = function_text.decode("utf-8", errors="replace")
+            if function_name in factory_aliases:
+                if (node.start_byte, node.end_byte) not in recognized_factory_calls:
+                    raise ValueError("Vitest createRequire alias provenance is ambiguous")
+                continue
+            if function is not None and (
+                function_text == b"import" or function_name in loader_aliases
+            ):
+                if len(arguments) != 1:
                     raise ValueError("Vitest dynamic module loader is unsupported")
-                target = named[0]
+                target = arguments[0]
+            elif function is not None and function.type == "identifier":
+                local_operand = any(
+                    (value := static_string(argument)) is not None
+                    and value.startswith(("./", "../"))
+                    for argument in arguments
+                )
+                if local_operand:
+                    raise ValueError("Vitest loader alias provenance is unknown")
         if target is None:
             continue
-        raw = source[target.start_byte:target.end_byte]
-        if target.type == "template_string" and b"${" not in raw:
-            value = raw[1:-1].decode("utf-8")
-        elif target.type == "string":
-            try:
-                value = ast.literal_eval(raw.decode("utf-8"))
-            except (SyntaxError, ValueError) as exc:
-                raise ValueError("Vitest module loader string is invalid") from exc
-        else:
+        value = static_string(target)
+        if value is None:
             raise ValueError("Vitest dynamic module loader is unsupported")
-        if isinstance(value, str) and value.startswith(("./", "../")):
+        if value.startswith(("./", "../")):
             values.append(value)
     resolved: set[PurePosixPath] = set()
     for value in values:
@@ -1311,6 +1468,115 @@ def _validator_tree_identity(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _member_content_digest(path: Path) -> str:
+    """Hash one regular member without following a replacement symlink."""
+    digest = hashlib.sha256()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    finally:
+        os.close(descriptor)
+    return digest.hexdigest()
+
+
+def _capture_vitest_member(
+    path: Path, role: str, relative_path: PurePosixPath,
+) -> VitestToolchainMember:
+    """Capture exact lstat type, mode, link spelling, and regular bytes."""
+    metadata = path.lstat()
+    mode = stat.S_IMODE(metadata.st_mode)
+    if stat.S_ISLNK(metadata.st_mode):
+        return VitestToolchainMember(
+            role, relative_path, "symlink", mode,
+            link_target=os.readlink(path),
+        )
+    if stat.S_ISREG(metadata.st_mode):
+        return VitestToolchainMember(
+            role, relative_path, "file", mode,
+            content_digest=_member_content_digest(path),
+        )
+    if stat.S_ISDIR(metadata.st_mode):
+        return VitestToolchainMember(role, relative_path, "directory", mode)
+    raise ValueError(f"Vitest toolchain member has unsupported type: {path}")
+
+
+def _capture_vitest_tree(
+    root: Path, role: str, *, validate_links: bool = True,
+) -> tuple[VitestToolchainMember, ...]:
+    """Capture a complete cache-excluding tree without traversing links."""
+    captured = [_capture_vitest_member(root, role, PurePosixPath("."))]
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as entries:
+            children = sorted(entries, key=lambda item: item.name)
+        for child in children:
+            if child.name in VITEST_CACHE_NAMES:
+                continue
+            path = Path(child.path)
+            relative = PurePosixPath(path.relative_to(root).as_posix())
+            member = _capture_vitest_member(path, role, relative)
+            captured.append(member)
+            if member.kind == "directory":
+                pending.append(path)
+            elif member.kind == "symlink" and validate_links:
+                target = path.resolve(strict=True)
+                if not _path_is_relative_to(target, root.resolve()):
+                    raise ValueError(
+                        f"Vitest dependency symlink escapes captured closure: {relative}"
+                    )
+    return tuple(sorted(captured, key=lambda item: item.relative_path.as_posix()))
+
+
+def _vitest_members_identity(
+    members: tuple[VitestToolchainMember, ...],
+) -> str:
+    """Hash an immutable typed member manifest, not live staged bytes."""
+    payload = [
+        {
+            "role": member.role,
+            "path": member.relative_path.as_posix(),
+            "kind": member.kind,
+            "mode": member.mode,
+            "digest": member.content_digest,
+            "target": member.link_target,
+        }
+        for member in members
+    ]
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _descriptor_vitest_members(
+    launcher: Path,
+    entrypoint: Path,
+    dependencies: Path,
+    native_runtime: tuple[Path, ...],
+    lockfile: Path,
+) -> tuple[VitestToolchainMember, ...]:
+    """Capture every typed role and the complete dependency membership."""
+    members = list(_capture_vitest_tree(dependencies, "dependencies"))
+    members.extend((
+        _capture_vitest_member(launcher, "launcher", PurePosixPath(".")),
+        _capture_vitest_member(entrypoint, "entrypoint", PurePosixPath(".")),
+        _capture_vitest_member(lockfile, "lockfile", PurePosixPath(".")),
+    ))
+    members.extend(
+        _capture_vitest_member(path, "native_runtime", PurePosixPath(str(index)))
+        for index, path in enumerate(native_runtime)
+    )
+    return tuple(sorted(
+        members,
+        key=lambda item: (item.role, item.relative_path.as_posix()),
+    ))
+
+
 def _manifest_regular_path(value: object, role: str) -> Path:
     """Return one canonical non-symlink regular manifest role path."""
     if not isinstance(value, str) or not Path(value).is_absolute():
@@ -1380,6 +1646,9 @@ def _load_vitest_toolchain_descriptor(
     for role_path in (launcher, entrypoint, dependencies, *native_runtime, lockfile):
         if _path_is_relative_to(role_path, root.resolve()):
             raise ValueError("Vitest toolchain roles must be external to candidate checkout")
+    members = _descriptor_vitest_members(
+        launcher, entrypoint, dependencies, native_runtime, lockfile
+    )
     digest = hashlib.sha256(manifest.read_bytes() + b"\0")
     role_paths = {
         "launcher": (launcher,),
@@ -1388,35 +1657,198 @@ def _load_vitest_toolchain_descriptor(
         "native_runtime": native_runtime,
         "lockfile": (lockfile,),
     }
-    dependencies_identity = _validator_tree_identity(dependencies)
+    dependency_members = tuple(
+        member for member in members if member.role == "dependencies"
+    )
+    dependencies_identity = _vitest_members_identity(dependency_members)
     for role, paths in sorted(role_paths.items()):
         digest.update(role.encode() + b"\0")
         for path in paths:
             digest.update(str(path).encode() + b"\0")
             digest.update(_validator_tree_identity(path).encode() + b"\0")
+    digest.update(_vitest_members_identity(members).encode() + b"\0")
     identity = digest.hexdigest()
     if config.vitest_toolchain_identity not in {None, identity}:
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
         manifest.resolve(), launcher, entrypoint, dependencies, native_runtime,
-        lockfile, identity, dependencies_identity,
+        lockfile, identity, dependencies_identity, members,
     )
 
 
 def _copy_vitest_dependencies(source: Path, destination: Path) -> None:
-    """Copy the bound package closure while omitting mutable Vitest caches."""
-    shutil.copytree(
+    """Copy a package closure without following links or copying caches."""
+    source_mode = stat.S_IMODE(source.lstat().st_mode)
+    destination.mkdir(mode=source_mode)
+
+    def copy_directory(source_fd: int, destination_fd: int) -> None:
+        for name in sorted(os.listdir(source_fd)):
+            if name in VITEST_CACHE_NAMES:
+                continue
+            metadata = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+            mode = stat.S_IMODE(metadata.st_mode)
+            if stat.S_ISDIR(metadata.st_mode):
+                child_source = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    os.mkdir(name, mode=mode, dir_fd=destination_fd)
+                    child_destination = os.open(
+                        name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=destination_fd
+                    )
+                    try:
+                        copy_directory(child_source, child_destination)
+                        os.fchmod(child_destination, mode)
+                    finally:
+                        os.close(child_destination)
+                finally:
+                    os.close(child_source)
+            elif stat.S_ISLNK(metadata.st_mode):
+                os.symlink(
+                    os.readlink(name, dir_fd=source_fd),
+                    name,
+                    dir_fd=destination_fd,
+                )
+            elif stat.S_ISREG(metadata.st_mode):
+                child_source = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=source_fd,
+                )
+                try:
+                    child_destination = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        mode,
+                        dir_fd=destination_fd,
+                    )
+                    try:
+                        while chunk := os.read(child_source, 1024 * 1024):
+                            os.write(child_destination, chunk)
+                        os.fchmod(child_destination, mode)
+                    finally:
+                        os.close(child_destination)
+                finally:
+                    os.close(child_source)
+            else:
+                raise ValueError(
+                    f"Vitest toolchain member has unsupported type: {name}"
+                )
+
+    source_fd = os.open(
         source,
-        destination,
-        symlinks=False,
-        ignore=shutil.ignore_patterns(*VITEST_CACHE_NAMES),
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
     )
+    try:
+        destination_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            copy_directory(source_fd, destination_fd)
+            os.fchmod(destination_fd, source_mode)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+
+
+def _vitest_role_members(
+    descriptor: VitestToolchainDescriptor, role: str,
+) -> tuple[VitestToolchainMember, ...]:
+    """Return the captured immutable members for one typed role."""
+    return tuple(member for member in descriptor.members if member.role == role)
+
+
+def _assert_vitest_members(
+    actual: tuple[VitestToolchainMember, ...],
+    expected: tuple[VitestToolchainMember, ...],
+    context: str,
+) -> None:
+    """Fail when current bytes, modes, types, links, or membership differ."""
+    if actual != expected:
+        raise ValueError(f"Vitest {context} member identity mismatch")
+
+
+def _verify_vitest_descriptor_source(
+    descriptor: VitestToolchainDescriptor,
+) -> None:
+    """Verify live source roles against the previously captured descriptor."""
+    current = _descriptor_vitest_members(
+        descriptor.launcher,
+        descriptor.entrypoint,
+        descriptor.dependencies,
+        descriptor.native_runtime,
+        descriptor.lockfile,
+    )
+    _assert_vitest_members(current, descriptor.members, "source")
+
+
+def _copy_vitest_regular(source: Path, destination: Path, mode: int) -> None:
+    """Copy one regular descriptor member with no-follow source semantics."""
+    source_fd = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        destination_fd = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode
+        )
+        try:
+            while chunk := os.read(source_fd, 1024 * 1024):
+                os.write(destination_fd, chunk)
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+    destination.chmod(mode)
+
+
+def _verify_vitest_phase_toolchain(phase: VitestPhaseToolchain) -> None:
+    """Verify the executable copy against captured descriptor identity."""
+    descriptor = phase.descriptor
+    dependency_members = _capture_vitest_tree(
+        phase.dependencies, "dependencies", validate_links=False
+    )
+    _assert_vitest_members(
+        dependency_members,
+        _vitest_role_members(descriptor, "dependencies"),
+        "copied dependencies",
+    )
+    singleton_paths = {
+        "launcher": phase.launcher,
+        "entrypoint": phase.entrypoint,
+        "lockfile": phase.lockfile,
+    }
+    for role, path in singleton_paths.items():
+        actual = (_capture_vitest_member(path, role, PurePosixPath(".")),)
+        _assert_vitest_members(
+            actual, _vitest_role_members(descriptor, role), f"copied {role}"
+        )
+    actual_native = tuple(
+        _capture_vitest_member(path, "native_runtime", PurePosixPath(str(index)))
+        for index, path in enumerate(phase.native_runtime)
+    )
+    _assert_vitest_members(
+        actual_native,
+        _vitest_role_members(descriptor, "native_runtime"),
+        "copied native runtime",
+    )
+    expected_controller = {
+        PurePosixPath("launcher"), PurePosixPath("lockfile"), PurePosixPath("native")
+    } | {
+        PurePosixPath("native") / str(index)
+        for index in range(len(phase.native_runtime))
+    }
+    actual_controller = {
+        PurePosixPath(path.relative_to(phase.controller).as_posix())
+        for path in phase.controller.rglob("*")
+    }
+    if actual_controller != expected_controller:
+        raise ValueError("Vitest copied controller member identity mismatch")
 
 
 def _prepare_vitest_toolchain(
     root: Path, descriptor: VitestToolchainDescriptor
 ) -> VitestPhaseToolchain:
     """Copy identity-checked launcher and dependency bytes into one phase."""
+    _verify_vitest_descriptor_source(descriptor)
     destination = root / "node_modules"
     if destination.exists() or destination.is_symlink():
         raise ValueError("Vitest phase tree already contains candidate node_modules")
@@ -1426,17 +1858,36 @@ def _prepare_vitest_toolchain(
     controller = root / ".pdd-vitest-toolchain"
     controller.mkdir(mode=0o700)
     launcher = controller / "launcher"
-    shutil.copy2(descriptor.launcher, launcher, follow_symlinks=False)
-    launcher.chmod(descriptor.launcher.stat().st_mode & 0o777)
+    launcher_member = _vitest_role_members(descriptor, "launcher")[0]
+    _copy_vitest_regular(descriptor.launcher, launcher, launcher_member.mode)
+    lockfile = controller / "lockfile"
+    lockfile_member = _vitest_role_members(descriptor, "lockfile")[0]
+    _copy_vitest_regular(descriptor.lockfile, lockfile, lockfile_member.mode)
+    native_directory = controller / "native"
+    native_directory.mkdir(mode=0o700)
+    native_runtime = []
+    for index, source in enumerate(descriptor.native_runtime):
+        destination_native = native_directory / str(index)
+        member = _vitest_role_members(descriptor, "native_runtime")[index]
+        _copy_vitest_regular(source, destination_native, member.mode)
+        native_runtime.append(destination_native)
     entrypoint = destination / descriptor.entrypoint.relative_to(
         descriptor.dependencies
     )
     if not entrypoint.is_file() or entrypoint.is_symlink():
         raise ValueError("copied Vitest entrypoint is not a regular file")
-    if _validator_tree_identity(launcher) != _validator_tree_identity(
-        descriptor.launcher
-    ):
-        raise ValueError("copied Vitest launcher identity mismatch")
+    phase = VitestPhaseToolchain(
+        launcher=launcher,
+        entrypoint=entrypoint,
+        lockfile=lockfile,
+        native_runtime=tuple(native_runtime),
+        readable_roots=(),
+        readable_bindings=tuple(zip(native_runtime, descriptor.native_runtime)),
+        dependencies=destination,
+        controller=controller,
+        descriptor=descriptor,
+    )
+    _verify_vitest_phase_toolchain(phase)
     current = _load_vitest_toolchain_descriptor(
         root,
         RunnerConfig(
@@ -1447,7 +1898,8 @@ def _prepare_vitest_toolchain(
     )
     if current.identity != descriptor.identity:
         raise ValueError("Vitest toolchain changed during phase setup")
-    return VitestPhaseToolchain(launcher, entrypoint, descriptor.native_runtime)
+    _verify_vitest_phase_toolchain(phase)
+    return phase
 
 
 def _command_part_identity(root: Path, part: str) -> str:
@@ -1539,9 +1991,15 @@ def _runtime_manifest(
     """Return byte-change-sensitive metadata without rereading runtime bytes."""
     manifest = []
     for name, path in entries:
-        stat = path.stat()
+        metadata = path.stat()
         manifest.append(
-            (name, str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+            (
+                name,
+                str(path),
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+                metadata.st_size,
+            )
         )
     return tuple(manifest)
 
@@ -2169,6 +2627,9 @@ def _run_vitest(
         descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
         if phase_toolchain is None:
             phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
+        if phase_toolchain.descriptor.identity != descriptor.identity:
+            raise ValueError("Vitest copied descriptor identity mismatch")
+        _verify_vitest_phase_toolchain(phase_toolchain)
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
         return RunnerExecution(
             "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
@@ -2214,6 +2675,7 @@ def _run_vitest(
                 env=_vitest_environment(home),
                 writable_roots=(scratch, *cache_roots),
                 readable_roots=(reporter, *phase_toolchain.readable_roots),
+                readable_bindings=phase_toolchain.readable_bindings,
                 result_fifo=result_fifo,
                 result_fd=result_fd,
             )
@@ -2241,6 +2703,7 @@ def _run_vitest(
         if _validator_tree_identity(root) != before:
             return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
         try:
+            _verify_vitest_phase_toolchain(phase_toolchain)
             if _load_vitest_toolchain_descriptor(tool_root, replace(
                 config, vitest_toolchain_identity=descriptor.identity
             )).identity != descriptor.identity:
@@ -2722,6 +3185,10 @@ def _make_vitest_phase_read_only(root: Path) -> None:
         if ".git" in relative.parts or any(
             name in relative.parts for name in VITEST_CACHE_NAMES
         ):
+            continue
+        if relative.parts and relative.parts[0] in {
+            "node_modules", ".pdd-vitest-toolchain"
+        }:
             continue
         if path.is_symlink():
             raise ValueError(f"copied Vitest phase contains symlink: {relative}")
