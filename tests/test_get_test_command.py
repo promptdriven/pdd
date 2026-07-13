@@ -675,6 +675,29 @@ class TestWorkspaceMembershipHardening:
         (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
         assert _workspace_globs_for(repo) == []
 
+    def test_pnpm_yaml_uses_yaml_1_2_scalar_resolution(self, tmp_path):
+        """pnpm parses YAML 1.2, whose core schema resolves ``0o12`` as octal and
+        ``1e3`` as a float — non-string ``packages`` entries that must be rejected.
+        PyYAML (1.1) would keep them as strings and falsely prove membership, so the
+        loader is configured with YAML-1.2 scalar resolution. A *quoted* ``"0o12"``
+        is a string in both and stays a valid glob."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text("packages:\n  - 0o12\n  - 1e3\n")
+        assert _workspace_globs_for(anc) == []  # both are numbers → no globs
+        (anc / "pnpm-workspace.yaml").write_text('packages:\n  - "0o12"\n')
+        assert _workspace_globs_for(anc) == ["0o12"]  # quoted → string glob
+
+    def test_pnpm_yaml_duplicate_keys_fail_closed(self, tmp_path):
+        """pnpm rejects duplicate mapping keys; PyYAML silently keeps the last. The
+        loader raises on a duplicate so the parse fails membership closed rather than
+        adopting whichever value PyYAML happened to keep."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - a/*\npackages:\n  - b/*\n")
+        assert _workspace_globs_for(anc) == []
+
     def test_non_dict_package_json_does_not_crash(self, tmp_path):
         """A package.json whose top level is a JSON array must not raise."""
         anc = tmp_path / "anc"
@@ -1197,6 +1220,11 @@ class TestWorkspaceMembershipHardening:
         assert _has_brace_range("{foo..bar}") is False
         assert _has_brace_range("{1.0..3.0}") is False
         assert _has_brace_range("{..}") is False
+        # Plus-prefixed and non-ASCII/Unicode endpoints are literal, not ranges.
+        assert _has_brace_range("{+1..+3}") is False
+        assert _has_brace_range("{١..٣}") is False  # Arabic-Indic digits
+        assert _package_matches_workspace(
+            ("packages", "{+1..+3}"), ["packages/{+1..+3}"]) is True
         # A literal multi-char-endpoint "range" matches its literal dir name.
         assert _package_matches_workspace(
             ("packages", "{foo..bar}"), ["packages/{foo..bar}"]) is True

@@ -144,26 +144,31 @@ def _has_complete_bracket_class(raw: str) -> bool:
 
 def _is_range_body(body: str) -> bool:
     """True when ``body`` (the content of a ``{...}``) is a real minimatch brace
-    *range*: ``X..Y`` or ``X..Y..Z`` where the two endpoints are BOTH signed
-    integers or BOTH single characters, and the optional step ``Z`` is an integer.
+    *range*: ``X..Y`` or ``X..Y..Z`` where the two endpoints are BOTH ASCII integers
+    (optional leading ``-`` — a leading ``+`` is NOT a range) or BOTH single ASCII
+    letters, and the optional step ``Z`` is an ASCII integer.
 
-    Multi-character non-integer endpoints (``foo..bar``), non-integer numeric-looking
-    endpoints (``1.0..3.0``), and empty endpoints (``..``) are NOT ranges — minimatch
-    leaves them literal — so they are NOT flagged."""
+    Anything else is NOT a range — minimatch leaves it literal — so it is NOT
+    flagged: multi-character endpoints (``foo..bar``), non-integer numeric-looking
+    endpoints (``1.0..3.0``), plus-prefixed (``+1..+3``), non-ASCII/Unicode digits or
+    letters, and empty endpoints (``..``)."""
     parts = body.split("..")
     if len(parts) not in (2, 3):
         return False
 
-    def _is_int(text: str) -> bool:
-        digits = text[1:] if text[:1] in "+-" else text
-        return bool(digits) and digits.isdigit()
+    def _is_ascii_int(text: str) -> bool:  # optional leading '-' only, ASCII digits
+        digits = text[1:] if text[:1] == "-" else text
+        return bool(digits) and digits.isascii() and digits.isdigit()
+
+    def _is_ascii_alpha(text: str) -> bool:  # a single ASCII letter
+        return len(text) == 1 and text.isascii() and text.isalpha()
 
     start, end = parts[0], parts[1]
-    endpoints_ok = (_is_int(start) and _is_int(end)) or (
-        len(start) == 1 and len(end) == 1)
+    endpoints_ok = (_is_ascii_int(start) and _is_ascii_int(end)) or (
+        _is_ascii_alpha(start) and _is_ascii_alpha(end))
     if not endpoints_ok:
         return False
-    return len(parts) == 2 or _is_int(parts[2])
+    return len(parts) == 2 or _is_ascii_int(parts[2])
 
 
 def _has_brace_range(raw: str) -> bool:
@@ -476,6 +481,53 @@ def _workspace_globs_for(ancestor: Path, cache: Optional[dict] = None) -> list:
     return _workspace_globs_uncached(ancestor)
 
 
+_PNPM_YAML_LOADER_CACHE: dict = {}
+
+
+def _pnpm_yaml_loader(yaml):
+    """Return (memoized) a ``yaml.SafeLoader`` subclass whose scalar resolution and
+    duplicate-key handling match pnpm's YAML 1.2 parser more closely than PyYAML's
+    default YAML 1.1 rules, so a ``pnpm-workspace.yaml`` cannot falsely prove
+    membership through a version discrepancy:
+
+      * YAML 1.2's core schema resolves several unquoted scalar forms as NUMBERS that
+        PyYAML (1.1) leaves as strings — octal ``0o12`` and exponent/leading-dot
+        floats (``1e3``, ``+.5``). Resolving them as numbers makes ``_string_globs``
+        reject a bare-number ``packages`` entry (as pnpm does), while a *quoted*
+        ``"0o12"`` — a string in both — stays a valid glob.
+      * pnpm rejects duplicate mapping keys; PyYAML silently keeps the last. A custom
+        map constructor raises on a duplicate so the parse fails closed.
+    """
+    cached = _PNPM_YAML_LOADER_CACHE.get("loader")
+    if cached is not None:
+        return cached
+
+    class _Loader(yaml.SafeLoader):  # pylint: disable=too-few-public-methods
+        pass
+
+    _Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:int", re.compile(r"^0o[0-7]+$"), list("0"))
+    _Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:float",
+        re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$"),
+        list("-+0123456789."))
+
+    def _construct_mapping_no_duplicates(loader, node, deep=False):
+        mapping = {}
+        for key_node, value_node in node.value:
+            key = loader.construct_object(key_node, deep=deep)
+            if key in mapping:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"duplicate key {key!r}", key_node.start_mark)
+            mapping[key] = loader.construct_object(value_node, deep=deep)
+        return mapping
+
+    _Loader.add_constructor(
+        "tag:yaml.org,2002:map", _construct_mapping_no_duplicates)
+    _PNPM_YAML_LOADER_CACHE["loader"] = _Loader
+    return _Loader
+
+
 def _workspace_globs_uncached(ancestor: Path) -> list:
     """See :func:`_workspace_globs_for`; this performs the actual filesystem read."""
     # ``pnpm-workspace.yaml`` is authoritative when *present at all* — even as a
@@ -493,7 +545,9 @@ def _workspace_globs_uncached(ancestor: Path) -> list:
         if text is None:
             return []
         try:
-            data = yaml.safe_load(text)
+            # Parse with pnpm-compatible (YAML 1.2 core + no-duplicate-key) rules so
+            # a version discrepancy cannot falsely prove membership.
+            data = yaml.load(text, Loader=_pnpm_yaml_loader(yaml))
         except (yaml.YAMLError, ValueError, TypeError, RecursionError, OverflowError):
             # Any construction failure on untrusted YAML → membership unproven
             # (fail closed). ``yaml.YAMLError`` does NOT cover errors raised by
