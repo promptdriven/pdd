@@ -3,11 +3,18 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 import csv
 import io
+import json
+import shlex
 import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, TestCommand
+from pdd.get_test_command import (
+    TestCommand,
+    _detect_ts_test_runner,
+    _relative_matches_workspace_glob,
+    get_test_command_for_file,
+)
 
 
 class TestGetTestCommandForFilePython:
@@ -286,6 +293,319 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescriptreact")
 
         assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
+
+    def test_jest_config_found_more_than_five_parents_up(self, tmp_path):
+        """A colocated suite deep in a Next.js app tree must still find Jest.
+
+        Regression: the runner detector previously walked up only 5 parents, so a
+        page test at frontend/src/app/<route>/<sub>/__tests__/ never reached
+        frontend/jest.config.js and fell back to a non-test runner. The walk now
+        continues up to the repository root.
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / ".git").mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "package.json").write_text("{}")
+        # 7 directories below the config (well past the old 5-parent cap).
+        test_dir = (
+            config_dir / "src" / "app" / "admin" / "hackathon" / "events"
+            / "eventId" / "__tests__"
+        )
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "test_page.tsx"
+        test_file.write_text("describe('page', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == config_dir
+
+    def test_jest_command_targets_path_literally_with_run_tests_by_path(self, tmp_path):
+        """Jest must be invoked with --runTestsByPath so absolute paths match.
+
+        Jest otherwise treats the trailing path as a regex; Next.js dynamic-route
+        segments like [eventId]/[slug] are character classes that never match the
+        literal bracketed path.
+        """
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / "package.json").write_text("{}")
+        test_file = tmp_path / "tests" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('c', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert "--runTestsByPath" in result.command, result.command
+
+    def test_dynamic_route_bracket_path_is_targeted_literally(self, tmp_path):
+        """A bracketed dynamic-route suite path is passed to Jest verbatim."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "package.json").write_text("{}")
+        test_dir = config_dir / "src" / "app" / "events" / "[slug]" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "test_page.tsx"
+        test_file.write_text("describe('page', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescriptreact")
+
+        assert "--runTestsByPath" in result.command
+        # The resolved absolute path (brackets intact) must appear literally.
+        assert str(test_file.resolve()) in result.command, result.command
+
+    def test_walk_finds_workspace_root_config_past_leaf_package_json(self, tmp_path):
+        """A workspace leaf must inherit the workspace-root runner config.
+
+        Regression guard for the boundary: a leaf package has its own
+        package.json but the Jest config lives at the workspace/repo root. The
+        walk must pass *through* the leaf manifest and still find the root config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")  # leaf manifest, no jest config
+        test_dir = leaf / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "widget.test.ts"
+        test_file.write_text("describe('w', () => {})")
+
+        cmd, returned_dir = _detect_ts_test_runner(test_file)
+        assert "npx jest" in cmd
+        assert returned_dir == repo, returned_dir
+
+    def test_walk_stops_at_repository_root_and_does_not_escape(self, tmp_path):
+        """The detector must not adopt a config above the repository root.
+
+        A jest.config.js in an unrelated ancestor above the .git repo root must
+        be ignored; without an in-repo config we fall back to CSV.
+        """
+        # Stray config above the repo root — must be ignored.
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()  # repo root, no jest config inside
+        test_file = repo / "src" / "test_calculator.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("console.log('x')")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        # Falls back to the CSV runner (npx tsx), never the out-of-repo Jest.
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_independent_leaf_package_does_not_adopt_repo_root_config(self, tmp_path):
+        """An independent package must not adopt an unrelated repo-root config.
+
+        The leaf has its own package.json and is NOT a workspace member (the repo
+        root declares no ``workspaces``), so the walk must stop at the leaf and
+        fall back to CSV rather than crossing to the repository-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")  # no "workspaces"
+        leaf = repo / "packages" / "independent"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")  # own project, no jest config
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_unrelated_package_under_workspace_root_is_not_a_member(self, tmp_path):
+        """A package that does not match the workspace globs is not a member.
+
+        The repo root declares ``workspaces: ["packages/*"]`` but the test lives
+        under ``vendor/tool`` (its own package.json). It must NOT adopt the
+        repo-root Jest config — membership requires a glob match, not merely the
+        presence of a workspaces declaration somewhere above.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        vendor = repo / "vendor" / "tool"
+        vendor.mkdir(parents=True)
+        (vendor / "package.json").write_text("{}")  # not under packages/*
+        test_file = vendor / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_pnpm_exclusion_pattern_excludes_matching_package(self, tmp_path):
+        """A pnpm `!` exclusion must remove a package from workspace membership.
+
+        With `packages: ['packages/**', '!**/test/**']`, a package under
+        `packages/app/test/fixture` matches the positive glob but is explicitly
+        excluded, so it must NOT inherit the workspace-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - 'packages/**'\n  - '!**/test/**'\n"
+        )
+        pkg = repo / "packages" / "app" / "test" / "fixture"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")  # own manifest, excluded from ws
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_brace_expansion_in_workspace_glob_matches_member(self, tmp_path):
+        """npm/Yarn brace-expansion globs must be honored, not matched literally.
+
+        `workspaces: ['packages/{app,lib}']` makes `packages/app` a member, which
+        must inherit the workspace-root Jest config.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/{app,lib}"]}')
+        pkg = repo / "packages" / "app"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")  # member, no own config
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command, result.command
+
+    def test_later_positive_workspace_pattern_reincludes_package(self, tmp_path):
+        """The last matching pattern decides membership, including re-inclusion."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - 'packages/**'\n  - '!packages/**'\n  - 'packages/app'\n"
+        )
+        pkg = repo / "packages" / "app"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result.command, result.command
+
+    def test_invalid_or_over_budget_workspace_declaration_fails_closed(self, tmp_path):
+        """One unsupported pattern or too many patterns leaves membership unproven."""
+        declarations = (
+            ["packages/**", "packages/[app]"],
+            ["packages/**"] * 129,
+        )
+        for index, patterns in enumerate(declarations):
+            repo = tmp_path / f"repo-{index}"
+            repo.mkdir()
+            (repo / ".git").mkdir()
+            (repo / "jest.config.js").write_text("module.exports = {};")
+            (repo / "package.json").write_text(json.dumps({"workspaces": patterns}))
+            pkg = repo / "packages" / "app"
+            pkg.mkdir(parents=True)
+            (pkg / "package.json").write_text("{}")
+            test_file = pkg / "src" / "widget.test.ts"
+            test_file.parent.mkdir()
+            test_file.write_text("describe('w', () => {})")
+
+            result = get_test_command_for_file(str(test_file), language="typescript")
+
+            assert result is not None
+            assert "npx jest" not in result.command, result.command
+
+    def test_repeated_double_star_pattern_is_bounded(self):
+        """Many ``**`` segments match iteratively within the segment budget."""
+        rel_parts = tuple(["segment"] * 127 + ["target"])
+        pattern = "/".join(["**"] * 127 + ["target"])
+
+        assert _relative_matches_workspace_glob(rel_parts, pattern)
+
+    def test_non_git_project_stops_at_package_json_boundary(self, tmp_path):
+        """Without a .git ancestor, stop at the nearest package.json.
+
+        A stray jest.config.js above an independent project's package.json must
+        not be adopted, and the walk must not run to the filesystem root.
+        """
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")  # stray
+        project = tmp_path / "project"
+        project.mkdir()
+        (project / "package.json").write_text("{}")  # boundary, no .git, no config
+        test_file = project / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_playwright_bracketed_spec_path_is_regex_escaped(self, tmp_path):
+        """Playwright positional args are regexes, so bracketed paths must escape.
+
+        `.spec` files under a Next.js dynamic route ([slug]) would otherwise never
+        match Playwright's regex filter.
+        """
+        repo = tmp_path / "frontend"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "playwright.config.ts").write_text("export default {};")
+        test_dir = repo / "e2e" / "events" / "[slug]"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "landing.spec.ts"
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result.command.startswith("npx playwright test"), result.command
+        # Brackets must be regex-escaped so Playwright matches them literally.
+        assert r"\[slug\]" in result.command, result.command
+
+    def test_resolved_path_is_shell_quoted(self, tmp_path):
+        """The path is shell-quoted so shell=True callers survive spaces/metachars."""
+        repo = tmp_path / "my app"  # space in an ancestor directory
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        test_dir = repo / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "widget.test.ts"
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        # The command must round-trip through a POSIX shell tokenizer back to the
+        # exact resolved path (no re-splitting on the space).
+        argv = shlex.split(result.command)
+        assert str(test_file.resolve()) in argv, (result.command, argv)
 
 
 class TestPlaywrightDetection:
@@ -725,3 +1045,123 @@ class TestIssue1080MonorepoCwd:
         assert result is not None
         # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
         assert result.cwd is None
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestTestCommandDataclass:
+    """Tests for the TestCommand dataclass itself."""
+
+    def test_testcommand_default_cwd_is_none(self):
+        tc = TestCommand(command="pytest foo.py")
+        assert tc.command == "pytest foo.py"
+        assert tc.cwd is None
+
+    def test_testcommand_with_explicit_cwd(self, tmp_path):
+        tc = TestCommand(command="npx jest", cwd=tmp_path)
+        assert tc.cwd == tmp_path
+
+    def test_testcommand_not_collected_by_pytest(self):
+        # __test__ = False prevents pytest from treating it as a test class
+        assert getattr(TestCommand, "__test__", True) is False
+
+
+class TestAdditionalRunnerDetection:
+    """Additional coverage for runner detection edge cases."""
+
+    def test_vitest_mjs_config_detected(self, tmp_path):
+        (tmp_path / "vitest.config.mjs").write_text("export default {};")
+        (tmp_path / "package.json").write_text("{}")
+        test_file = tmp_path / "src" / "foo.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, cfg_dir = result
+        assert "npx vitest" in cmd
+        assert cfg_dir == tmp_path
+
+    def test_jest_mjs_config_detected(self, tmp_path):
+        (tmp_path / "jest.config.mjs").write_text("export default {};")
+        test_file = tmp_path / "foo.test.ts"
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx jest" in cmd
+
+    def test_playwright_js_config_for_spec_file(self, tmp_path):
+        (tmp_path / "playwright.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "login.spec.ts"
+        test_file.write_text("test('login', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx playwright" in cmd
+
+    def test_playwright_mjs_config_for_spec_file(self, tmp_path):
+        (tmp_path / "playwright.config.mjs").write_text("export default {};")
+        test_file = tmp_path / "login.spec.tsx"
+        test_file.write_text("test('x', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, _ = result
+        assert "npx playwright" in cmd
+
+    def test_nearest_config_wins_over_ancestor(self, tmp_path):
+        """A closer jest.config should be preferred over a more distant one."""
+        (tmp_path / "vitest.config.ts").write_text("export default {};")
+        (tmp_path / "package.json").write_text("{}")
+        inner = tmp_path / "packages" / "app"
+        inner.mkdir(parents=True)
+        (inner / "jest.config.js").write_text("module.exports = {};")
+        test_file = inner / "src" / "foo.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, cfg_dir = result
+        assert "npx jest" in cmd
+        assert cfg_dir == inner
+
+    def test_absolute_resolved_path_used_in_command(self, tmp_path, monkeypatch):
+        """The command should embed the resolved absolute path of the test file."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        (tmp_path / "package.json").write_text("{}")
+        sub = tmp_path / "src"
+        sub.mkdir()
+        test_file = sub / "foo.test.ts"
+        test_file.write_text("test('x', () => {});")
+
+        # Change into the directory and pass a relative path
+        monkeypatch.chdir(sub)
+        result = get_test_command_for_file("foo.test.ts", language="typescript")
+        assert result is not None
+        assert str(test_file.resolve()) in result.command
+
+
+class TestLoadLanguageFormatIntegration:
+    """Integration tests that exercise CSV loading via public entry point."""
+
+    def test_rust_extension_uses_cargo_test_from_csv(self):
+        result = get_test_command_for_file("/tmp/lib.rs", language="rust")
+        # CSV has 'cargo test' for .rs with no {file} placeholder
+        assert result is not None
+        assert "cargo test" in result.command
+
+    def test_go_extension_uses_go_test_from_csv(self):
+        result = get_test_command_for_file("/tmp/foo_test.go", language="go")
+        assert result is not None
+        assert "go test" in result.command
+        assert "/tmp/foo_test.go" in result.command
