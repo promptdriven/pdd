@@ -174,6 +174,8 @@ def _evidence(
 
 
 def _unit_verdict(context: ReportContext, unit: ManifestUnit) -> SyncVerdict:
+    if context.manifest.invalid_reasons:
+        return _error_verdict(unit, BaselineStatus.CORRUPT, "manifest is invalid")
     profile = context.profiles.for_unit(unit.unit_id)
     if profile is None:
         return _error_verdict(unit, BaselineStatus.CORRUPT, "profile is missing")
