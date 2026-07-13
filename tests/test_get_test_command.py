@@ -1499,8 +1499,8 @@ class TestAdditionalCoverage:
         assert result is not None
         assert "--runTestsByPath" not in result.command
 
-    def test_lerna_default_packages_glob_makes_leaf_member(self, tmp_path):
-        """A lerna.json without explicit packages defaults to packages/*."""
+    def test_lerna_omitted_packages_does_not_invent_workspace(self, tmp_path):
+        """Lerna without packages or package-manager proof fails closed."""
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / ".git").mkdir()
@@ -1515,6 +1515,46 @@ class TestAdditionalCoverage:
         test_file.write_text("describe('w', () => {})")
 
         result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_lerna_null_packages_does_not_authorize_root_runner(self, tmp_path):
+        """An explicit null Lerna packages value is invalid, not a default."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text("{}")
+        (repo / "lerna.json").write_text('{"packages": null}')
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" not in result.command
+
+    def test_lerna_omitted_packages_reuses_proven_npm_workspace(self, tmp_path):
+        """A valid package-manager declaration can independently prove membership."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text('{"workspaces": ["packages/*"]}')
+        (repo / "lerna.json").write_text("{}")
+        leaf = repo / "packages" / "app"
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
         assert result is not None
         assert "npx jest" in result.command
 
@@ -1582,6 +1622,37 @@ class TestAdditionalCoverage:
 
 class TestRunnerBoundaryRegressions:
     """Public-boundary regressions for ownership proof and bounded discovery."""
+
+    @pytest.mark.parametrize(
+        ("relative_package", "patterns", "inherits_jest"),
+        (
+            (("packages", ".hidden"), ["packages/*"], False),
+            (("packages", ".hidden"), ["packages/.*"], True),
+            (("packages", "visible"), ["packages/*"], True),
+            (("node_modules", "dependency"), ["**"], False),
+            (("packages", "visible"), ["**"], True),
+        ),
+    )
+    def test_npm_workspace_provider_boundaries_control_root_runner_inheritance(
+        self, tmp_path, relative_package, patterns, inherits_jest
+    ):
+        """npm dot and node_modules rules govern public runner inheritance."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(json.dumps({"workspaces": patterns}))
+        leaf = repo.joinpath(*relative_package)
+        leaf.mkdir(parents=True)
+        (leaf / "package.json").write_text("{}")
+        test_file = leaf / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("test('x', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert ("npx jest" in result.command) is inherits_jest
 
     @pytest.mark.parametrize("extglob", ("?(foo)", "*(foo)", "+(foo)", "@(foo)", "!(foo)"))
     @pytest.mark.parametrize("excluded", (False, True))
