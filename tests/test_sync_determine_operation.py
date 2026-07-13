@@ -9552,3 +9552,147 @@ def test_get_pdd_file_paths_arch_branch_nested_category_example_test(tmp_path, m
     paths = get_pdd_file_paths("foo", "python", "prompts")
     assert paths["example"].resolve(strict=False) == (tmp_path / "examples" / "nested" / "foo_example.py").resolve()
     assert paths["test"].resolve(strict=False) == (tmp_path / "tests" / "nested" / "test_foo.py").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-12 review hardening: the approved-alias policy must hold through the
+# INTERNAL recursive architecture-hint search and nested-subproject
+# finalization; alias authority must come from a REAL git worktree (not a
+# planted `.git`); and an unsafe path-owning row must not suppress a genuine
+# ambiguity between two valid legacy rows.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_approved_alias_flat_filename_recursive_discovery(tmp_path, monkeypatch):
+    """r12 F1: a LEGACY FLAT architecture filename (`widget_python.prompt`) whose file
+    lives nested is found by the INTERNAL recursive rglob search. When that nested file
+    is an APPROVED in-repo alias (symlink escaping the prompts root but staying inside
+    the git repository), the recursive search must honour it — not raise
+    UnsafePromptPathError. This exercises the recursive path (line ~422), not the
+    qualified-filename direct path covered by the r11 test."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / "src" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    try:
+        (root / "prompts" / "nested" / "widget_python.prompt").symlink_to(
+            "../../canonical-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "src" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    # FLAT filename (not `nested/widget_python.prompt`): the direct join misses, so the
+    # bare request drops into the recursive rglob search.
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "canonical-prompts" / "widget_python.prompt"
+    ).resolve()
+    assert paths["code"].resolve(strict=False) == (root / "src" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_nested_subproject_alias_survives_finalization(tmp_path, monkeypatch):
+    """r12 F1: a nested subproject's approved alias may target a canonical prompt
+    ELSEWHERE in the enclosing repository. It passes discovery, and finalization must
+    also accept it (the resolved target stays inside the validated enclosing repo) —
+    it must NOT be rejected just because it escapes the nested governing/prompts root."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    # Canonical prompt shared at the repo top, OUTSIDE the nested subproject.
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    # A nested .pddrc + architecture.json make `sub` its own governing root.
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8"
+    )
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()
+    assert paths["code"].resolve(strict=False) == (sub / "src" / "widget.py").resolve()
+
+
+def test_enclosing_git_root_rejects_planted_git_marker(tmp_path):
+    """r12 F2: an empty/planted `.git` directory is NOT a real worktree, so
+    _enclosing_git_root must return None for it while returning the resolved root for a
+    genuine repository."""
+    import sync_determine_operation as sync_determine_module
+    fake = tmp_path / "fake"
+    (fake / ".git").mkdir(parents=True)
+    (fake / "prompts").mkdir()
+    assert sync_determine_module._enclosing_git_root(fake / "prompts") is None
+
+    real = tmp_path / "real"
+    real.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=real, check=True)
+    (real / "prompts").mkdir()
+    resolved = sync_determine_module._enclosing_git_root(real / "prompts")
+    assert resolved is not None
+    assert resolved.resolve() == real.resolve()
+
+
+def test_get_pdd_file_paths_fake_git_marker_rejects_escaping_alias(tmp_path, monkeypatch):
+    """r12 F2: a planted empty `.git` in a NON-repository tree must not grant alias
+    authority — an escaping prompt symlink is still rejected, so a later `update` cannot
+    overwrite the non-prompt file it points at."""
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+    (root / ".git").mkdir()  # planted, empty — NOT a real repository
+    victim = root / "victim.py"
+    original = "SECRET = 1  # must remain unchanged\n"
+    victim.write_text(original, encoding="utf-8")
+    try:
+        (root / "prompts" / "credits_python.prompt").symlink_to("../victim.py")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    monkeypatch.chdir(root)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("credits", "python", prompts_dir="prompts")
+    assert victim.read_text(encoding="utf-8") == original
+
+
+def test_get_pdd_file_paths_unsafe_owner_row_does_not_suppress_ambiguity(tmp_path, monkeypatch):
+    """r12 F3: a row whose FILENAME path-owns the qualified basename but whose FILEPATH
+    escapes containment (`../../nested/widget.py`) must NOT set the owner flag — else it
+    is dropped by the safety pass while suppressing two valid legacy rows, collapsing a
+    genuine ambiguity to a silent first-match. The owner flag must be built from the
+    fully-eligible (contained + right-extension) row set."""
+    import sync_determine_operation as sync_determine_module
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            # Unsafe: filename path-owns `nested/widget`, but filepath escapes the root.
+            {"filename": "nested/widget_python.prompt", "filepath": "../../nested/widget.py"},
+            # Two valid legacy rows -> two distinct nested outputs = genuine ambiguity.
+            {"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts")

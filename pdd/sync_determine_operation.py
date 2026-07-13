@@ -426,12 +426,15 @@ def _resolve_prompt_path_from_architecture(
                 candidate, basename
             ):
                 continue
-            try:
-                candidate.resolve(strict=False).relative_to(resolved_root)
-            except (OSError, RuntimeError, ValueError):
+            # Alias-aware containment (R12 F1): use the SAME predicate as direct and
+            # architecture-hint discovery so an APPROVED in-repo prompt alias — a
+            # symlink escaping the prompts root but staying inside the enclosing git
+            # repository — is honoured here too. A symlink leaving the repository (or
+            # a non-repository tree) still fails and is treated as unsafe (R8).
+            if _prompt_candidate_within_root(candidate, resolved_root):
+                matches.append(candidate)
+            else:
                 unsafe_matches.append(candidate)
-                continue
-            matches.append(candidate)
         if matches and context_prefix:
             matches = [
                 m for m in matches
@@ -484,14 +487,52 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     return None
 
 
-def _enclosing_git_root(path: Any) -> Optional[Path]:
-    """Nearest ancestor directory that contains a ``.git`` entry, else ``None``.
+@lru_cache(maxsize=2048)
+def _validated_git_worktree_root(directory: str) -> Optional[str]:
+    """Resolved worktree root reported by Git for ``directory``, else ``None``.
 
-    Uses lexical (``os.path.abspath``) ancestry — never follows the leaf symlink —
-    so an APPROVED in-repo prompt alias (#1991: ``prompts/nested/foo`` symlinked to
-    an in-repository canonical location) can be recognised as repository-internal.
-    Returns ``None`` for a tree with no ``.git``, so a plain escaping symlink in a
-    non-repository directory is still rejected by R8.
+    Runs ``git -C <directory> rev-parse --show-toplevel`` so authority is granted
+    only by a *real* repository, never by an unvalidated ``.git`` marker: an empty
+    ``.git`` directory (or a planted ``.git`` file) makes ``rev-parse`` fail, so a
+    symlink escaping into such a tree is still rejected (R8, R12 F2). The reported
+    top-level is resolved (``os.path.realpath``) so the boundary is comparable to a
+    resolved alias target. Cached per absolute directory for the process; callers
+    only reach it on a leaf-symlink root escape, so the subprocess is rare.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", directory, "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    if not top:
+        return None
+    try:
+        return os.path.realpath(top)
+    except (OSError, ValueError):
+        return None
+
+
+def _enclosing_git_root(path: Any) -> Optional[Path]:
+    """Resolved root of the real Git worktree enclosing ``path``, else ``None``.
+
+    Delegates to :func:`_validated_git_worktree_root`, which asks Git itself for the
+    worktree top-level rather than trusting a ``.git`` entry to exist. This lets an
+    APPROVED in-repo prompt alias (#1991: ``prompts/nested/foo`` symlinked to an
+    in-repository canonical location) be recognised as repository-internal, while a
+    planted/empty ``.git`` marker in a non-repository tree grants no authority
+    (R12 F2). Returns ``None`` for any directory Git does not report as a worktree,
+    so a plain escaping symlink outside a real repository is still rejected by R8.
+
+    The *lexical* absolute of ``path`` seeds the query (the leaf symlink is never
+    followed), but the returned boundary is Git's resolved top-level.
     """
     try:
         current = Path(os.path.abspath(path))
@@ -499,10 +540,10 @@ def _enclosing_git_root(path: Any) -> Optional[Path]:
         return None
     if not current.is_dir():
         current = current.parent
-    for parent in (current, *current.parents):
-        if (parent / ".git").exists():
-            return parent
-    return None
+    top = _validated_git_worktree_root(str(current))
+    if top is None:
+        return None
+    return Path(top)
 
 
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
@@ -2493,16 +2534,26 @@ def _architecture_module_choices(
             if _leaf != _target_prompt_leaf_q or not _filename_path_owns_qualified(_fnv):
                 continue
             _fpv = _m.get("filepath")
-            if (
-                isinstance(_fpv, str)
-                and _fpv.strip()
-                and _module_filepath_matches_basename(
-                    _fpv, basename, context_name=context_name,
-                    pddrc_anchor=architecture_path.parent,
-                )
+            if not (isinstance(_fpv, str) and _fpv.strip()):
+                continue
+            # The owner flag must be built from the SAME fully-eligible row set the
+            # ambiguity count uses (R12 F3): a row that path-owns the qualified basename
+            # by FILENAME but whose FILEPATH is later dropped by the extension or
+            # containment gate is NOT a real owner. If such an unsafe/escaping row set the
+            # flag, it would suppress two genuinely-ambiguous valid legacy rows down to an
+            # empty choice set (silent first-match-wins) instead of raising
+            # AmbiguousModuleError. So apply extension + containment here too.
+            if not _module_filepath_matches_basename(
+                _fpv, basename, context_name=context_name,
+                pddrc_anchor=architecture_path.parent,
             ):
-                _has_path_owning_filename = True
-                break
+                continue
+            if lang_ext_q and PurePosixPath(_fpv).suffix.lstrip(".").lower() != lang_ext_q:
+                continue
+            if _contained_architecture_code_path(architecture_path.parent, _fpv) is None:
+                continue
+            _has_path_owning_filename = True
+            break
 
         qualified: set = set()
         for module in modules:
@@ -3188,7 +3239,35 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     except (OSError, RuntimeError, ValueError):
                         continue
                 if not _prompt_ok:
-                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                    # R12 F1: an APPROVED in-repo prompt alias DISCOVERED on disk (a
+                    # symlink whose LEXICAL path sits inside the prompts root / governing
+                    # project) may target a canonical prompt ELSEWHERE in the same
+                    # enclosing git repository — e.g. a nested subproject aliasing a shared
+                    # canonical prompt. Honour it in finalization the SAME way discovery
+                    # does, but only for a genuine discovered alias (an on-disk symlink)
+                    # whose resolved target stays inside the VALIDATED enclosing repository
+                    # (a planted/empty `.git` grants nothing — R12 F2). A non-symlink
+                    # outputs.prompt.path escaping both roots gets no such allowance.
+                    _alias_ok = False
+                    _prompt_lexical = Path(os.path.abspath(_prompt))
+                    _lex_in_root = False
+                    for _root in (prompts_root_anchor, _governing_root):
+                        try:
+                            _prompt_lexical.relative_to(Path(os.path.abspath(_root)))
+                            _lex_in_root = True
+                            break
+                        except (OSError, RuntimeError, ValueError):
+                            continue
+                    if _lex_in_root and Path(_prompt).is_symlink():
+                        _repo = _enclosing_git_root(_prompt)
+                        if _repo is not None:
+                            try:
+                                _prompt_resolved.relative_to(_repo)
+                                _alias_ok = True
+                            except (OSError, RuntimeError, ValueError):
+                                _alias_ok = False
+                    if not _alias_ok:
+                        raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
             return paths
 
         resolved_context_name = _resolve_context_name_for_basename(
