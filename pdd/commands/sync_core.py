@@ -42,7 +42,12 @@ from ..sync_core import (
     signer_from_environment,
 )
 from ..sync_core.git_io import resolve_git_commit
-from ..sync_core.runner import RunnerConfig, _protected_command_error
+from ..sync_core.runner import (
+    RunnerConfig,
+    _load_vitest_toolchain_descriptor,
+    _protected_command_error,
+    _vitest_command_error,
+)
 from .. import __version__
 
 
@@ -177,16 +182,39 @@ def _runner_config_from_options(
         raise click.ClickException(
             "--vitest-command must contain exactly an absolute launcher and entrypoint"
         )
-    return RunnerConfig(
+    manifest_path = (
+        Path(vitest_manifest).expanduser().resolve()
+        if isinstance(vitest_manifest, str) and vitest_manifest else None
+    )
+    if (protected_vitest is None) != (manifest_path is None):
+        raise click.ClickException(
+            "--vitest-command and --vitest-toolchain-manifest are required together"
+        )
+    if protected_vitest is not None:
+        error = _vitest_command_error(cwd, protected_vitest)
+        if error is not None:
+            raise click.ClickException(f"--vitest-command: {error}")
+    config = RunnerConfig(
         jest_command=_protected_command(
             jest_command if isinstance(jest_command, str) else None,
             "--jest-command",
             cwd,
         ),
         vitest_command=protected_vitest,
-        vitest_toolchain_manifest=Path(vitest_manifest).expanduser().resolve()
-        if isinstance(vitest_manifest, str) and vitest_manifest else None,
+        vitest_toolchain_manifest=manifest_path,
     )
+    if protected_vitest is not None:
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(cwd, config)
+        except (OSError, ValueError) as exc:
+            raise click.ClickException(f"invalid Vitest toolchain: {exc}") from exc
+        config = RunnerConfig(
+            jest_command=config.jest_command,
+            vitest_command=config.vitest_command,
+            vitest_toolchain_manifest=config.vitest_toolchain_manifest,
+            vitest_toolchain_identity=descriptor.identity,
+        )
+    return config
 
 
 @click.command("certify")

@@ -116,6 +116,34 @@ VITEST_DYNAMIC_CONFIG_NAMES = (
     "vitest.config.cts",
     "vitest.config.mts",
 )
+VITEST_TOOLCHAIN_ROLES = {
+    "launcher", "entrypoint", "dependencies", "native_runtime", "lockfile"
+}
+VITEST_CACHE_NAMES = {".vite", ".vite-temp"}
+
+
+@dataclass(frozen=True)
+# pylint: disable=too-many-instance-attributes
+class VitestToolchainDescriptor:
+    """Validated immutable identity and typed external Vitest role closure."""
+
+    manifest: Path
+    launcher: Path
+    entrypoint: Path
+    dependencies: Path
+    native_runtime: tuple[Path, ...]
+    lockfile: Path
+    identity: str
+    dependencies_identity: str
+
+
+@dataclass(frozen=True)
+class VitestPhaseToolchain:
+    """Copied executable Vitest launcher and package closure for one phase."""
+
+    launcher: Path
+    entrypoint: Path
+    readable_roots: tuple[Path, ...]
 
 
 @dataclass(frozen=True)
@@ -888,12 +916,33 @@ def _vitest_ast_imports(
     while pending:
         node = pending.pop()
         pending.extend(node.named_children)
+        node_text = source[node.start_byte:node.end_byte]
+        if node.type == "identifier" and node_text == b"createRequire":
+            raise ValueError("Vitest createRequire aliases are not bound")
+        if node.type == "subscript_expression" and any(
+            marker in node_text for marker in (b"require", b"createRequire", b"glob")
+        ):
+            raise ValueError("Vitest computed module loader is not bound")
         target = None
         if node.type in {"import_statement", "export_statement"}:
             target = node.child_by_field_name("source")
         elif node.type == "call_expression":
             function = node.child_by_field_name("function")
-            if function is not None and source[function.start_byte:function.end_byte] in {b"import", b"require"}:
+            function_text = (
+                source[function.start_byte:function.end_byte]
+                if function is not None else b""
+            )
+            if function is not None and function.type == "member_expression":
+                property_node = function.child_by_field_name("property")
+                property_text = (
+                    source[property_node.start_byte:property_node.end_byte]
+                    if property_node is not None else b""
+                )
+                if property_text in {b"require", b"createRequire", b"glob", b"globEager"}:
+                    raise ValueError("Vitest alternate module loader is not bound")
+            if function_text in {b"createRequire"}:
+                raise ValueError("Vitest createRequire aliases are not bound")
+            if function is not None and function_text in {b"import", b"require"}:
                 arguments = node.child_by_field_name("arguments")
                 named = arguments.named_children if arguments is not None else []
                 if len(named) != 1:
@@ -1184,10 +1233,12 @@ def runner_identity_digest(
             root, config
         )
         if config.vitest_toolchain_manifest is not None:
-            identity = config.vitest_toolchain_identity or _vitest_toolchain_identity(
-                config.vitest_toolchain_manifest
-            )
-            payload["vitest_toolchain_identity"] = identity
+            try:
+                payload["vitest_toolchain_identity"] = (
+                    _load_vitest_toolchain_descriptor(root, config).identity
+                )
+            except (OSError, ValueError):
+                payload["vitest_toolchain_identity"] = "invalid-vitest-toolchain"
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1205,75 +1256,198 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
 def _file_identity(path: Path) -> str:
     """Return a stable identity digest for an executable validator file."""
     try:
-        data = path.read_bytes()
-    except OSError:
+        return _validator_tree_identity(path)
+    except (OSError, ValueError):
         data = b"<unreadable>"
     return hashlib.sha256(str(path).encode() + b"\0" + data).hexdigest()
 
 
-def _directory_identity(root: Path) -> str:
-    """Hash regular file modes and bytes without following symlinks."""
+def _update_validator_path_identity(
+    digest: "hashlib._Hash", path: Path, logical: str, active: set[Path]
+) -> None:
+    """Hash one path without traversing a symlink as a directory entry."""
+    metadata = path.lstat()
+    mode = metadata.st_mode & 0o7777
+    digest.update(logical.encode() + b"\0" + str(mode).encode() + b"\0")
+    if path.is_symlink():
+        target_text = os.readlink(path)
+        digest.update(b"symlink\0" + target_text.encode() + b"\0")
+        target = path.resolve(strict=True)
+        if target in active:
+            raise ValueError(f"validator toolchain symlink cycle: {path}")
+        _update_validator_path_identity(
+            digest, target, logical + "->target", active | {target}
+        )
+        return
+    if path.is_file():
+        digest.update(b"file\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+        return
+    if path.is_dir():
+        digest.update(b"directory\0")
+        with os.scandir(path) as entries:
+            children = sorted(entries, key=lambda item: item.name)
+        for child in children:
+            if child.name in VITEST_CACHE_NAMES:
+                continue
+            _update_validator_path_identity(
+                digest,
+                Path(child.path),
+                f"{logical}/{child.name}" if logical else child.name,
+                active,
+            )
+        return
+    raise ValueError(f"validator toolchain role is not a file or directory: {path}")
+
+
+def _validator_tree_identity(root: Path) -> str:
+    """Hash modes, links, targets, and bytes with cache exclusion and no link walk."""
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root).as_posix()
-        if relative == ".git" or relative.startswith(".git/"):
-            continue
-        if relative.startswith("node_modules/.vite"):
-            continue
-        metadata = path.lstat()
-        if path.is_symlink():
-            digest.update(relative.encode() + b"\0symlink\0" + os.readlink(path).encode())
-        elif path.is_file():
-            digest.update(relative.encode() + b"\0" + str(metadata.st_mode & 0o777).encode())
-            with path.open("rb") as handle:
-                chunk = handle.read(1024 * 1024)
-                while chunk:
-                    digest.update(chunk)
-                    chunk = handle.read(1024 * 1024)
-        elif path.is_dir():
-            digest.update(relative.encode() + b"\0dir")
+    canonical = root.absolute()
+    _update_validator_path_identity(digest, canonical, "", {canonical})
     return digest.hexdigest()
 
 
-def _vitest_toolchain_identity(manifest: Path) -> str:
-    """Bind one complete typed external Node/Vitest toolchain closure."""
+def _manifest_regular_path(value: object, role: str) -> Path:
+    """Return one canonical non-symlink regular manifest role path."""
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError(f"Vitest toolchain role {role} must be an absolute path")
+    path = Path(value)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Vitest toolchain role {role} must be a regular file")
+    return path.resolve(strict=True)
+
+
+def _load_vitest_toolchain_descriptor(
+    root: Path, config: RunnerConfig
+) -> VitestToolchainDescriptor:
+    """Parse, type-check, command-match, and identity one Vitest descriptor."""
+    command = config.vitest_command
+    manifest = config.vitest_toolchain_manifest
+    if command is None:
+        raise ValueError("Vitest command and toolchain manifest are required together")
+    command_error = _vitest_command_error(root, command)
+    if command_error is not None:
+        raise ValueError(command_error)
+    if manifest is None:
+        raise ValueError("Vitest command and toolchain manifest are required together")
+    manifest = manifest.expanduser()
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("Vitest toolchain manifest must be a regular file")
+    if _path_is_relative_to(manifest.resolve(), root.resolve()):
+        raise ValueError("Vitest toolchain manifest must be external to candidate checkout")
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("Vitest toolchain manifest is invalid") from exc
-    required = {"launcher", "entrypoint", "dependencies", "lockfile"}
-    if not isinstance(payload, dict) or set(payload) != required:
-        raise ValueError("Vitest toolchain manifest must declare launcher, entrypoint, dependencies, and lockfile")
-    digest = hashlib.sha256()
-    for role in sorted(required):
-        value = payload[role]
-        if not isinstance(value, str) or not Path(value).is_absolute():
-            raise ValueError(f"Vitest toolchain role {role} must be an absolute path")
-        path = Path(value)
-        if role == "dependencies":
-            if not path.is_dir():
-                raise ValueError("Vitest toolchain dependencies must be a directory")
-            identity = _directory_identity(path)
-        else:
-            if not path.is_file() or path.is_symlink():
-                raise ValueError(f"Vitest toolchain role {role} must be a regular file")
-            identity = _file_identity(path)
-        digest.update(role.encode() + b"\0" + str(path.resolve()).encode() + b"\0" + identity.encode())
-    return digest.hexdigest()
+    if not isinstance(payload, dict) or set(payload) != {"version", "roles"}:
+        raise ValueError("Vitest toolchain manifest must declare version and typed roles")
+    roles = payload.get("roles")
+    if payload.get("version") != 1 or not isinstance(roles, dict):
+        raise ValueError("Vitest toolchain manifest roles schema is invalid")
+    if set(roles) != VITEST_TOOLCHAIN_ROLES:
+        raise ValueError("Vitest toolchain manifest roles are incomplete")
+    launcher = _manifest_regular_path(roles["launcher"], "launcher")
+    entrypoint = _manifest_regular_path(roles["entrypoint"], "entrypoint")
+    lockfile = _manifest_regular_path(roles["lockfile"], "lockfile")
+    dependency_value = roles["dependencies"]
+    if not isinstance(dependency_value, str) or not Path(dependency_value).is_absolute():
+        raise ValueError("Vitest toolchain dependencies must be an absolute directory")
+    dependency_path = Path(dependency_value)
+    if dependency_path.is_symlink() or not dependency_path.is_dir():
+        raise ValueError("Vitest toolchain dependencies must be a directory")
+    dependencies = dependency_path.resolve(strict=True)
+    try:
+        entrypoint.relative_to(dependencies)
+    except ValueError as exc:
+        raise ValueError("Vitest entrypoint must be inside dependencies role") from exc
+    native_values = roles["native_runtime"]
+    if not isinstance(native_values, list) or not native_values:
+        raise ValueError("Vitest native_runtime role must be a non-empty path array")
+    native_runtime = tuple(
+        _manifest_regular_path(value, "native_runtime") for value in native_values
+    )
+    command_paths = tuple(Path(part).expanduser().resolve(strict=True) for part in command)
+    if command_paths[0] != launcher:
+        raise ValueError("Vitest launcher role does not match command launcher")
+    if command_paths[1] != entrypoint:
+        raise ValueError("Vitest entrypoint role does not match command entrypoint")
+    if not os.access(launcher, os.X_OK):
+        raise ValueError("Vitest toolchain launcher is not executable")
+    for role_path in (launcher, entrypoint, dependencies, *native_runtime, lockfile):
+        if _path_is_relative_to(role_path, root.resolve()):
+            raise ValueError("Vitest toolchain roles must be external to candidate checkout")
+    digest = hashlib.sha256(manifest.read_bytes() + b"\0")
+    role_paths = {
+        "launcher": (launcher,),
+        "entrypoint": (entrypoint,),
+        "dependencies": (dependencies,),
+        "native_runtime": native_runtime,
+        "lockfile": (lockfile,),
+    }
+    dependencies_identity = _validator_tree_identity(dependencies)
+    for role, paths in sorted(role_paths.items()):
+        digest.update(role.encode() + b"\0")
+        for path in paths:
+            digest.update(str(path).encode() + b"\0")
+            digest.update(_validator_tree_identity(path).encode() + b"\0")
+    identity = digest.hexdigest()
+    if config.vitest_toolchain_identity not in {None, identity}:
+        raise ValueError("Vitest toolchain changed across protocol execution")
+    return VitestToolchainDescriptor(
+        manifest.resolve(), launcher, entrypoint, dependencies, native_runtime,
+        lockfile, identity, dependencies_identity,
+    )
 
 
-def _prepare_vitest_dependencies(root: Path, config: RunnerConfig) -> None:
-    """Expose only the identity-bound external dependency closure to a phase."""
-    if config.vitest_toolchain_manifest is None:
-        return
-    payload = json.loads(config.vitest_toolchain_manifest.read_text(encoding="utf-8"))
-    dependencies = Path(payload["dependencies"]).resolve()
+def _copy_vitest_dependencies(source: Path, destination: Path) -> None:
+    """Copy the bound package closure while omitting mutable Vitest caches."""
+    shutil.copytree(
+        source,
+        destination,
+        symlinks=False,
+        ignore=shutil.ignore_patterns(*VITEST_CACHE_NAMES),
+    )
+
+
+def _prepare_vitest_toolchain(
+    root: Path, descriptor: VitestToolchainDescriptor
+) -> VitestPhaseToolchain:
+    """Copy identity-checked launcher and dependency bytes into one phase."""
     destination = root / "node_modules"
     if destination.exists() or destination.is_symlink():
         raise ValueError("Vitest phase tree already contains candidate node_modules")
-    shutil.copytree(dependencies, destination, symlinks=True)
+    _copy_vitest_dependencies(descriptor.dependencies, destination)
     (destination / ".vite-temp").mkdir()
     (destination / ".vite").mkdir()
+    controller = root / ".pdd-vitest-toolchain"
+    controller.mkdir(mode=0o700)
+    launcher = controller / "launcher"
+    shutil.copy2(descriptor.launcher, launcher, follow_symlinks=False)
+    launcher.chmod(descriptor.launcher.stat().st_mode & 0o777)
+    entrypoint = destination / descriptor.entrypoint.relative_to(
+        descriptor.dependencies
+    )
+    if not entrypoint.is_file() or entrypoint.is_symlink():
+        raise ValueError("copied Vitest entrypoint is not a regular file")
+    if _validator_tree_identity(launcher) != _validator_tree_identity(
+        descriptor.launcher
+    ):
+        raise ValueError("copied Vitest launcher identity mismatch")
+    current = _load_vitest_toolchain_descriptor(
+        root,
+        RunnerConfig(
+            vitest_command=(str(descriptor.launcher), str(descriptor.entrypoint)),
+            vitest_toolchain_manifest=descriptor.manifest,
+            vitest_toolchain_identity=descriptor.identity,
+        ),
+    )
+    if current.identity != descriptor.identity:
+        raise ValueError("Vitest toolchain changed during phase setup")
+    return VitestPhaseToolchain(launcher, entrypoint, descriptor.native_runtime)
 
 
 def _command_part_identity(root: Path, part: str) -> str:
@@ -1293,15 +1467,18 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
             _command_part_identity(root, part) for part in config.jest_command
         ]
         payload["jest_toolchain"] = [
-            _directory_identity(path)
+            _validator_tree_identity(path)
             for path in _jest_toolchain_roots(config.jest_command)
         ]
     if config.vitest_command is not None:
-        payload["vitest"] = (
-            list(config.vitest_command)
-            if config.vitest_toolchain_identity is not None
-            else [_command_part_identity(root, part) for part in config.vitest_command]
-        )
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            payload["vitest"] = {
+                "command": [str(descriptor.launcher), str(descriptor.entrypoint)],
+                "identity": descriptor.identity,
+            }
+        except (OSError, ValueError):
+            payload["vitest"] = "invalid-vitest-toolchain"
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1606,19 +1783,6 @@ def _jest_command(config: RunnerConfig) -> tuple[str, ...] | None:
     return None
 
 
-def _directory_identity(root: Path) -> str:
-    """Hash every regular file in an external validator package directory."""
-    digest = hashlib.sha256()
-    try:
-        paths = sorted(path for path in root.rglob("*") if path.is_file())
-        for path in paths:
-            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-            digest.update(path.read_bytes() + b"\0")
-    except OSError:
-        return _file_identity(root)
-    return digest.hexdigest()
-
-
 def _jest_toolchain_roots(command: tuple[str, ...]) -> tuple[Path, ...]:
     """Return external package roots needed by an absolute Jest entry point."""
     roots: set[Path] = set()
@@ -1677,7 +1841,7 @@ def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None
             expect_module_operand = True
             continue
         if part.startswith("-"):
-            return "explicit validator command must contain launcher operands only"
+            continue
         path = Path(part).expanduser()
         if not path.is_absolute() and "/" not in part:
             return (
@@ -1693,9 +1857,16 @@ def _protected_command_error(root: Path, command: tuple[str, ...]) -> str | None
             return "explicit validator command executable is not executable"
         if _path_is_relative_to(resolved, candidate_root):
             return "explicit validator command inside the candidate checkout is not trusted"
-        if not resolved.is_file():
-            return "explicit validator command path is missing"
     return None
+
+
+def _vitest_command_error(root: Path, command: tuple[str, ...]) -> str | None:
+    """Require exactly one absolute launcher and entrypoint for Vitest."""
+    if len(command) != 2:
+        return "Vitest command must contain exactly an absolute launcher and entrypoint"
+    if any(part.startswith("-") for part in command):
+        return "Vitest command cannot contain launcher flags or controls"
+    return _protected_command_error(root, command)
 
 
 _JEST_REPORTER = """class PddTrustedReporter {
@@ -1944,6 +2115,39 @@ def _vitest_result(
     return EvidenceOutcome.PASS, f"{len(identities)} protected Vitest tests passed", identities
 
 
+def _vitest_reporter_source(result_fd: int) -> str:
+    """Return a checker-owned reporter that writes only from the coordinator."""
+    return f"""import fs from 'node:fs';
+import path from 'node:path';
+const RESULT_FD = {result_fd};
+export default class PddTrustedVitestReporter {{
+  constructor() {{ this.tests = []; }}
+  onTestCaseResult(test) {{
+    const result = test.result();
+    const filename = path.relative(process.cwd(), test.module.moduleId);
+    this.tests.push({{
+      identity: filename + '::' + test.fullName,
+      status: result.state,
+      failureMessages: (result.errors || []).map((item) => item.stack || item.message),
+    }});
+  }}
+  onTestRunEnd() {{
+    fs.writeSync(RESULT_FD, JSON.stringify({{tests: this.tests}}));
+  }}
+}}
+"""
+
+
+def _read_result_pipe(read_fd: int) -> bytes:
+    """Read the complete checker-owned reporter pipe after the child exits."""
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(read_fd, 1024 * 1024)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
 def _run_vitest(
     root: Path,
     paths: tuple[PurePosixPath, ...],
@@ -1951,45 +2155,48 @@ def _run_vitest(
     config: RunnerConfig,
     expected: tuple[str, ...] | None = None,
     command_root: Path | None = None,
+    phase_toolchain: VitestPhaseToolchain | None = None,
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
-    """Run exact protected Vitest paths with the built-in JSON reporter."""
+    # pylint: disable=too-many-return-statements
+    """Run exact protected Vitest paths with a private coordinator reporter."""
     tool_root = command_root or root
     command_prefix = _vitest_command(config)
     if command_prefix is None:
         if (tool_root / "node_modules" / "vitest" / "vitest.mjs").is_file():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-untrusted", "candidate node_modules Vitest runner is not trusted"), ()
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-unavailable", "no local Vitest binary is available"), ()
-    command_error = _protected_command_error(root, command_prefix)
-    if command_error is not None:
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(tool_root, config)
+        if phase_toolchain is None:
+            phase_toolchain = _prepare_vitest_toolchain(root, descriptor)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
         return RunnerExecution(
-            "vitest", EvidenceOutcome.ERROR, "vitest-untrusted", command_error
+            "vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)
         ), ()
-    toolchain_identity = config.vitest_toolchain_identity
-    if config.vitest_toolchain_manifest is not None:
-        try:
-            observed = _vitest_toolchain_identity(config.vitest_toolchain_manifest)
-        except ValueError as exc:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-toolchain", str(exc)), ()
-        if toolchain_identity is not None and observed != toolchain_identity:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-toolchain", "Vitest toolchain changed before phase"), ()
-        toolchain_identity = observed
     try:
         config_path, _config_data = _vitest_config(root, "HEAD")
     except ValueError as exc:
         return RunnerExecution("vitest", EvidenceOutcome.ERROR, "vitest-config", str(exc)), ()
     with tempfile.TemporaryDirectory(prefix="pdd-trusted-vitest-") as directory:
         temporary = Path(directory)
+        scratch = temporary / "scratch"
+        home = scratch / "home"
+        home.mkdir(parents=True, mode=0o700)
         output = temporary / "results.json"
+        reporter = temporary / f"reporter-{os.urandom(16).hex()}.mjs"
+        read_fd, write_fd = os.pipe()
+        os.set_inheritable(write_fd, True)
+        reporter.write_text(_vitest_reporter_source(write_fd), encoding="utf-8")
         command = [
-            *command_prefix,
+            str(phase_toolchain.launcher),
+            str(phase_toolchain.entrypoint),
             "run",
             *(path.as_posix() for path in paths),
             f"--config={root / config_path}",
-            "--reporter=json",
-            f"--outputFile={output}",
+            f"--reporter={reporter}",
         ]
         digest = hashlib.sha256(json.dumps(command, separators=(",", ":")).encode()).hexdigest()
-        before = _directory_identity(root)
+        before = _validator_tree_identity(root)
         try:
             cache_roots = tuple(
                 path for path in (
@@ -2000,27 +2207,46 @@ def _run_vitest(
                 command,
                 cwd=root,
                 timeout=timeout_seconds,
-                env=_vitest_environment(temporary)
-                | {"PDD_TRUSTED_VITEST_OUTPUT": str(output)},
-                writable_roots=(temporary, *cache_roots),
+                env=_vitest_environment(home),
+                writable_roots=(scratch, *cache_roots),
+                readable_roots=(reporter, *phase_toolchain.readable_roots),
+                pass_fds=(write_fd,),
             )
         except (OSError, UnicodeError, ValueError) as exc:
+            os.close(read_fd)
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, f"Vitest launch failed: {exc}"), ()
+        finally:
+            os.close(write_fd)
+        try:
+            output.write_bytes(_read_result_pipe(read_fd))
+        except OSError as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, digest,
+                f"Vitest result transport failed: {exc}",
+            ), ()
+        finally:
+            os.close(read_fd)
         if result.returncode == 124:
             return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
-        if result.returncode in {126, 127} and not output.exists():
+        if result.returncode in {126, 127} and not output.read_bytes():
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
-        if result.returncode and not output.exists():
+        if result.returncode and not output.read_bytes():
             detail = (result.stderr or result.stdout or "Vitest exited without a result")[-2000:]
             return RunnerExecution("vitest", EvidenceOutcome.FAIL, digest, detail), ()
-        if _directory_identity(root) != before:
+        if _validator_tree_identity(root) != before:
             return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
-        if config.vitest_toolchain_manifest is not None and _vitest_toolchain_identity(
-            config.vitest_toolchain_manifest
-        ) != toolchain_identity:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest toolchain changed during phase"), ()
+        try:
+            if _load_vitest_toolchain_descriptor(tool_root, replace(
+                config, vitest_toolchain_identity=descriptor.identity
+            )).identity != descriptor.identity:
+                raise ValueError("Vitest toolchain changed during phase")
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            return RunnerExecution(
+                "vitest", EvidenceOutcome.ERROR, digest,
+                f"Vitest toolchain recheck failed: {exc}",
+            ), ()
         outcome, detail, identities = _vitest_result(root, output, result.returncode, expected)
         return RunnerExecution("vitest", outcome, digest, detail), identities
 
@@ -2485,40 +2711,58 @@ def _collect_jest_at_base(
         return _run_jest(clone, paths, config.timeout_seconds, config)
 
 
+def _make_vitest_phase_read_only(root: Path) -> None:
+    """Protect phase inputs while retaining only declared Vitest cache writes."""
+    paths = sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True)
+    for path in paths:
+        relative = path.relative_to(root)
+        if ".git" in relative.parts or any(
+            name in relative.parts for name in VITEST_CACHE_NAMES
+        ):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"copied Vitest phase contains symlink: {relative}")
+        executable = path.is_file() and bool(path.stat().st_mode & 0o111)
+        path.chmod(0o555 if path.is_dir() or executable else 0o444)
+    root.chmod(0o555)
+
+
 def _collect_vitest_at_base(
     root: Path, base_sha: str, paths: tuple[PurePosixPath, ...], config: RunnerConfig
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Run protected-base Vitest to establish independently derived identities."""
-    with tempfile.TemporaryDirectory(prefix="pdd-vitest-protected-base-") as directory:
-        clone = Path(directory) / "repository"
-        cloned = subprocess.run(
-            ["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        checked_out = cloned.returncode == 0 and subprocess.run(
-            ["git", "checkout", "-q", "--detach", base_sha],
-            cwd=clone,
-            capture_output=True,
-            check=False,
-        ).returncode == 0
-        if not checked_out:
-            return RunnerExecution("protected-base-collection", EvidenceOutcome.COLLECTION_ERROR, hashlib.sha256(base_sha.encode()).hexdigest(), "cannot create protected-base Vitest clone"), ()
-        _prepare_vitest_dependencies(clone, config)
-        for path in clone.rglob("*"):
-            relative = path.relative_to(clone).as_posix()
-            if ".git" not in path.relative_to(clone).parts and not relative.startswith(
-                "node_modules/.vite"
-            ):
-                path.chmod(0o555 if path.is_dir() else 0o444)
-        return _run_vitest(
-            clone,
-            paths,
-            config.timeout_seconds,
-            config,
-            command_root=root,
-        )
+    digest = hashlib.sha256(base_sha.encode()).hexdigest()
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(root, config)
+        with tempfile.TemporaryDirectory(
+            prefix="pdd-vitest-protected-base-"
+        ) as directory:
+            clone = Path(directory) / "repository"
+            cloned = subprocess.run(
+                ["git", "clone", "-q", "--no-local", "--no-checkout",
+                 str(root), str(clone)],
+                capture_output=True, text=True, check=False,
+            )
+            checked_out = cloned.returncode == 0 and subprocess.run(
+                ["git", "checkout", "-q", "--detach", base_sha],
+                cwd=clone, capture_output=True, check=False,
+            ).returncode == 0
+            if not checked_out:
+                return RunnerExecution(
+                    "protected-base-collection", EvidenceOutcome.COLLECTION_ERROR,
+                    digest, "cannot create protected-base Vitest clone",
+                ), ()
+            phase = _prepare_vitest_toolchain(clone, descriptor)
+            _make_vitest_phase_read_only(clone)
+            return _run_vitest(
+                clone, paths, config.timeout_seconds, config,
+                command_root=root, phase_toolchain=phase,
+            )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return RunnerExecution(
+            "protected-base-collection", EvidenceOutcome.ERROR, digest,
+            f"Vitest phase setup failed: {exc}",
+        ), ()
 
 
 def _run_vitest_at_commit(
@@ -2526,28 +2770,36 @@ def _run_vitest_at_commit(
     expected: tuple[str, ...],
 ) -> tuple[RunnerExecution, tuple[str, ...]]:
     """Execute one fresh immutable exact-commit Vitest phase tree."""
-    with tempfile.TemporaryDirectory(prefix="pdd-vitest-checked-head-") as directory:
-        clone = Path(directory) / "repository"
-        cloned = subprocess.run(
-            ["git", "clone", "-q", "--no-local", "--no-checkout", str(root), str(clone)],
-            capture_output=True, text=True, check=False,
-        )
-        checked_out = cloned.returncode == 0 and subprocess.run(
-            ["git", "checkout", "-q", "--detach", commit], cwd=clone,
-            capture_output=True, check=False,
-        ).returncode == 0
-        if not checked_out:
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, hashlib.sha256(commit.encode()).hexdigest(), "cannot create checked-head Vitest clone"), ()
-        _prepare_vitest_dependencies(clone, config)
-        for path in clone.rglob("*"):
-            relative = path.relative_to(clone).as_posix()
-            if ".git" not in path.relative_to(clone).parts and not relative.startswith(
-                "node_modules/.vite"
-            ):
-                path.chmod(0o555 if path.is_dir() else 0o444)
-        return _run_vitest(
-            clone, paths, config.timeout_seconds, config, expected, command_root=root
-        )
+    digest = hashlib.sha256(commit.encode()).hexdigest()
+    try:
+        descriptor = _load_vitest_toolchain_descriptor(root, config)
+        with tempfile.TemporaryDirectory(prefix="pdd-vitest-checked-head-") as directory:
+            clone = Path(directory) / "repository"
+            cloned = subprocess.run(
+                ["git", "clone", "-q", "--no-local", "--no-checkout",
+                 str(root), str(clone)],
+                capture_output=True, text=True, check=False,
+            )
+            checked_out = cloned.returncode == 0 and subprocess.run(
+                ["git", "checkout", "-q", "--detach", commit], cwd=clone,
+                capture_output=True, check=False,
+            ).returncode == 0
+            if not checked_out:
+                return RunnerExecution(
+                    "vitest", EvidenceOutcome.ERROR, digest,
+                    "cannot create checked-head Vitest clone",
+                ), ()
+            phase = _prepare_vitest_toolchain(clone, descriptor)
+            _make_vitest_phase_read_only(clone)
+            return _run_vitest(
+                clone, paths, config.timeout_seconds, config, expected,
+                command_root=root, phase_toolchain=phase,
+            )
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        return RunnerExecution(
+            "vitest", EvidenceOutcome.ERROR, digest,
+            f"Vitest phase setup failed: {exc}",
+        ), ()
 
 
 def _protected_node_ids(
@@ -2761,15 +3013,16 @@ def run_obligation(
                 obligation.validator_config_digest,
                 "candidate node_modules Vitest runner is not trusted",
             )
-        if config.vitest_command is not None:
-            command_error = _protected_command_error(root, config.vitest_command)
-            if command_error is not None:
-                return RunnerExecution(
-                    obligation.obligation_id,
-                    EvidenceOutcome.ERROR,
-                    obligation.validator_config_digest,
-                    command_error,
-                )
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            config = replace(config, vitest_toolchain_identity=descriptor.identity)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            return RunnerExecution(
+                obligation.obligation_id,
+                EvidenceOutcome.ERROR,
+                obligation.validator_config_digest,
+                f"Vitest toolchain validation failed: {exc}",
+            )
     with tempfile.TemporaryDirectory(prefix="pdd-runner-exact-head-") as directory:
         clone = Path(directory) / "repository"
         cloned = subprocess.run(
@@ -2807,13 +3060,17 @@ def run_profile(
     config: RunnerConfig = RunnerConfig(),
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
-    if config.vitest_toolchain_manifest is not None:
-        config = replace(
-            config,
-            vitest_toolchain_identity=_vitest_toolchain_identity(
-                config.vitest_toolchain_manifest
-            ),
-        )
+    initial_vitest_identity: str | None = None
+    if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
+        try:
+            initial_vitest_identity = _load_vitest_toolchain_descriptor(
+                root, config
+            ).identity
+            config = replace(
+                config, vitest_toolchain_identity=initial_vitest_identity
+            )
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            pass
     executions = tuple(
         run_obligation(
             root,
@@ -2824,6 +3081,21 @@ def run_profile(
         )
         for obligation in profile.obligations
     )
+    if initial_vitest_identity is not None:
+        try:
+            final_identity = _load_vitest_toolchain_descriptor(root, config).identity
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            final_identity = None
+        if final_identity != initial_vitest_identity:
+            executions = tuple(
+                RunnerExecution(
+                    obligation.obligation_id,
+                    EvidenceOutcome.ERROR,
+                    execution.command_digest,
+                    "Vitest toolchain changed across protocol execution",
+                ) if obligation.validator_id == "vitest" else execution
+                for obligation, execution in zip(profile.obligations, executions)
+            )
     runner_digest = runner_identity_digest(profile, root=root, ref=binding.head_sha, config=config)
     binding = AttestationBinding(
         profile.unit_id,

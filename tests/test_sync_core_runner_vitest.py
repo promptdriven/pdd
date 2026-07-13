@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -270,17 +271,17 @@ def test_vitest_toolchain_descriptor_is_complete_typed_and_matches_command(
     config = _runner_config(tmp_path, runner)
     descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
 
-    assert descriptor.launcher == Path(sys.executable).resolve()
+    assert descriptor.launcher.name == "python"
     assert descriptor.entrypoint == runner.resolve()
     assert descriptor.dependencies.name == "node_modules"
-    assert descriptor.native_runtime == (Path(sys.executable).resolve(),)
+    assert descriptor.native_runtime[0].name == "runtime.bin"
 
     wrong = tmp_path / "wrong.py"
     wrong.write_text("pass\n", encoding="utf-8")
     with pytest.raises(ValueError, match="entrypoint.*command"):
         _load_vitest_toolchain_descriptor(
             tmp_path / "repo",
-            replace(config, vitest_command=(sys.executable, str(wrong))),
+            replace(config, vitest_command=(config.vitest_command[0], str(wrong))),
         )
 
 
@@ -308,10 +309,26 @@ def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_ca
     descriptor = _load_vitest_toolchain_descriptor(tmp_path / "repo", config)
     baseline = descriptor.identity
 
+    launcher = descriptor.launcher
+    launcher.write_bytes(launcher.read_bytes() + b"changed")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    launcher.write_bytes(launcher.read_bytes().removesuffix(b"changed"))
+    baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
     runner.write_text(runner.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
     runner.write_text(runner.read_text(encoding="utf-8").removesuffix("\n# changed\n"), encoding="utf-8")
     baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
+    native = descriptor.native_runtime[0]
+    native.write_bytes(b"changed-native")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    native.write_bytes(b"native")
+    baseline = _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity
+
+    descriptor.lockfile.write_text('{"changed":true}\n', encoding="utf-8")
+    assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity != baseline
+    descriptor.lockfile.write_text("{}\n", encoding="utf-8")
 
     dependency = descriptor.dependencies / "vitest/dependency.js"
     dependency.write_text("export default 1;\n", encoding="utf-8")
@@ -517,6 +534,13 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
     toolchain = tmp_path / "trusted-toolchain"
     native = toolchain / "native"
     native.mkdir(parents=True, exist_ok=True)
+    native_file = native / "runtime.bin"
+    native_file.write_bytes(b"native")
+    launcher = toolchain / "bin/python"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    if not launcher.exists():
+        shutil.copy2(sys.executable, launcher)
+        launcher.chmod(0o755)
     lockfile = toolchain / "package-lock.json"
     lockfile.write_text("{}\n", encoding="utf-8")
     manifest = toolchain / "vitest-toolchain.json"
@@ -525,10 +549,10 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
             {
                 "version": 1,
                 "roles": {
-                    "launcher": str(Path(sys.executable).resolve()),
+                    "launcher": str(launcher.resolve()),
                     "entrypoint": str(entrypoint.resolve()),
                     "dependencies": str((toolchain / "node_modules").resolve()),
-                    "native_runtime": [str(Path(sys.executable).resolve())],
+                    "native_runtime": [str(native_file.resolve())],
                     "lockfile": str(lockfile.resolve()),
                 },
             }
@@ -539,10 +563,12 @@ def _toolchain_manifest(tmp_path: Path, entrypoint: Path) -> Path:
 
 
 def _runner_config(tmp_path: Path, entrypoint: Path, timeout: int = 2) -> RunnerConfig:
+    manifest = _toolchain_manifest(tmp_path, entrypoint)
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
     return RunnerConfig(
         timeout_seconds=timeout,
-        vitest_command=(sys.executable, str(entrypoint)),
-        vitest_toolchain_manifest=_toolchain_manifest(tmp_path, entrypoint),
+        vitest_command=(roles["launcher"], str(entrypoint)),
+        vitest_toolchain_manifest=manifest,
     )
 
 

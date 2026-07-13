@@ -174,11 +174,14 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
             str(limits.max_output_bytes), "256", *command]
 
 
-def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
+def _staged_bwrap(
+    argv: list[str], sources: list[Path], pass_fds: tuple[int, ...] = ()
+) -> list[str]:
     """Stage exact bind mounts before replacing the namespace root."""
     helper = "\n".join((
         "import json,os,pathlib,shutil,subprocess,sys,tempfile",
-        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
+        "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2]); "
+        "fds=tuple(json.loads(sys.argv[3]))",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
         "os.chmod(base,0o755); staged=[]",
         "try:",
@@ -188,15 +191,19 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         "  subprocess.run(['mount','--bind',str(source),str(target)],check=True)",
         "  staged.append(target)",
         " argv=[str(staged[int(x[4:-1])]) if x.startswith('@FD:') else x for x in argv]",
-        " result=subprocess.run(argv,check=False)",
+        " result=subprocess.run(argv,check=False,pass_fds=fds)",
         "finally:",
         " for target in reversed(staged):",
         "  subprocess.run(['umount',str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
         "raise SystemExit(result.returncode)",
     ))
-    return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
-            json.dumps(argv), json.dumps([str(path) for path in sources])]
+    sudo = ["sudo", "-n", "-E"]
+    if pass_fds:
+        sudo.extend(("-C", str(max(pass_fds) + 1)))
+    return [*sudo, str(_SUPERVISOR_EXECUTABLE), "-c", helper,
+            json.dumps(argv), json.dumps([str(path) for path in sources]),
+            json.dumps(pass_fds)]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -298,7 +305,9 @@ def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[list[str], Path | None]:
+    # pylint: disable=too-many-locals
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
         raise RuntimeError(
@@ -355,12 +364,14 @@ def _sandbox_command(
         for item in writable_files:
             bind("--bind", item.resolve())
         argv.extend(("--chdir", str(workdir)))
+        if pass_fds:
+            argv.extend(("--preserve-fds", str(max(pass_fds))))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
              "--clear-groups", "--"] if setpriv else []
         )
         argv.extend(("--", *drop, *_limited_command(command, limits)))
-        return _staged_bwrap(argv, sources), None
+        return _staged_bwrap(argv, sources, pass_fds), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
 
@@ -369,13 +380,14 @@ def run_supervised(
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
     try:
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
-            limits=limits, readable_roots=readable_roots,
+            limits=limits, readable_roots=readable_roots, pass_fds=pass_fds,
         )
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False
@@ -396,6 +408,7 @@ def run_supervised(
         argv, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
         env=sandbox_environment,
         start_new_session=True,
+        pass_fds=pass_fds,
     )
     timed_out = False
     surviving = False

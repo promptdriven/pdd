@@ -110,6 +110,30 @@ def test_linux_sandbox_fails_closed_for_root_caller(
     assert surviving is False
 
 
+def test_linux_sandbox_preserves_checker_result_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(
+        "pdd.sync_core.supervisor.released_runtime_closure_paths", lambda: ()
+    )
+
+    argv, profile = _sandbox_command(
+        ["/bin/true"], (tmp_path,), pass_fds=(9,)
+    )
+
+    assert profile is None
+    assert argv[:5] == ["sudo", "-n", "-E", "-C", "10"]
+    bwrap = json.loads(argv[-3])
+    assert bwrap[bwrap.index("--preserve-fds") + 1] == "9"
+    assert json.loads(argv[-1]) == [9]
+
+
 def test_sandbox_directory_bind_provides_parent_for_nested_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
