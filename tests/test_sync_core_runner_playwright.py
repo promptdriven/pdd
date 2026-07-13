@@ -214,12 +214,13 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
     manifest = directory / "playwright-toolchain.json"
     manifest.write_text(
         json.dumps({
-            "version": 2,
+            "version": 3,
             "roles": {
                 "launcher": str(launcher.resolve()),
                 "entrypoint": str(installed_entrypoint.resolve()),
                 "dependencies": str(dependencies.resolve()),
                 "browser_runtime": str(browsers.resolve()),
+                "native_runtime": [str(launcher.resolve())],
                 "lockfile": str(lockfile.resolve()),
             },
         }),
@@ -230,6 +231,73 @@ def _toolchain_manifest(directory: Path, launcher: Path, entrypoint: Path) -> Pa
 
 def _manifest_entrypoint(manifest: Path) -> Path:
     return Path(json.loads(manifest.read_text(encoding="utf-8"))["roles"]["entrypoint"])
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux")
+    or not shutil.which("bwrap")
+    or not os.environ.get("PDD_RUN_REAL_PLAYWRIGHT")
+    or not os.environ.get("PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"),
+    reason="requires the mandatory hosted Linux Playwright protocol lane",
+)
+def test_real_playwright_source_or_wheel_protocol_uses_browser(
+    tmp_path: Path,
+) -> None:
+    """Run collection and execution through bwrap with bundled Chromium."""
+    if os.environ.get("PDD_REQUIRE_INSTALLED_WHEEL"):
+        module_path = Path(runner_module.__file__).resolve()
+        assert "site-packages" in module_path.parts, module_path
+
+    manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
+    roles = json.loads(manifest.read_text(encoding="utf-8"))["roles"]
+    root = tmp_path / "real-playwright-repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "runner@example.com")
+    _git(root, "config", "user.name", "Runner Test")
+    (root / "tests").mkdir()
+    (root / "tests/widget.spec.ts").write_text(
+        "import { expect, test } from '@playwright/test';\n"
+        "test('real protected browser', async ({ page }) => {\n"
+        "  await page.goto('data:text/html,<title>Widget</title>');\n"
+        "  await expect(page).toHaveTitle('Widget');\n"
+        "});\n",
+        encoding="utf-8",
+    )
+    (root / "playwright.config.ts").write_text(
+        "export default {};\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "protected real Playwright test")
+    commit = _git(root, "rev-parse", "HEAD")
+    paths = (PurePosixPath("tests/widget.spec.ts"),)
+    obligation = VerificationObligation(
+        "playwright-real", "test", "playwright",
+        playwright_validator_config_digest(root, commit, paths),
+        ("REQ-1",), paths,
+    )
+    profile = VerificationProfile(
+        UnitId("repo", PurePosixPath("prompts/widget_ts.prompt"), "typescript"),
+        (obligation,), ("REQ-1",), "profile-v1",
+    )
+
+    envelope, executions = run_profile(
+        root,
+        profile,
+        RunBinding("snapshot", commit, commit),
+        AttestationIssue(
+            AttestationSigner("trusted-ci", b"w" * 32), "id", "nonce",
+            datetime(2026, 7, 13, tzinfo=timezone.utc),
+        ),
+        RunnerConfig(
+            timeout_seconds=60,
+            playwright_command=(roles["launcher"], roles["entrypoint"]),
+            playwright_toolchain_manifest=manifest,
+        ),
+    )
+
+    assert executions[0].outcome is EvidenceOutcome.PASS, executions[0].detail
+    assert dict(envelope.binding.adapter_identities)["playwright"]
 
 
 def test_playwright_binds_static_runtime_resources_and_rejects_reflection(
@@ -997,6 +1065,32 @@ def test_toolchain_manifest_requires_complete_typed_external_roles(tmp_path: Pat
         _toolchain_manifest_identity(manifest)
 
 
+def test_toolchain_manifest_requires_nonempty_native_runtime(tmp_path: Path) -> None:
+    launcher = Path(sys.executable)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, launcher)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["native_runtime"] = []
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="incomplete"):
+        _toolchain_manifest_identity(manifest)
+
+
+def test_toolchain_manifest_identity_binds_native_runtime_content(tmp_path: Path) -> None:
+    launcher = Path(sys.executable)
+    manifest = _toolchain_manifest(tmp_path / "toolchain", launcher, launcher)
+    native = tmp_path / "toolchain/native.so"
+    native.write_bytes(b"base-native")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["roles"]["native_runtime"] = [str(native.resolve())]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    before = _toolchain_manifest_identity(manifest)
+
+    native.write_bytes(b"changed-native")
+
+    assert _toolchain_manifest_identity(manifest) != before
+
+
 def test_directory_identity_binds_symlink_topology(tmp_path: Path) -> None:
     target = tmp_path / "package-a"
     target.mkdir()
@@ -1026,12 +1120,13 @@ def test_toolchain_manifest_rejects_absolute_symlinks(
     (toolchain / "browsers").mkdir()
     (toolchain / "package-lock.json").write_text("{}", encoding="utf-8")
     manifest.write_text(json.dumps({
-        "version": 2,
+        "version": 3,
         "roles": {
             "launcher": str((toolchain / "node").resolve()),
             "entrypoint": str((toolchain / "cli.js").resolve()),
             "dependencies": str((toolchain / "modules").resolve()),
             "browser_runtime": str((toolchain / "browsers").resolve()),
+            "native_runtime": [str((toolchain / "node").resolve())],
             "lockfile": str((toolchain / "package-lock.json").resolve()),
         },
     }), encoding="utf-8")
@@ -1056,12 +1151,13 @@ def test_toolchain_manifest_identity_is_relocation_stable_with_relative_symlink(
         (toolchain / "browsers").mkdir()
         (toolchain / "package-lock.json").write_text("{}", encoding="utf-8")
         (root / "manifest.json").write_text(json.dumps({
-            "version": 2,
+            "version": 3,
             "roles": {
                 "launcher": str((toolchain / "node").resolve()),
                 "entrypoint": str((toolchain / "cli.js").resolve()),
                 "dependencies": str((toolchain / "modules").resolve()),
                 "browser_runtime": str((toolchain / "browsers").resolve()),
+                "native_runtime": [str((toolchain / "node").resolve())],
                 "lockfile": str((toolchain / "package-lock.json").resolve()),
             },
         }), encoding="utf-8")

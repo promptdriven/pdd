@@ -178,6 +178,41 @@ PLAYWRIGHT_CONFIG_NAMES = (
     "playwright.config.ts", "playwright.config.cts", "playwright.config.mts",
 )
 
+PLAYWRIGHT_TOOLCHAIN_ROLES = {
+    "launcher", "entrypoint", "dependencies", "browser_runtime",
+    "native_runtime", "lockfile",
+}
+
+
+@dataclass(frozen=True)
+class PlaywrightToolchainRoles:
+    """Validated external paths required by the Playwright process tree."""
+
+    launcher: Path
+    entrypoint: Path
+    dependencies: Path
+    browser_runtime: Path
+    native_runtime: tuple[Path, ...]
+    lockfile: Path
+
+    @property
+    def readable_roots(self) -> tuple[Path, ...]:
+        """Return complete non-native roots mounted at their host paths."""
+        return (
+            self.launcher,
+            self.entrypoint,
+            self.dependencies,
+            self.browser_runtime,
+            self.lockfile,
+        )
+
+    @property
+    def native_bindings(self) -> tuple[tuple[Path, Path], ...]:
+        """Bind native files at the exact paths retained by ELF loaders."""
+        return tuple(
+            (path.resolve(strict=True), path) for path in self.native_runtime
+        )
+
 
 @dataclass(frozen=True)
 class RunnerConfig:
@@ -3023,20 +3058,31 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("Playwright toolchain manifest is invalid") from exc
-    required_roles = {
-        "launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile",
-    }
     if not isinstance(payload, dict) or set(payload) != {"version", "roles"}:
         raise ValueError("Playwright toolchain manifest must declare typed roles")
     roles = payload.get("roles")
-    if payload.get("version") != 2 or not isinstance(roles, dict):
+    if payload.get("version") != 3 or not isinstance(roles, dict):
         raise ValueError("Playwright toolchain manifest roles schema is invalid")
-    if set(roles) != required_roles or not all(
-        isinstance(item, str) and Path(item).is_absolute() for item in roles.values()
+    native_values = roles.get("native_runtime")
+    scalar_roles = PLAYWRIGHT_TOOLCHAIN_ROLES - {"native_runtime"}
+    if (
+        set(roles) != PLAYWRIGHT_TOOLCHAIN_ROLES
+        or not all(
+            isinstance(roles.get(role), str)
+            and Path(roles[role]).is_absolute()
+            for role in scalar_roles
+        )
+        or not isinstance(native_values, list)
+        or not native_values
+        or not all(
+            isinstance(item, str) and Path(item).is_absolute()
+            for item in native_values
+        )
     ):
         raise ValueError("Playwright toolchain manifest roles are incomplete")
-    digest = hashlib.sha256(b"pdd-playwright-toolchain-v3\0")
-    for role, item in sorted(roles.items()):
+    digest = hashlib.sha256(b"pdd-playwright-toolchain-v4\0")
+    for role in sorted(scalar_roles):
+        item = roles[role]
         declared = Path(item)
         if not declared.exists():
             raise ValueError(f"Playwright toolchain role {role} does not exist")
@@ -3048,13 +3094,30 @@ def _toolchain_manifest_identity(manifest_path: Path) -> str:
         digest.update(role.encode() + b"\0")
         digest.update(_manifest_path_identity(declared, set(), PurePosixPath(role)))
         digest.update(b"\0")
+    digest.update(b"native_runtime\0")
+    for index, item in enumerate(native_values):
+        declared = Path(item)
+        if not declared.exists() or not declared.resolve(strict=True).is_file():
+            raise ValueError("Playwright native_runtime role must contain files")
+        digest.update(_manifest_path_identity(
+            declared, set(), PurePosixPath("native_runtime") / str(index)
+        ))
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
-def _toolchain_manifest_roles(manifest_path: Path) -> dict[str, Path]:
+def _toolchain_manifest_roles(manifest_path: Path) -> PlaywrightToolchainRoles:
     """Return canonical roles after the manifest has passed identity validation."""
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return {role: Path(value).resolve(strict=True) for role, value in payload["roles"].items()}
+    roles = payload["roles"]
+    return PlaywrightToolchainRoles(
+        launcher=Path(roles["launcher"]).resolve(strict=True),
+        entrypoint=Path(roles["entrypoint"]).resolve(strict=True),
+        dependencies=Path(roles["dependencies"]).resolve(strict=True),
+        browser_runtime=Path(roles["browser_runtime"]).resolve(strict=True),
+        native_runtime=tuple(Path(value) for value in roles["native_runtime"]),
+        lockfile=Path(roles["lockfile"]).resolve(strict=True),
+    )
 
 
 def _playwright_toolchain_identity(
@@ -3066,16 +3129,26 @@ def _playwright_toolchain_identity(
         raise ValueError("Playwright toolchain manifest must be external to candidate checkout")
     manifest_identity = _toolchain_manifest_identity(manifest)
     roles = _toolchain_manifest_roles(manifest)
-    for role, role_path in roles.items():
+    role_paths = {
+        "launcher": roles.launcher,
+        "entrypoint": roles.entrypoint,
+        "dependencies": roles.dependencies,
+        "browser_runtime": roles.browser_runtime,
+        "lockfile": roles.lockfile,
+    }
+    for role, role_path in role_paths.items():
         if _path_is_relative_to(role_path, candidate):
             raise ValueError(f"Playwright toolchain role {role} must be external")
-    if roles["dependencies"].name != "node_modules":
+    for role_path in roles.native_runtime:
+        if _path_is_relative_to(role_path.resolve(strict=True), candidate):
+            raise ValueError("Playwright toolchain role native_runtime must be external")
+    if roles.dependencies.name != "node_modules":
         raise ValueError("Playwright dependencies role must be the NODE_PATH node_modules root")
-    if roles["lockfile"].parent != roles["dependencies"].parent:
+    if roles.lockfile.parent != roles.dependencies.parent:
         raise ValueError("Playwright lockfile must govern the declared dependency tree")
-    package_root = roles["dependencies"] / "@playwright" / "test"
+    package_root = roles.dependencies / "@playwright" / "test"
     if not package_root.is_dir() or not _path_is_relative_to(
-        roles["entrypoint"], package_root
+        roles.entrypoint, package_root
     ):
         raise ValueError(
             "Playwright entrypoint must be inside the declared @playwright/test dependency package"
@@ -3090,9 +3163,9 @@ def _playwright_toolchain_identity(
             if resolved is None:
                 raise ValueError("Playwright command launcher is not resolvable")
             command_paths.append(Path(resolved).resolve(strict=True))
-    if not command_paths or command_paths[0] != roles["launcher"]:
+    if not command_paths or command_paths[0] != roles.launcher:
         raise ValueError("Playwright toolchain launcher role does not cover command")
-    if len(command_paths) < 2 or command_paths[1] != roles["entrypoint"]:
+    if len(command_paths) < 2 or command_paths[1] != roles.entrypoint:
         raise ValueError("Playwright toolchain entrypoint role does not cover command")
     return manifest_identity
 
@@ -4388,11 +4461,12 @@ def _run_playwright_in_tree(
             timeout=timeout_seconds,
             env=_playwright_environment(
                 home,
-                roles["dependencies"],
-                roles["browser_runtime"],
+                roles.dependencies,
+                roles.browser_runtime,
             ),
             writable_roots=(scratch,),
-            readable_roots=(reporter, *roles.values()),
+            readable_roots=(reporter, *roles.readable_roots),
+            readable_bindings=roles.native_bindings,
             result_fifo=result_fifo,
             result_fd=result_fd,
         )

@@ -105,21 +105,42 @@ jobs:
           TOOLCHAIN="$toolchain" BROWSER_CACHE="$browser_cache" python - <<'PY'
           import json
           import os
+          import re
           import shutil
+          import stat
+          import subprocess
           from pathlib import Path
 
           root = Path(os.environ["TOOLCHAIN"]).resolve()
           launcher = Path(shutil.which("node") or "").resolve(strict=True)
           entrypoint = (root / "node_modules/@playwright/test/cli.js").resolve(strict=True)
           browser = Path(os.environ["BROWSER_CACHE"]).resolve(strict=True)
+          native = set()
+          candidates = [launcher]
+          candidates.extend(
+              path for path in browser.rglob("*")
+              if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o111
+          )
+          for executable in candidates:
+              linked = subprocess.run(
+                  ["ldd", str(executable)], capture_output=True, text=True,
+                  check=False,
+              )
+              for line in linked.stdout.splitlines():
+                  match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
+                  if match and Path(match.group(1)).is_file():
+                      native.add(str(Path(match.group(1))))
+          if not native:
+              raise SystemExit("Playwright native runtime closure is empty")
           manifest = root / "playwright-toolchain.json"
           manifest.write_text(json.dumps({
-              "version": 2,
+              "version": 3,
               "roles": {
                   "launcher": str(launcher),
                   "entrypoint": str(entrypoint),
                   "dependencies": str((root / "node_modules").resolve()),
                   "browser_runtime": str(browser),
+                  "native_runtime": sorted(native),
                   "lockfile": str((root / "package-lock.json").resolve(strict=True)),
               },
           }), encoding="utf-8")
@@ -225,10 +246,24 @@ jobs:
           from pathlib import Path
           manifest = Path(os.environ["PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST"])
           roles = json.loads(manifest.read_text())["roles"]
-          required = {"launcher", "entrypoint", "dependencies", "browser_runtime", "lockfile"}
+          required = {
+              "launcher", "entrypoint", "dependencies", "browser_runtime",
+              "native_runtime", "lockfile",
+          }
           assert set(roles) == required
-          assert all(Path(value).exists() for value in roles.values())
+          assert roles["native_runtime"]
+          scalar = required - {"native_runtime"}
+          assert all(Path(roles[name]).exists() for name in scalar)
+          assert all(Path(value).is_file() for value in roles["native_runtime"])
           PY
+
+      - name: Run real protected Playwright source protocol
+        env:
+          PDD_RUN_REAL_PLAYWRIGHT: '1'
+        run: >
+          pytest -q
+          tests/test_sync_core_runner_playwright.py::test_real_playwright_source_or_wheel_protocol_uses_browser
+          --timeout=90
 
       - name: Validate architecture vs prompt includes (fixture smoke)
         run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
@@ -321,7 +356,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     name: Package Preprocess Smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PDD_PATH: ''
       PYTHONPATH: ''
@@ -338,6 +373,67 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      - name: Set up Node for real Playwright wheel coverage
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Provision identity-bound Playwright Chromium toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          toolchain="$RUNNER_TEMP/pdd-playwright-toolchain"
+          browser_cache="$toolchain/browser-runtime"
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" npm install --prefix "$toolchain" --ignore-scripts --no-audit --no-fund @playwright/test@1.55.0
+          PLAYWRIGHT_BROWSERS_PATH="$browser_cache" "$toolchain/node_modules/.bin/playwright" install --with-deps chromium
+          TOOLCHAIN="$toolchain" BROWSER_CACHE="$browser_cache" python - <<'PY'
+          import json
+          import os
+          import re
+          import shutil
+          import stat
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["TOOLCHAIN"]).resolve()
+          launcher = Path(shutil.which("node") or "").resolve(strict=True)
+          entrypoint = (root / "node_modules/@playwright/test/cli.js").resolve(strict=True)
+          browser = Path(os.environ["BROWSER_CACHE"]).resolve(strict=True)
+          native = set()
+          candidates = [launcher]
+          candidates.extend(
+              path for path in browser.rglob("*")
+              if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o111
+          )
+          for executable in candidates:
+              linked = subprocess.run(
+                  ["ldd", str(executable)], capture_output=True, text=True,
+                  check=False,
+              )
+              for line in linked.stdout.splitlines():
+                  match = re.search(r"(?:=>\s+)?(/[^ ]+)", line)
+                  if match and Path(match.group(1)).is_file():
+                      native.add(str(Path(match.group(1))))
+          if not native:
+              raise SystemExit("Playwright native runtime closure is empty")
+          manifest = root / "playwright-toolchain.json"
+          manifest.write_text(json.dumps({
+              "version": 3,
+              "roles": {
+                  "launcher": str(launcher),
+                  "entrypoint": str(entrypoint),
+                  "dependencies": str((root / "node_modules").resolve()),
+                  "browser_runtime": str(browser),
+                  "native_runtime": sorted(native),
+                  "lockfile": str((root / "package-lock.json").resolve(strict=True)),
+              },
+          }), encoding="utf-8")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"PDD_REAL_PLAYWRIGHT_TOOLCHAIN_MANIFEST={manifest}\n")
+          PY
+
       - name: Build wheel
         run: |
           python -m pip install --upgrade pip
@@ -349,14 +445,27 @@ jobs:
           mkdir -p "$RUNNER_TEMP/pdd-wheelhouse"
           python -m pip download \
             --dest "$RUNNER_TEMP/pdd-wheelhouse" \
-            dist-smoke/*.whl
+            dist-smoke/*.whl pytest pytest-timeout
 
       - name: Install wheel in isolated no-network environment
         run: |
           python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
           PIP_NO_INDEX=1 "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install \
             --find-links "$RUNNER_TEMP/pdd-wheelhouse" \
-            pdd-cli
+            pdd-cli pytest pytest-timeout
+
+      - name: Run real protected Playwright installed-wheel protocol
+        env:
+          PDD_RUN_REAL_PLAYWRIGHT: '1'
+          PDD_REQUIRE_INSTALLED_WHEEL: '1'
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d)"
+          cp tests/test_sync_core_runner_playwright.py "$smoke_dir/"
+          cd "$smoke_dir"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pytest" -q \
+            test_sync_core_runner_playwright.py::test_real_playwright_source_or_wheel_protocol_uses_browser \
+            --timeout=90
 
       - name: Verify packaged Vitest grammars offline
         run: |
