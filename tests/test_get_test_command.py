@@ -520,9 +520,12 @@ class TestTypeScriptTestRunnerDetection:
 
     def test_invalid_or_over_budget_workspace_declaration_fails_closed(self, tmp_path):
         """One unsupported pattern or too many patterns leaves membership unproven."""
+        alternatives = ",".join(f"variant{number:02d}" for number in range(32))
+        expensive_pattern = f"packages/{{{alternatives}}}/" + "a" * 470
         declarations = (
             ["packages/**", "packages/[app]"],
             ["packages/**"] * 129,
+            ["packages/**"] + [expensive_pattern] * 127,
         )
         for index, patterns in enumerate(declarations):
             repo = tmp_path / f"repo-{index}"
@@ -541,6 +544,35 @@ class TestTypeScriptTestRunnerDetection:
 
             assert result is not None
             assert "npx jest" not in result.command, result.command
+
+    def test_runner_config_symlink_must_resolve_inside_repository(self, tmp_path):
+        """Reject an escaping config symlink while accepting an in-repo target."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        test_file = repo / "src" / "widget.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('w', () => {})")
+        external_config = tmp_path / "external-jest.config.js"
+        external_config.write_text("module.exports = {};")
+        config_link = repo / "jest.config.js"
+        config_link.symlink_to(external_config)
+
+        escaped = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert escaped is not None
+        assert "npx jest" not in escaped.command, escaped.command
+
+        config_link.unlink()
+        internal_config = repo / "config" / "jest.config.js"
+        internal_config.parent.mkdir()
+        internal_config.write_text("module.exports = {};")
+        config_link.symlink_to(internal_config)
+
+        contained = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert contained is not None
+        assert "npx jest" in contained.command, contained.command
 
     def test_repeated_double_star_pattern_is_bounded(self):
         """Many ``**`` segments match iteratively within the segment budget."""

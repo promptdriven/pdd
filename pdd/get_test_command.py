@@ -37,6 +37,7 @@ _MAX_WORKSPACE_PATTERNS = 128
 _MAX_WORKSPACE_PATTERN_LENGTH = 1024
 _MAX_WORKSPACE_SEGMENTS = 128
 _MAX_BRACE_ALTERNATIVES = 32
+_MAX_WORKSPACE_MATCH_STATES = 250_000
 
 
 def _match_workspace_segment(value: str, pattern: str) -> bool:
@@ -118,6 +119,39 @@ def _prepare_workspace_pattern(pattern: str) -> Optional[list[Tuple[str, ...]]]:
     return prepared
 
 
+def _workspace_match_state_cost(
+    rel_parts: Tuple[str, ...], segments: Tuple[str, ...]
+) -> int:
+    """Return a deterministic upper bound for path and segment DP states."""
+    path_states = (len(rel_parts) + 1) * (len(segments) + 1)
+    relative_character_states = sum(len(part) + 1 for part in rel_parts)
+    pattern_character_states = sum(
+        len(segment) + 1 for segment in segments if segment != "**"
+    )
+    return path_states + relative_character_states * pattern_character_states
+
+
+def _workspace_segments_match(
+    rel_parts: Tuple[str, ...], segments: Tuple[str, ...]
+) -> bool:
+    """Match one already-prepared alternative with iterative dynamic programming."""
+    previous = [False] * (len(rel_parts) + 1)
+    previous[0] = True
+    for segment in segments:
+        current = [False] * (len(rel_parts) + 1)
+        if segment == "**":
+            current[0] = previous[0]
+            for index in range(1, len(rel_parts) + 1):
+                current[index] = previous[index] or current[index - 1]
+        else:
+            for index in range(1, len(rel_parts) + 1):
+                current[index] = previous[index - 1] and _match_workspace_segment(
+                    rel_parts[index - 1], segment
+                )
+        previous = current
+    return previous[-1]
+
+
 def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -> bool:
     """Match a relative path against one bounded workspace glob, fail closed."""
     if (
@@ -129,24 +163,16 @@ def _relative_matches_workspace_glob(rel_parts: Tuple[str, ...], pattern: str) -
     alternatives = _prepare_workspace_pattern(pattern)
     if alternatives is None:
         return False
-    for segments in alternatives:
-        previous = [False] * (len(rel_parts) + 1)
-        previous[0] = True
-        for segment in segments:
-            current = [False] * (len(rel_parts) + 1)
-            if segment == "**":
-                current[0] = previous[0]
-                for index in range(1, len(rel_parts) + 1):
-                    current[index] = previous[index] or current[index - 1]
-            else:
-                for index in range(1, len(rel_parts) + 1):
-                    current[index] = previous[index - 1] and _match_workspace_segment(
-                        rel_parts[index - 1], segment
-                    )
-            previous = current
-        if previous[-1]:
-            return True
-    return False
+    work_states = sum(
+        _workspace_match_state_cost(rel_parts, segments)
+        for segments in alternatives
+    )
+    if work_states > _MAX_WORKSPACE_MATCH_STATES:
+        return False
+    return any(
+        _workspace_segments_match(rel_parts, segments)
+        for segments in alternatives
+    )
 
 
 def _declared_workspace_membership(
@@ -157,19 +183,29 @@ def _declared_workspace_membership(
         return None
     if len(rel_parts) > _MAX_WORKSPACE_SEGMENTS:
         return None
-    member = False
+    prepared_patterns = []
+    work_states = 0
     for raw_pattern in patterns:
-        if not isinstance(raw_pattern, str):
-            return None
-        if len(raw_pattern) > _MAX_WORKSPACE_PATTERN_LENGTH:
+        if (
+            not isinstance(raw_pattern, str)
+            or len(raw_pattern) > _MAX_WORKSPACE_PATTERN_LENGTH
+        ):
             return None
         excluded = raw_pattern.startswith("!")
         pattern = raw_pattern[1:] if excluded else raw_pattern
         alternatives = _prepare_workspace_pattern(pattern)
         if alternatives is None:
             return None
+        for segments in alternatives:
+            work_states += _workspace_match_state_cost(rel_parts, segments)
+            if work_states > _MAX_WORKSPACE_MATCH_STATES:
+                return None
+        prepared_patterns.append((excluded, alternatives))
+
+    member = False
+    for excluded, alternatives in prepared_patterns:
         if any(
-            _relative_matches_workspace_glob(rel_parts, "/".join(segments))
+            _workspace_segments_match(rel_parts, segments)
             for segments in alternatives
         ):
             member = not excluded
@@ -284,6 +320,36 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
     return False
 
 
+def _repository_root_for(test_path: Path) -> Optional[Path]:
+    """Return the canonical repository root containing ``test_path``, if any."""
+    current = test_path.resolve().parent
+    for _ in range(80):
+        if (current / ".git").exists():
+            return current.resolve()
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
+
+
+def _runner_config_is_contained(config_path: Path, repository_root: Optional[Path]) -> bool:
+    """Accept only regular config targets contained by an anchored repository."""
+    try:
+        resolved_config = config_path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    if not resolved_config.is_file():
+        return False
+    if repository_root is None:
+        return True
+    try:
+        resolved_config.relative_to(repository_root)
+    except ValueError:
+        return False
+    return True
+
+
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """Detect Playwright, Jest, or Vitest config by walking up from the test file.
 
@@ -315,10 +381,11 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
+    repository_root = _repository_root_for(test_path)
     for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any(
-            (search_dir / cfg).exists()
+            _runner_config_is_contained(search_dir / cfg, repository_root)
             for cfg in (
                 'playwright.config.ts',
                 'playwright.config.js',
@@ -327,12 +394,12 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         ):
             return ("npx playwright test", search_dir)
         if any(
-            (search_dir / cfg).exists()
+            _runner_config_is_contained(search_dir / cfg, repository_root)
             for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')
         ):
             return ("npx jest --no-coverage --runTestsByPath", search_dir)
         if any(
-            (search_dir / cfg).exists()
+            _runner_config_is_contained(search_dir / cfg, repository_root)
             for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')
         ):
             return ("npx vitest run", search_dir)
@@ -343,7 +410,7 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         if is_project and not _belongs_to_ancestor_workspace(search_dir):
             break
         # Never escape the repository, even absent an in-project config.
-        if (search_dir / ".git").exists():
+        if repository_root is not None and search_dir == repository_root:
             break
         parent = search_dir.parent
         if parent == search_dir:
