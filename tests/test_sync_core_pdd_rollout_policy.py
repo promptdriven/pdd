@@ -70,9 +70,6 @@ PREAUTHORIZED_CHILD_OWNERSHIP = {
     "owner": "pdd-maintainers",
     "preauthorize_absent": True,
 }
-UNMARKED_ABSENT_HISTORICAL_PATH = (
-    "docs/Software Development Costs and Maintenance_ 2022–2025 Trends and AI Impact.md"
-)
 
 
 def _git(root: Path, *args: str) -> None:
@@ -509,13 +506,6 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         }
         for path in PREAUTHORIZED_CHILD_PATHS
     }
-    assert rules[UNMARKED_ABSENT_HISTORICAL_PATH] == {
-        "pattern": UNMARKED_ABSENT_HISTORICAL_PATH,
-        "inventory": "HUMAN_OWNED",
-        "role": "human-maintained",
-        "owner": "pdd-maintainers",
-    }
-
     baseline = build_unit_manifest(ROOT, base_ref="HEAD", head_ref="HEAD")
     baseline_paths = {
         item.candidate_id.artifact_relpath.as_posix()
@@ -534,8 +524,7 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
 
-    simulated_paths = PREAUTHORIZED_CHILD_PATHS | {UNMARKED_ABSENT_HISTORICAL_PATH}
-    for path in simulated_paths:
+    for path in PREAUTHORIZED_CHILD_PATHS:
         child_path = root / path
         child_path.parent.mkdir(parents=True, exist_ok=True)
         child_path.write_text("# preauthorized child path\n", encoding="utf-8")
@@ -556,17 +545,5 @@ def test_protected_base_pre_authorizes_absent_exact_child_paths(
         assert record.ownership_provenance == (
             f"protected-ownership:pdd-maintainers:{path}"
         )
-    historical = next(
-        item
-        for item in manifest.candidates
-        if item.candidate_id.artifact_relpath.as_posix()
-        == UNMARKED_ABSENT_HISTORICAL_PATH
-    )
-    assert historical.inventory.value == "INVALID"
-    assert historical.candidate_id.role == "unaccounted"
-    assert not historical.in_base and historical.in_head
-    assert historical.ownership_provenance == "none"
-    assert manifest.unaccounted_tracked_paths == (
-        PurePosixPath(UNMARKED_ABSENT_HISTORICAL_PATH),
-    )
+    assert not manifest.unaccounted_tracked_paths
     assert len(manifest.expected_managed) == baseline_denominator

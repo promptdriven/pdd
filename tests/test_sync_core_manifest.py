@@ -522,3 +522,40 @@ def test_absent_preauthorization_rejects_wildcard_pattern(tmp_path) -> None:
 
     with pytest.raises(ManifestError, match="overly broad or invalid"):
         build_unit_manifest(root, base_ref=commit, head_ref=commit)
+
+
+def test_unmarked_absent_exact_rule_does_not_classify_new_head_path(tmp_path) -> None:
+    """Dormant historical rules remain inert without explicit authorization."""
+    root = _repository(tmp_path)
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"].append(
+        {
+            "pattern": "docs/unmarked-future.md",
+            "inventory": "HUMAN_OWNED",
+            "role": "documentation",
+            "owner": "docs@example.com",
+        }
+    )
+    policy_path.write_text(json.dumps(policy))
+    base = _commit(root, "unmarked absent ownership rule")
+
+    docs_path = root / "docs/unmarked-future.md"
+    docs_path.parent.mkdir()
+    docs_path.write_text("candidate addition\n")
+    head = _commit(root, "introduce unmarked path")
+
+    manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
+    candidate = next(
+        item
+        for item in manifest.candidates
+        if item.candidate_id.artifact_relpath
+        == PurePosixPath("docs/unmarked-future.md")
+    )
+    assert candidate.inventory is InventoryStatus.INVALID
+    assert candidate.candidate_id.role == "unaccounted"
+    assert not candidate.in_base and candidate.in_head
+    assert candidate.ownership_provenance == "none"
+    assert PurePosixPath("docs/unmarked-future.md") in (
+        manifest.unaccounted_tracked_paths
+    )
