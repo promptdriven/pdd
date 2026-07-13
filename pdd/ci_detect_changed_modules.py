@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 PDD_PATH_PREFIXES = ("pdd/", "prompts/", "context/", "tests/")
 # Package execution shims and CI helper scripts are not PDD dev units;
@@ -59,6 +60,7 @@ _INCLUDE_OPEN_TAG = re.compile(
     re.DOTALL,
 )
 _SELECT_ATTR = re.compile(r"""\bselect\s*=\s*(['"])(.*?)\1""", re.DOTALL)
+_PATH_ATTR = re.compile(r"""\bpath\s*=\s*(['"])(.*?)\1""", re.DOTALL)
 _PROMPT_DIRS = ("prompts/", "pdd/prompts/")
 _INCLUDE_PATH_SUFFIXES = (
     ".bash",
@@ -81,6 +83,15 @@ _INCLUDE_PATH_SUFFIXES = (
     ".yaml",
     ".yml",
 )
+
+
+class _ReverseDepContext(NamedTuple):
+    """Shared immutable inputs and mutable parse cache for closure traversal."""
+
+    repo_root: Path
+    changed_paths: set[str]
+    changed_defs_by_path: dict[str, set[str] | None]
+    refs_by_path: dict[str, list[tuple[str, set[str] | None]]]
 
 
 def _git_changed_files(diff_base: str) -> list[str]:
@@ -195,23 +206,34 @@ def _extract_include_refs(content: str) -> list[tuple[str, set[str] | None]]:
             pos = start + 1
             continue
 
-        close_tag = f"</{match.group('tag')}>"
+        attrs = match.group("attrs") or ""
+        tag = match.group("tag")
+        selected_defs = _selected_defs_from_attrs(attrs)
+        path_attr = _path_from_attrs(attrs) if tag == "include" else None
+        if attrs.rstrip().endswith("/"):
+            if path_attr is not None:
+                normalized = _normalize_repo_path(path_attr)
+                if _looks_like_include_target(normalized):
+                    refs.append((normalized, selected_defs))
+            pos = match.end()
+            continue
+
+        close_tag = f"</{tag}>"
         close_start = content.find(close_tag, match.end())
         if close_start == -1:
             pos = match.end()
             continue
 
-        attrs = match.group("attrs") or ""
         body = content[match.end() : close_start]
         # Prompt prose sometimes mentions literal <include> tags before a real
         # include block. If a candidate body contains another include opener,
         # this was prose, so advance one byte and let the real tag match next.
-        if "<include" in body:
+        if path_attr is None and "<include" in body:
             pos = start + 1
             continue
 
-        selected_defs = _selected_defs_from_attrs(attrs)
-        for part in re.split(r"[,\n]", body):
+        parts = [path_attr] if path_attr is not None else re.split(r"[,\n]", body)
+        for part in parts:
             normalized = _normalize_repo_path(part)
             if _looks_like_include_target(normalized):
                 refs.append((normalized, selected_defs))
@@ -246,6 +268,12 @@ def _selected_defs_from_attrs(attrs: str) -> set[str] | None:
             selected_defs.add(name)
 
     return selected_defs or None
+
+
+def _path_from_attrs(attrs: str) -> str | None:
+    """Return the declared include path, preserving path-over-body precedence."""
+    match = _PATH_ATTR.search(attrs)
+    return match.group(2).strip() if match else None
 
 
 def _diff_base_ref(diff_base: str) -> str:
@@ -322,7 +350,7 @@ def _resolved_include_targets(
         return set()
 
     candidates: list[str] = []
-    for root in (repo_root, prompt_path.resolve().parent):
+    for root in _include_resolution_roots(prompt_path, repo_root):
         try:
             resolved = (root / target).resolve()
             relative = resolved.relative_to(repo_root).as_posix()
@@ -335,6 +363,27 @@ def _resolved_include_targets(
         if resolved.exists():
             return {normalized}
     return set(candidates)
+
+
+def _include_resolution_roots(prompt_path: Path, repo_root: Path) -> tuple[Path, ...]:
+    """Return repository, prompt, and projected-source roots in precedence order."""
+    prompt_resolved = prompt_path.resolve()
+    roots = [repo_root, prompt_resolved.parent]
+    try:
+        relative = prompt_resolved.relative_to(repo_root)
+    except ValueError:
+        return tuple(roots)
+
+    prompt_indexes = [
+        index for index, part in enumerate(relative.parts) if part == "prompts"
+    ]
+    if prompt_indexes:
+        index = prompt_indexes[-1]
+        projected_file = repo_root.joinpath(
+            *relative.parts[:index], *relative.parts[index + 1 :]
+        )
+        roots.append(projected_file.parent)
+    return tuple(dict.fromkeys(roots))
 
 
 def _include_matches_changed(
@@ -370,28 +419,64 @@ def _matching_changed_path(
 
 def _reverse_dep_basename_for_prompt(
     prompt_file: Path,
-    repo_root: Path,
-    changed_paths: set[str],
-    changed_defs_by_path: dict[str, set[str] | None],
+    context: _ReverseDepContext,
 ) -> str | None:
-    """Return a prompt basename when it includes one changed target."""
-    try:
-        content = prompt_file.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
+    """Return a prompt basename when its recursive closure reaches a change."""
     prompt_basename = _prompt_basename_from_path(prompt_file.as_posix())
     if not prompt_basename:
         return None
-    for include_path, selected_defs in _extract_include_refs(content):
-        changed_path = _matching_changed_path(
-            include_path, prompt_file, repo_root, changed_paths
-        )
-        if changed_path is not None and _include_matches_changed(
-            selected_defs, changed_path, changed_defs_by_path
-        ):
-            return prompt_basename
+    if _source_reaches_changed_path(
+        prompt_file,
+        context,
+    ):
+        return prompt_basename
     return None
+
+
+def _source_reaches_changed_path(
+    source_file: Path,
+    context: _ReverseDepContext,
+) -> bool:
+    """Walk one include closure iteratively with deterministic cycle protection."""
+    pending = [source_file]
+    visited: set[str] = set()
+    while pending:
+        current_file = pending.pop()
+        try:
+            source_path = (
+                current_file.resolve().relative_to(context.repo_root).as_posix()
+            )
+        except (OSError, ValueError):
+            continue
+        if source_path in visited:
+            continue
+        visited.add(source_path)
+
+        if source_path not in context.refs_by_path:
+            try:
+                content = current_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                context.refs_by_path[source_path] = []
+            else:
+                context.refs_by_path[source_path] = _extract_include_refs(content)
+
+        children: dict[str, Path] = {}
+        for include_path, selected_defs in context.refs_by_path[source_path]:
+            changed_path = _matching_changed_path(
+                include_path, current_file, context.repo_root, context.changed_paths
+            )
+            if changed_path is not None and _include_matches_changed(
+                selected_defs, changed_path, context.changed_defs_by_path
+            ):
+                return True
+            for target in _resolved_include_targets(
+                include_path, current_file, context.repo_root
+            ):
+                target_file = context.repo_root / target
+                if target_file.is_file() and target not in visited:
+                    children[target] = target_file
+        pending.extend(children[path] for path in reversed(sorted(children)))
+    return False
 
 
 def _reverse_dep_basenames(
@@ -414,16 +499,19 @@ def _reverse_dep_basenames(
         path: _changed_python_defs(path, diff_base) for path in changed_paths
     }
     repo_root = Path.cwd().resolve()
+    prompt_files: list[Path] = []
     for pdir in _PROMPT_DIRS:
         prompt_root = Path(pdir)
         if not prompt_root.exists():
             continue
-        for prompt_file in prompt_root.rglob("*.prompt"):
-            prompt_basename = _reverse_dep_basename_for_prompt(
-                prompt_file, repo_root, changed_paths, changed_defs_by_path
-            )
-            if not prompt_basename:
-                continue
+        prompt_files.extend(prompt_root.rglob("*.prompt"))
+
+    context = _ReverseDepContext(
+        repo_root, changed_paths, changed_defs_by_path, {}
+    )
+    for prompt_file in sorted(prompt_files, key=lambda path: path.as_posix()):
+        prompt_basename = _reverse_dep_basename_for_prompt(prompt_file, context)
+        if prompt_basename:
             found.add(prompt_basename)
     return found
 
