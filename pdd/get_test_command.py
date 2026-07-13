@@ -38,6 +38,8 @@ _MAX_WORKSPACE_PATTERN_LENGTH = 1024
 _MAX_WORKSPACE_SEGMENTS = 128
 _MAX_BRACE_ALTERNATIVES = 32
 _MAX_WORKSPACE_MATCH_STATES = 250_000
+_MAX_WORKSPACE_MANIFEST_BYTES = 1_048_576
+_MAX_WORKSPACE_MANIFEST_NESTING = 64
 
 
 def _match_workspace_segment(value: str, pattern: str) -> bool:
@@ -214,18 +216,66 @@ def _declared_workspace_membership(
 
 def _string_pattern_list(value: object) -> Optional[list[str]]:
     """Validate a workspace pattern list without coercing non-string entries."""
-    if not isinstance(value, list):
+    if not isinstance(value, list) or len(value) > _MAX_WORKSPACE_PATTERNS:
         return None
     if any(not isinstance(pattern, str) for pattern in value):
         return None
     return value
 
 
+def _workspace_manifest_depth_is_bounded(contents: str) -> bool:
+    """Reject parser-hostile collection nesting before object construction."""
+    nesting = 0
+    collection_starts = (
+        yaml.tokens.BlockSequenceStartToken,
+        yaml.tokens.BlockMappingStartToken,
+        yaml.tokens.FlowSequenceStartToken,
+        yaml.tokens.FlowMappingStartToken,
+    )
+    collection_ends = (
+        yaml.tokens.BlockEndToken,
+        yaml.tokens.FlowSequenceEndToken,
+        yaml.tokens.FlowMappingEndToken,
+    )
+    try:
+        for token in yaml.scan(contents):
+            if isinstance(token, collection_starts):
+                nesting += 1
+                if nesting > _MAX_WORKSPACE_MANIFEST_NESTING:
+                    return False
+            elif isinstance(token, collection_ends):
+                nesting = max(0, nesting - 1)
+    except (RecursionError, yaml.YAMLError):
+        return False
+    return True
+
+
+def _read_workspace_manifest(path: Path) -> Optional[str]:
+    """Read one byte- and depth-bounded UTF-8 manifest, failing closed."""
+    try:
+        with path.open("rb") as handle:
+            contents = handle.read(_MAX_WORKSPACE_MANIFEST_BYTES + 1)
+    except OSError:
+        return None
+    if len(contents) > _MAX_WORKSPACE_MANIFEST_BYTES:
+        return None
+    try:
+        decoded = contents.decode("utf-8")
+    except UnicodeError:
+        return None
+    if not _workspace_manifest_depth_is_bounded(decoded):
+        return None
+    return decoded
+
+
 def _pnpm_workspace_globs(path: Path) -> Optional[list[str]]:
     """Load an authoritative pnpm package declaration, failing closed."""
+    contents = _read_workspace_manifest(path)
+    if contents is None:
+        return None
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
+        data = yaml.safe_load(contents)
+    except (RecursionError, yaml.YAMLError):
         return None
     if not isinstance(data, dict):
         return None
@@ -236,9 +286,12 @@ def _manifest_workspace_globs(path: Path) -> Optional[list[str]]:
     """Load npm/Yarn workspace patterns when a package manifest declares them."""
     if not path.exists():
         return []
+    contents = _read_workspace_manifest(path)
+    if contents is None:
+        return []
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError, UnicodeError):
+        manifest = json.loads(contents)
+    except (RecursionError, ValueError):
         return []
     if not isinstance(manifest, dict):
         return None
@@ -254,9 +307,12 @@ def _lerna_workspace_globs(path: Path) -> Optional[list[str]]:
     """Load Lerna patterns, including its conventional ``packages/*`` default."""
     if not path.exists():
         return []
+    contents = _read_workspace_manifest(path)
+    if contents is None:
+        return None
     try:
-        lerna = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError, UnicodeError):
+        lerna = json.loads(contents)
+    except (RecursionError, ValueError):
         return None
     if not isinstance(lerna, dict):
         return None
@@ -282,10 +338,37 @@ def _workspace_globs_for(ancestor: Path) -> Optional[list[str]]:
     return manifest_globs + lerna_globs
 
 
+def _ancestor_workspace_root(package_dir: Path) -> Optional[Path]:
+    """Return the nearest ancestor workspace that proves package membership."""
+    canonical_package = package_dir.resolve()
+    ancestor = canonical_package.parent
+    for _ in range(80):
+        globs = _workspace_globs_for(ancestor)
+        if globs is None:
+            return None
+        if globs:
+            try:
+                rel_parts = tuple(canonical_package.relative_to(ancestor.resolve()).parts)
+            except ValueError:
+                rel_parts = ()
+            membership = _declared_workspace_membership(rel_parts, globs)
+            if membership is None:
+                return None
+            if membership:
+                return ancestor.resolve()
+        if (ancestor / "pnpm-workspace.yaml").exists():
+            return None
+        if (ancestor / ".git").exists():
+            break
+        parent = ancestor.parent
+        if parent == ancestor:
+            break
+        ancestor = parent
+    return None
+
+
 def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
-    """Return True if ``package_dir`` (which holds a ``package.json``) is a member
-    of an ancestor JS workspace, so its runner config may live at the workspace
-    root rather than in the leaf package.
+    """Return True if ``package_dir`` is a proven ancestor-workspace member.
 
     Membership is proven, not assumed: an ancestor's declared workspace globs
     (npm/yarn ``workspaces``, ``lerna.json`` ``packages``, ``pnpm-workspace.yaml``
@@ -294,30 +377,20 @@ def _belongs_to_ancestor_workspace(package_dir: Path) -> bool:
     root is therefore not treated as a member. The search never looks above the
     repository root (``.git``).
     """
-    ancestor = package_dir.parent
+    return _ancestor_workspace_root(package_dir) is not None
+
+
+def _nearest_package_root_for(test_path: Path) -> Optional[Path]:
+    """Return the nearest canonical package root containing ``test_path``."""
+    current = test_path.resolve().parent
     for _ in range(80):
-        globs = _workspace_globs_for(ancestor)
-        if globs is None:
-            return False
-        if globs:
-            try:
-                rel_parts = tuple(package_dir.resolve().relative_to(ancestor.resolve()).parts)
-            except ValueError:
-                rel_parts = ()
-            membership = _declared_workspace_membership(rel_parts, globs)
-            if membership is None:
-                return False
-            if membership:
-                return True
-        if (ancestor / "pnpm-workspace.yaml").exists():
-            return False
-        if (ancestor / ".git").exists():
+        if (current / "package.json").exists():
+            return current
+        parent = current.parent
+        if parent == current:
             break
-        parent = ancestor.parent
-        if parent == ancestor:
-            break
-        ancestor = parent
-    return False
+        current = parent
+    return None
 
 
 def _repository_root_for(test_path: Path) -> Optional[Path]:
@@ -333,18 +406,41 @@ def _repository_root_for(test_path: Path) -> Optional[Path]:
     return None
 
 
-def _runner_config_is_contained(config_path: Path, repository_root: Optional[Path]) -> bool:
-    """Accept only regular config targets contained by an anchored repository."""
+def _runner_ownership_root(
+    test_path: Path, repository_root: Optional[Path]
+) -> Optional[Path]:
+    """Return the canonical ceiling that may own a discovered runner config."""
+    if repository_root is not None:
+        return repository_root
+    package_root = _nearest_package_root_for(test_path)
+    if package_root is None:
+        return None
+    ownership_root = package_root.resolve()
+    for _ in range(80):
+        workspace_root = _ancestor_workspace_root(ownership_root)
+        if workspace_root is None or workspace_root == ownership_root:
+            break
+        ownership_root = workspace_root
+    return ownership_root
+
+
+def _runner_config_is_contained(config_path: Path, ownership_root: Optional[Path]) -> bool:
+    """Accept only regular config targets contained by a proven owner.
+
+    Without a Git, package, or workspace anchor, ordinary config files remain
+    usable but symlinks are rejected because their ownership cannot be proven.
+    """
+    is_symlink = config_path.is_symlink()
     try:
         resolved_config = config_path.resolve(strict=True)
     except (OSError, RuntimeError):
         return False
     if not resolved_config.is_file():
         return False
-    if repository_root is None:
-        return True
+    if ownership_root is None:
+        return not is_symlink
     try:
-        resolved_config.relative_to(repository_root)
+        resolved_config.relative_to(ownership_root)
     except ValueError:
         return False
     return True
@@ -382,10 +478,11 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
     repository_root = _repository_root_for(test_path)
+    ownership_root = _runner_ownership_root(test_path, repository_root)
     for _ in range(80):
         # For .spec.ts/.spec.tsx files, check Playwright first
         if is_spec and any(
-            _runner_config_is_contained(search_dir / cfg, repository_root)
+            _runner_config_is_contained(search_dir / cfg, ownership_root)
             for cfg in (
                 'playwright.config.ts',
                 'playwright.config.js',
@@ -394,12 +491,12 @@ def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
         ):
             return ("npx playwright test", search_dir)
         if any(
-            _runner_config_is_contained(search_dir / cfg, repository_root)
+            _runner_config_is_contained(search_dir / cfg, ownership_root)
             for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')
         ):
             return ("npx jest --no-coverage --runTestsByPath", search_dir)
         if any(
-            _runner_config_is_contained(search_dir / cfg, repository_root)
+            _runner_config_is_contained(search_dir / cfg, ownership_root)
             for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')
         ):
             return ("npx vitest run", search_dir)
