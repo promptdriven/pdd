@@ -303,22 +303,43 @@ def _changed_python_defs(path: str, diff_base: str | None) -> set[str] | None:
     return changed_defs
 
 
+def _resolved_include_targets(
+    include_path: str, prompt_path: Path, repo_root: Path
+) -> set[str]:
+    """Return normalized, in-repository paths an include can resolve to.
+
+    Include processing resolves a repository-relative target before trying the
+    including prompt's directory. Preserve that precedence whenever a target
+    exists. For a deleted target, return the distinct valid candidates so the
+    caller can still detect a reverse dependency when exactly one changed path
+    matches; multiple changed candidates remain deliberately ambiguous.
+    """
+    target = Path(include_path)
+    if target.is_absolute():
+        return set()
+
+    candidates: list[str] = []
+    for root in (repo_root, prompt_path.resolve().parent):
+        try:
+            resolved = (root / target).resolve()
+            relative = resolved.relative_to(repo_root).as_posix()
+        except (OSError, ValueError):
+            continue
+        normalized = _normalize_repo_path(relative)
+        if not normalized or normalized in candidates:
+            continue
+        candidates.append(normalized)
+        if resolved.exists():
+            return {normalized}
+    return set(candidates)
+
+
 def _include_matches_changed(
-    include_path: str,
     selected_defs: set[str] | None,
     changed_path: str,
-    changed_basename: str,
     changed_defs_by_path: dict[str, set[str] | None],
 ) -> bool:
-    """Return True if a prompt include should react to a changed file."""
-    include_basename = os.path.basename(include_path)
-    path_matches = (
-        changed_path.endswith(include_path)
-        or include_path.endswith(changed_basename)
-        or include_basename == changed_basename
-    )
-    if not path_matches:
-        return False
+    """Return True when selectors permit a resolved include to react."""
 
     if selected_defs is None:
         return True
@@ -328,6 +349,46 @@ def _include_matches_changed(
         return True
 
     return bool(selected_defs & changed_defs)
+
+
+def _matching_changed_path(
+    include_path: str,
+    prompt_path: Path,
+    repo_root: Path,
+    changed_paths: set[str],
+) -> str | None:
+    """Return the sole changed file an include resolves to, if unambiguous."""
+    matched_paths = (
+        _resolved_include_targets(include_path, prompt_path, repo_root)
+        & changed_paths
+    )
+    return next(iter(matched_paths)) if len(matched_paths) == 1 else None
+
+
+def _reverse_dep_basename_for_prompt(
+    prompt_file: Path,
+    repo_root: Path,
+    changed_paths: set[str],
+    changed_defs_by_path: dict[str, set[str] | None],
+) -> str | None:
+    """Return a prompt basename when it includes one changed target."""
+    try:
+        content = prompt_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    prompt_basename = _prompt_basename_from_path(prompt_file.as_posix())
+    if not prompt_basename:
+        return None
+    for include_path, selected_defs in _extract_include_refs(content):
+        changed_path = _matching_changed_path(
+            include_path, prompt_file, repo_root, changed_paths
+        )
+        if changed_path is not None and _include_matches_changed(
+            selected_defs, changed_path, changed_defs_by_path
+        ):
+            return prompt_basename
+    return None
 
 
 def _reverse_dep_basenames(
@@ -341,39 +402,26 @@ def _reverse_dep_basenames(
     found: set[str] = set()
     if not changed_files:
         return found
-    changed_lookup = {}
+    changed_paths: set[str] = set()
     for path in changed_files:
         normalized = _normalize_repo_path(path)
         if normalized:
-            changed_lookup[normalized] = os.path.basename(normalized)
+            changed_paths.add(normalized)
     changed_defs_by_path = {
-        path: _changed_python_defs(path, diff_base) for path in changed_lookup
+        path: _changed_python_defs(path, diff_base) for path in changed_paths
     }
+    repo_root = Path.cwd().resolve()
     for pdir in _PROMPT_DIRS:
         prompt_root = Path(pdir)
         if not prompt_root.exists():
             continue
         for prompt_file in prompt_root.rglob("*.prompt"):
-            try:
-                content = prompt_file.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            prompt_basename = _prompt_basename_from_path(prompt_file.as_posix())
+            prompt_basename = _reverse_dep_basename_for_prompt(
+                prompt_file, repo_root, changed_paths, changed_defs_by_path
+            )
             if not prompt_basename:
                 continue
-            for include_path, selected_defs in _extract_include_refs(content):
-                if any(
-                    _include_matches_changed(
-                        include_path,
-                        selected_defs,
-                        changed_path,
-                        changed_basename,
-                        changed_defs_by_path,
-                    )
-                    for changed_path, changed_basename in changed_lookup.items()
-                ):
-                    found.add(prompt_basename)
-                    break
+            found.add(prompt_basename)
     return found
 
 
