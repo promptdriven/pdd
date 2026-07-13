@@ -2,9 +2,51 @@
 
 import os
 import csv
+import re
 import shlex
 from typing import Dict, Optional
 from pdd.path_resolution import get_default_resolver
+
+# Commands/forms that RE-EVALUATE an argument as code, undoing ``shlex.quote``'s single
+# quoting: ``eval <arg>`` and a shell invoked with ``-c`` (``bash -c``/``sh -c``…).
+_REEVAL_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
+
+
+def _feeds_value_into_reevaluation(template: str) -> bool:
+    """True when ``template`` would RE-EVALUATE an inserted value as code — so a
+    ``shlex.quote``-d ``$(...)`` in the value would still execute at the second parse.
+    The value is unsafe when a command clause runs ``eval`` or a shell with ``-c``
+    (``bash -c {file}``, ``sh -c {file}``). A bare ``sh {file}`` / ``bash {file}`` (run
+    the *file* as a script — the shipped Shell/Bash/Zsh templates) is SAFE and NOT
+    rejected: only the ``-c`` *code* argument is. Each command clause's leading command is
+    inspected (quote/escape-aware split); an unparseable template fails closed (True).
+    Called only after ``$``/backtick/``()``/brace/glob/newline forms are already refused,
+    so the tokenizer sees a simple command line."""
+    try:
+        lex = shlex.shlex(template, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        clauses, clause = [], []
+        for tok in lex:
+            if tok in (";", "&", "&&", "|", "||"):
+                clauses.append(clause)
+                clause = []
+            else:
+                clause.append(tok)
+        clauses.append(clause)
+    except ValueError:
+        return True
+    for toks in clauses:
+        j = 0
+        while j < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[j]):
+            j += 1  # skip leading VAR=value environment assignments
+        if j >= len(toks):
+            continue
+        cmd = toks[j].split("/")[-1]
+        if cmd == "eval":
+            return True
+        if cmd in _REEVAL_SHELLS and "-c" in toks[j + 1:]:
+            return True
+    return False
 
 
 def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str]:
@@ -37,7 +79,11 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
     * places a placeholder inside its own single/double quotes, immediately after a
       backslash, or inside a shell comment (a ``#`` that starts a comment — at a word
       boundary or right after a ``;``/``&``/``|`` control operator — where a newline in
-      the value would break out onto a new command line).
+      the value would break out onto a new command line);
+    * RE-EVALUATES the value as code — an ``eval`` command or a shell invoked with
+      ``-c`` (``bash -c {file}``) — where the second parse undoes the single quoting.
+      (A bare ``sh {file}`` / ``bash {file}`` that runs the *file* as a script is safe
+      and still substitutes; only the ``-c`` code argument is refused.)
 
     Substitution is single-pass, so a value that itself contains a ``{...}`` token is
     never rescanned as a placeholder. An empty placeholder key is rejected up front (it
@@ -67,6 +113,10 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
     for key in values:
         masked = masked.replace(key, "\x00")
     if any(ch in masked for ch in "{}[]*?~"):
+        return None
+    # Refuse templates that re-evaluate an inserted value as code (``eval {file}``,
+    # ``bash -c {file}``) — the second parse would undo ``shlex.quote``'s single quoting.
+    if _feeds_value_into_reevaluation(template):
         return None
     out: list = []
     i, n = 0, len(template)

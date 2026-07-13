@@ -1100,13 +1100,22 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             if negated:
                 neg_groups.append(expanded)
             else:
-                neg_groups = [
-                    grp for grp in neg_groups
-                    if not any(
+                # Reproduce upstream's EXACT mutation order: it iterates
+                # ``for (i=0; i<negatedPatterns.length; ++i) { if match: splice(i,1) }``,
+                # so a ``splice(i)`` followed by ``++i`` SKIPS the negation that shifts
+                # into slot ``i`` — an adjacent matching negation survives. Simultaneous
+                # removal (a list comprehension) would wrongly drop it too. E.g.
+                # ``["packages/**","!packages/**","!packages/*","packages/app"]`` leaves
+                # ``!packages/*`` in force, excluding ``packages/app``.
+                i = 0
+                while i < len(neg_groups):
+                    if any(
                         _relative_matches_workspace_glob(
                             raw_parts, np, cells, work, pre_normalized=True)
-                        for np in grp)
-                ]
+                        for np in neg_groups[i]
+                    ):
+                        del neg_groups[i]
+                    i += 1  # ++i regardless — skips the group shifted into slot i
                 if not is_comment:
                     pos_groups.append((raw_parts, expanded))
         neg_flat = [np for grp in neg_groups for np in grp]
@@ -1344,13 +1353,23 @@ _EXEC_SUBCMDS = frozenset({"exec", "dlx", "x"})
 _RUNNER_BOOL_FLAGS = frozenset({"--yes", "-y"})
 # Shell control operators that separate command clauses.
 _CLAUSE_OPERATORS = frozenset({";", "&", "&&", "|", "||"})
+# A package.json script value longer than this is not parsed for vitest — it fails proof
+# closed. Real test scripts are short; a ~1 MB no-whitespace value would make the shell
+# lexer build one quadratic-cost token. (Bounds the lexing work per script; the ancestor
+# walk reads a bounded number of manifests, so the aggregate stays bounded too.)
+_MAX_SCRIPT_LEN = 4096
 
 
 def _binary_after_flags_is_vitest(tokens: list) -> bool:
-    """Return True iff the first non-boolean-flag token names the ``vitest`` binary. Any
-    arg-taking/unknown flag (not a known boolean flag) fails closed, so ``npx --package
-    vitest echo ok`` — where ``vitest`` is the option's value, not the binary — is False."""
-    for tok in tokens:
+    """Return True iff the invoked binary (skipping boolean flags) names ``vitest``. An
+    arg-taking/unknown flag fails closed, so ``npx --package vitest echo ok`` — where
+    ``vitest`` is the option's VALUE, not the binary — is False. A ``--`` options
+    terminator is honored: the token right after it is the positional command, so
+    ``npm exec -- vitest`` is True."""
+    for j, tok in enumerate(tokens):
+        if tok == "--":
+            nxt = tokens[j + 1] if j + 1 < len(tokens) else ""
+            return nxt.split("/")[-1] == "vitest"
         if tok in _RUNNER_BOOL_FLAGS:
             continue
         if tok.startswith("-"):
@@ -1392,7 +1411,10 @@ def _script_invokes_vitest(script: str) -> bool:
     ESCAPE-aware shell lexer and split into command clauses on unquoted control operators
     (``;`` ``&`` ``&&`` ``|`` ``||``), so ``echo x\\; vitest`` stays one clause (the
     escaped ``;`` is a literal argument, not a boundary) and ``echo 'a; b' vitest`` is
-    not mis-split. Malformed (unbalanced-quote) scripts fail closed."""
+    not mis-split. An oversized script (a manifest padding attack) and a malformed
+    (unbalanced-quote) script both fail closed."""
+    if len(script) > _MAX_SCRIPT_LEN:
+        return False
     try:
         lex = shlex.shlex(script, posix=True, punctuation_chars=True)
         lex.whitespace_split = True

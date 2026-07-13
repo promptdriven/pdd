@@ -1306,6 +1306,16 @@ class TestWorkspaceMembershipHardening:
         assert _package_matches_workspace(
             ("packages", "app"), ["{packages/*,other/*}"], ordered=False) is True
 
+    def test_npm_negation_removal_uses_splice_while_increment_semantics(self):
+        """npm's negation-removal loop splices at index ``i`` then does ``++i``, so a
+        matching negation ADJACENT to a removed one is skipped and survives. For
+        ``["packages/**", "!packages/**", "!packages/*", "packages/app"]`` the positive
+        ``packages/app`` removes ``!packages/**`` (slot 0) but the loop advances past the
+        shifted ``!packages/*`` — which survives and excludes ``packages/app``. Reproduce
+        the sequential (not simultaneous) semantics."""
+        g = ["packages/**", "!packages/**", "!packages/*", "packages/app"]
+        assert _package_matches_workspace(("packages", "app"), g, ordered=False) is False
+
     def test_jest_config_extensions_include_cjs_and_json(self):
         """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
         `jest.config.cjs` must be detected as a Jest project, not fall back to tsx."""
@@ -1507,14 +1517,24 @@ class TestWorkspaceMembershipHardening:
         assert "npx vitest run" in cmd, cmd
         assert cwd == repo.resolve()
         # A script invoking the vitest BINARY proves it — directly, via a direct package
-        # runner (npx/bunx), or via an explicit exec subcommand (pnpm exec / bun x).
+        # runner (npx/bunx), via an explicit exec subcommand (pnpm exec / bun x), or with
+        # a `--` options terminator (npm exec -- vitest).
         for script in ("vitest run", "npx vitest", "npx --yes vitest", "bunx vitest",
                        "pnpm exec vitest", "pnpm dlx vitest", "bun x vitest",
-                       "yarn exec vitest", "./node_modules/.bin/vitest"):
+                       "yarn exec vitest", "npm exec -- vitest", "pnpm dlx -- vitest",
+                       "./node_modules/.bin/vitest"):
             (repo / "package.json").write_text(
                 json.dumps({"scripts": {"test": script}}))
             cmd2, _ = _detect_ts_test_runner(repo / "src" / "a.test.ts")
             assert cmd2 is not None and "npx vitest run" in cmd2, (script, cmd2)
+        # DoS: an oversized (near-1MB) no-whitespace script value must fail proof closed
+        # QUICKLY (a quadratic shell-lexer cost is unacceptable), not be adopted.
+        import time as _time
+        (repo / "package.json").write_text(
+            json.dumps({"scripts": {"test": "x" * (900 * 1024)}}))
+        _t0 = _time.time()
+        assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None
+        assert _time.time() - _t0 < 2.0, "oversized script must fail closed quickly"
         # A script where "vitest" is not the invoked BINARY — a bare argument; an arg to
         # echo/node/command; the value of a runner option flag; a package.json SCRIPT
         # name (`npm run vitest` / bare `pnpm vitest`, which may be a Vite-only shadow);
