@@ -22,6 +22,9 @@
      - A SHARED PUBLIC helper (imported by `get_test_command`, `agentic_fix`, and
        `agentic_langtest`); it MUST be part of this module's public interface and MUST
        NOT be removed or renamed.
+     - Emits POSIX-shell command strings for PDD's existing `bash -lc` / `shell=True`
+       callers; native `cmd.exe` and PowerShell command syntax are outside this
+       interface.
      - Fills `{placeholder}` tokens in a shell-command `template` with **shell-quoted**
        values (`shlex.quote`) in a SINGLE left-to-right pass (a value that itself
        contains a `{...}` token is never rescanned as another placeholder).
