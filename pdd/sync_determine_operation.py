@@ -2707,6 +2707,7 @@ def _architecture_module_choices(
     language: str,
     modules: Any = _ARCH_MODULES_UNSET,
     context_name: Optional[str] = None,
+    prompts_root: Optional[Path] = None,
 ) -> List[str]:
     """Return the distinct canonical output files a BARE basename maps to.
 
@@ -2745,6 +2746,24 @@ def _architecture_module_choices(
 
     if not modules:
         return []
+
+    # Prompt-root prefix-overlap stripping (R18 F2): when the active prompt root already
+    # represents the qualified directory (e.g. root `pdd/prompts`, request `prompts/widget`),
+    # the leading `prompts` overlaps the root — both a bare `widget_python.prompt` row and a
+    # `prompts/widget_python.prompt` row map to the SAME physical prompt. Canonicalise the
+    # basename against the prompt root (the SAME overlap transform physical prompt discovery
+    # uses via `_prompt_relative_parts_for_root`) so ownership/ambiguity is computed on the
+    # physical identity: otherwise the textual pre-pass would suppress the bare row that
+    # final selection can still choose, and a genuine two-output ambiguity would slip through.
+    if prompts_root is not None and "/" in basename:
+        try:
+            _stripped_parts = _prompt_relative_parts_for_root(
+                Path(prompts_root), PurePosixPath(basename)
+            )
+        except (OSError, ValueError):
+            _stripped_parts = None
+        if _stripped_parts:
+            basename = "/".join(_stripped_parts)
 
     if "/" in basename:
         # A path-qualified basename is NOT automatically unambiguous: because a qualified
@@ -3465,6 +3484,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         _config_pddrc = _find_pddrc_file(config_anchor)
         _reject_unsafe_pddrc_output_config(config_anchor)
 
+        # Explicit prompt provenance (R18 F3): set True only when prompt discovery
+        # (_find_prompt_file) actually RETURNS a path — i.e. a real on-disk prompt. A
+        # convention-reconstructed path (missing-prompt branch) leaves this False, so the
+        # discovery-only approved-alias exception cannot be granted to a dangling alias
+        # that discovery itself excluded. A mutable holder captured by the finalizer.
+        _prompt_provenance = {"discovered": False}
+
         def _discovered_alias_within_repo(_prompt: Any, _prompt_resolved: Path) -> bool:
             """Whether a DISCOVERED approved-alias prompt is contained in the project repo.
 
@@ -3558,6 +3584,19 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     # symlink-to-regular-file is still allowed.
                     if _resolved_artifact.exists() and not _resolved_artifact.is_file():
                         raise UnsafeOutputPathError(_reanchored, _governing_root, _artifact)
+                    # R18 F1: an artifact path must not have been reached THROUGH an
+                    # out-of-tree hop either — a configured output like `link/back/foo.py`
+                    # where `link` -> /outside -> back-into-repo passes the terminal check
+                    # yet lets a later retarget of the external node redirect the write
+                    # outside the project. Apply the same every-hop walk as prompts, gated
+                    # by a cheap symlink pre-check.
+                    if _path_has_symlink(_reanchored):
+                        _art_roots = _hop_trust_roots(
+                            _governing_root, _governing_resolved,
+                            _enclosing_git_root(_governing_root),
+                        )
+                        if not _symlink_chain_within_root(_reanchored, _art_roots):
+                            raise UnsafeOutputPathError(_reanchored, _governing_root, _artifact)
             # Rebuild test_files from the ANCHORED test directory rather than trusting
             # a list globbed before anchoring (which, from a parent CWD, would glob the
             # PARENT's siblings and hand nonexistent nested paths to the runner). Keep
@@ -3594,8 +3633,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # `outputs.prompt.path` destination (even one that coincides with a
                 # discovered alias path) must obey the normal configured-path policy
                 # (contained in the prompts root / governing project) and may NOT inherit
-                # discovery's enclosing-repository alias acceptance.
-                _is_discovered_prompt = not prompt_from_config
+                # discovery's enclosing-repository alias acceptance. The exception ALSO
+                # requires the prompt to have been ACTUALLY returned by discovery (R18 F3):
+                # a convention-reconstructed dangling alias — one discovery excluded because
+                # its target does not exist — must NOT receive the approved-alias privilege.
+                _is_discovered_prompt = (not prompt_from_config) and _prompt_provenance["discovered"]
                 # A CONFIGURED outputs.prompt.path (Issue #237, e.g. `custom/prompts/`) is
                 # GOVERNING-ROOT-relative, not CWD-relative: anchor it under the governing
                 # root the same way outputs are, so a parent/sibling-CWD run still resolves
@@ -3759,7 +3801,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if arch_path:
             ambiguous_choices = _architecture_module_choices(
                 arch_path, basename, language, modules=arch_modules,
-                context_name=resolved_context_name,
+                context_name=resolved_context_name, prompts_root=prompts_root,
             )
             if len(ambiguous_choices) > 1:
                 raise AmbiguousModuleError(basename, language, ambiguous_choices)
@@ -3768,6 +3810,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # This handles case-insensitive matching, nested subdirectories, and
         # architecture.json hints in a single code path.
         resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override, arch_modules=arch_modules)
+        _prompt_provenance["discovered"] = bool(resolved_prompt)
         if resolved_prompt:
             prompt_path = str(resolved_prompt)
             try:
@@ -3948,7 +3991,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # example/test stem from the canonical code path so the artifacts are
                 # distinct per module. Unique leaves keep the flat stem (backward compat).
                 example_stem = code_stem
-                if arch_path and len(_architecture_module_choices(arch_path, name, language, modules=arch_modules)) > 1:
+                if arch_path and len(_architecture_module_choices(arch_path, name, language, modules=arch_modules, prompts_root=prompts_root)) > 1:
                     example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
 
                 # #1985 global-sync builds the base architecture artifact paths.

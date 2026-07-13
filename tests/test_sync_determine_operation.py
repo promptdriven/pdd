@@ -10396,3 +10396,126 @@ def test_split_path_anchor_preserves_windows_and_unc_anchors():
     )
     assert posix_anchor == "/"
     assert posix_parts == ["repo", "prompts", "alias"]
+
+
+# ---------------------------------------------------------------------------
+# Round-18 review hardening: every-hop validation on code/example/test artifact
+# paths; R11 pre-pass + selection share physical prompt identity under prompt-root
+# prefix-overlap; and a convention-reconstructed dangling alias must fail closed.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_artifact_rejects_external_intermediate_symlink(tmp_path, monkeypatch):
+    """r18 F1: a configured artifact output (outputs.code.path) reached through an EXTERNAL
+    intermediate directory symlink that re-enters the repo must be rejected — the every-hop
+    walk applies to code/example/test, not only prompts (retarget-safe)."""
+    root = tmp_path / "repo"
+    (root / "prompts").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "foo_python.prompt").write_text("% f\n", encoding="utf-8")
+    (root / "realsrc").mkdir()
+    ext = tmp_path / "external"
+    ext.mkdir()
+    try:
+        (ext / "back").symlink_to(root / "realsrc", target_is_directory=True)
+        (root / "link").symlink_to(ext, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        code:\n          path: "link/back/foo.py"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    with pytest.raises((UnsafeOutputPathError, UnsafePromptPathError)):
+        get_pdd_file_paths("foo", "python", "prompts")
+
+
+def test_get_pdd_file_paths_prompt_root_overlap_is_ambiguous(tmp_path, monkeypatch):
+    """r18 F2: when the prompt root already represents the qualified dir (pdd/prompts), a
+    bare row and a `prompts/`-prefixed row both physically own the same prompt. Two distinct
+    outputs is a genuine ambiguity that must be BLOCKED (not silently resolved to one row)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "legacy/prompts/widget.py"},
+            {"filename": "prompts/widget_python.prompt", "filepath": "src/prompts/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("prompts/widget", "python", prompts_dir="pdd/prompts")
+
+
+def test_architecture_module_choices_prompt_root_overlap_counts_both_rows(tmp_path):
+    """r18 F2 (helper): _architecture_module_choices canonicalises `prompts/widget` against
+    a `pdd/prompts` root (prefix-overlap stripping) so BOTH the bare and prefixed rows count
+    -> two distinct outputs -> ambiguity, matching what final selection would face."""
+    import sync_determine_operation as sync_determine_module
+    from pathlib import Path as _P
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "legacy/prompts/widget.py"},
+            {"filename": "prompts/widget_python.prompt", "filepath": "src/prompts/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    choices = sync_determine_module._architecture_module_choices(
+        tmp_path / "architecture.json", "prompts/widget", "python",
+        prompts_root=_P("pdd/prompts"),
+    )
+    assert "legacy/prompts/widget.py" in choices
+    assert "src/prompts/widget.py" in choices
+
+
+def test_get_pdd_file_paths_dangling_convention_alias_fails_closed(tmp_path, monkeypatch):
+    """r18 F3: a nested `prompts/foo -> ../../shared/foo` whose in-repo target does NOT exist
+    is excluded by discovery (is_file False); the missing-prompt convention reconstruction
+    must NOT grant it the discovery-only approved-alias privilege — it fails closed."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared").mkdir()  # target dir exists, but the prompt file does NOT
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    try:
+        (sub / "prompts" / "foo_python.prompt").symlink_to("../../shared/foo_python.prompt")
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    monkeypatch.chdir(sub)
+    with pytest.raises(UnsafePromptPathError):
+        get_pdd_file_paths("foo", "python", "prompts")
+
+
+def test_get_pdd_file_paths_discovered_alias_control_still_resolves(tmp_path, monkeypatch):
+    """r18 F3 control: a genuinely DISCOVERED approved alias whose in-repo target EXISTS must
+    still resolve after the provenance tightening."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "shared-prompts").mkdir()
+    (root / "shared-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    sub = root / "sub"
+    (sub / "prompts").mkdir(parents=True)
+    (sub / "src").mkdir(parents=True)
+    (sub / "src" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    try:
+        (sub / "prompts" / "widget_python.prompt").symlink_to(
+            "../../shared-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (sub / ".pddrc").write_text('contexts:\n  default:\n    paths: ["**"]\n', encoding="utf-8")
+    (sub / "architecture.json").write_text(
+        json.dumps([{"filename": "widget_python.prompt", "filepath": "src/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(sub)
+    paths = get_pdd_file_paths("widget", "python", "prompts")
+    assert paths["prompt"].resolve(strict=False) == (
+        root / "shared-prompts" / "widget_python.prompt"
+    ).resolve()
