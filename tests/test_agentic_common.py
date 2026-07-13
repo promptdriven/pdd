@@ -2991,7 +2991,7 @@ def test_codex_old_cli_gate_prevents_inference_subprocess(tmp_path, monkeypatch)
     assert success is False
     assert ">= 0.144.0" in message
     assert cost == 0.0
-    assert model == "gpt-5.6-sol"
+    assert model is None
 
 
 def test_provider_cli_binary_name_mapping():
@@ -6595,7 +6595,8 @@ def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_lo
     mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
     mock_subprocess.return_value.stderr = ""
 
-    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+    result = run_agentic_task("Fix the bug", mock_cwd)
+    success, msg, cost, provider = result
 
     assert success
     assert provider == "openai"
@@ -6605,6 +6606,161 @@ def test_codex_no_model_env_var_uses_gpt_5_6_default(mock_cwd, mock_env, mock_lo
     model_idx = cmd.index("--model")
     assert cmd[model_idx + 1] == "gpt-5.6-sol"
     assert model_idx < cmd.index("exec")
+    assert result.model_id == "", (
+        "requested CODEX_MODEL must not masquerade as provider-observed model provenance"
+    )
+
+
+def test_codex_jsonl_thread_id_resolves_provider_owned_session_model(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "sessions" / "2026" / "07" / "12"
+    session_dir.mkdir(parents=True)
+    transcript = session_dir / f"rollout-test-{thread_id}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": thread_id,
+                            "model_provider": "openai",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    parsed = ac._parse_codex_jsonl(
+        [
+            json.dumps({"type": "thread.started", "thread_id": thread_id}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }
+            ),
+            json.dumps({"type": "turn.completed", "usage": {}}),
+        ]
+    )
+
+    assert parsed["thread_id"] == thread_id
+    assert ac._extract_codex_session_model(thread_id, {"CODEX_HOME": str(tmp_path)}) == (
+        "gpt-5.6-sol"
+    )
+
+
+def test_codex_provider_returns_model_from_correlated_session_transcript(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "codex-home" / "sessions" / "2026" / "07" / "12"
+    session_dir.mkdir(parents=True)
+    (session_dir / f"rollout-test-{thread_id}.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": thread_id, "model_provider": "openai"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ndjson_output = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": thread_id}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "done"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 10,
+                        "cached_input_tokens": 0,
+                    },
+                }
+            ),
+        ]
+    )
+    prompt_file = tmp_path / ".agentic_prompt_test.txt"
+    prompt_file.write_text("test prompt", encoding="utf-8")
+
+    with patch.dict(
+        os.environ,
+        {
+            "OPENAI_API_KEY": "test-key",
+            "CODEX_HOME": str(tmp_path / "codex-home"),
+            "CODEX_MODEL": "gpt-5.6-sol",
+        },
+        clear=False,
+    ), patch.object(ac, "_find_cli_binary", return_value="/usr/bin/codex"), patch.object(
+        ac, "_get_provider_cli_version", return_value="codex-cli 0.144.1"
+    ), patch.object(ac, "_subprocess_run_spooled") as mock_run_spooled:
+        mock_run_spooled.return_value = MagicMock(
+            returncode=0,
+            stdout=ndjson_output,
+            stderr="",
+        )
+        success, output, _cost, model = ac._run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert output == "done"
+    assert model == "gpt-5.6-sol"
+
+
+def test_codex_session_model_rejects_uncorrelated_or_non_openai_transcript(tmp_path):
+    import pdd.agentic_common as ac
+
+    thread_id = "019f59fb-ae90-7411-b105-94d1d68445ea"
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    transcript = session_dir / f"rollout-test-{thread_id}.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": thread_id, "model_provider": "azure"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.6-sol"},
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert ac._extract_codex_session_model(thread_id, {"CODEX_HOME": str(tmp_path)}) is None
 
 
 # gpt-5.6-sol is the runtime-verified GPT-5.6 slug on Codex 0.144.1; the bare

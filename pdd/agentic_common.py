@@ -21,7 +21,7 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -2711,6 +2711,7 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
     agent_message_data: Optional[Dict[str, Any]] = None
     session_end: Optional[Dict[str, Any]] = None
     last_json: Optional[Dict[str, Any]] = None
+    thread_id: Optional[str] = None
     for line in lines:
         line = line.strip()
         if not line:
@@ -2725,6 +2726,10 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
         # Legacy Codex format: single event contains both text and usage.
         if item.get("type") == "result":
             return item
+        if item.get("type") == "thread.started":
+            candidate_thread_id = item.get("thread_id")
+            if isinstance(candidate_thread_id, str) and candidate_thread_id:
+                thread_id = candidate_thread_id
         # Modern Codex CLI (0.104.0+): text in item.completed agent_message.
         if (item.get("type") == "item.completed"
                 and isinstance(item.get("item"), dict)
@@ -2746,13 +2751,85 @@ def _parse_codex_jsonl(lines) -> Dict[str, Any]:
                 merged["usage"] = session_end.get("usage", {})
             if "model" in session_end:
                 merged["model"] = session_end.get("model")
+            if thread_id:
+                merged["thread_id"] = thread_id
             return merged
+        if thread_id:
+            return {**agent_message_data, "thread_id": thread_id}
         return agent_message_data
     if session_end is not None:
+        if thread_id:
+            return {**session_end, "thread_id": thread_id}
         return session_end
     if last_json is not None:
         return last_json
     return {}
+
+
+_CODEX_THREAD_ID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def _extract_codex_session_model(
+    thread_id: str,
+    env: Mapping[str, str],
+) -> Optional[str]:
+    """Read the provider-owned Codex session transcript for an observed model.
+
+    Codex CLI 0.144 emits a ``thread.started`` ID on ``exec --json`` but omits
+    the model from its stdout ``turn.completed`` event. Its persisted rollout
+    transcript binds that same ID to ``session_meta.model_provider=openai`` and
+    ``turn_context.model``. Use only that correlated provider evidence; never
+    substitute the requested ``CODEX_MODEL`` and call it observed provenance.
+    """
+    normalized_thread_id = str(thread_id or "").strip().lower()
+    if _CODEX_THREAD_ID_RE.fullmatch(normalized_thread_id) is None:
+        return None
+    codex_home = Path(env.get("CODEX_HOME") or (Path.home() / ".codex"))
+    sessions_root = codex_home / "sessions"
+    try:
+        candidates = sorted(
+            sessions_root.rglob(f"*{normalized_thread_id}.jsonl"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError:
+        return None
+    for candidate in candidates[:2]:
+        observed_provider = ""
+        observed_session_id = ""
+        observed_model = ""
+        try:
+            with candidate.open(encoding="utf-8", errors="replace") as handle:
+                for index, raw_line in enumerate(handle):
+                    if index >= 64:
+                        break
+                    if len(raw_line) > 1_000_000:
+                        continue
+                    try:
+                        event = json.loads(raw_line)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    payload = event.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    if event.get("type") == "session_meta":
+                        observed_provider = str(payload.get("model_provider") or "").lower()
+                        observed_session_id = str(payload.get("id") or "").lower()
+                    elif event.get("type") == "turn_context":
+                        model = payload.get("model")
+                        if isinstance(model, str) and model.strip():
+                            observed_model = model.strip()
+                    if (
+                        observed_provider == "openai"
+                        and observed_session_id == normalized_thread_id
+                        and observed_model
+                    ):
+                        return observed_model
+        except OSError:
+            continue
+    return None
 
 
 def _is_codex_stdin_notice(text: str) -> bool:
@@ -5169,14 +5246,14 @@ def run_agentic_task(
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
-                # Issue #1376: prefer the model the provider actually reported;
-                # fall back to the requested model from env vars when the JSON
-                # didn't surface one (e.g. early-error returns).
+                # Keep requested/effective routing separate from provider-observed
+                # provenance. A successful result's model_id must never be filled
+                # from CODEX_MODEL merely because the CLI omitted model evidence.
                 effective_model = actual_model or _get_provider_model(provider)
                 harness_id = _provider_harness_id(provider)
                 capability = harness_capabilities.get(harness_id, {})
                 identity_observable = bool(capability.get("identity_observable", True))
-                model_id = str(effective_model or "") if identity_observable else ""
+                model_id = str(actual_model or "") if identity_observable else ""
                 cli_version = _get_provider_cli_version(provider)
                 if usage:
                     usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
@@ -7387,7 +7464,7 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL") or CODEX_MODEL_DEFAULT
         codex_version_error = _codex_gpt_5_6_version_error(codex_model)
         if codex_version_error:
-            return False, codex_version_error, 0.0, codex_model
+            return False, codex_version_error, 0.0, None
         cmd.extend(["--model", codex_model])
         cmd.extend([
             "exec",
@@ -7612,6 +7689,10 @@ def _run_with_provider(
                     data = _extract_json_from_output(output_str)
 
             success, text, cost, actual_model = _parse_provider_json(provider, data)
+            if provider == "openai" and actual_model is None:
+                thread_id = data.get("thread_id") if isinstance(data, dict) else None
+                if isinstance(thread_id, str):
+                    actual_model = _extract_codex_session_model(thread_id, env)
             if cost == 0.0 and verbose and isinstance(data, dict):
                 console.print(
                     f"[dim]Warning: {provider} returned $0 cost. "

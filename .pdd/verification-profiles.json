@@ -1435,7 +1435,7 @@
       "prompt_path": "pdd/prompts/agentic_common_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:b5e7b70a12956b7a9be60acb217dfb22a8fe08c3a62632ceea578a65a7a615d1"
+        "CONTRACT-SHA256:0dac173222091fa416cbccdeb6b38f5fd1308387bada755d8f9719d3849b4d6e"
       ],
       "obligations": [
         {
@@ -1444,7 +1444,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:b5e7b70a12956b7a9be60acb217dfb22a8fe08c3a62632ceea578a65a7a615d1"
+            "CONTRACT-SHA256:0dac173222091fa416cbccdeb6b38f5fd1308387bada755d8f9719d3849b4d6e"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_common_python.prompt"
