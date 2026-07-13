@@ -47,6 +47,57 @@ UsageSource = str
 _HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+_PROVIDER_FAILURE_SINK_ENV = "PDD_PROVIDER_FAILURE_SINK"
+_PROVIDER_FAILURE_TOKEN_ENV = "PDD_PROVIDER_FAILURE_TOKEN"
+_PROVIDER_FAILURE_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32,256}")
+
+
+def _consume_provider_failure_sink() -> Optional[Tuple[Path, str]]:
+    raw_path = os.environ.pop(_PROVIDER_FAILURE_SINK_ENV, "")
+    token = os.environ.pop(_PROVIDER_FAILURE_TOKEN_ENV, "")
+    path = Path(raw_path) if raw_path else None
+    if (
+        path is None
+        or not path.is_absolute()
+        or path.exists()
+        or not path.parent.is_dir()
+        or not _PROVIDER_FAILURE_TOKEN_RE.fullmatch(token)
+    ):
+        return None
+    return path, token
+
+
+def _publish_provider_failure_sink(
+    sink: Optional[Tuple[Path, str]], failure: object
+) -> None:
+    if sink is None or not isinstance(failure, tuple) or len(failure) != 2:
+        return
+    path, token = sink
+    provider, reason = failure
+    if provider not in _PROVIDER_ENVIRONMENT_PROVIDERS:
+        return
+    if reason not in _PROVIDER_ENVIRONMENT_REASONS:
+        return
+    temp_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    payload = {
+        "version": 1,
+        "kind": "provider_environment_failure",
+        "token": token,
+        "provider": provider,
+        "reason": reason,
+    }
+    try:
+        descriptor = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, separators=(",", ":"), ensure_ascii=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    except OSError:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 class EffortCapability(str, Enum):
@@ -1167,6 +1218,7 @@ class AgenticTaskResult(tuple):
         cli_version: str = "",
         model_id: Optional[str] = None,
         cumulative_cost_usd: Optional[float] = None,
+        provider_environment_failure: Optional[Tuple[str, str]] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
@@ -1178,6 +1230,7 @@ class AgenticTaskResult(tuple):
         result._cli_version = cli_version
         result._model_id = model_id
         result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
+        result._provider_environment_failure = provider_environment_failure
         return result
 
     def __iter__(self):
@@ -1226,6 +1279,11 @@ class AgenticTaskResult(tuple):
     @property
     def cumulative_cost_usd(self) -> float:
         return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
+    @property
+    def provider_environment_failure(self) -> Optional[Tuple[str, str]]:
+        """Trusted in-process provider/runtime classification, when present."""
+        return getattr(self, "_provider_environment_failure", None)
 
     def meets_usage_contract(self) -> bool:
         """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
@@ -4973,6 +5031,7 @@ def run_agentic_task(
         Four-value unpacking remains supported for legacy callers; structured
         consumers can read ``result.usage`` or ``result[4]``.
     """
+    provider_failure_sink = _consume_provider_failure_sink()
     normalized_claude_policy = (
         validate_claude_policy(
             claude_policy,
@@ -5521,6 +5580,7 @@ def run_agentic_task(
             "",
             None,
             cumulative_cost_usd=cumulative_cost_usd,
+            provider_environment_failure=provider_environment_failure,
         )
 
         _emit_routing_outcome(
@@ -5619,8 +5679,15 @@ def run_agentic_task(
                 )
                 if fallback_result is not None:
                     last_result = fallback_result
+            _publish_provider_failure_sink(
+                provider_failure_sink,
+                getattr(last_result, "provider_environment_failure", None),
+            )
             return last_result
 
+        _publish_provider_failure_sink(
+            provider_failure_sink, provider_environment_failure
+        )
         return failure_result
 
     finally:

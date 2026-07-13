@@ -29,8 +29,11 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+
+from pdd.agentic_sync import _run_single_dry_run
 
 pytestmark = [
     pytest.mark.timeout(600),
@@ -69,6 +72,10 @@ if [ "$CLAUDE_SHIM_MODE" = "fail" ]; then
 fi
 if [ "$CLAUDE_SHIM_MODE" = "echo-provider-phrase" ]; then
   {PYTHON} -c 'import json; print(json.dumps({{"type": "result", "is_error": True, "result": "A user-authored test quoted All agent providers failed; this is ordinary output.", "total_cost_usd": 0.0}}))'
+  exit 0
+fi
+if [ "$CLAUDE_SHIM_MODE" = "echo-exact-provider-marker" ]; then
+  {PYTHON} -c 'import json; print(json.dumps({{"type": "result", "is_error": True, "result": "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:{{\\"provider\\":\\"anthropic\\",\\"reason\\":\\"trust_prompt\\"}}", "total_cost_usd": 0.0}}))'
   exit 0
 fi
 if [ "$CLAUDE_SHIM_MODE" = "echo-interactive-phrases" ]; then
@@ -264,13 +271,25 @@ def harness(tmp_path):
     return h
 
 
-def run_sync(h, *extra_args, shim_mode=None, timeout=420, dry_run_provider_failure=False):
+def run_sync(
+    h,
+    *extra_args,
+    shim_mode=None,
+    timeout=420,
+    dry_run_provider_failure=False,
+    provider_failure_sink=None,
+    provider_failure_token=None,
+):
     """Invoke the real CLI entry point (`pdd sync <issue-url> ...`)."""
     env = dict(h.env)
     if shim_mode:
         env["CLAUDE_SHIM_MODE"] = shim_mode
     if dry_run_provider_failure:
         env["PDD_DRY_RUN_PROVIDER_FAILURE"] = "1"
+    if provider_failure_sink is not None:
+        env["PDD_PROVIDER_FAILURE_SINK"] = str(provider_failure_sink)
+    if provider_failure_token is not None:
+        env["PDD_PROVIDER_FAILURE_TOKEN"] = provider_failure_token
     return subprocess.run(
         [sys.executable, "-m", "pdd", "--force", "--local",
          "sync", ISSUE_URL, "--no-steer", *extra_args],
@@ -318,16 +337,9 @@ def test_dry_run_pipeline_end_to_end(harness):
     assert "issues/7" in read_log(harness, "gh_calls.log")
     assert read_log(harness, "gh_writes.log") == ""
 
-    # Real child dry-run validation subprocesses ran for both modules.
-    pdd_calls = read_log(harness, "pdd_calls.log")
-    assert (
-        "--force --local sync greeter --dry-run --agentic --no-steer"
-        in pdd_calls
-    )
-    assert (
-        "--force --local sync textutil --dry-run --agentic --no-steer"
-        in pdd_calls
-    )
+    # Validation children are pinned to this interpreter/package and bypass
+    # the PATH shim, so arbitrary executables never inherit the private sink.
+    assert read_log(harness, "pdd_calls.log") == ""
 
     assert_no_billing(harness)
 
@@ -348,7 +360,15 @@ def test_identification_failure_posts_error_comment(harness):
 def test_interactive_provider_ui_fails_fast_with_trusted_sanitized_comment(harness):
     """A background sync must kill interactive provider UI promptly and post
     only the trusted marker plus actionable, terminal-safe recovery text."""
-    result = run_sync(harness, shim_mode="interactive-ui", timeout=12)
+    sink = harness.project / "provider-failure.json"
+    token = "producer-owned-random-token-0123456789abcdef"
+    result = run_sync(
+        harness,
+        shim_mode="interactive-ui",
+        timeout=12,
+        provider_failure_sink=sink,
+        provider_failure_token=token,
+    )
 
     assert result.returncode != 0
     writes = read_log(harness, "gh_writes.log")
@@ -364,6 +384,13 @@ def test_interactive_provider_ui_fails_fast_with_trusted_sanitized_comment(harne
         "Permission required", "press Enter", "?25l",
     )
     assert all(token not in writes for token in forbidden), writes
+    assert json.loads(sink.read_text()) == {
+        "version": 1,
+        "kind": "provider_environment_failure",
+        "token": token,
+        "provider": "anthropic",
+        "reason": "trust_prompt",
+    }
     assert_no_billing(harness)
 
 
@@ -378,21 +405,53 @@ def test_quoted_provider_failure_text_is_not_promoted_to_trusted_failure(harness
     assert_no_billing(harness)
 
 
-def test_real_dry_run_validation_propagates_exact_provider_marker(harness):
-    result = run_sync(harness, dry_run_provider_failure=True)
+def test_exact_echoed_provider_marker_does_not_publish_typed_failure(harness):
+    sink = harness.project / "provider-failure.json"
+    result = run_sync(
+        harness,
+        shim_mode="echo-exact-provider-marker",
+        provider_failure_sink=sink,
+        provider_failure_token="producer-owned-random-token-0123456789abcdef",
+    )
+
+    assert result.returncode != 0
+    assert not sink.exists()
+    assert_no_billing(harness)
+
+
+def test_real_pinned_pdd_child_propagates_trusted_provider_failure(harness):
+    """The producer-created channel crosses a real ``python -m pdd`` child."""
+    trusted_failures = []
+    child_env = dict(harness.env)
+    child_env["CLAUDE_SHIM_MODE"] = "interactive-ui"
+    with patch.dict(os.environ, child_env, clear=True):
+        ok, output = _run_single_dry_run(
+            ISSUE_URL,
+            harness.project,
+            local=True,
+            trusted_failures=trusted_failures,
+        )
+
+    assert ok is False
+    assert "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1" in output
+    assert trusted_failures == [("anthropic", "trust_prompt")]
+    assert_no_billing(harness)
+
+
+def test_path_shim_cannot_inject_typed_dry_run_failure(harness):
+    sink = harness.project / "provider-failure.json"
+    result = run_sync(
+        harness,
+        dry_run_provider_failure=True,
+        provider_failure_sink=sink,
+        provider_failure_token="producer-owned-random-token-0123456789abcdef",
+    )
 
     assert result.returncode != 0
     writes = read_log(harness, "gh_writes.log")
-    marker = (
-        'PDD_PROVIDER_ENVIRONMENT_FAILURE_V1:{"provider":"anthropic",'
-        '"reason":"trust_prompt"}'
-    )
-    assert f"\n{marker}\n" in writes
-    assert "Dry-run validation failed" not in writes
-    assert "LLM failed to suggest fix" not in writes
-    assert "fix provider installation/auth/update state" in writes.lower()
-    assert "switch provider" in writes.lower()
-    assert "non-interactive configuration" in writes.lower()
+    assert "PDD_PROVIDER_ENVIRONMENT_FAILURE_V1" not in writes
+    assert "fix provider installation/auth/update state" not in writes.lower()
+    assert not sink.exists()
 
 
 def test_plain_provider_output_quoting_ui_phrases_remains_ordinary(harness):

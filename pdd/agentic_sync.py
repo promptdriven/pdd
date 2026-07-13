@@ -13,8 +13,10 @@ import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -22,6 +24,12 @@ from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import (
+    _PROVIDER_ENVIRONMENT_PROVIDERS,
+    _PROVIDER_ENVIRONMENT_REASONS,
+    _PROVIDER_FAILURE_SINK_ENV,
+    _PROVIDER_FAILURE_TOKEN_ENV,
+    _consume_provider_failure_sink,
+    _publish_provider_failure_sink,
     _sanitize_comment_body,
     build_agentic_task_instruction,
     run_agentic_task,
@@ -77,7 +85,6 @@ console = Console()
 _GLOBAL_SYNC_NOOP_OPERATIONS = {"nothing", "all_synced"}
 _GLOBAL_SYNC_TIER1_OPERATIONS = {"generate", "auto-deps"}
 _SYNC_DETERMINE_LOGGER_NAME = "pdd.sync_determine_operation"
-
 
 def _is_github_issue_url(s: str) -> bool:
     """Check if a string looks like a GitHub issue URL."""
@@ -1960,18 +1967,21 @@ def _build_targeted_dep_graph(
 
 
 def _run_single_dry_run(
-    basename: str, cwd: Path, quiet: bool = False, local: bool = False
+    basename: str,
+    cwd: Path,
+    quiet: bool = False,
+    local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, str]:
     """Run pdd sync <basename> --dry-run from the given cwd.
 
     Returns:
         Tuple of (success, stderr_output).
     """
-    pdd_exe = _find_pdd_executable()
-    if pdd_exe:
-        cmd = [pdd_exe]
-    else:
-        cmd = [sys.executable, "-m", "pdd"]
+    # Use this installed package/interpreter, rather than a PATH-resolved
+    # executable that arbitrary test/user code could replace while inheriting
+    # the private typed-failure capability.
+    cmd = [sys.executable, "-m", "pdd"]
 
     cmd.append("--force")
     if local:
@@ -1988,17 +1998,42 @@ def _run_single_dry_run(
         env["PDD_FORCE_LOCAL"] = "1"
 
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(cwd),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-        )
+        with tempfile.TemporaryDirectory(prefix="pdd-provider-failure-") as channel_dir:
+            sink = Path(channel_dir) / "failure.json"
+            token = secrets.token_urlsafe(32)
+            env[_PROVIDER_FAILURE_SINK_ENV] = str(sink)
+            env[_PROVIDER_FAILURE_TOKEN_ENV] = token
+            result = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+            )
+            if result.returncode != 0 and sink.is_file():
+                try:
+                    payload = json.loads(sink.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    payload = None
+                if (
+                    isinstance(payload, dict)
+                    and set(payload) == {"version", "kind", "token", "provider", "reason"}
+                    and payload.get("version") == 1
+                    and payload.get("kind") == "provider_environment_failure"
+                    and secrets.compare_digest(str(payload.get("token", "")), token)
+                    and payload.get("provider") in _PROVIDER_ENVIRONMENT_PROVIDERS
+                    and payload.get("reason") in _PROVIDER_ENVIRONMENT_REASONS
+                    and trusted_failures is not None
+                ):
+                    trusted_failures.append(
+                        (str(payload["provider"]), str(payload["reason"]))
+                    )
         if result.returncode == 0:
             return True, ""
-        output = result.stderr or result.stdout or f"Exit code {result.returncode}"
+        output = "\n".join(
+            part for part in (result.stdout, result.stderr) if part
+        ) or f"Exit code {result.returncode}"
         marker = _extract_provider_environment_marker(output)
         return False, marker or output
     except subprocess.TimeoutExpired:
@@ -2015,6 +2050,7 @@ def _llm_fix_dry_run_failure(
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
     local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, Optional[Path], float, str]:
     """Ask the LLM to suggest the correct cwd/command when dry-run fails.
 
@@ -2067,7 +2103,7 @@ def _llm_fix_dry_run_failure(
         attempted_cwd=str(project_root),
     )
 
-    llm_success, llm_output, llm_cost, _ = run_agentic_task(
+    llm_result = run_agentic_task(
         instruction=prompt,
         cwd=project_root,
         verbose=verbose,
@@ -2078,8 +2114,14 @@ def _llm_fix_dry_run_failure(
         reasoning_time=reasoning_time,
         background_safe=True,
     )
+    llm_success, llm_output, llm_cost, _ = llm_result
 
     if not llm_success:
+        trusted_failure = getattr(
+            llm_result, "provider_environment_failure", None
+        )
+        if trusted_failures is not None and isinstance(trusted_failure, tuple):
+            trusted_failures.append(trusted_failure)
         marker = _extract_provider_environment_marker(llm_output)
         return False, None, llm_cost, marker or f"LLM failed to suggest fix: {llm_output}"
 
@@ -2163,6 +2205,7 @@ def _run_dry_run_validation(
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
     local: bool = False,
+    trusted_failures: Optional[List[Tuple[str, str]]] = None,
 ) -> Tuple[bool, Dict[str, Path], Dict[str, str], List[str], float]:
     """Run dry-run validation for each module with LLM fallback.
 
@@ -2205,9 +2248,10 @@ def _run_dry_run_validation(
             continue
 
         # 2. Run dry-run with the resolved target from the owning cwd.
-        ok, err_output = _run_single_dry_run(
-            target, cwd, quiet=quiet, local=local
-        )
+        dry_run_kwargs: Dict[str, Any] = {"quiet": quiet, "local": local}
+        if trusted_failures is not None:
+            dry_run_kwargs["trusted_failures"] = trusted_failures
+        ok, err_output = _run_single_dry_run(target, cwd, **dry_run_kwargs)
 
         if ok:
             contract_errors = _prompt_contract_errors_for_module(
@@ -2243,6 +2287,7 @@ def _run_dry_run_validation(
             verbose=verbose,
             reasoning_time=reasoning_time,
             local=local,
+            trusted_failures=trusted_failures,
         )
         total_llm_cost += llm_cost
 
@@ -2702,6 +2747,7 @@ def run_agentic_sync(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    provider_failure_sink = _consume_provider_failure_sink()
     _clear_nested_pddrc_cache()
     # 1. Check gh CLI
     if not _check_gh_cli():
@@ -2871,7 +2917,7 @@ def run_agentic_sync(
                 console.print("[bold]Identifying modules to sync via LLM...[/bold]")
 
             # 8. Call LLM
-            llm_success, llm_output, llm_cost, provider = run_agentic_task(
+            llm_result = run_agentic_task(
                 instruction=prompt,
                 cwd=project_root,
                 verbose=verbose,
@@ -2882,11 +2928,16 @@ def run_agentic_sync(
                 reasoning_time=reasoning_time,
                 background_safe=True,
             )
+            llm_success, llm_output, llm_cost, provider = llm_result
 
             if not llm_success:
                 msg = f"LLM failed to identify modules: {llm_output}"
                 if use_github_state:
                     _post_error_comment(owner, repo, issue_number, msg)
+                _publish_provider_failure_sink(
+                    provider_failure_sink,
+                    getattr(llm_result, "provider_environment_failure", None),
+                )
                 return False, msg, llm_cost, provider
 
             # 9. Parse LLM response
@@ -3049,6 +3100,7 @@ def run_agentic_sync(
     if not quiet:
         console.print("[bold]Running dry-run validation for each module...[/bold]")
 
+    trusted_validation_failures: List[Tuple[str, str]] = []
     all_valid, module_cwds, module_targets, dry_run_errors, dry_run_cost = (
         _run_dry_run_validation(
             modules=modules_to_sync,
@@ -3057,6 +3109,7 @@ def run_agentic_sync(
             verbose=verbose,
             reasoning_time=reasoning_time,
             local=local,
+            trusted_failures=trusted_validation_failures,
         )
     )
     llm_cost += dry_run_cost
@@ -3069,6 +3122,10 @@ def run_agentic_sync(
             console.print(f"[red]{msg}[/red]")
         if use_github_state:
             _post_error_comment(owner, repo, issue_number, msg)
+        if trusted_validation_failures:
+            _publish_provider_failure_sink(
+                provider_failure_sink, trusted_validation_failures[0]
+            )
         return False, msg, llm_cost, provider
 
     if not quiet:
