@@ -24,7 +24,6 @@ FOUNDATION_PROFILE_PATHS = {
     "pdd/sync_core/descriptor_store.py",
     "pdd/sync_core/signer_process.py",
     "pdd/sync_core/supervisor.py",
-    "tests/test_sync_core_descriptor_store.py",
 }
 REQUIREMENT_ID = re.compile(r"\bREQ-[A-Za-z0-9_.:-]+\b")
 PYTEST_VALIDATOR_CONFIG_DIGEST = (
@@ -50,6 +49,10 @@ FOUNDATION_OBLIGATIONS = {
             "tests/test_sync_core_supervisor.py",
         ),
         "code": ("pdd/sync_core/supervisor.py",),
+    },
+    "pytest-signer-process": {
+        "tests": ("tests/test_sync_core_trust.py",),
+        "code": ("pdd/sync_core/signer_process.py",),
     },
 }
 
@@ -240,6 +243,11 @@ def test_rollout_profiles_cover_the_protected_pdd_denominator(monkeypatch) -> No
         assert tuple(path.as_posix() for path in obligation.code_under_test_paths) == (
             expected_obligation["code"]
         )
+    assert {
+        path.as_posix()
+        for obligation in foundation_pytest.values()
+        for path in obligation.code_under_test_paths
+    } == FOUNDATION_PROFILE_PATHS
 
 
 def test_rollout_profiles_cannot_self_authorize(monkeypatch) -> None:
