@@ -30,6 +30,7 @@ from pdd.sync_core.runner import (
     _playwright_missing_result_detail,
     _playwright_reporter_source,
     _playwright_result,
+    _playwright_runtime_prefix,
     _toolchain_manifest_identity,
     _playwright_toolchain_identity,
     playwright_validator_config_digest,
@@ -1989,6 +1990,19 @@ def test_playwright_missing_private_result_has_bounded_diagnostics() -> None:
     assert "exit 17" in detail
     assert "mount failed" in detail
     assert len(detail) < 600
+
+
+def test_playwright_linux_node_disables_wasm_trap_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner_module.sys, "platform", "linux")
+
+    assert _playwright_runtime_prefix(
+        ("/usr/bin/node", "/opt/playwright/cli.js"), Path("/usr/bin/node")
+    ) == (
+        "/usr/bin/node", "--disable-wasm-trap-handler",
+        "/opt/playwright/cli.js",
+    )
 
 
 @pytest.mark.parametrize("source", [

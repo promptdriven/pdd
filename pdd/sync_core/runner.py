@@ -4241,6 +4241,18 @@ def _playwright_missing_result_detail(
     return f"{detail}: {diagnostic}" if diagnostic else detail
 
 
+def _playwright_runtime_prefix(
+    prefix: tuple[str, ...], launcher: Path,
+) -> tuple[str, ...]:
+    """Avoid Node's large Linux Wasm trap-handler virtual-memory reservation."""
+    if (
+        sys.platform.startswith("linux")
+        and launcher.name in {"node", "nodejs"}
+    ):
+        return (prefix[0], "--disable-wasm-trap-handler", *prefix[1:])
+    return prefix
+
+
 def _playwright_result(
     root: Path, output: str, returncode: int, expected: tuple[str, ...] | None,
     collection: bool = False,
@@ -4457,7 +4469,8 @@ def _run_playwright_in_tree(
                 "playwright", EvidenceOutcome.ERROR, "playwright-closure", str(exc)
             ), ()
         command = [
-            *prefix, "test", *(path.as_posix() for path in paths),
+            *_playwright_runtime_prefix(prefix, roles.launcher),
+            "test", *(path.as_posix() for path in paths),
             f"--config={root / config_path}", f"--reporter={reporter}",
             "--update-snapshots=none", f"--output={scratch / 'results'}",
         ]
