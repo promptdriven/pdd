@@ -1012,15 +1012,17 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                 # falsely proving membership).
                 raise _PatternBudgetError
             # A *positive* pattern whose effective form is a minimatch comment (a
-            # leading ``#``) matches nothing, so it must not be matched literally into
-            # a false member. Classify it AFTER the SAME leading normalization the
-            # matcher applies (strip leading ``/`` and at most one ``./``) so ``/#*``
-            # and ``.//#*`` are recognized as comments too, not just ``#*``/``./#*``.
-            # (A ``!``-exclusion body starting with ``#`` is left to match its literal
-            # ``#`` — the safe direction, since a spurious exclusion only removes a
-            # member, never adds one.)
-            if not negated and _effective_leading(body).startswith("#"):
-                continue
+            # leading ``#``) matches NO concrete path, so it must never be matched
+            # literally into a member. But it is still a real pattern STRING: under
+            # npm's ``appendNegatedPatterns`` a later positive — comment or not — whose
+            # pattern string is matched by an earlier negation REMOVES that negation
+            # (so ``["packages/**", "!**", "#noop"]`` re-includes ``packages/**``).
+            # Record the comment flag (classified after the SAME leading normalization
+            # the matcher applies, so ``/#*``/``.//#*`` count) and resolve it per-source
+            # below rather than dropping the pattern here. (A ``!``-exclusion body
+            # starting with ``#`` is left to match its literal ``#`` — the safe
+            # direction, since a spurious exclusion only removes a member.)
+            is_comment = (not negated) and _effective_leading(body).startswith("#")
             expanded = _expand_braces(body, budget, work)
             # Validate the CONCRETE (expanded) patterns, not the raw glob: brace
             # expansion can create an unsupported construct out of separate
@@ -1030,7 +1032,7 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
             for pat in expanded:
                 if _concrete_pattern_unsupported(pat):
                     raise _PatternBudgetError
-            parsed.append((negated, expanded))
+            parsed.append((negated, expanded, is_comment))
 
         def _matches_any(pattern_list) -> bool:
             return any(
@@ -1041,9 +1043,11 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         if ordered:
             # pnpm (@pnpm/matcher): evaluate in DECLARATION ORDER; the last pattern
             # that matches this path decides — a later positive RE-INCLUDES a path an
-            # earlier ``!`` excluded, per-path.
+            # earlier ``!`` excluded, per-path. A positive comment matches no path.
             member = False
-            for negated, expanded in parsed:
+            for negated, expanded, is_comment in parsed:
+                if is_comment:
+                    continue
                 if _matches_any(expanded):
                     member = not negated
             return member
@@ -1054,11 +1058,14 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
         # entirely (``minimatch(pattern, negatedPattern)`` upstream), so
         # ``["packages/**", "!packages/legacy/**", "packages/legacy/app"]`` drops the
         # ``!packages/legacy/**`` exclusion and every ``packages/**`` path — including
-        # ``packages/legacy/app`` — is a member again. A path is then a member iff it
-        # matches a surviving positive and no surviving negation.
-        positives = []  # concrete positive pattern strings, declaration order
+        # ``packages/legacy/app`` — is a member again. A positive COMMENT pattern
+        # (``#noop``) also participates in this removal (its pattern string can match an
+        # earlier negation) even though it never matches a concrete path. A path is then
+        # a member iff it matches a surviving non-comment positive and no surviving
+        # negation.
+        positives = []  # concrete positive pattern strings for path matching (no comments)
         negatives = []  # concrete negation pattern strings still in force
-        for negated, expanded in parsed:
+        for negated, expanded, is_comment in parsed:
             if negated:
                 negatives.extend(expanded)
             else:
@@ -1072,7 +1079,8 @@ def _package_matches_workspace(rel_parts: Tuple[str, ...], globs: list,
                         if not _relative_matches_workspace_glob(
                             pos_parts, neg, cells, work)
                     ]
-                    positives.append(pos)
+                    if not is_comment:
+                        positives.append(pos)
         if not _matches_any(positives):
             return False
         return not _matches_any(negatives)
@@ -1281,12 +1289,27 @@ _VITE_CONFIG_NAMES = (
 )
 
 
+def _script_invokes_vitest(script: str) -> bool:
+    """True when a package.json script actually INVOKES vitest as a command, rather
+    than merely mentioning the substring (``echo no-vitest-installed`` must NOT count).
+    A token invokes vitest if its final path component is exactly ``vitest`` — covering
+    ``vitest run``, ``npx vitest``, ``pnpm exec vitest``, ``yarn vitest``, and
+    ``./node_modules/.bin/vitest`` — but not ``no-vitest-installed`` or
+    ``cat vitest.config.ts``."""
+    try:
+        tokens = shlex.split(script)
+    except ValueError:
+        tokens = script.split()
+    return any(tok.split("/")[-1] == "vitest" for tok in tokens)
+
+
 def _vitest_proven_by_manifest(manifest: dict) -> bool:
     """True when a ``package.json`` manifest proves Vitest is the test runner — so a
     bare ``vite.config.*`` (which Vitest loads as its config) may be adopted. Proof is
-    ``vitest`` in any dependency map or a script that invokes it. Without such proof an
-    ordinary Vite *application* (which also has a ``vite.config.*`` but no tests) MUST
-    NOT be treated as a test project."""
+    ``vitest`` declared in any dependency map, or a script that actually invokes the
+    ``vitest`` command (a token whose basename is ``vitest``). Without such proof an
+    ordinary Vite *application* (which also has a ``vite.config.*`` but no tests, and
+    whose scripts merely mention the string) MUST NOT be treated as a test project."""
     for key in ("dependencies", "devDependencies",
                 "peerDependencies", "optionalDependencies"):
         deps = manifest.get(key)
@@ -1295,7 +1318,7 @@ def _vitest_proven_by_manifest(manifest: dict) -> bool:
     scripts = manifest.get("scripts")
     if isinstance(scripts, dict):
         for val in scripts.values():
-            if isinstance(val, str) and "vitest" in val:
+            if isinstance(val, str) and _script_invokes_vitest(val):
                 return True
     return False
 

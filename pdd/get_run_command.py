@@ -16,64 +16,73 @@ def shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str
     metacharacters is returned bare, otherwise it is single-quoted. Such a word is
     safe to splice in, and safe to concatenate with ORDINARY LITERAL characters on
     either side (so a suffix ``{file}.out`` or prefix ``./{file}`` stays a single
-    correctly-quoted argument). It is only unsafe where the surrounding context would
-    let the inserted quoting be reinterpreted:
+    correctly-quoted argument).
 
-    * inside the template's own single/double quotes or backticks (``"{file}"``, even
-      ``" {file} "``) — the value's quotes become literal and a ``$(...)`` in it still
-      executes;
-    * immediately preceded by ``$`` (``${file}`` → ``$'...'`` ANSI-C / ``${...}``) or a
-      backslash (``\\{file}`` escapes the value's opening quote);
-    * inside a shell comment (``echo hi # {file}``) or here-document body — neither is
-      an ordinary word context, and a newline in the value would break out of it.
+    The value is only reinterpreted where the surrounding template creates a context
+    the single quoting cannot survive: a command-evaluation context (``$(...)``,
+    ``${...}``, arithmetic ``$((...))``, a ``$``-variable, backticks, or a
+    ``(...)``/process-substitution subshell), the template's own quotes, a shell
+    comment, or a here-document body. Rather than model all of those, this helper
+    ALLOWLISTS simple command lines: it refuses (returns ``None``) any template that
 
-    To keep the analysis sound, a multiline template (any newline — the only way to
-    form a here-document body) is refused outright, and a placeholder reached in a
-    comment context is refused. Substitution is single-pass, so a value that itself
-    contains a ``{...}`` token is never rescanned as a placeholder.
+    * contains a newline (the only way to form a here-document body);
+    * contains ``$``, a backtick, or ``(``/``)`` anywhere (every command-substitution,
+      parameter/arithmetic expansion, and subshell/process-substitution form requires
+      one of these — real ``run``/verify templates like ``python {file}`` or
+      ``gfortran -o {file}.out {file}`` need none of them);
+    * places a placeholder inside its own single/double quotes, immediately after a
+      backslash, or inside a shell comment (a ``#`` that starts a comment — at a word
+      boundary or right after a ``;``/``&``/``|`` control operator — where a newline in
+      the value would break out onto a new command line).
+
+    Substitution is single-pass, so a value that itself contains a ``{...}`` token is
+    never rescanned as a placeholder.
     """
-    # A here-document body requires a newline; comment/quoting analysis below assumes
-    # a single logical line. Refuse any multiline template rather than model heredocs.
+    # Refuse constructs the single-pass allowlist cannot reason about: multiline
+    # (here-document bodies) and any command-evaluation context. `$` covers `$(`,
+    # `${`, `$((`, and `$var`; backtick covers command substitution; `(`/`)` cover
+    # subshells and `$(`/`<(`/`>(`. No legitimate run/verify template needs these.
     if "\n" in template or "\r" in template:
+        return None
+    if any(ch in template for ch in "$`()"):
         return None
     out: list = []
     i, n = 0, len(template)
-    in_single = in_double = in_back = False
-    in_comment = False       # after an unquoted, word-boundary '#' to end of line
-    at_word_boundary = True   # position could begin an unquoted bare word / comment
+    in_single = in_double = False
+    in_comment = False       # after an unquoted comment-starting '#' to end of line
+    prev_significant = ""     # last emitted template char (for comment-boundary/escape)
     while i < n:
         placeholder = next(
             (k for k in values if template.startswith(k, i)), None)
         if placeholder is not None:
-            prev = template[i - 1] if i > 0 else ""
-            if (in_single or in_double or in_back or in_comment) \
-                    or prev in ("$", "\\"):
+            if in_single or in_double or in_comment or prev_significant == "\\":
                 return None
             out.append(shlex.quote(values[placeholder]))
             i += len(placeholder)
-            at_word_boundary = False
+            prev_significant = "x"  # placeholder resolves to a non-boundary word char
             continue
         char = template[i]
         if char == "\\" and not in_single:
             out.append(char)
-            if i + 1 < n:
-                out.append(template[i + 1])
+            nxt = template[i + 1] if i + 1 < n else ""
+            if nxt:
+                out.append(nxt)
                 i += 2
             else:
                 i += 1
-            at_word_boundary = False
+            prev_significant = "x"  # an escaped char is a word char, not a boundary
             continue
-        if char == "'" and not in_double and not in_back and not in_comment:
+        if char == "'" and not in_double and not in_comment:
             in_single = not in_single
-        elif char == '"' and not in_single and not in_back and not in_comment:
+        elif char == '"' and not in_single and not in_comment:
             in_double = not in_double
-        elif char == "`" and not in_single and not in_comment:
-            in_back = not in_back
-        elif char == "#" and at_word_boundary \
-                and not (in_single or in_double or in_back):
+        elif char == "#" and not in_single and not in_double and not in_comment \
+                and (prev_significant in ("", " ", "\t", ";", "&", "|")):
+            # `#` begins a comment at a command-word boundary — start-of-line, after
+            # whitespace, or right after a control operator (`;`/`&`/`|`).
             in_comment = True
         out.append(char)
-        at_word_boundary = char.isspace() and not (in_single or in_double or in_back)
+        prev_significant = char
         i += 1
     return "".join(out)
 

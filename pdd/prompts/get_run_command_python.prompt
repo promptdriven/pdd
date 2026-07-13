@@ -18,15 +18,34 @@
      - Raises `ValueError` if `PDD_PATH` environment variable is not set.
      - Handles `FileNotFoundError` or `csv.Error` by printing an error message and returning an empty string.
 
-  2) Function `get_run_command_for_file(file_path: str) -> str`:
+  2) Function `shell_safe_substitute(template: str, values: Dict[str, str]) -> Optional[str]`:
+     - A SHARED PUBLIC helper (imported by `get_test_command`, `agentic_fix`, and
+       `agentic_langtest`); it MUST be part of this module's public interface and MUST
+       NOT be removed or renamed.
+     - Fills `{placeholder}` tokens in a shell-command `template` with **shell-quoted**
+       values (`shlex.quote`) in a SINGLE left-to-right pass (a value that itself
+       contains a `{...}` token is never rescanned as another placeholder).
+     - `shlex.quote` yields a self-contained shell word, so a placeholder is safe as a
+       standalone word AND when concatenated with ordinary literal characters on either
+       side (`{file}.out`, `./{file}` substitute correctly). It returns `None` (caller
+       falls through) for any template it cannot fill safely, because callers run the
+       result with `bash -lc` / `shell=True`: a multiline template (here-document
+       body), any template containing `$`, a backtick, or `(`/`)` (command-substitution,
+       parameter/arithmetic expansion, or subshell/process-substitution contexts), or a
+       placeholder inside the template's own quotes, immediately after a backslash, or
+       inside a shell comment (a `#` starting at a word boundary or after a `;`/`&`/`|`
+       control operator).
+
+  3) Function `get_run_command_for_file(file_path: str) -> str`:
      - Accepts a file path.
      - Extracts the extension.
      - Calls `get_run_command` to get the template.
-     - Replaces the `{file}` placeholder in the template with the **shell-quoted**
-       `file_path` (`shlex.quote`). Callers execute the returned command with
-       `bash -lc` / `shell=True`, so an unquoted path with spaces or shell
-       metacharacters (`$()`, `;`, …) MUST NOT be spliced in raw — it would be
-       re-split or executed via command substitution (a command-injection vector).
+     - Fills the `{file}` placeholder via `shell_safe_substitute(template, {'{file}':
+       file_path})`; returns that string, or an empty string when the helper returns
+       `None` (unsafe template) or no command is found. Callers execute the returned
+       command with `bash -lc` / `shell=True`, so an unquoted path with spaces or shell
+       metacharacters (`$()`, `;`, …) MUST NOT be spliced in raw — it would be re-split
+       or executed via command substitution (a command-injection vector).
      - Returns the executable command string or empty string if no command found.
 
 % Data Source
