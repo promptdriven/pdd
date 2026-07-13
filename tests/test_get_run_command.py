@@ -1,6 +1,11 @@
 import pytest
 import os
-from pdd.get_run_command import get_run_command, get_run_command_for_file
+import shlex
+from pdd.get_run_command import (
+    get_run_command,
+    get_run_command_for_file,
+    shell_safe_substitute,
+)
 
 # Mock CSV data with run_command column
 mock_csv_data = """language,comment,extension,run_command
@@ -129,3 +134,43 @@ class TestGetRunCommandForFile:
         monkeypatch.delenv("PDD_PATH", raising=False)
         with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
             get_run_command_for_file('/path/to/script.py')
+
+
+class TestShellSafeSubstitute:
+    """Direct tests for the shell-lexical-aware substitution helper.
+
+    The result is executed with ``shell=True`` by callers, so every inserted
+    value must be neutralized (``shlex.quote``) AND placed only where quoting
+    can protect it — a standalone, unquoted bare word."""
+
+    def test_bare_word_value_is_single_quoted_and_inert(self):
+        """A metacharacter-laden value at a bare-word placeholder is single-quoted,
+        so ``$(...)``/``;`` in the path are literal, not executed."""
+        evil = "/x/$(touch PWN)/a; b.py"
+        out = shell_safe_substitute("pytest {file}", {"{file}": evil})
+        assert shlex.split(out) == ["pytest", evil], out
+        assert "$(touch" not in shlex.split(out)
+
+    def test_quoted_or_adjacent_placeholder_is_refused(self):
+        """A placeholder nested in the template's own quotes, or fused to an adjacent
+        word, cannot be made safe by ``shlex.quote`` — the helper returns None so the
+        caller falls through rather than emit an injectable command."""
+        for tpl in ('pytest "{file}"', "pytest '{file}'", "pytest {file}x",
+                    "x{file}", "run `{file}`", 'echo "a {file} b"'):
+            assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+
+    def test_values_are_not_rescanned_for_other_placeholders(self):
+        """Substitution is single-pass: a value that itself contains another
+        placeholder's text is inserted verbatim (single-quoted), never re-expanded.
+        A sequential ``str.replace`` chain would wrongly expand ``{b}`` inside a's
+        value into ``$(touch PWN)``."""
+        out = shell_safe_substitute(
+            "run {a} {b}", {"{a}": "{b}", "{b}": "$(touch PWN)"})
+        assert shlex.split(out) == ["run", "{b}", "$(touch PWN)"], out
+        assert "touch" in out  # present, but literal inside the quotes for {b}
+        # The '{b}' inserted for {a} was NOT re-expanded into the $() payload.
+        assert out.count("$(touch PWN)") == 1
+
+    def test_absent_placeholder_returns_template_unchanged(self):
+        """A template with no placeholder is returned as-is (still a valid command)."""
+        assert shell_safe_substitute("pytest --version", {"{file}": "x"}) == "pytest --version"

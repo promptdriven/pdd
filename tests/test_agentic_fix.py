@@ -287,6 +287,22 @@ class TestVerifyAndLog:
         assert captured["cmd"] == final  # unchanged
         assert "touch" not in shlex.split(captured["cmd"])
 
+    def test_verify_template_resolves_relative_path_against_cwd(self, tmp_path):
+        """A relative ``unit_test_file`` in a template is resolved against the passed
+        ``cwd`` (the dir ``run_agentic_fix`` operates in), NOT the process CWD, so the
+        substituted ``{test}`` targets the same file that was fixed even when pytest
+        runs from a different directory."""
+        import shlex
+        proj = tmp_path / "proj"
+        (proj / "tests").mkdir(parents=True)
+        (proj / "tests" / "t_a.py").write_text("print('x')\n")
+        cmd = _substitute_verify_template("pytest {test}", "tests/t_a.py", proj)
+        argv = shlex.split(cmd)
+        assert argv == ["pytest", str((proj / "tests" / "t_a.py").resolve())], cmd
+        # {cwd} resolves to the supplied working dir (bare-word placeholder).
+        cmd2 = _substitute_verify_template("run {cwd}", "tests/t_a.py", proj)
+        assert shlex.split(cmd2) == ["run", str(proj)], cmd2
+
     def test_verify_and_log_uses_run_command_for_python(self, tmp_path, monkeypatch):
         """Should use python run command from CSV for .py files."""
         # Set up PDD_PATH to point to actual data directory

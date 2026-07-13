@@ -11,7 +11,7 @@ from typing import Tuple, List, Optional, Dict
 from rich.console import Console
 
 from .get_language import get_language
-from .get_run_command import get_run_command_for_file
+from .get_run_command import get_run_command_for_file, shell_safe_substitute
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
 from .agentic_langtest import default_verify_cmd_for
@@ -120,31 +120,19 @@ def _run_testcmd(cmd: str, cwd: Path) -> bool:
 def _substitute_verify_template(template: str, unit_test_file: str,
                                 cwd: Path) -> Optional[str]:
     """Substitute a verify-command TEMPLATE's ``{test}``/``{cwd}`` placeholders with
-    shell-quoted values, or return ``None`` when the template is unsafe.
+    shell-quoted values via a shell-lexical-context-aware single pass (see
+    :func:`shell_safe_substitute`), or return ``None`` when the template is unsafe (a
+    placeholder inside quotes/backticks or not a standalone bare word — where
+    ``shlex.quote`` would not actually neutralize a ``$(...)`` in the path).
 
-    ``shlex.quote`` wraps its value in single quotes, which only neutralizes shell
-    metacharacters when the placeholder is a standalone *bare word*. If the template
-    instead nests a placeholder inside its own quotes (``pytest "{test}"``) or
-    adjoins it to another token, the inserted single quotes become literal and a
-    ``$(...)``/backtick in the resolved path is still executed by the shell. So each
-    placeholder occurrence must be bounded by whitespace or a string end; otherwise
-    the template is refused (``None``) rather than turned into an injectable command.
+    The test path is resolved against the supplied ``cwd`` (not the process CWD), so
+    a relative ``unit_test_file`` targets the same file ``run_agentic_fix`` resolved.
+    Substitution is single-pass, so a value containing a literal ``{cwd}``/``{test}``
+    is never rescanned as another placeholder.
     """
-    for placeholder in ("{test}", "{cwd}"):
-        start = 0
-        while True:
-            i = template.find(placeholder, start)
-            if i == -1:
-                break
-            end = i + len(placeholder)
-            before_ok = i == 0 or template[i - 1].isspace()
-            after_ok = end == len(template) or template[end].isspace()
-            if not (before_ok and after_ok):
-                return None  # placeholder inside quotes / a token → injectable
-            start = end
-    return template.replace(
-        "{test}", shlex.quote(str(Path(unit_test_file).resolve()))
-    ).replace("{cwd}", shlex.quote(str(cwd)))
+    test_abs = str((cwd / unit_test_file).resolve())
+    return shell_safe_substitute(
+        template, {"{test}": test_abs, "{cwd}": str(cwd)})
 
 
 def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str],
