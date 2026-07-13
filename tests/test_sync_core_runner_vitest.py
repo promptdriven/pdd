@@ -668,6 +668,22 @@ def test_vitest_toolchain_identity_binds_all_roles_modes_symlinks_and_ignores_ca
     assert _load_vitest_toolchain_descriptor(tmp_path / "repo", config).identity == before_cache
 
 
+def test_vitest_toolchain_identity_is_stable_after_relocation(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    runner = _fake_vitest(first)
+    first_config = _runner_config(first, runner)
+    shutil.copytree(first / "trusted-toolchain", second / "trusted-toolchain")
+    relocated_runner = second / "trusted-toolchain/node_modules/vitest/fake_vitest.py"
+    second_config = _runner_config(second, relocated_runner)
+
+    assert _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", first_config
+    ).identity == _load_vitest_toolchain_descriptor(
+        tmp_path / "repo", second_config
+    ).identity
+
+
 def test_validator_tree_identity_is_uniquely_mode_and_symlink_sensitive(
     tmp_path: Path,
 ) -> None:
@@ -960,7 +976,7 @@ def test_profile_does_not_execute_after_failed_initial_vitest_capture(
     assert executions[0].outcome is EvidenceOutcome.ERROR
     assert "initial capture failed" in executions[0].detail
     assert envelope.binding.vitest_toolchain_identity is None
-    assert calls > 1
+    assert calls == 1
 
 
 def _git(root: Path, *args: str) -> str:
@@ -1610,6 +1626,76 @@ def test_vitest_package_mappings_bind_transitive_local_helpers(
     assert vitest_validator_config_digest(root, "HEAD", paths) != before
 
 
+@pytest.mark.parametrize(("validator", "suffix"), [("jest", "js"), ("vitest", "ts")])
+@pytest.mark.parametrize(
+    ("specifier", "root_mapping", "nested_mapping"),
+    [
+        (
+            "#fixture-helper",
+            {"imports": {"#fixture-helper": "./tests/root-helper"}},
+            {"imports": {"#fixture-helper": "./tests/nested-helper"}},
+        ),
+        (
+            "fixture-self/helper",
+            {"name": "fixture-self", "exports": {"./helper": "./tests/root-helper"}},
+            {"name": "fixture-self", "exports": {"./helper": "./tests/nested-helper"}},
+        ),
+    ],
+)
+def test_javascript_package_mappings_use_nearest_committed_scope(
+    tmp_path: Path,
+    validator: str,
+    suffix: str,
+    specifier: str,
+    root_mapping: dict[str, object],
+    nested_mapping: dict[str, object],
+) -> None:
+    """Nested imports and self-exports must not bind a root package helper."""
+    root, _commit = _repository(tmp_path)
+    package = root / "packages/widget"
+    tests = package / "tests"
+    tests.mkdir(parents=True)
+    (root / "package.json").write_text(json.dumps(root_mapping), encoding="utf-8")
+    (root / f"tests/root-helper.{suffix}").write_text(
+        "export const trusted = 'root';\n", encoding="utf-8"
+    )
+    (package / "package.json").write_text(json.dumps(nested_mapping), encoding="utf-8")
+    (tests / f"nested-helper.{suffix}").write_text(
+        "export const trusted = 'nested';\n", encoding="utf-8"
+    )
+    test_path = PurePosixPath(f"packages/widget/tests/widget.test.{suffix}")
+    test_source = f"import {{ trusted }} from {specifier!r};\n"
+    test_source += (
+        "test('widget works', () => expect(trusted).toBe('nested'));\n"
+        if validator == "jest"
+        else "import { test } from 'vitest';\ntest('widget works', () => { if (trusted !== 'nested') throw new Error('bad'); });\n"
+    )
+    (root / test_path).write_text(test_source, encoding="utf-8")
+    if validator == "jest":
+        (root / "jest.config.json").write_text("{}\n", encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "add conflicting nested package maps")
+    digest_function = (
+        jest_validator_config_digest if validator == "jest"
+        else vitest_validator_config_digest
+    )
+    digest = digest_function(root, "HEAD", (test_path,))
+
+    (root / f"tests/root-helper.{suffix}").write_text(
+        "export const trusted = 'changed-root';\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate root mapped helper")
+    assert digest_function(root, "HEAD", (test_path,)) == digest
+
+    (tests / f"nested-helper.{suffix}").write_text(
+        "export const trusted = 'changed-nested';\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "mutate nested mapped helper")
+    assert digest_function(root, "HEAD", (test_path,)) != digest
+
+
 def test_vitest_rejects_ambiguous_package_mapping_conditions(tmp_path: Path) -> None:
     root, _commit = _repository(tmp_path)
     (root / "package.json").write_text(
@@ -1698,6 +1784,22 @@ def test_vitest_result_fifo_without_writer_is_distinct_collection_error(
 
     assert executions[0].outcome is EvidenceOutcome.COLLECTION_ERROR
     assert executions[0].detail == "Vitest reporter produced no result"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "outcome"),
+    [(126, EvidenceOutcome.ERROR), (127, EvidenceOutcome.ERROR), (1, EvidenceOutcome.FAIL)],
+)
+def test_vitest_exit_failure_precedes_empty_fifo_collection_error(
+    tmp_path: Path, returncode: int, outcome: EvidenceOutcome
+) -> None:
+    root, commit = _repository(tmp_path)
+    runner = _fake_vitest(tmp_path)
+    runner.write_text(f"import sys\nsys.exit({returncode})\n", encoding="utf-8")
+
+    _envelope, executions = _run(root, commit, commit, runner)
+
+    assert executions[0].outcome is outcome
 
 
 def test_vitest_linux_command_binds_wasm_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
