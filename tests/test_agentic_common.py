@@ -5651,6 +5651,34 @@ class TestCliDiscovery:
         result = _find_cli_binary("claude")
         assert result == str(fake_claude)
 
+    def test_find_cli_binary_skips_inaccessible_common_path(
+        self, monkeypatch, tmp_path
+    ):
+        """An unreadable common prefix should not abort later CLI discovery."""
+        from pdd import agentic_common
+
+        blocked = Path("/usr/local/bin/claude")
+        available = tmp_path / "bin" / "claude"
+        available.parent.mkdir()
+        available.write_text("#!/bin/sh\nexit 0\n")
+        available.chmod(0o755)
+        original_exists = Path.exists
+
+        def permission_guard(path: Path) -> bool:
+            if path == blocked:
+                raise PermissionError(13, "Permission denied", str(path))
+            return original_exists(path)
+
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(Path, "exists", permission_guard)
+        monkeypatch.setattr(
+            agentic_common,
+            "_iter_common_cli_paths",
+            lambda _name: iter((blocked, available)),
+        )
+
+        assert agentic_common._find_cli_binary("claude", config={}) == str(available)
+
     def test_find_cli_binary_pddrc_override(self, monkeypatch, tmp_path):
         """.pddrc agentic.claude_path should take precedence."""
         from pdd.agentic_common import _find_cli_binary

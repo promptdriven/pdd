@@ -180,7 +180,7 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         "import json,os,pathlib,shutil,subprocess,sys,tempfile",
         "argv=json.loads(sys.argv[1]); paths=json.loads(sys.argv[2])",
         "base=pathlib.Path(tempfile.mkdtemp(prefix='pdd-binds-',dir='/run'))",
-        "os.chmod(base,0o755); staged=[]",
+        "os.chmod(base,0o755); staged=[]; result=None",
         "try:",
         " for index,source in enumerate(paths):",
         "  source=pathlib.Path(source); target=base/str(index)",
@@ -193,10 +193,26 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         " for target in reversed(staged):",
         "  subprocess.run(['umount',str(target)],check=False)",
         " shutil.rmtree(base,ignore_errors=True)",
-        "raise SystemExit(result.returncode)",
+        "raise SystemExit(result.returncode if result is not None else 1)",
     ))
     return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
             json.dumps(argv), json.dumps([str(path) for path in sources])]
+
+
+def _private_result_command(
+    command: list[str], result_fifo: Path, result_fd: int,
+) -> list[str]:
+    """Open and unlink a checker FIFO before candidate code can execute."""
+    script = (
+        "import os,sys;"
+        "path=sys.argv[1];target=int(sys.argv[2]);"
+        "source=os.open(path,os.O_WRONLY);os.unlink(path);"
+        "os.dup2(source,target);"
+        "os.close(source) if source!=target else None;"
+        "os.execvpe(sys.argv[3],sys.argv[3:],os.environ)"
+    )
+    return [str(_SUPERVISOR_EXECUTABLE), "-c", script,
+            str(result_fifo), str(result_fd), *command]
 
 def _supervised_descendants(token: str) -> set[int]:
     """Find descendants carrying the unforgeable per-run environment marker."""
@@ -298,13 +314,22 @@ def _sandbox_command(
     command: list[str], writable_roots: tuple[Path, ...], *, cwd: Path | None = None,
     writable_files: tuple[Path, ...] = (), limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    result_fifo: Path | None = None,
+    result_fd: int = 198,
 ) -> tuple[list[str], Path | None]:
+    # pylint: disable=too-many-locals,too-many-branches
     """Return an explicitly detected macOS/Linux sandbox command."""
     if sys.platform == "darwin":
         raise RuntimeError(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
+        if os.getuid() == 0:
+            raise RuntimeError(
+                "protected sandbox requires a non-root caller so process limits "
+                "remain kernel-enforced"
+            )
         if not (bool(shutil.which("sudo")) and subprocess.run(
                 ["sudo", "-n", "true"], capture_output=True, check=False,
         ).returncode == 0):
@@ -344,17 +369,27 @@ def _sandbox_command(
                 bind("--ro-bind", item.resolve(), item)
         for item in readable_roots:
             bind("--ro-bind", item.resolve())
+        for source, destination in readable_bindings:
+            bind("--ro-bind", source.resolve(), destination)
         argv.extend(("--dev", "/dev"))
         for item in writable_roots:
             bind("--bind", item.resolve())
         for item in writable_files:
             bind("--bind", item.resolve())
+        if result_fifo is not None:
+            # The coordinator wrapper opens and unlinks the FIFO before it
+            # executes any candidate-controlled code.  Binding only its
+            # dedicated directory keeps the reporter and toolchain immutable.
+            bind("--bind", result_fifo.parent.resolve())
         argv.extend(("--chdir", str(workdir)))
         drop = (
             [setpriv, "--reuid", str(os.getuid()), "--regid", str(os.getgid()),
              "--clear-groups", "--"] if setpriv else []
         )
-        argv.extend(("--", *drop, *_limited_command(command, limits)))
+        sandboxed = _limited_command(command, limits)
+        if result_fifo is not None:
+            sandboxed = _private_result_command(sandboxed, result_fifo, result_fd)
+        argv.extend(("--", *drop, *sandboxed))
         return _staged_bwrap(argv, sources), None
     raise RuntimeError("unsupported sandbox platform or mechanism")
 
@@ -364,6 +399,9 @@ def run_supervised(
     writable_roots: tuple[Path, ...], writable_files: tuple[Path, ...] = (),
     limits: SupervisorLimits = SupervisorLimits(),
     readable_roots: tuple[Path, ...] = (),
+    readable_bindings: tuple[tuple[Path, Path], ...] = (),
+    result_fifo: Path | None = None,
+    result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run sandboxed and terminate marked descendants across session changes."""
     # pylint: disable=consider-using-with,too-many-locals,too-many-branches,too-many-statements
@@ -371,6 +409,8 @@ def run_supervised(
         argv, profile = _sandbox_command(
             command, writable_roots, cwd=cwd, writable_files=writable_files,
             limits=limits, readable_roots=readable_roots,
+            readable_bindings=readable_bindings,
+            result_fifo=result_fifo, result_fd=result_fd,
         )
     except RuntimeError as exc:
         return subprocess.CompletedProcess(command, 125, "", str(exc)), False

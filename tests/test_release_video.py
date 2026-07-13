@@ -292,6 +292,18 @@ def pds_capture_argv(capture: Path) -> list[str]:
     return json.loads(capture.read_text(encoding="utf8"))["argv"]
 
 
+def assert_audit_fix_policy_args(argv: list[str]) -> None:
+    """Assert the release wrapper's bounded audit-repair policy argv."""
+    expected = (
+        ("--audit-fix-max-passes", "2"),
+        ("--audit-fix-max-annotations-per-pass", "3"),
+        ("--audit-fix-max-spend-pddc", "24"),
+        ("--audit-fix-source-approval", "not-required"),
+    )
+    for flag, value in expected:
+        assert argv[argv.index(flag) + 1] == value
+
+
 def run_release_video_with_existing_script(
     tmp_path: Path,
     *,
@@ -341,6 +353,17 @@ def run_release_video_with_existing_script(
         check=True,
     )
     return result, capture
+
+
+def test_release_video_existing_script_forwards_bounded_audit_fix_policy(
+    tmp_path: Path,
+):
+    _, capture = run_release_video_with_existing_script(tmp_path)
+
+    pds_call = pds_capture_argv(capture)
+
+    assert pds_call[:2] == ["release-video", "create"]
+    assert_audit_fix_policy_args(pds_call)
 
 
 def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
@@ -404,6 +427,7 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert pds_call[pds_call.index("--release-tag") + 1] == "v1.1.0"
     assert pds_call[pds_call.index("--repo-name") + 1] == "promptdriven/pdd"
     assert pds_call[pds_call.index("--claude-model") + 1] == "glm-5.2"
+    assert_audit_fix_policy_args(pds_call)
     idempotency_key = pds_call[pds_call.index("--idempotency-key") + 1]
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
 
@@ -2021,7 +2045,7 @@ def test_release_video_makefile_pds_cli_default_avoids_stale_global_cli():
     makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
 
     assert (
-        "PDS_CLI ?= npx -y @promptdriven/pds@0.1.7 --timeout 120s"
+        "PDS_CLI ?= npx -y @promptdriven/pds@0.1.11 --timeout 120s"
         in makefile_text
     )
 
@@ -2082,11 +2106,11 @@ def test_release_video_makefile_empty_local_defaults_are_unset():
 
     assert '--claude-cli "claude"' in release_video.stdout
     assert '--claude-model "claude-opus-4-8"' in release_video.stdout
-    assert '--pds-cli "npx -y @promptdriven/pds@0.1.7 --timeout 120s"' in (
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.11 --timeout 120s"' in (
         release_video.stdout
     )
     assert '--claude-model "claude-opus-4-8"' in preflight.stdout
-    assert '--pds-cli "npx -y @promptdriven/pds@0.1.7 --timeout 120s"' in (
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.11 --timeout 120s"' in (
         preflight.stdout
     )
 
@@ -2098,7 +2122,7 @@ def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli
 
     assert (
         "PDS_CLI_PACKAGE: "
-        "${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.7' }}"
+        "${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.11' }}"
         in workflow_text
     )
     assert "make check-release-video-config" in workflow_text
@@ -2565,7 +2589,7 @@ def test_release_video_preflight_warns_for_project_scoped_profile(tmp_path: Path
             str(SCRIPT),
             "--preflight",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.7\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=tmp_path,
         text=True,
@@ -2614,7 +2638,7 @@ def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: 
             str(SCRIPT),
             "--preflight",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.7\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=tmp_path,
         text=True,
@@ -2649,7 +2673,7 @@ def test_release_video_preflight_with_env_token_and_project_reports_fixed_projec
             "--project-id",
             "fixed-project-123",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.7\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=repo,
         text=True,
@@ -2669,7 +2693,7 @@ def test_release_video_preflight_reports_redacted_pds_cli_command_and_version(
     tmp_path: Path,
 ):
     pds_cli = (
-        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.7\\n')} "
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.11\\n')} "
         "--token secret-preflight-token"
     )
 
@@ -2690,13 +2714,13 @@ def test_release_video_preflight_reports_redacted_pds_cli_command_and_version(
 
     assert "release-video preflight: PDS CLI command:" in result.stdout
     assert "--token '[redacted]'" in result.stdout
-    assert "release-video preflight: PDS CLI version: 0.1.7" in result.stdout
+    assert "release-video preflight: PDS CLI version: 0.1.11" in result.stdout
     assert "secret-preflight-token" not in result.stdout + result.stderr
 
 
 def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
     pds_cli = (
-        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.6\\n')} "
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.10\\n')} "
         "--token secret-preflight-token"
     )
 
@@ -2716,7 +2740,7 @@ def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
     )
 
     assert result.returncode == 1
-    assert "PDS CLI 0.1.6 is older than required 0.1.7" in result.stderr
+    assert "PDS CLI 0.1.10 is older than required 0.1.11" in result.stderr
     assert "--token '[redacted]'" in result.stdout
     assert "secret-preflight-token" not in result.stdout + result.stderr
 
@@ -5694,6 +5718,24 @@ def test_release_video_status_query_prints_refreshed_recovery_commands(tmp_path:
         "--project pdd-v1-1-0-release jobs watch "
         "--run-id agent_run_current --jsonl"
     ) in result.stdout
+    status_argv = pds_capture_argv(capture)
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    audit_fix_flags = (
+        "--audit-fix-max-passes",
+        "--audit-fix-max-annotations-per-pass",
+        "--audit-fix-max-spend-pddc",
+        "--audit-fix-source-approval",
+    )
+    assert status_argv[:4] == [
+        "--project",
+        "pdd-v1-1-0-release",
+        "release-video",
+        "status",
+    ]
+    for flag in audit_fix_flags:
+        assert flag not in status_argv
+        assert flag not in refreshed["recoverCommand"]
+        assert flag not in refreshed["watchCommand"]
 
 
 def test_release_video_status_query_success_redacts_legacy_sidecar_secrets(
