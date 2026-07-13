@@ -25,6 +25,25 @@ def read_git_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def read_git_regular_blob(root: Path, ref: str, path: PurePosixPath) -> bytes | None:
+    """Read a regular blob and reject symlinks, gitlinks, and special modes."""
+    result = subprocess.run(
+        ["git", "ls-tree", ref, "--", path.as_posix()],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    mode = result.stdout.split(None, 1)[0]
+    if mode == "040000":
+        return None
+    if mode not in {"100644", "100755"}:
+        raise ValueError(f"Git closure member is not a regular file: {path.as_posix()}")
+    return read_git_blob(root, ref, path)
+
+
 def resolve_git_commit(root: Path, ref: str) -> str:
     """Resolve one exact commit or fail closed."""
     result = subprocess.run(
