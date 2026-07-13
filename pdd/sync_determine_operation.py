@@ -512,7 +512,7 @@ def _find_prompt_file(
             return resolved
 
     # --- Step 3: Architecture.json hint → recursive search ---
-    if architecture_path and architecture_path.exists():
+    if architecture_path and (modules is not None or architecture_path.exists()):
         _, arch_filename = _get_filepath_from_architecture(
             architecture_path,
             f"{basename_candidates[0]}_{language}.prompt",
@@ -1184,7 +1184,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # through ambiguity detection, prompt discovery, and code-path selection. A
         # single snapshot means a concurrent architecture rewrite mid-resolution
         # cannot pair a prompt from one registry version with a code target from
-        # another. `None` (unreadable arch) leaves callers to their own per-call read.
+        # another. An unreadable architecture is frozen as an empty snapshot.
         arch_modules = _load_architecture_modules(arch_path) if arch_path else None
 
         # Issue #1677: fail fast on an ambiguous BARE basename BEFORE resolving a

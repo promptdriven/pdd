@@ -1799,6 +1799,48 @@ def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
     )
 
 
+def test_find_prompt_file_uses_snapshot_after_architecture_removed(tmp_path, monkeypatch):
+    """Prompt discovery must use the frozen snapshot after a concurrent rename."""
+    import sync_determine_operation as sync_determine_module
+
+    prompts_root = tmp_path / "prompts"
+    correct_prompt = prompts_root / "deep" / "credits_Python.prompt"
+    correct_prompt.parent.mkdir(parents=True)
+    correct_prompt.write_text("% architecture-selected prompt\n", encoding="utf-8")
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(
+        json.dumps({"modules": [{
+            "filename": "credits_Python.prompt",
+            "filepath": "backend/credits.py",
+        }]}),
+        encoding="utf-8",
+    )
+
+    modules = sync_determine_module._load_architecture_modules(architecture_path)
+    architecture_path.unlink()
+    original_lookup = sync_determine_module._get_filepath_from_architecture
+    snapshot_calls = []
+
+    def track_lookup(*args, **kwargs):
+        snapshot_calls.append(kwargs.get("modules"))
+        return original_lookup(*args, **kwargs)
+
+    monkeypatch.setattr(
+        sync_determine_module, "_get_filepath_from_architecture", track_lookup
+    )
+
+    resolved = sync_determine_module._find_prompt_file(
+        "credits",
+        "python",
+        prompts_root,
+        architecture_path,
+        modules=modules,
+    )
+
+    assert snapshot_calls == [modules]
+    assert resolved == correct_prompt
+
+
 def test_get_pdd_file_paths_failed_architecture_parse_is_frozen(tmp_path, monkeypatch):
     """A failed initial parse must not be retried against rewritten bytes."""
     import sync_determine_operation as sync_determine_module
