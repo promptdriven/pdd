@@ -2045,7 +2045,7 @@ def test_release_video_makefile_pds_cli_default_avoids_stale_global_cli():
     makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
 
     assert (
-        "PDS_CLI ?= npx -y @promptdriven/pds@0.1.10 --timeout 120s"
+        "PDS_CLI ?= npx -y @promptdriven/pds@0.1.11 --timeout 120s"
         in makefile_text
     )
 
@@ -2106,11 +2106,11 @@ def test_release_video_makefile_empty_local_defaults_are_unset():
 
     assert '--claude-cli "claude"' in release_video.stdout
     assert '--claude-model "claude-opus-4-8"' in release_video.stdout
-    assert '--pds-cli "npx -y @promptdriven/pds@0.1.10 --timeout 120s"' in (
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.11 --timeout 120s"' in (
         release_video.stdout
     )
     assert '--claude-model "claude-opus-4-8"' in preflight.stdout
-    assert '--pds-cli "npx -y @promptdriven/pds@0.1.10 --timeout 120s"' in (
+    assert '--pds-cli "npx -y @promptdriven/pds@0.1.11 --timeout 120s"' in (
         preflight.stdout
     )
 
@@ -2122,7 +2122,7 @@ def test_release_video_workflow_defaults_and_preflights_recovery_capable_pds_cli
 
     assert (
         "PDS_CLI_PACKAGE: "
-        "${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.10' }}"
+        "${{ vars.PDS_CLI_PACKAGE || '@promptdriven/pds@0.1.11' }}"
         in workflow_text
     )
     assert "make check-release-video-config" in workflow_text
@@ -2589,7 +2589,7 @@ def test_release_video_preflight_warns_for_project_scoped_profile(tmp_path: Path
             str(SCRIPT),
             "--preflight",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.10\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=tmp_path,
         text=True,
@@ -2638,7 +2638,7 @@ def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: 
             str(SCRIPT),
             "--preflight",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.10\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=tmp_path,
         text=True,
@@ -2673,7 +2673,7 @@ def test_release_video_preflight_with_env_token_and_project_reports_fixed_projec
             "--project-id",
             "fixed-project-123",
             "--pds-cli",
-            str(pds_version_stub(tmp_path, "0.1.10\n")),
+            str(pds_version_stub(tmp_path, "0.1.11\n")),
         ],
         cwd=repo,
         text=True,
@@ -2693,7 +2693,7 @@ def test_release_video_preflight_reports_redacted_pds_cli_command_and_version(
     tmp_path: Path,
 ):
     pds_cli = (
-        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.10\\n')} "
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.11\\n')} "
         "--token secret-preflight-token"
     )
 
@@ -2714,13 +2714,13 @@ def test_release_video_preflight_reports_redacted_pds_cli_command_and_version(
 
     assert "release-video preflight: PDS CLI command:" in result.stdout
     assert "--token '[redacted]'" in result.stdout
-    assert "release-video preflight: PDS CLI version: 0.1.10" in result.stdout
+    assert "release-video preflight: PDS CLI version: 0.1.11" in result.stdout
     assert "secret-preflight-token" not in result.stdout + result.stderr
 
 
 def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
     pds_cli = (
-        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.9\\n')} "
+        f"{pds_version_stub(tmp_path, '@promptdriven/pds 0.1.10\\n')} "
         "--token secret-preflight-token"
     )
 
@@ -2740,7 +2740,7 @@ def test_release_video_preflight_rejects_stale_pds_cli_version(tmp_path: Path):
     )
 
     assert result.returncode == 1
-    assert "PDS CLI 0.1.9 is older than required 0.1.10" in result.stderr
+    assert "PDS CLI 0.1.10 is older than required 0.1.11" in result.stderr
     assert "--token '[redacted]'" in result.stdout
     assert "secret-preflight-token" not in result.stdout + result.stderr
 
