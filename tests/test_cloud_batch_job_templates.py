@@ -16,6 +16,12 @@ def _template_variables(template_name: str) -> dict:
     return runnable["environment"]
 
 
+def _template_container(template_name: str) -> dict:
+    template_path = REPO_ROOT / "ci" / "cloud-batch" / template_name
+    data = json.loads(template_path.read_text(encoding="utf-8"))
+    return data["taskGroups"][0]["taskSpec"]["runnables"][0]["container"]
+
+
 def _setup_secret_names() -> set[str]:
     setup_path = REPO_ROOT / "ci" / "cloud-batch" / "setup-gcp.sh"
     setup_text = setup_path.read_text(encoding="utf-8")
@@ -147,6 +153,36 @@ def test_cloud_batch_entrypoint_preflights_protected_sandbox_contract():
     assert "for command in bwrap sudo setpriv mount umount" in entrypoint_text
     assert "sudo -n true" in entrypoint_text
     assert "missing protected sandbox prerequisites" in entrypoint_text
+
+
+def test_only_pytest_shard_job_grants_minimal_sandbox_capabilities():
+    pytest_container = _template_container("job-template.json")
+    assert pytest_container["options"] == (
+        "--cap-add=SYS_ADMIN --security-opt=seccomp=unconfined"
+    )
+    assert "--privileged" not in pytest_container["options"]
+
+    for template_name in (
+        "job-template-standard.json",
+        "job-template-cloud-regression.json",
+    ):
+        container = _template_container(template_name)
+        assert "options" not in container
+        assert "--privileged" not in json.dumps(container)
+
+
+def test_cloud_batch_sandbox_preflight_is_scoped_to_pytest_task_indexes():
+    entrypoint_text = (
+        REPO_ROOT / "ci" / "cloud-batch" / "entrypoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "preflight_protected_sandbox()" in entrypoint_text
+    assert re.search(
+        r'if \[ "\$\{TASK_INDEX\}" -ge "\$\{PYTEST_START\}" \] &&\s*'
+        r'\[ "\$\{TASK_INDEX\}" -le "\$\{PYTEST_END\}" \]; then\s*'
+        r'preflight_protected_sandbox\s*fi',
+        entrypoint_text,
+    )
 
 
 def test_cloud_batch_entrypoint_builds_clean_ephemeral_git_head(tmp_path):
