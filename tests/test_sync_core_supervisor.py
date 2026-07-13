@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from pdd.sync_core import supervisor
 from pdd.sync_core.supervisor import (
     SupervisorLimits,
     _linked_libraries,
@@ -21,6 +22,23 @@ from pdd.sync_core.supervisor import (
     _runtime_directories,
     run_supervised,
 )
+
+
+def test_runtime_closure_ignores_synthetic_argv_interpreter_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Identity-only argv prefixes must never become measured or mounted paths."""
+    actual_executable = Path(sys.executable).resolve()
+    supervisor.released_runtime_closure_paths.cache_clear()
+    try:
+        monkeypatch.setattr(
+            "pdd.sync_core.runner.sys.executable", "/venv-a/bin/python"
+        )
+        closure = dict(supervisor.released_runtime_closure_paths())
+        assert closure["interpreter/python"] == actual_executable
+        assert closure["interpreter/python"].is_file()
+    finally:
+        supervisor.released_runtime_closure_paths.cache_clear()
 
 
 def test_runtime_directories_collapse_nested_but_keep_disjoint_roots(
