@@ -4272,6 +4272,36 @@ class TestFingerprintIncludeDependencies:
             "even when the prompt itself has no <include> tags"
         )
 
+    def test_calculate_prompt_hash_anchors_relative_stored_deps_to_explicit_root(
+        self, pdd_test_environment, monkeypatch
+    ):
+        """Stored relative dependency keys must not be interpreted from process CWD."""
+        prompts_dir = pdd_test_environment / "prompts"
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, "Create a helper using project docs.\n")
+        project_dep = pdd_test_environment / "docs" / "contract.md"
+        create_file(project_dep, "trusted project dependency\n")
+
+        nested = pdd_test_environment / "nested"
+        alternate_dep = nested / "docs" / "contract.md"
+        create_file(alternate_dep, "wrong nested dependency\n")
+        monkeypatch.chdir(nested)
+
+        stored_deps = {"docs/contract.md": calculate_sha256(project_dep)}
+        anchored_hash = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+        create_file(alternate_dep, "changed wrong nested dependency\n")
+        anchored_hash_after_alternate_change = calculate_prompt_hash(
+            prompt_path,
+            stored_deps=stored_deps,
+            dependency_root=pdd_test_environment,
+        )
+
+        assert anchored_hash == anchored_hash_after_alternate_change
+
     def test_fingerprint_stores_include_deps(self, pdd_test_environment):
         """Fingerprint dataclass should correctly store and serialize include_deps."""
         fp = Fingerprint(
