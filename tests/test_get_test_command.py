@@ -688,6 +688,23 @@ class TestWorkspaceMembershipHardening:
         (anc / "pnpm-workspace.yaml").write_text('packages:\n  - "0o12"\n')
         assert _workspace_globs_for(anc) == ["0o12"]  # quoted → string glob
 
+    def test_pnpm_yaml_1_1_only_scalars_stay_string_globs(self, tmp_path):
+        """The YAML 1.2 core schema replaces PyYAML's 1.1 table wholesale, so scalars
+        that YAML 1.1 resolves as non-strings but YAML 1.2 keeps as STRINGS
+        (``yes``/``no``/``on``/``off`` booleans, ``0b10`` binary, ``1:20``
+        sexagesimal, ``2020-01-01`` timestamps, ``1_000`` underscore ints) remain
+        valid string globs — they must NOT reject the whole declaration and deny a
+        legitimate sibling glob its membership."""
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text(
+            "packages:\n  - packages/*\n  - yes\n  - 0b10\n  - 1:20\n"
+            "  - 2020-01-01\n  - 1_000\n")
+        assert _workspace_globs_for(anc) == [
+            "packages/*", "yes", "0b10", "1:20", "2020-01-01", "1_000"]
+        # And end-to-end: a real sibling glob still confers membership.
+        assert _package_matches_workspace(("packages", "app"), ["packages/*", "yes"]) is True
+
     def test_pnpm_yaml_duplicate_keys_fail_closed(self, tmp_path):
         """pnpm rejects duplicate mapping keys; PyYAML silently keeps the last. The
         loader raises on a duplicate so the parse fails membership closed rather than
@@ -1457,16 +1474,19 @@ class TestWorkspaceMembershipHardening:
         (anc / "pnpm-workspace.yaml").write_text("packages: " + "[" * 3000 + "]" * 3000 + "\n")
         assert _workspace_globs_for(anc) == []
 
-    def test_pnpm_yaml_malformed_timestamp_fails_closed(self, tmp_path):
-        """A malformed YAML timestamp scalar raises a bare ValueError from PyYAML's
-        constructor — not a yaml.YAMLError — and must fail closed, not crash."""
+    def test_pnpm_yaml_date_like_scalar_is_a_string_glob(self, tmp_path):
+        """YAML 1.2's core schema (which pnpm uses) has NO timestamp type, so a
+        date-like scalar such as ``2020-99-99`` is a plain STRING — a literal glob,
+        not a construction that crashes (the YAML 1.1 timestamp constructor raised a
+        bare ValueError on an out-of-range date). Discovery must not crash, and the
+        entry is kept as a literal glob."""
         pytest.importorskip("yaml")
-        for body in ("packages: [2020-99-99]\n", "packages: 2020-13-45\n"):
-            anc = tmp_path / body[:12].replace(":", "_").replace(" ", "")
-            anc.mkdir()
-            (anc / "pnpm-workspace.yaml").write_text(body)
-            assert _workspace_globs_for(anc) == []
-            (anc / "pnpm-workspace.yaml").unlink()
+        anc = tmp_path / "anc"
+        anc.mkdir()
+        (anc / "pnpm-workspace.yaml").write_text("packages:\n  - 2020-99-99\n")
+        assert _workspace_globs_for(anc) == ["2020-99-99"]  # literal string glob
+        (anc / "pnpm-workspace.yaml").write_text("packages:\n  - 2020-13-45\n")
+        assert _workspace_globs_for(anc) == ["2020-13-45"]
 
     def test_pnpm_malformed_timestamp_leaf_not_a_member(self, tmp_path):
         """End-to-end: a pnpm YAML that fails to construct must not let a leaf adopt

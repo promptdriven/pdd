@@ -486,17 +486,24 @@ _PNPM_YAML_LOADER_CACHE: dict = {}
 
 def _pnpm_yaml_loader(yaml):
     """Return (memoized) a ``yaml.SafeLoader`` subclass whose scalar resolution and
-    duplicate-key handling match pnpm's YAML 1.2 parser more closely than PyYAML's
-    default YAML 1.1 rules, so a ``pnpm-workspace.yaml`` cannot falsely prove
-    membership through a version discrepancy:
+    duplicate-key handling match pnpm's YAML 1.2 parser, so a ``pnpm-workspace.yaml``
+    cannot prove/deny membership through a version discrepancy with PyYAML's default
+    YAML 1.1 rules.
 
-      * YAML 1.2's core schema resolves several unquoted scalar forms as NUMBERS that
-        PyYAML (1.1) leaves as strings — octal ``0o12`` and exponent/leading-dot
-        floats (``1e3``, ``+.5``). Resolving them as numbers makes ``_string_globs``
-        reject a bare-number ``packages`` entry (as pnpm does), while a *quoted*
-        ``"0o12"`` — a string in both — stays a valid glob.
-      * pnpm rejects duplicate mapping keys; PyYAML silently keeps the last. A custom
-        map constructor raises on a duplicate so the parse fails closed.
+    The inherited YAML 1.1 implicit-resolver table is REPLACED wholesale with the
+    YAML 1.2 *core schema* — layering selected rules onto the 1.1 table would still
+    misclassify the forms 1.1 resolves but 1.2 does not: `yes`/`no`/`on`/`off` (1.1
+    bool → 1.2 str), `0b10` (1.1 binary → 1.2 str), `1:20` (1.1 sexagesimal → 1.2
+    str), `2020-01-01` (1.1 timestamp → 1.2 str), and `1_000` (1.1 underscore int →
+    1.2 str), which pnpm treats as valid string globs. Under the 1.2 core schema only
+    `true`/`false` (bool), `null`/`~`/empty (null), `[-+]?[0-9]+`/`0o…`/`0x…` (int),
+    and the exponent/`.inf`/`.nan` floats resolve as non-strings; everything else —
+    including ordinary globs and a quoted ``"0o12"`` — stays a string. A non-string
+    ``packages`` entry is then rejected by ``_string_globs`` exactly as pnpm rejects
+    a bare number/bool.
+
+    pnpm also rejects duplicate mapping keys (PyYAML silently keeps the last); a
+    custom map constructor raises on a duplicate so the parse fails closed.
     """
     cached = _PNPM_YAML_LOADER_CACHE.get("loader")
     if cached is not None:
@@ -505,11 +512,22 @@ def _pnpm_yaml_loader(yaml):
     class _Loader(yaml.SafeLoader):  # pylint: disable=too-few-public-methods
         pass
 
+    _Loader.yaml_implicit_resolvers = {}  # drop PyYAML's inherited YAML 1.1 table
     _Loader.add_implicit_resolver(
-        "tag:yaml.org,2002:int", re.compile(r"^0o[0-7]+$"), list("0"))
+        "tag:yaml.org,2002:bool",
+        re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+    _Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:null",
+        re.compile(r"^(?:~|null|Null|NULL)$"), ["~", "n", "N"])
+    _Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:int",
+        re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"),
+        list("-+0123456789"))
     _Loader.add_implicit_resolver(
         "tag:yaml.org,2002:float",
-        re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$"),
+        re.compile(
+            r"^(?:[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?"
+            r"|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"),
         list("-+0123456789."))
 
     def _construct_mapping_no_duplicates(loader, node, deep=False):
