@@ -21,6 +21,7 @@ from pdd.sync_core import (
 )
 from pdd.sync_core.runner import (
     _local_javascript_imports,
+    _prepare_vitest_dependencies,
     _protected_command_error,
     _run_vitest,
     _vitest_environment,
@@ -194,6 +195,29 @@ def test_vitest_toolchain_descriptor_is_required_and_typed(tmp_path: Path) -> No
     fields = RunnerConfig.__dataclass_fields__
     assert "vitest_toolchain_manifest" in fields
     assert "vitest_toolchain_identity" in fields
+
+
+def test_vitest_toolchain_dependencies_are_copied_into_phase_tree(
+    tmp_path: Path,
+) -> None:
+    dependencies = tmp_path / "trusted-node-modules"
+    dependencies.mkdir()
+    (dependencies / "vitest.mjs").write_text("trusted", encoding="utf-8")
+    manifest = tmp_path / "toolchain.json"
+    manifest.write_text(
+        json.dumps({"dependencies": str(dependencies)}), encoding="utf-8"
+    )
+    phase_root = tmp_path / "phase"
+    phase_root.mkdir()
+
+    _prepare_vitest_dependencies(
+        phase_root, RunnerConfig(vitest_toolchain_manifest=manifest)
+    )
+
+    copied_entrypoint = phase_root / "node_modules/vitest.mjs"
+    assert copied_entrypoint.read_text(encoding="utf-8") == "trusted"
+    assert (phase_root / "node_modules/.vite-temp").is_dir()
+    assert (phase_root / "node_modules/.vite").is_dir()
 
 
 def test_vitest_phase_tree_mutation_cannot_pass(tmp_path: Path) -> None:

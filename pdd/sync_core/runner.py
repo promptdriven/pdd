@@ -5,26 +5,27 @@
 
 from __future__ import annotations
 
-import hashlib
 import ast
 import configparser
 import concurrent.futures
+import hashlib
+import importlib.metadata
 import json
 import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ET
-import importlib.metadata
-
-import pytest
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 from tree_sitter_language_pack import get_parser
 
@@ -34,7 +35,7 @@ from .trust import (
     AttestationIssuer,
     AttestationRequest,
 )
-from .isolation import SECRET_ENV_MARKERS, untrusted_child_environment
+from .isolation import untrusted_child_environment
 from .git_io import read_git_blob, read_git_regular_blob
 from .types import (
     EvidenceOutcome,
