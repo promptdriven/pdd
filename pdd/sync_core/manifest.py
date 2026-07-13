@@ -83,6 +83,7 @@ class OwnershipRule:
     inventory: InventoryStatus
     role: str
     owner: str
+    preauthorize_absent: bool = False
 
 
 @dataclass(frozen=True)
@@ -652,7 +653,7 @@ def _candidate_records(
             exact_rules = tuple(
                 item
                 for item in sources.ownership_rules
-                if item.pattern == path.as_posix()
+                if item.preauthorize_absent and item.pattern == path.as_posix()
             )
             rule, rule_error = _ownership_for(path, exact_rules)
         if path in sources.prompt_owner:
@@ -774,7 +775,12 @@ def _ownership_rules(root: Path, protected_base_ref: str) -> tuple[OwnershipRule
             owner = str(item["owner"])
         except (KeyError, ValueError) as exc:
             raise ManifestError("protected ownership rule is malformed") from exc
-        rule = OwnershipRule(pattern, inventory, role, owner)
+        preauthorize_absent = item.get("preauthorize_absent", False)
+        if not isinstance(preauthorize_absent, bool):
+            raise ManifestError("protected ownership rule is malformed")
+        rule = OwnershipRule(
+            pattern, inventory, role, owner, preauthorize_absent
+        )
         if not _valid_ownership_rule(rule):
             raise ManifestError("protected ownership rule is overly broad or invalid")
         if pattern in patterns:
@@ -797,7 +803,15 @@ def _valid_ownership_rule(rule: OwnershipRule) -> bool:
         InventoryStatus.MANAGED,
         InventoryStatus.HUMAN_OWNED,
     }
-    return pattern_valid and identity_valid and inventory_valid
+    absent_authorization_valid = not rule.preauthorize_absent or not any(
+        token in rule.pattern for token in ("*", "?", "[")
+    )
+    return (
+        pattern_valid
+        and identity_valid
+        and inventory_valid
+        and absent_authorization_valid
+    )
 
 
 def _tree_manifest(
