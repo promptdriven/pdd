@@ -20,6 +20,7 @@ from ..sync_core import (
     FingerprintStore,
     GlobalCertificateOptions,
     NightlyObservation,
+    PathPolicy,
     PlannedWrite,
     RepositoryTarget,
     SemanticStatus,
@@ -33,7 +34,9 @@ from ..sync_core import (
     checker_identity_from_environment,
     encode_fingerprint,
     finalize_unit,
+    load_committed_aliases,
     load_verification_profiles,
+    require_valid_manifest,
     run_lifecycle_matrix,
     signer_from_environment,
 )
@@ -315,7 +318,17 @@ def certify(
 def recover(ctx: click.Context, transaction_id: str) -> None:
     """Explicitly recover one crash-durable synchronization transaction."""
     ctx.ensure_object(dict)
-    result = TransactionManager(Path.cwd()).recover(transaction_id)
+    root = Path.cwd()
+    head = resolve_git_commit(root, "HEAD")
+    result = TransactionManager(root).recover(
+        transaction_id,
+        alias_policy_loader=lambda: PathPolicy(
+            root,
+            approved_aliases=load_committed_aliases(root, head),
+            base_ref=head,
+            head_ref=head,
+        ),
+    )
     click.echo(
         json.dumps(
             {
@@ -342,6 +355,10 @@ def baseline(ctx: click.Context, module: str, reviewed_by: str, reason: str) -> 
     root = Path.cwd().resolve()
     head = resolve_git_commit(root, "HEAD")
     manifest = build_unit_manifest(root, base_ref=head, head_ref=head)
+    try:
+        require_valid_manifest(manifest)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
     wanted = PurePosixPath(module)
     matches = [
         unit for unit in manifest.managed_units if unit.unit_id.prompt_relpath == wanted
