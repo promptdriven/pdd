@@ -1379,15 +1379,15 @@ def test_vitest_config_reference_index_candidate_changes_validator_digest(tmp_pa
     assert head_digest != base_digest
 
 
-def test_vitest_repository_escape_import_is_not_bound(tmp_path: Path) -> None:
+def test_vitest_repository_escape_import_fails_clearly(tmp_path: Path) -> None:
     root, commit = _repository(tmp_path)
-    imports = _local_javascript_imports(
-        root,
-        commit,
-        PurePosixPath("tests/widget.test.ts"),
-        b"import '../../outside.js';\n",
-    )
-    assert imports == set()
+    with pytest.raises(ValueError, match="escapes repository"):
+        _local_javascript_imports(
+            root,
+            commit,
+            PurePosixPath("tests/widget.test.ts"),
+            b"import '../../outside.js';\n",
+        )
 
 
 def test_vitest_local_alias_config_fails_closed(tmp_path: Path) -> None:
