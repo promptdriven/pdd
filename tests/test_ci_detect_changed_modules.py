@@ -186,6 +186,77 @@ def test_reverse_dep_respects_selected_function_changes(tmp_path, monkeypatch):
     assert "old_consumer" not in result
 
 
+def test_reverse_dep_matches_exact_repo_and_prompt_relative_paths(tmp_path, monkeypatch):
+    """Repository and prompt-relative includes must resolve without basename matching."""
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "pdd" / "prompts" / "nested"
+    prompt_dir.mkdir(parents=True)
+    (tmp_path / "pdd" / "shared.py").write_text(
+        "def root_change():\n    return 'root'\n", encoding="utf-8"
+    )
+    relative_target = prompt_dir / "parts" / "shared.py"
+    relative_target.parent.mkdir()
+    relative_target.write_text(
+        "def relative_change():\n    return 'relative'\n", encoding="utf-8"
+    )
+    (prompt_dir / "repo_consumer_python.prompt").write_text(
+        "<include>pdd/shared.py</include>", encoding="utf-8"
+    )
+    (prompt_dir / "relative_consumer_python.prompt").write_text(
+        '<include select="def:relative_change">./parts/shared.py</include>',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_changed_python_defs",
+        lambda path, diff_base: {"relative_change"}
+        if path == "pdd/prompts/nested/parts/shared.py"
+        else None,
+    )
+
+    result = module._reverse_dep_basenames(
+        ["pdd/shared.py", "pdd/prompts/nested/parts/shared.py"],
+        diff_base="origin/main...HEAD",
+    )
+
+    assert "nested/repo_consumer" in result
+    assert "nested/relative_consumer" in result
+
+
+def test_reverse_dep_ignores_cross_directory_basename_collisions(
+    tmp_path, monkeypatch
+):
+    """An include must not pull in a similarly named module from another directory."""
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "pdd" / "evidence_store.py").write_text(
+        "def target():\n    return 'target'\n", encoding="utf-8"
+    )
+    (tmp_path / "pdd" / "agentic_sync_runner.py").write_text(
+        "def target():\n    return 'target'\n", encoding="utf-8"
+    )
+    (prompt_dir / "evidence_consumer_python.prompt").write_text(
+        "<include>pdd/evidence_store.py</include>", encoding="utf-8"
+    )
+    (prompt_dir / "runner_consumer_python.prompt").write_text(
+        "<include>pdd/agentic_sync_runner.py</include>", encoding="utf-8"
+    )
+
+    result = module._reverse_dep_basenames(
+        ["pdd/sync_core/evidence_store.py", "pdd/sync_core/runner.py"]
+    )
+
+    assert "evidence_consumer" not in result
+    assert "runner_consumer" not in result
+
+
 def test_reverse_dep_without_diff_base_keeps_conservative_matching(
     tmp_path, monkeypatch
 ):
