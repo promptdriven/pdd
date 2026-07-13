@@ -469,11 +469,15 @@ def _wildcard_units_match(name_u: list, pat_u: list,
         work[0] -= 1
         if work[0] < 0:
             raise _PatternBudgetError
-        if p < npat and (pat_u[p] == q or pat_u[p] == name_u[s]):
-            s += 1
-            p += 1
-        elif p < npat and pat_u[p] == star:
+        if p < npat and pat_u[p] == star:
+            # A pattern ``*`` is ALWAYS a wildcard — test it BEFORE literal equality, or
+            # a literal ``*`` in the NAME (e.g. the pattern-string ``packages/**`` used as
+            # a "path" during npm's pattern-vs-pattern pruning) would be consumed as a
+            # literal match and ``**`` would fail to match the glob ``*``.
             star_p, star_s = p, s
+            p += 1
+        elif p < npat and (pat_u[p] == q or pat_u[p] == name_u[s]):
+            s += 1
             p += 1
         elif star_p != -1:
             p = star_p + 1

@@ -16,6 +16,7 @@ from pdd.get_test_command import (
     _workspace_globs_for,
     _belongs_to_ancestor_workspace,
     _package_matches_workspace,
+    _wildcard_segment_match,
     _expand_braces,
     _BraceBudgetError,
     _PatternBudgetError,
@@ -507,6 +508,28 @@ class TestTypeScriptTestRunnerDetection:
 
         result = get_test_command_for_file(str(test_file), language="typescript")
 
+        assert result is not None
+        assert "npx jest" not in result.command, result.command
+
+    def test_npm_star_star_pruned_by_star_negation_no_config_inheritance(self, tmp_path):
+        """End-to-end: with npm ``workspaces: ["packages/**", "!packages/*"]`` the raw
+        positive ``packages/**`` is pruned (its string is matched by the negation glob
+        ``packages/*``), so NO package under ``packages/`` is a member — a DEEP
+        ``packages/deep/app`` must NOT inherit the repo-root Jest config."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        (repo / "jest.config.js").write_text("module.exports = {};")
+        (repo / "package.json").write_text(
+            '{"workspaces": ["packages/**", "!packages/*"]}')
+        pkg = repo / "packages" / "deep" / "app"
+        pkg.mkdir(parents=True)
+        (pkg / "package.json").write_text("{}")  # independent package, not a member
+        test_file = pkg / "src" / "widget.test.ts"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text("describe('w', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
         assert result is not None
         assert "npx jest" not in result.command, result.command
 
@@ -1315,6 +1338,21 @@ class TestWorkspaceMembershipHardening:
         the sequential (not simultaneous) semantics."""
         g = ["packages/**", "!packages/**", "!packages/*", "packages/app"]
         assert _package_matches_workspace(("packages", "app"), g, ordered=False) is False
+
+    def test_npm_positive_pattern_star_matches_glob_star_during_pruning(self):
+        """During npm's pattern-vs-pattern pruning the raw positive ``packages/**`` is
+        matched (as a literal path) against the negation glob ``packages/*``: the ``*`` in
+        the glob is a WILDCARD that matches the literal segment ``**``. So
+        ``["packages/**", "!packages/*"]`` prunes ``packages/**`` and NO package under it
+        is a member — neither ``packages/app`` nor a deeper ``packages/deep/app``. (A
+        matcher that consumed the pattern ``*`` as a literal equal to the name ``*`` would
+        wrongly keep the positive.)"""
+        g = ["packages/**", "!packages/*"]
+        assert _package_matches_workspace(("packages", "app"), g, ordered=False) is False
+        assert _package_matches_workspace(("packages", "deep", "app"), g, ordered=False) is False
+        # A literal ``*`` in a real segment still matches a pattern ``*`` and a literal ``*``.
+        assert _wildcard_segment_match("**", "*") is True
+        assert _wildcard_segment_match("a*b", "a*b") is True
 
     def test_jest_config_extensions_include_cjs_and_json(self):
         """Jest supports `.cjs`/`.json` (and TS variants) config files; a project using
