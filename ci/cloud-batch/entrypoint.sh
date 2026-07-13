@@ -185,6 +185,20 @@ pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-d
 SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
+# Pytest includes the protected verifier. Run those shards as a dedicated
+# non-root user so RLIMIT_NPROC cannot be bypassed by UID 0. Setup remains
+# trusted/root because it owns source extraction and the editable install.
+PYTEST_SANDBOX_USER="pdd"
+PYTEST_USER_COMMAND=()
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
+    PYTEST_USER_COMMAND=(
+        setpriv --reuid=pdd --regid=pdd --init-groups --
+        env HOME=/home/pdd USER=pdd LOGNAME=pdd
+    )
+fi
+
 # ── Phantom-contract preflight ────────────────────────────────────────────
 preflight_protected_sandbox() {
     # Protected Linux runner contract: the inner verifier deliberately fails
@@ -197,7 +211,8 @@ preflight_protected_sandbox() {
         command -v "${command}" >/dev/null 2>&1 || \
             missing_sandbox_commands+=("${command}")
     done
-    if [ "${#missing_sandbox_commands[@]}" -ne 0 ] || ! sudo -n true; then
+    if [ "${#missing_sandbox_commands[@]}" -ne 0 ] ||
+       ! "${PYTEST_USER_COMMAND[@]}" sudo -n true; then
         echo "FATAL: missing protected sandbox prerequisites: ${missing_sandbox_commands[*]:-passwordless sudo}"
         write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
         exit 1
@@ -207,17 +222,18 @@ preflight_protected_sandbox() {
     # Exercise that capability explicitly because container runtimes can
     # expose the tools while withholding the required mount capability.
     local sandbox_preflight_dir
-    sandbox_preflight_dir=$(mktemp -d)
-    mkdir "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"
-    if ! sudo -n mount --bind \
+    sandbox_preflight_dir=$("${PYTEST_USER_COMMAND[@]}" mktemp -d)
+    "${PYTEST_USER_COMMAND[@]}" mkdir \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"
+    if ! "${PYTEST_USER_COMMAND[@]}" sudo -n mount --bind \
         "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"; then
         echo "FATAL: protected sandbox bind-mount capability is unavailable"
         rm -rf "${sandbox_preflight_dir}"
         write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
         exit 1
     fi
-    sudo -n umount "${sandbox_preflight_dir}/target"
-    rm -rf "${sandbox_preflight_dir}"
+    "${PYTEST_USER_COMMAND[@]}" sudo -n umount "${sandbox_preflight_dir}/target"
+    "${PYTEST_USER_COMMAND[@]}" rm -rf "${sandbox_preflight_dir}"
 }
 
 # Only pytest shards execute the protected verifier. Other regression jobs do
@@ -230,7 +246,8 @@ fi
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.
-python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
+"${PYTEST_USER_COMMAND[@]}" python -c \
+    "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
     echo "FATAL: image missing expected pytest plugins"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
@@ -242,7 +259,9 @@ python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov
 # -k __nonexistent__ filter selects zero tests on purpose, so collection
 # exercises config parsing and marker registration without running anything.
 PREFLIGHT_EXIT=0
-python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
+"${PYTEST_USER_COMMAND[@]}" python -m pytest --collect-only --quiet \
+    --strict-markers --strict-config tests/ -k __nonexistent__ \
+    >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
 if [ "$PREFLIGHT_EXIT" -ne 0 ] && [ "$PREFLIGHT_EXIT" -ne 5 ]; then
     echo "FATAL: pytest config or marker registration is broken (exit=$PREFLIGHT_EXIT)"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "pytest config invalid"
@@ -525,9 +544,10 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
 
     JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     PYTEST_CHUNK_TIMEOUT="${PYTEST_CHUNK_TIMEOUT:-1200}"
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
         run_with_timeout "${PYTEST_CHUNK_TIMEOUT}" \
-        python -m pytest -vv \
+        "${PYTEST_USER_COMMAND[@]}" python -m pytest -vv \
         --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then

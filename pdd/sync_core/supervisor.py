@@ -299,6 +299,11 @@ def _sandbox_command(
             "unsupported protected sandbox: macOS cannot prove process lifetime isolation"
         )
     if sys.platform.startswith("linux") and shutil.which("bwrap"):
+        if os.getuid() == 0:
+            raise RuntimeError(
+                "protected sandbox requires a non-root caller so process limits "
+                "remain kernel-enforced"
+            )
         if not (bool(shutil.which("sudo")) and subprocess.run(
                 ["sudo", "-n", "true"], capture_output=True, check=False,
         ).returncode == 0):
