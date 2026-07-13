@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-13T08:36:02.658177+00:00",
+  "exit_code": 0,
+  "tests_passed": 238,
+  "tests_failed": 0,
+  "coverage": 0.0,
+  "test_hash": "618390abd8d8124dd3106799ad53d6cb856bff331ecf973fc3f1e85553d257cf",
+  "test_files": {
+    "test_agentic_sync.py": "618390abd8d8124dd3106799ad53d6cb856bff331ecf973fc3f1e85553d257cf"
+  }
+}
