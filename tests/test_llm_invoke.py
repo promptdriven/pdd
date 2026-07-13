@@ -5408,6 +5408,9 @@ class TestInteractiveOnlyFilter:
 
     def test_interactive_included_with_opt_in(self, llm_mod, tmp_path, monkeypatch):
         monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+        # This test isolates the interactive opt-in. PR auto-heal deliberately
+        # exports PDD_SKIP_LOCAL_MODELS, which is a separate stronger policy.
+        monkeypatch.delenv("PDD_SKIP_LOCAL_MODELS", raising=False)
         df = self._make_df(llm_mod, tmp_path)
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         names = [c["model"] for c in candidates]
@@ -5457,6 +5460,8 @@ class TestInteractiveOnlyFilter:
         # Backward compatibility: a pre-migration CSV has no column. Nothing is
         # treated as interactive and no row is dropped.
         monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        # A caller-level local-model ban is orthogonal to legacy CSV parsing.
+        monkeypatch.delenv("PDD_SKIP_LOCAL_MODELS", raising=False)
         df = self._make_df(llm_mod, tmp_path, with_column=False)
         assert int(df["interactive_only"].sum()) == 0
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)

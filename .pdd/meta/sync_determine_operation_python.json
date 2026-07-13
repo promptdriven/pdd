@@ -1,21 +1,21 @@
 {
-  "pdd_version": "0.0.296.dev0",
-  "timestamp": "2026-07-09T09:54:54.515165+00:00",
-  "command": "fix",
-  "prompt_hash": "67066038dc835de0304bdf437277088994f8293b858343af8a8c1ba00b7c86a2",
-  "code_hash": "e616ac746674a9f1e8be84bf3093d5e1f45ff0175bc3767b758f2d17b2c54132",
+  "pdd_version": "0.0.304.dev0",
+  "timestamp": "2026-07-13T22:16:52.374678+00:00",
+  "command": "test",
+  "prompt_hash": "4834f75cfbb3a85139b51ef1e55379ef6c53ef9e2b466041e9a6d1130ebb9746",
+  "code_hash": "e9dbfc88588fec6a64149c3b56baad118696e6066dff3931f0ade3b1ce8e1faf",
   "example_hash": "225d20ea0210bbf52650a9f424879ff495e574dd2411eb4b86592a6d06cf59a5",
-  "test_hash": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d",
+  "test_hash": "c80addf9aa95722ea5a6ba12d718a1852221b26814359103d788df6f77d74faa",
   "test_files": {
-    "test_sync_determine_operation.py": "0e896d21fdf4a2974a3fc0ae3332308e2f2d3d30f4fdb13d39b075c3fb8ec04d"
+    "test_sync_determine_operation.py": "c80addf9aa95722ea5a6ba12d718a1852221b26814359103d788df6f77d74faa"
   },
   "include_deps": {
-    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/construct_paths_example.py": "412cb260650bcbd628fba647db917a8d32f8191df2e1c32cc22f22c0c11b1740",
-    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "pdd/llm_invoke.py": "2c423dbe12dd22d1acfca6c658bfef36eaf3b016626ae4a2845576500bfcb54b",
+    "pdd/llm_invoke.py": "f03ad8b98203eff97d73dd0ce6daa75641924d3aae999eba92f459cfcda189ef",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
     "pdd/template_expander.py": "bcaa670f334b9fa7726aa85906e70125ad2cd4b7e7b62a8e39f8bdd06c975edb",
-    "prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d"
+    "prompts/sync_analysis_LLM.prompt": "b54ff4325be64b9393db33026a576468bfa45f6c7aa736526b7bae2872f0520d",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f"
   }
 }

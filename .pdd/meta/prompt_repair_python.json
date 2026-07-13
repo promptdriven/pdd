@@ -1,10 +1,10 @@
 {
   "pdd_version": "0.0.304.dev0",
-  "timestamp": "2026-07-13T20:59:22.067768+00:00",
+  "timestamp": "2026-07-13T22:16:52.099396+00:00",
   "command": "test",
-  "prompt_hash": "07a183a0d4611094bcf4e9be769cd110556f2aaefa497c690b97f09ecf47c308",
+  "prompt_hash": "23cc94b86cf96450804ae11573af396da4dcb52453589eb260ffecd0956f0382",
   "code_hash": "6c5d0e3da5e96a9d485a1593a7feaa01b256c90d2a17165203d953f7f880cc72",
-  "example_hash": null,
+  "example_hash": "40d0b426218f30775a3550a306bcb908d41187d21f9a2ab789b5a78cafb9163c",
   "test_hash": "5378b880b4376e7d8bae71ec1bdf3ea486b0c5774fe28c57e3cb2a70975087aa",
   "test_files": {
     "test_prompt_repair.py": "5378b880b4376e7d8bae71ec1bdf3ea486b0c5774fe28c57e3cb2a70975087aa"
@@ -15,6 +15,6 @@
     "pdd/checkup_prompt_main.py": "538367ba6b7fa74d9f86ba6d1235219598f7a124c58cf00ad0abf6cf027526dc",
     "pdd/prompt_lint.py": "df85f363082925c714e23be8d7b2e941d62a8542a3370a2581d16780cef1474e",
     "pdd/server/token_counter.py": "847ac13e3804c451aca64652877940c06b72c2fc33edc00232f1d4aa16c957e8",
-    "pdd/agentic_common.py": "902eb6647fdee96479d4600015bcaa54a86ded005bb6f1fbe9c36db9883d136c"
+    "pdd/agentic_common.py": "55d9d10b11ccbccb4fceeda87118dc92979c12ad178964bdef11a5bc4841e184"
   }
 }

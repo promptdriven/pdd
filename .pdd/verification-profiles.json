@@ -2271,7 +2271,7 @@
       "prompt_path": "pdd/prompts/agentic_sync_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:42499f7e8b407ee013366aae925f9ce9ec48b9feb81a1158ba2ddb858f01b7be"
+        "CONTRACT-SHA256:aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8"
       ],
       "obligations": [
         {
@@ -2280,7 +2280,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:42499f7e8b407ee013366aae925f9ce9ec48b9feb81a1158ba2ddb858f01b7be"
+            "CONTRACT-SHA256:aa67cf6c09fdd10aa2670a0c8c2dba3b01630b8c18c86c34d3f1ec213b45aad8"
           ],
           "artifact_paths": [
             "pdd/prompts/agentic_sync_python.prompt"
@@ -4053,7 +4053,7 @@
       "prompt_path": "pdd/prompts/commands/checkup_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8"
+        "CONTRACT-SHA256:0f9a99e1b652f75e0777be14b0dadee6d21bacb567ea931ed5e16d9788073e6a"
       ],
       "obligations": [
         {
@@ -4062,7 +4062,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:62750858a2961ec33a0ed0ca64f37389c370d764fd53823065e7386c30f6faa8"
+            "CONTRACT-SHA256:0f9a99e1b652f75e0777be14b0dadee6d21bacb567ea931ed5e16d9788073e6a"
           ],
           "artifact_paths": [
             "pdd/prompts/commands/checkup_python.prompt"
@@ -8549,7 +8549,7 @@
       "prompt_path": "pdd/prompts/prompt_repair_python.prompt",
       "language_id": "python",
       "required_requirement_ids": [
-        "CONTRACT-SHA256:915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846"
+        "CONTRACT-SHA256:d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562"
       ],
       "obligations": [
         {
@@ -8558,7 +8558,7 @@
           "validator_id": "threshold-ed25519",
           "validator_config_digest": "threshold-ed25519-v1",
           "requirement_ids": [
-            "CONTRACT-SHA256:915a3f4e69e31010f156cc381d873ba75c6777365780ffc6d69020e914b0c846"
+            "CONTRACT-SHA256:d136f2f47483b0a17b9f733402ecfe1d2e8d69540c054043eeee8a752aa69562"
           ],
           "artifact_paths": [
             "pdd/prompts/prompt_repair_python.prompt"
