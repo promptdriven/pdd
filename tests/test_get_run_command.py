@@ -1,6 +1,9 @@
 import pytest
 import os
 import shlex
+import subprocess
+import tempfile
+from pathlib import Path
 from pdd.get_run_command import (
     get_run_command,
     get_run_command_for_file,
@@ -135,6 +138,32 @@ class TestGetRunCommandForFile:
         with pytest.raises(ValueError, match="PDD_PATH environment variable is not set"):
             get_run_command_for_file('/path/to/script.py')
 
+    def test_adjacent_placeholder_csv_templates_still_resolve(self):
+        """Shipped CSV templates whose ``{file}`` sits adjacent to literal text —
+        Fortran ``gfortran -o {file}.out {file} && ./{file}.out`` and Pascal
+        ``fpc {file} && ./{file}`` — MUST still produce a command (a prior over-strict
+        adjacency rejection returned ``''`` and silently disabled crash verification
+        for those languages). Uses the REAL project CSV via PDD_PATH."""
+        import shlex as _shlex
+        repo = str(Path(__file__).parent.parent)
+        os.environ["PDD_PATH"] = repo
+        try:
+            f90 = get_run_command_for_file("/proj/main.f90")
+            pas = get_run_command_for_file("/proj/main.pas")
+        finally:
+            os.environ.pop("PDD_PATH", None)
+        assert f90 and "gfortran" in f90 and "/proj/main.f90" in f90, f90
+        assert pas and "fpc" in pas and "/proj/main.pas" in pas, pas
+        # A metacharacter path stays inert (single-quoted) even in adjacency.
+        evil_path = "/p/$(touch PWN).f90"
+        os.environ["PDD_PATH"] = repo
+        try:
+            evil = get_run_command_for_file(evil_path)
+        finally:
+            os.environ.pop("PDD_PATH", None)
+        assert _shlex.quote(evil_path) in evil, evil          # payload single-quoted
+        assert "touch" in evil and " $(touch PWN)" not in evil  # never a bare $()
+
 
 class TestShellSafeSubstitute:
     """Direct tests for the shell-lexical-aware substitution helper.
@@ -151,13 +180,52 @@ class TestShellSafeSubstitute:
         assert shlex.split(out) == ["pytest", evil], out
         assert "$(touch" not in shlex.split(out)
 
-    def test_quoted_or_adjacent_placeholder_is_refused(self):
-        """A placeholder nested in the template's own quotes, or fused to an adjacent
-        word, cannot be made safe by ``shlex.quote`` — the helper returns None so the
-        caller falls through rather than emit an injectable command."""
-        for tpl in ('pytest "{file}"', "pytest '{file}'", "pytest {file}x",
-                    "x{file}", "run `{file}`", 'echo "a {file} b"'):
+    def test_quoted_or_dollar_prefixed_placeholder_is_refused(self):
+        """A placeholder nested in the template's own quotes/backticks, or immediately
+        preceded by ``$``/``\\`` (``${file}`` → ``$'...'`` ANSI-C), cannot be made safe
+        by ``shlex.quote`` — the helper returns None so the caller falls through rather
+        than emit an injectable command. A space-surrounded placeholder that is still
+        *inside* an enclosing quote is refused too."""
+        for tpl in ('pytest "{file}"', "pytest '{file}'", "run `{file}`",
+                    'echo "a {file} b"', "echo ${file}"):
             assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
+
+    def test_literal_adjacency_is_safe_and_inert(self):
+        """A placeholder adjacent to ORDINARY literal word characters (a suffix
+        ``{file}.out`` or prefix ``./{file}``) is safe: ``shlex.quote`` yields a
+        self-contained word, so concatenated literals extend the same argument and a
+        ``$(...)`` in the value stays inert. Verified by real ``bash -lc`` execution."""
+        # Fortran/Pascal-style adjacent templates substitute (no longer refused).
+        out = shell_safe_substitute(
+            "gfortran -o {file}.out {file}", {"{file}": "main.f90"})
+        assert out == "gfortran -o main.f90.out main.f90", out
+        # A malicious value in adjacency does not execute under bash -lc.
+        cmd = shell_safe_substitute(
+            "echo pre-{file}.suf", {"{file}": "$(touch PWN_ADJ)"})
+        with tempfile.TemporaryDirectory() as d:
+            proc = subprocess.run(["bash", "-lc", cmd], cwd=d,
+                                  capture_output=True, text=True, timeout=10)
+            assert "PWN_ADJ" not in os.listdir(d), os.listdir(d)
+            assert "$(touch PWN_ADJ)" in proc.stdout, proc.stdout
+
+    def test_heredoc_comment_and_multiline_are_refused(self):
+        """A here-document body, a shell comment, or any multiline template is not an
+        ordinary word context — ``shlex.quote`` single-quoting does not stop a
+        ``$(...)`` in a heredoc body, and a newline in the value would break out of a
+        comment. All are refused (None). Verified by real ``bash -lc`` execution of the
+        naive (rejected) form to prove the exploit is real."""
+        heredoc = "cat <<EOF\n{file}\nEOF"
+        assert shell_safe_substitute(heredoc, {"{file}": "$(touch PWN_HD)"}) is None
+        assert shell_safe_substitute("echo hi # {file}",
+                                     {"{file}": "\n$(touch PWN_CM)"}) is None
+        assert shell_safe_substitute("echo {file}\r\necho x", {"{file}": "a"}) is None
+        # Prove the heredoc exploit the guard prevents is genuine: the naive
+        # single-quoted substitution WOULD execute the payload under bash.
+        with tempfile.TemporaryDirectory() as d:
+            naive = heredoc.replace("{file}", shlex.quote("$(touch PWN_HD)"))
+            subprocess.run(["bash", "-lc", naive], cwd=d,
+                           capture_output=True, text=True, timeout=10)
+            assert "PWN_HD" in os.listdir(d), "expected the naive heredoc form to inject"
 
     def test_values_are_not_rescanned_for_other_placeholders(self):
         """Substitution is single-pass: a value that itself contains another

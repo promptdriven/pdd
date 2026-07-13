@@ -125,14 +125,18 @@ def _substitute_verify_template(template: str, unit_test_file: str,
     placeholder inside quotes/backticks or not a standalone bare word — where
     ``shlex.quote`` would not actually neutralize a ``$(...)`` in the path).
 
-    The test path is resolved against the supplied ``cwd`` (not the process CWD), so
-    a relative ``unit_test_file`` targets the same file ``run_agentic_fix`` resolved.
-    Substitution is single-pass, so a value containing a literal ``{cwd}``/``{test}``
-    is never rescanned as another placeholder.
+    Both ``{test}`` and ``{cwd}`` resolve to ABSOLUTE paths, anchored at the supplied
+    ``cwd`` (not the process CWD). A relative ``unit_test_file`` therefore targets the
+    same file ``run_agentic_fix`` resolved, and ``{cwd}`` is the same absolute
+    directory the caller runs the command in — so a template like
+    ``cd {cwd} && pytest {test}`` does not double-join a relative ``cwd`` onto the
+    already-relative process directory. Substitution is single-pass, so a value
+    containing a literal ``{cwd}``/``{test}`` is never rescanned as another placeholder.
     """
-    test_abs = str((cwd / unit_test_file).resolve())
+    cwd_abs = Path(cwd).resolve()
+    test_abs = str((cwd_abs / unit_test_file).resolve())
     return shell_safe_substitute(
-        template, {"{test}": test_abs, "{cwd}": str(cwd)})
+        template, {"{test}": test_abs, "{cwd}": str(cwd_abs)})
 
 
 def _verify_and_log(unit_test_file: str, cwd: Path, *, verify_cmd: Optional[str],
