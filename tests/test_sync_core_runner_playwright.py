@@ -520,10 +520,12 @@ def test_playwright_execution_uses_process_group_supervisor(
     root, commit = _repository(tmp_path)
     calls: list[list[str]] = []
     scratch_bindings = []
+    temp_directories = []
 
     def supervised(command, **_kwargs):
         calls.append(command)
         scratch_bindings.append(_kwargs["writable_bindings"])
+        temp_directories.append(_kwargs["temp_directory"])
         _write_private_result(_kwargs, {
             "tests": [{"identity": IDENTITY, "status": "passed"}],
         })
@@ -534,7 +536,9 @@ def test_playwright_execution_uses_process_group_supervisor(
     assert executions[0].outcome is EvidenceOutcome.PASS
     assert calls
     assert scratch_bindings[0][0][1] == Path("/tmp")
-    assert scratch_bindings[0][0][0].name == "scratch"
+    assert scratch_bindings[0][0][0].name == "tmp"
+    assert scratch_bindings[0][0][0].parent.name == "scratch"
+    assert temp_directories[0] == Path("/tmp")
 
 
 @pytest.mark.parametrize(

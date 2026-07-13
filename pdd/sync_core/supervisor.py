@@ -414,6 +414,7 @@ def run_supervised(
     readable_roots: tuple[Path, ...] = (),
     readable_bindings: tuple[tuple[Path, Path], ...] = (),
     writable_bindings: tuple[tuple[Path, Path], ...] = (),
+    temp_directory: Path | None = None,
     result_fifo: Path | None = None,
     result_fd: int = 198,
 ) -> tuple[subprocess.CompletedProcess[str], bool]:
@@ -435,9 +436,9 @@ def run_supervised(
     sandbox_environment = env | {
         "PYTHONDONTWRITEBYTECODE": "1",
         "PDD_SUPERVISION_TOKEN": token,
-        "TMPDIR": str(writable_roots[0].resolve()),
-        "TEMP": str(writable_roots[0].resolve()),
-        "TMP": str(writable_roots[0].resolve()),
+        "TMPDIR": str(temp_directory or writable_roots[0].resolve()),
+        "TEMP": str(temp_directory or writable_roots[0].resolve()),
+        "TMP": str(temp_directory or writable_roots[0].resolve()),
     }
     library_path = _sandbox_library_path(env)
     if library_path:

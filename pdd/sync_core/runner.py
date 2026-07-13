@@ -4464,6 +4464,8 @@ def _run_playwright_in_tree(
         scratch = temporary / "scratch"
         home = scratch / "home"
         home.mkdir(parents=True, mode=0o700)
+        sandbox_tmp = scratch / "tmp"
+        sandbox_tmp.mkdir(mode=0o700)
         controllers = temporary / f"controller-{os.urandom(16).hex()}"
         controllers.mkdir(mode=0o700)
         reporter = controllers / "reporter.cjs"
@@ -4514,7 +4516,8 @@ def _run_playwright_in_tree(
                 roles.browser_runtime,
             ),
             writable_roots=(scratch,),
-            writable_bindings=((scratch, Path("/tmp")),),
+            writable_bindings=((sandbox_tmp, Path("/tmp")),),
+            temp_directory=Path("/tmp"),
             readable_roots=(reporter, *roles.readable_roots),
             readable_bindings=roles.native_bindings,
             result_fifo=result_fifo,
