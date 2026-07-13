@@ -6,15 +6,14 @@
                     {
                         "container": {
                             "imageUri": "{{REGION}}-docker.pkg.dev/{{PROJECT_ID}}/pdd-ci/pdd-test:latest",
-                            "entrypoint": "/entrypoint.sh"
+                            "entrypoint": "/entrypoint.sh",
+                            "options": "--privileged"
                         },
                         "environment": {
                             "variables": {
                                 "VERTEX_PROJECT": "{{PROJECT_ID}}",
                                 "PDD_TEST_HEADLESS": "1",
                                 "GCS_BUCKET_NAME": "litellm_cache",
-                                "TASK_INDEX_OFFSET": "32",
-                                "SKIP_INDEXES": "54,68,69,70,71,72,73,74,75",
                                 "PDD_CLOUD_URL": "https://{{REGION}}-{{PROJECT_ID}}.cloudfunctions.net",
                                 "PDD_ENV": "staging",
                                 "PDD_CLOUD_TIMEOUT": "1200",
@@ -57,8 +56,8 @@
                     }
                 ]
             },
-            "taskCount": "36",
-            "parallelism": "36"
+            "taskCount": "32",
+            "parallelism": "32"
         }
     ],
     "allocationPolicy": {

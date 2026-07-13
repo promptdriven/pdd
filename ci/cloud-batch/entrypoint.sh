@@ -3,33 +3,25 @@ set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
 # Support multi-group jobs: FIXED_TASK_INDEX overrides BATCH_TASK_INDEX
-# (used by dedicated STANDARD groups), TASK_INDEX_OFFSET maps a serial group
-# onto a contiguous task range, and SKIP_INDEXES lets the main group skip
-# dedicated task indexes while preserving the global task numbering.
+# (used by dedicated STANDARD groups). Otherwise TASK_INDEX_OFFSET selects a
+# group's starting index and SKIP_INDEXES omits indexes owned by other groups,
+# preserving the global 0-76 result numbering.
 if [ -n "${FIXED_TASK_INDEX:-}" ]; then
     TASK_INDEX="${FIXED_TASK_INDEX}"
-elif [ -n "${TASK_INDEX_OFFSET:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX=$((_RAW + TASK_INDEX_OFFSET))
-elif [ -n "${SKIP_INDEXES:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    TASK_INDEX="${_RAW}"
-    IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
-    for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
-        [ -n "${_SKIP_INDEX}" ] || continue
-        if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
-            TASK_INDEX=$((TASK_INDEX + 1))
-        fi
-    done
-elif [ -n "${SKIP_INDEX:-}" ]; then
-    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
-    if [ "${_RAW}" -ge "${SKIP_INDEX}" ]; then
-        TASK_INDEX=$((_RAW + 1))
-    else
-        TASK_INDEX="${_RAW}"
-    fi
 else
-    TASK_INDEX="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    _RAW="${BATCH_TASK_INDEX:?BATCH_TASK_INDEX not set}"
+    TASK_INDEX=$((_RAW + ${TASK_INDEX_OFFSET:-0}))
+    if [ -n "${SKIP_INDEXES:-}" ]; then
+        IFS=',' read -r -a _SKIP_INDEXES <<< "${SKIP_INDEXES}"
+        for _SKIP_INDEX in "${_SKIP_INDEXES[@]}"; do
+            [ -n "${_SKIP_INDEX}" ] || continue
+            if [ "${_SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+                TASK_INDEX=$((TASK_INDEX + 1))
+            fi
+        done
+    elif [ -n "${SKIP_INDEX:-}" ] && [ "${SKIP_INDEX}" -le "${TASK_INDEX}" ]; then
+        TASK_INDEX=$((TASK_INDEX + 1))
+    fi
 fi
 RESULTS_DIR="/mnt/disks/results"
 SOURCE_DIR="/mnt/disks/source"
@@ -140,6 +132,30 @@ START_TIME=$(date +%s)
 trap term_handler TERM INT
 trap trap_handler EXIT
 
+initialize_source_git_snapshot() {
+    # The upload intentionally excludes the host repository's .git directory.
+    # Build an exact ephemeral HEAD from the uploaded test inputs so protected
+    # rollout/finalizer tests can clone and compare a clean committed snapshot.
+    # Test-only supplemental files must remain available without becoming part
+    # of that protected source identity.
+    git init -q "${WORK_DIR}"
+    git -C "${WORK_DIR}" config user.email "ci@pdd.dev"
+    git -C "${WORK_DIR}" config user.name "PDD Cloud Batch"
+    printf '%s\n' ".pdd-package-version" ".pddrc_pddcloud" \
+        >> "${WORK_DIR}/.git/info/exclude"
+    # Force-add files that were tracked in the host checkout even if a current
+    # ignore rule now matches them; the synthetic commit must represent every
+    # uploaded source byte, not reinterpret the host's tracked set.
+    git -C "${WORK_DIR}" add -f -A -- . \
+        ':(exclude).pdd-package-version' ':(exclude).pddrc_pddcloud'
+    git -C "${WORK_DIR}" commit -q --no-gpg-sign \
+        -m "test(cloud-test): snapshot uploaded source"
+    if [ -n "$(git -C "${WORK_DIR}" status --porcelain=v1 --untracked-files=all)" ]; then
+        echo "FATAL: synthetic Cloud Batch source checkout is not clean"
+        return 1
+    fi
+}
+
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
 echo "=== Task ${TASK_INDEX}: extracting source ==="
@@ -154,16 +170,76 @@ if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
     export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
 fi
 
+initialize_source_git_snapshot
+
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
 SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
+# Pytest includes the protected verifier. Run those shards as a dedicated
+# non-root user so RLIMIT_NPROC cannot be bypassed by UID 0. Setup remains
+# trusted/root because it owns source extraction and the editable install.
+PYTEST_SANDBOX_USER="pdd"
+PYTEST_USER_COMMAND=()
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
+    PYTEST_USER_COMMAND=(
+        setpriv --reuid=pdd --regid=pdd --init-groups --
+        env HOME=/home/pdd USER=pdd LOGNAME=pdd
+    )
+fi
+
 # ── Phantom-contract preflight ────────────────────────────────────────────
+preflight_protected_sandbox() {
+    # Protected Linux runner contract: the inner verifier deliberately fails
+    # closed unless every namespace/bind-staging tool is present and sudo is
+    # noninteractive. Report this as an image prerequisite failure instead of
+    # an opaque nested pytest COLLECTION_ERROR.
+    local command
+    local -a missing_sandbox_commands=()
+    for command in bwrap sudo setpriv mount umount; do
+        command -v "${command}" >/dev/null 2>&1 || \
+            missing_sandbox_commands+=("${command}")
+    done
+    if [ "${#missing_sandbox_commands[@]}" -ne 0 ] ||
+       ! "${PYTEST_USER_COMMAND[@]}" sudo -n true; then
+        echo "FATAL: missing protected sandbox prerequisites: ${missing_sandbox_commands[*]:-passwordless sudo}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "missing protected sandbox prerequisites"
+        exit 1
+    fi
+
+    # The runner stages private bind mounts before entering bubblewrap.
+    # Exercise that capability explicitly because container runtimes can
+    # expose the tools while withholding the required mount capability.
+    local sandbox_preflight_dir
+    sandbox_preflight_dir=$("${PYTEST_USER_COMMAND[@]}" mktemp -d)
+    "${PYTEST_USER_COMMAND[@]}" mkdir \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"
+    if ! "${PYTEST_USER_COMMAND[@]}" sudo -n mount --bind \
+        "${sandbox_preflight_dir}/source" "${sandbox_preflight_dir}/target"; then
+        echo "FATAL: protected sandbox bind-mount capability is unavailable"
+        rm -rf "${sandbox_preflight_dir}"
+        write_result "failed" "${SETUP_SECONDS}" "preflight" "protected sandbox mount unavailable"
+        exit 1
+    fi
+    "${PYTEST_USER_COMMAND[@]}" sudo -n umount "${sandbox_preflight_dir}/target"
+    "${PYTEST_USER_COMMAND[@]}" rm -rf "${sandbox_preflight_dir}"
+}
+
+# Only pytest shards execute the protected verifier. Other regression jobs do
+# not receive SYS_ADMIN and must not require its mount preflight.
+if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] &&
+   [ "${TASK_INDEX}" -le "${PYTEST_END}" ]; then
+    preflight_protected_sandbox
+fi
+
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.
-python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
+"${PYTEST_USER_COMMAND[@]}" python -c \
+    "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
     echo "FATAL: image missing expected pytest plugins"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
@@ -175,7 +251,9 @@ python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov
 # -k __nonexistent__ filter selects zero tests on purpose, so collection
 # exercises config parsing and marker registration without running anything.
 PREFLIGHT_EXIT=0
-python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
+"${PYTEST_USER_COMMAND[@]}" python -m pytest --collect-only --quiet \
+    --strict-markers --strict-config tests/ -k __nonexistent__ \
+    >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
 if [ "$PREFLIGHT_EXIT" -ne 0 ] && [ "$PREFLIGHT_EXIT" -ne 5 ]; then
     echo "FATAL: pytest config or marker registration is broken (exit=$PREFLIGHT_EXIT)"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "pytest config invalid"
@@ -458,9 +536,10 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
 
     JUNIT_XML="${RESULTS_DIR}/task_${TASK_INDEX}_junit.xml"
     PYTEST_CHUNK_TIMEOUT="${PYTEST_CHUNK_TIMEOUT:-1200}"
+    chown -R pdd:pdd "${WORK_DIR}" "${RESULTS_DIR}"
     run_test "pytest" "chunk_${CHUNK_INDEX}" \
         run_with_timeout "${PYTEST_CHUNK_TIMEOUT}" \
-        python -m pytest -vv \
+        "${PYTEST_USER_COMMAND[@]}" python -m pytest -vv \
         --junitxml="${JUNIT_XML}" "${CHUNK_TESTS[@]}"
 
 elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${REGRESSION_END}" ]; then

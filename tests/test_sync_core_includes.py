@@ -61,14 +61,14 @@ def test_literal_include_tag_in_prose_does_not_consume_later_markup() -> None:
     assert [item.path for item in references] == ["docs/actual.md"]
 
 
-@pytest.mark.timeout(1)
+@pytest.mark.timeout(1, func_only=True)
 def test_malformed_include_text_is_bounded() -> None:
     """Unterminated include markup cannot trigger superlinear parser backtracking."""
     text = "<include " + ('path="docs/a.md" ' * 20_000)
     assert parse_include_references(text) == ()
 
 
-@pytest.mark.timeout(1)
+@pytest.mark.timeout(1, func_only=True)
 def test_attribute_parser_is_bounded_for_repeated_word_characters() -> None:
     """Unquoted attribute-like input must not cause quadratic regex retries."""
     text = "<include " + ("0" * 15_000) + ">docs/a.md</include>"
