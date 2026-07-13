@@ -406,6 +406,21 @@ def _forward_subcommand_json(
     help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
 )
 @click.option(
+    "--prompt-repair-model",
+    type=str,
+    default=None,
+    help=(
+        "Exact Codex model for non-interactive prompt repair (for example, "
+        "gpt-5.6-sol). Disables provider/model fallback."
+    ),
+)
+@click.option(
+    "--prompt-repair-effort",
+    type=click.Choice(["low", "medium", "high", "xhigh"]),
+    default=None,
+    help="Exact Codex reasoning effort for prompt repair; requires --prompt-repair-model.",
+)
+@click.option(
     "--interactive",
     "interactive",
     is_flag=True,
@@ -541,6 +556,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     max_prompt_repair_rounds: Optional[int],
     max_prompt_token_growth: Optional[int],
     max_prompt_repair_seconds: Optional[float],
+    prompt_repair_model: Optional[str],
+    prompt_repair_effort: Optional[str],
     interactive: bool,
     apply: bool,
     dry_run: bool,
@@ -818,6 +835,21 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     target_kind = classify_checkup_target(target, project_root=project_root)
 
+    _exact_repair_requested = bool(prompt_repair_model or prompt_repair_effort)
+    if _exact_repair_requested and (
+        pr_url is not None
+        or target is None
+        or not is_prompt_shaped_target(target, project_root=project_root)
+    ):
+        raise click.UsageError(
+            "--prompt-repair-model/--prompt-repair-effort are supported only for "
+            "local prompt-target checkup."
+        )
+    if prompt_repair_effort and not prompt_repair_model:
+        raise click.UsageError(
+            "--prompt-repair-effort requires --prompt-repair-model."
+        )
+
     if (
         interactive
         and target is not None
@@ -855,6 +887,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
         _repair_active = _effective_repair not in (None, "off")
         _machine_output = as_json or explain
+        if _exact_repair_requested and not _repair_active:
+            raise click.UsageError(
+                "--prompt-repair-model requires --prompt-repair best-effort or strict."
+            )
 
         # Agentic checkup is opt-in for prompt targets. Bare
         # `pdd checkup <prompt>` stays on the structured source-set path so the
@@ -864,6 +900,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             _single_prompt_file and (interactive or planner is not None or auto_mode)
         ) and not _machine_output
         if _agent_requested:
+            if _exact_repair_requested:
+                raise click.UsageError(
+                    "Exact prompt-repair selectors apply to the non-interactive "
+                    "--prompt-repair loop, not --interactive/--auto/planner mode."
+                )
             from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
                 MODE_AUTO,
                 MODE_INTERACTIVE,
@@ -959,6 +1000,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             strict=strict,
             project_root=project_root,
         )
+        _total_cost = cost
+        _repair_effective_model: Optional[str] = None
 
         # check → repair → recheck cycle (Issue #1422)
         # Repair runs only after a failed structured checkup and never with --json.
@@ -1021,7 +1064,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     verbose=ctx.obj.get("verbose", False),
                     quiet=quiet,
                     strict=strict,
+                    model=prompt_repair_model,
+                    reasoning_effort=prompt_repair_effort,
                 )
+                _total_cost += _rr.cost_usd
+                _repair_effective_model = _rr.model_used or _repair_effective_model
                 if not quiet:
                     _summary = format_token_delta_summary(_rr)
                     if _summary:
@@ -1035,12 +1082,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 strict=strict,
                 project_root=project_root,
             )
+            _total_cost += cost
+            model = _repair_effective_model or model
 
         if not quiet and not as_json:
             echo_model_line(model)
         if exit_code:
             raise click.exceptions.Exit(exit_code)
-        return message, cost, model
+        return message, _total_cost, model
 
     # PR-mode argument validation.
     #

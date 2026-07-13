@@ -4,13 +4,24 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from .change import MODIFIED_PROMPT_END, MODIFIED_PROMPT_START, change
+from .agentic_common import (
+    AgenticTaskResult,
+    AgenticUnsupportedSemanticsError,
+    run_exact_agentic_task,
+)
+from .change import (
+    MODIFIED_PROMPT_END,
+    MODIFIED_PROMPT_START,
+    change,
+    extract_between_delimiters,
+)
 from .checkup_prompt_main import _finding_requires_clarification
 from .json_atomic import atomic_write_json, atomic_write_text
 from .prompt_lint import LintIssue, scan_prompt
@@ -56,6 +67,11 @@ class RepairResult:  # pylint: disable=too-many-instance-attributes
     message: str = ""
     findings_before: List[Dict[str, Any]] = field(default_factory=list)
     findings_after: List[Dict[str, Any]] = field(default_factory=list)
+    model_used: Optional[str] = None
+    cost_usd: float = 0.0
+    usage: List[Dict[str, Any]] = field(default_factory=list)
+    apply_method: str = "pdd.change.change"
+    billing_status: str = "unavailable"
 
 
 # Atomic text writes use atomic_write_text from pdd.json_atomic, which shares
@@ -254,6 +270,73 @@ def _repair_brief(
     )
 
 
+def _validate_exact_repair_selectors(
+    model: Optional[str], reasoning_effort: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Validate exact repair selectors without invoking any model runtime."""
+    normalized_model = (model or "").strip() or None
+    normalized_effort = (reasoning_effort or "").strip().lower() or None
+    if normalized_effort and not normalized_model:
+        raise AgenticUnsupportedSemanticsError(
+            "--prompt-repair-effort requires --prompt-repair-model"
+        )
+    if normalized_model and not normalized_model.startswith("gpt-"):
+        raise AgenticUnsupportedSemanticsError(
+            "Exact prompt repair currently supports only Codex gpt-* models"
+        )
+    if normalized_effort not in {None, "low", "medium", "high", "xhigh"}:
+        raise AgenticUnsupportedSemanticsError(
+            "Exact prompt-repair effort must be low, medium, high, or xhigh"
+        )
+    return normalized_model, normalized_effort
+
+
+def _run_exact_prompt_change(
+    *,
+    current_prompt: str,
+    change_context: str,
+    brief: str,
+    model: str,
+    reasoning_effort: Optional[str],
+    timeout: float,
+    verbose: bool,
+    quiet: bool,
+) -> AgenticTaskResult:
+    """Invoke the exact Codex repair boundary in an isolated read-only cwd."""
+    instruction = "\n".join(
+        [
+            "Repair the prompt exactly as requested below.",
+            "Return only the complete modified prompt between the required delimiters.",
+            "Do not use tools and do not refer to files outside this message.",
+            "",
+            "REPAIR INSTRUCTIONS:",
+            brief,
+            "",
+            "STRUCTURED CONTEXT:",
+            change_context,
+            "",
+            "CURRENT PROMPT:",
+            current_prompt,
+            "",
+            MODIFIED_PROMPT_START,
+            "<complete modified prompt>",
+            MODIFIED_PROMPT_END,
+        ]
+    )
+    with tempfile.TemporaryDirectory(prefix="pdd-prompt-repair-") as scratch:
+        return run_exact_agentic_task(
+            instruction,
+            Path(scratch),
+            provider="openai",
+            model=model,
+            effort=reasoning_effort,
+            timeout=timeout,
+            verbose=verbose,
+            quiet=quiet,
+            label="prompt-repair",
+        )
+
+
 def _validate_changed_prompt(original: str, candidate: str) -> Optional[str]:
     """Validate the complete prompt returned by ``change()``."""
     stripped = candidate.strip()
@@ -316,7 +399,11 @@ def _write_audit_note(
             "findings_before": len(result.findings_before),
             "findings_after": len(result.findings_after),
             "applied_operations": list(applied_operations),
-            "apply_method": "pdd.change.change",
+            "apply_method": result.apply_method,
+            "effective_model": result.model_used,
+            "cost_usd": result.cost_usd,
+            "usage": result.usage,
+            "billing_status": result.billing_status,
             "status": "repaired" if result.success else "failed",
         }
         atomic_write_json(audit_path, payload)
@@ -367,6 +454,8 @@ def run_prompt_repair_loop(
     verbose: bool = False,
     quiet: bool = False,
     strict: bool = False,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> RepairResult:
     """Run a bounded source-set check, ``change()``, and full re-check loop.
 
@@ -378,6 +467,9 @@ def run_prompt_repair_loop(
         as errors during re-checks, matching the strictness used by the caller's
         initial check.
     """
+    exact_model, exact_effort = _validate_exact_repair_selectors(
+        model, reasoning_effort
+    )
     work_cwd = cwd or path.parent
     project_root = work_cwd
     for parent in [work_cwd, *work_cwd.parents]:
@@ -449,6 +541,15 @@ def run_prompt_repair_loop(
     current_text = original_text
     rounds_used = 0
     applied_operations: List[str] = []
+    total_cost_usd = 0.0
+    model_used: Optional[str] = None
+    usage_records: List[Dict[str, Any]] = []
+    billing_status = "unavailable"
+    apply_method = (
+        "pdd.agentic_common.run_exact_agentic_task"
+        if exact_model
+        else "pdd.change.change"
+    )
     issues_after = issues_before
     findings_after = findings_before
     current_report = initial_report
@@ -472,6 +573,11 @@ def run_prompt_repair_loop(
                 message="repair timeout",
                 findings_before=findings_before,
                 findings_after=findings_after,
+                model_used=model_used,
+                cost_usd=total_cost_usd,
+                usage=usage_records,
+                apply_method=apply_method,
+                billing_status=billing_status,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
@@ -513,17 +619,45 @@ def run_prompt_repair_loop(
             indent=2,
         )
         try:
-            candidate, _, _ = change(
-                input_prompt=current_text,
-                input_code=change_context,
-                change_prompt=brief,
-                temperature=0.0,
-                # Normalise remaining wall-clock seconds to the 0–1 relative
-                # thinking budget that change()/llm_invoke() expects.
-                # Clamped to [0.01, 1.0] to avoid zero or over-budget reasoning.
-                time=min(1.0, max(0.01, remaining / config.max_seconds)),
-                verbose=verbose and not quiet,
-            )
+            if exact_model:
+                exact_result = _run_exact_prompt_change(
+                    current_prompt=current_text,
+                    change_context=change_context,
+                    brief=brief,
+                    model=exact_model,
+                    reasoning_effort=exact_effort,
+                    timeout=remaining,
+                    verbose=verbose and not quiet,
+                    quiet=quiet,
+                )
+                total_cost_usd += exact_result.cost_usd
+                model_used = exact_result.model_id
+                billing_status = "known_zero_subscription"
+                if exact_result.usage:
+                    usage_records.append(dict(exact_result.usage))
+                if not exact_result.success:
+                    raise RuntimeError(exact_result.output_text)
+                candidate = extract_between_delimiters(exact_result.output_text)
+                if candidate is None:
+                    raise ValueError(
+                        "Exact prompt repair did not return the required delimiters"
+                    )
+            else:
+                candidate, round_cost, round_model = change(
+                    input_prompt=current_text,
+                    input_code=change_context,
+                    change_prompt=brief,
+                    temperature=0.0,
+                    # Normalise remaining wall-clock seconds to the 0–1 relative
+                    # thinking budget that change()/llm_invoke() expects.
+                    # Clamped to [0.01, 1.0] to avoid zero or over-budget reasoning.
+                    time=min(1.0, max(0.01, remaining / config.max_seconds)),
+                    verbose=verbose and not quiet,
+                )
+                total_cost_usd += float(round_cost or 0.0)
+                model_used = str(round_model or "") or model_used
+                if round_cost:
+                    billing_status = "reported_nonzero"
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Prompt repair change() call failed for %s: %s", path, exc)
             current_text = _maybe_rollback_strict(
@@ -540,6 +674,11 @@ def run_prompt_repair_loop(
                 message="change failure",
                 findings_before=findings_before,
                 findings_after=current_findings,
+                model_used=model_used,
+                cost_usd=total_cost_usd,
+                usage=usage_records,
+                apply_method=apply_method,
+                billing_status=billing_status,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
@@ -567,6 +706,11 @@ def run_prompt_repair_loop(
                 message="invalid change result",
                 findings_before=findings_before,
                 findings_after=current_findings,
+                model_used=model_used,
+                cost_usd=total_cost_usd,
+                usage=usage_records,
+                apply_method=apply_method,
+                billing_status=billing_status,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
@@ -604,6 +748,11 @@ def run_prompt_repair_loop(
                 message="token budget exceeded",
                 findings_before=findings_before,
                 findings_after=current_findings,
+                model_used=model_used,
+                cost_usd=total_cost_usd,
+                usage=usage_records,
+                apply_method=apply_method,
+                billing_status=billing_status,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
@@ -688,6 +837,11 @@ def run_prompt_repair_loop(
         message=message,
         findings_before=findings_before,
         findings_after=findings_after,
+        model_used=model_used,
+        cost_usd=total_cost_usd,
+        usage=usage_records,
+        apply_method=apply_method,
+        billing_status=billing_status,
     )
     result.audit_path = _write_audit_note(
         project_root=project_root,

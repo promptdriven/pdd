@@ -7,8 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pdd.agentic_common import AgenticTaskResult, AgenticUnsupportedSemanticsError
 from pdd.prompt_repair import (
     PromptRepairConfig,
+    RepairResult,
     _actionable_findings,
     _lint_findings,
     _repair_brief,
@@ -141,6 +143,81 @@ def _pass_report(prompt: Path) -> dict:
         "target": str(prompt),
         "findings": [],
     }
+
+
+def test_exact_codex_repair_exposes_observed_model_usage_and_known_zero_cost(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "exact.prompt"
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    repaired = original + "\n% Exact Codex repair.\n"
+    prompt.write_text(original, encoding="utf-8")
+    exact_result = AgenticTaskResult(
+        True,
+        f"<<<MODIFIED_PROMPT>>>\n{repaired}\n<<<END_MODIFIED_PROMPT>>>",
+        0.0,
+        "openai",
+        {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 10},
+        model_id="gpt-5.6-sol",
+        usage_source="provider_reported",
+        estimate_method="provider_usage",
+    )
+
+    with (
+        patch(
+            "pdd.prompt_repair._run_exact_prompt_change",
+            return_value=exact_result,
+        ) as mock_exact,
+        patch("pdd.prompt_repair.change") as mock_legacy,
+        patch(
+            "pdd.prompt_repair._recheck_source_set",
+            return_value=_pass_report(prompt),
+        ),
+    ):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": _coverage_report(prompt)},
+            cwd=tmp_path,
+            quiet=True,
+            model="gpt-5.6-sol",
+            reasoning_effort="xhigh",
+        )
+
+    mock_legacy.assert_not_called()
+    assert mock_exact.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_exact.call_args.kwargs["reasoning_effort"] == "xhigh"
+    assert result.model_used == "gpt-5.6-sol"
+    assert result.cost_usd == 0.0
+    assert result.billing_status == "known_zero_subscription"
+    assert result.usage == [exact_result.usage]
+    assert prompt.read_text(encoding="utf-8").strip() == repaired.strip()
+    audit = json.loads(result.audit_path.read_text(encoding="utf-8"))
+    assert audit["apply_method"] == "pdd.agentic_common.run_exact_agentic_task"
+    assert audit["effective_model"] == "gpt-5.6-sol"
+    assert audit["cost_usd"] == 0.0
+    assert audit["billing_status"] == "known_zero_subscription"
+
+
+def test_unsupported_exact_repair_selector_fails_before_inference(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "unsupported.prompt"
+    prompt.write_text("placeholder", encoding="utf-8")
+    with (
+        patch("pdd.prompt_repair._run_exact_prompt_change") as mock_exact,
+        patch("pdd.prompt_repair.change") as mock_legacy,
+        pytest.raises(AgenticUnsupportedSemanticsError),
+    ):
+        run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            cwd=tmp_path,
+            model="claude-opus-4-7",
+            reasoning_effort="high",
+        )
+    mock_exact.assert_not_called()
+    mock_legacy.assert_not_called()
 
 
 def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
@@ -565,7 +642,15 @@ def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
         )
 
 
-@pytest.mark.parametrize("flag", ["--prompt-repair", "--max-prompt-repair-rounds"])
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--prompt-repair",
+        "--max-prompt-repair-rounds",
+        "--prompt-repair-model",
+        "--prompt-repair-effort",
+    ],
+)
 def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
     from click.testing import CliRunner
     from pdd.cli import cli
@@ -573,6 +658,62 @@ def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
     result = CliRunner().invoke(cli, ["--quiet", "checkup", "--help"])
     assert result.exit_code == 0
     assert flag in result.output
+
+
+def test_checkup_forwards_exact_repair_selectors_and_tracks_known_zero_cost(
+    tmp_path: Path,
+) -> None:
+    from click.testing import CliRunner
+    from pdd.cli import cli
+
+    prompt = tmp_path / "exact_cli.prompt"
+    prompt.write_text("% prompt", encoding="utf-8")
+    report = MagicMock(status="warn")
+    report.as_dict.return_value = _coverage_report(prompt)
+    report.recommended_actions.return_value = ["add coverage"]
+    repair_result = RepairResult(
+        success=True,
+        model_used="gpt-5.6-sol",
+        cost_usd=0.0,
+        billing_status="known_zero_subscription",
+    )
+    with (
+        patch(
+            "pdd.commands.checkup.run_checkup_prompt",
+            side_effect=[
+                (False, "failed", 0.0, "", 0),
+                (True, "passed", 0.0, "", 0),
+            ],
+        ),
+        patch(
+            "pdd.commands.checkup.build_prompt_source_set_report",
+            return_value=report,
+        ),
+        patch(
+            "pdd.commands.checkup.run_prompt_repair_loop",
+            return_value=repair_result,
+        ) as mock_repair,
+    ):
+        result = CliRunner().invoke(
+            cli,
+            [
+                "--quiet",
+                "checkup",
+                str(prompt),
+                "--project-root",
+                str(tmp_path),
+                "--prompt-repair",
+                "strict",
+                "--prompt-repair-model",
+                "gpt-5.6-sol",
+                "--prompt-repair-effort",
+                "xhigh",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert mock_repair.call_args.kwargs["model"] == "gpt-5.6-sol"
+    assert mock_repair.call_args.kwargs["reasoning_effort"] == "xhigh"
 
 
 def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> None:

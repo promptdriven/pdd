@@ -24,6 +24,7 @@
       {"name": "validate_claude_policy", "signature": "(policy: Any, *, interactive: bool = False) -> ClaudePolicy", "returns": "ClaudePolicy"},
       {"name": "build_agentic_task_instruction", "signature": "(instruction: str, *, user_feedback: Optional[str] = None, steers: Optional[List[SteerEntry]] = None) -> str", "returns": "str"},
       {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False) -> AgenticTaskResult", "returns": "AgenticTaskResult"},
+      {"name": "run_exact_agentic_task", "signature": "(instruction: str, cwd: Path, *, provider: str, model: str, effort: Optional[str] = None, timeout: Optional[float] = None, verbose: bool = False, quiet: bool = False, label: str = 'exact-agentic-task') -> AgenticTaskResult", "returns": "AgenticTaskResult"},
       {"name": "select_harness_for_task", "signature": "(task_class: str, candidates: List[str]) -> List[str]", "returns": "List[str]"},
       {"name": "detect_control_token", "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
       {"name": "classify_step_output", "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
@@ -61,6 +62,7 @@
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 <pdd-dependency>routing_policy_python.prompt</pdd-dependency>
+<pdd-dependency>codex_subscription_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -248,6 +250,12 @@ This matrix records per-harness model **controllability** for the deliverable; i
 - `steers` is an optional list of `SteerEntry` objects to inject into the instruction.
 - `routing_policy` is an optional `RoutingPolicy` from `pdd.routing_policy`; when non-None, enables pre-flight config selection via `select_config()`, bounded post-failure escalation via `escalate()`, and telemetry emission via `emit_routing_record()`. All existing callers without this argument are unaffected.
 - `task_class` is an optional coarse task-class string (e.g. `"bug-fix"`, `"feature"`) passed to `select_config()` when `routing_policy` is non-None; `None` or unrecognised values normalise to `"default"` and fall through to orchestrator defaults.
+
+`run_exact_agentic_task(instruction, cwd, *, provider, model, effort=None, timeout=None, verbose=False, quiet=False, label="exact-agentic-task") -> AgenticTaskResult`
+- Bypass retries, provider fallback, and routing escalation. Support only exact OpenAI Codex subscription execution with a concrete `gpt-*` model and effort in `low|medium|high|xhigh`; reject unsupported combinations before inference.
+- Require usable staged ChatGPT subscription OAuth via `has_codex_subscription_auth()` and remove ambient OpenAI API credential/config variables from the subprocess environment so exact subscription execution cannot switch to direct API auth.
+- Force the Codex CLI model, reasoning effort, read-only sandbox, and isolated-temp-directory `--skip-git-repo-check` through route-owned private arguments. Require provider-observed model provenance to equal the requested model; missing or mismatched evidence is failure.
+- Preserve provider-reported usage but return zero marginal provider cost for the subscription route. The subscription billing signal is an explicit private call argument, never a user-controllable environment variable; ambient environment must not suppress ordinary Codex cost accounting.
 `seed_issue_steer_cursor(repo_owner, repo_name, issue_number, state, *, cwd, quiet=False) -> bool`
 - Sets `last_steered_comment_id` / `last_steer_at` / `steer_cursor_seeded` to the current issue comment tail without returning steers. Returns `False` and logs a warning when the baseline `gh api` fetch fails (does not set `steer_cursor_seeded`).
 `ensure_issue_steer_cursor_seeded(repo_owner, repo_name, issue_number, state, *, cwd, quiet=False) -> bool`

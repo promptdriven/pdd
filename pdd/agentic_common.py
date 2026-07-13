@@ -41,7 +41,7 @@ from pdd.routing_policy import (
 
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
-AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
+AgenticUsage = Optional[Dict[str, Any]]
 ClaudePolicy = Dict[str, Any]
 UsageSource = str
 _HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
@@ -5713,6 +5713,151 @@ def run_agentic_task(
                 pass
 
 
+def run_exact_agentic_task(
+    instruction: str,
+    cwd: Path,
+    *,
+    provider: str,
+    model: str,
+    effort: Optional[str] = None,
+    timeout: Optional[float] = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    label: str = "exact-agentic-task",
+) -> AgenticTaskResult:
+    """Run one provider attempt with exact model and effort semantics.
+
+    This bypasses the provider cascade. It currently supports only the Codex
+    subscription runtime, where selectors map to explicit CLI arguments and the
+    effective model is recovered from provider session evidence. Unsupported
+    selector combinations raise before a provider subprocess starts.
+    """
+    normalized_provider = provider.strip().lower()
+    normalized_model = model.strip()
+    normalized_effort = (effort or "").strip().lower() or None
+    if normalized_provider != "openai":
+        raise AgenticUnsupportedSemanticsError(
+            "Exact agentic routing currently supports only the openai Codex provider"
+        )
+    if not normalized_model or not normalized_model.startswith("gpt-"):
+        raise AgenticUnsupportedSemanticsError(
+            "Exact Codex routing requires a concrete gpt-* model identifier"
+        )
+    if normalized_effort not in {None, "low", "medium", "high", "xhigh"}:
+        raise AgenticUnsupportedSemanticsError(
+            "Exact Codex reasoning effort must be one of low, medium, high, or xhigh"
+        )
+
+    from .codex_subscription import (  # pylint: disable=import-outside-toplevel
+        has_codex_subscription_auth,
+    )
+
+    if not has_codex_subscription_auth():
+        return AgenticTaskResult(
+            False,
+            "Exact Codex routing requires staged ChatGPT subscription OAuth auth; "
+            "refusing API-key fallback before inference",
+            0.0,
+            normalized_provider,
+            None,
+            model_id=None,
+        )
+
+    cli_path = _find_cli_binary(CLI_COMMANDS[normalized_provider])
+    if not cli_path:
+        return AgenticTaskResult(
+            False,
+            "Codex CLI is not installed or available on PATH",
+            0.0,
+            normalized_provider,
+            None,
+            model_id=None,
+        )
+    version_error = _codex_gpt_5_6_version_error(normalized_model)
+    if version_error:
+        return AgenticTaskResult(
+            False,
+            version_error,
+            0.0,
+            normalized_provider,
+            None,
+            cli_version=_get_provider_cli_version(normalized_provider),
+            model_id=None,
+        )
+
+    workdir = Path(cwd).resolve()
+    if not workdir.is_dir():
+        raise ValueError(f"Exact agentic task working directory does not exist: {workdir}")
+    prompt_path = workdir / f".exact_agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
+    prompt_path.write_text(instruction, encoding="utf-8")
+    env_overrides = {
+        "CODEX_MODEL": normalized_model,
+        "CODEX_SANDBOX_MODE": "read-only",
+    }
+    if normalized_effort:
+        env_overrides["CODEX_REASONING_EFFORT"] = normalized_effort
+
+    try:
+        provider_result = _run_with_provider(
+            normalized_provider,
+            prompt_path,
+            workdir,
+            timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS,
+            verbose,
+            quiet,
+            cli_path=cli_path,
+            label=label,
+            env_overrides=env_overrides,
+            env_removals={
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_ORGANIZATION",
+                "OPENAI_PROJECT",
+            },
+            codex_subscription_billing=True,
+            codex_skip_git_repo_check=True,
+        )
+    finally:
+        try:
+            prompt_path.unlink()
+        except OSError:
+            pass
+
+    success = bool(provider_result[0])
+    output = str(provider_result[1])
+    cost = float(provider_result[2])
+    actual_model = provider_result[3]
+    usage = provider_result[4] if len(provider_result) > 4 else None
+    cli_version = _get_provider_cli_version(normalized_provider)
+    if success and actual_model != normalized_model:
+        observed = actual_model or "unavailable"
+        return AgenticTaskResult(
+            False,
+            "Exact Codex model verification failed: "
+            f"requested {normalized_model}, provider observed {observed}",
+            cost,
+            normalized_provider,
+            usage,
+            usage_source="provider_reported" if usage else "unavailable",
+            estimate_method="provider_usage" if usage else "unavailable",
+            cli_version=cli_version,
+            model_id=actual_model,
+        )
+
+    return AgenticTaskResult(
+        success,
+        output,
+        cost,
+        normalized_provider,
+        usage,
+        usage_source="provider_reported" if usage else "unavailable",
+        estimate_method="provider_usage" if usage else "unavailable",
+        cli_version=cli_version,
+        model_id=actual_model,
+    )
+
+
 import logging as _logging
 _scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
 
@@ -7241,6 +7386,10 @@ def _run_with_provider(
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
     stall_timeout: Optional[float] = None,
+    env_overrides: Optional[Mapping[str, str]] = None,
+    env_removals: Optional[Set[str]] = None,
+    codex_subscription_billing: bool = False,
+    codex_skip_git_repo_check: bool = False,
 ) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
@@ -7269,10 +7418,23 @@ def _run_with_provider(
             ``None`` means "fall back to env" so unplumbed call sites
             keep receiving the signal via the global variable set by
             ``pdd/core/cli.py``.
+        env_overrides: Optional subprocess-only environment values. Exact-routing
+            callers use this to bind model, effort, and sandbox semantics without
+            mutating process-global environment.
+        env_removals: Optional subprocess-only environment keys to remove.
+        codex_subscription_billing: Route-owned signal that preserves Codex usage
+            while reporting zero marginal provider charge for ChatGPT subscription
+            execution. Ambient environment cannot enable this behavior.
+        codex_skip_git_repo_check: Route-owned opt-in for isolated temporary
+            directories that are intentionally not Git repositories.
     """
 
     # Prepare Environment
     env = os.environ.copy()
+    if env_overrides:
+        env.update({str(key): str(value) for key, value in env_overrides.items()})
+    for key in env_removals or set():
+        env.pop(key, None)
     env["TERM"] = "dumb"
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
@@ -7466,8 +7628,10 @@ def _run_with_provider(
         if codex_version_error:
             return False, codex_version_error, 0.0, None
         cmd.extend(["--model", codex_model])
+        cmd.append("exec")
+        if codex_skip_git_repo_check:
+            cmd.append("--skip-git-repo-check")
         cmd.extend([
-            "exec",
             "--sandbox", sandbox_mode,
             "--json",
             "-"
@@ -7708,6 +7872,22 @@ def _run_with_provider(
                         data,
                         actual_model=actual_model,
                     ),
+                )
+            if provider == "openai":
+                raw_usage = data.get("usage") if isinstance(data, dict) else None
+                # Exact subscription routes use ChatGPT/Codex OAuth. Preserve
+                # provider-reported token usage, but never apply direct OpenAI API
+                # rates to subscription work with zero marginal provider charge.
+                if codex_subscription_billing:
+                    cost = 0.0
+                return _ProviderRunResult(
+                    success,
+                    text,
+                    cost,
+                    actual_model,
+                    raw_usage if isinstance(raw_usage, dict) else None,
+                    effective_codex_effort,
+                    effective_codex_effort,
                 )
             return success, text, cost, actual_model
         except json.JSONDecodeError:

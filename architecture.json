@@ -53,7 +53,8 @@
       "auth_service_python.prompt",
       "_keyring_timeout_python.prompt",
       "git_porcelain_python.prompt",
-      "routing_policy_python.prompt"
+      "routing_policy_python.prompt",
+      "codex_subscription_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -66,6 +67,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
+          }
+        ],
         "dataclasses": [
           {
             "name": "SteerEntry",
@@ -114,6 +121,11 @@
           {
             "name": "run_agentic_task",
             "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, stall_timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None, before_attempt=None, single_provider_attempt=False) -> AgenticTaskResult",
+            "returns": "AgenticTaskResult"
+          },
+          {
+            "name": "run_exact_agentic_task",
+            "signature": "(instruction: str, cwd: Path, *, provider: str, model: str, effort: Optional[str] = None, timeout: Optional[float] = None, verbose: bool = False, quiet: bool = False, label: str = 'exact-agentic-task') -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -247,12 +259,6 @@
               "INTERACTIVE_ONLY",
               "UNSUPPORTED"
             ]
-          }
-        ],
-        "typeAliases": [
-          {
-            "name": "TaskClass",
-            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
           }
         ]
       }
@@ -8671,7 +8677,10 @@
       "agentic_checkup_python.prompt",
       "commands/prompt_python.prompt",
       "commands/contracts_python.prompt",
-      "commands/gate_python.prompt"
+      "commands/gate_python.prompt",
+      "checkup_agent_python.prompt",
+      "checkup_planner_python.prompt",
+      "checkup_prompt_main_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -10904,12 +10913,13 @@
     }
   },
   {
-    "reason": "Non-interactive prompt source-set repair orchestrator using the internal change() contract.",
-    "description": "Implements run_prompt_repair_loop(): consumes pdd.prompt_source_set_report.v1 findings and supporting context, synthesizes bounded change instructions, applies the complete prompt through pdd.change.change(), enforces token growth, rebuilds the full source-set report after each round, and writes an audit artifact to .pdd/evidence/prompt_repair/.",
+    "reason": "Non-interactive prompt source-set repair orchestrator supporting legacy change() and exact authenticated Codex repair.",
+    "description": "Implements run_prompt_repair_loop(): consumes pdd.prompt_source_set_report.v1 findings and supporting context, applies bounded repairs through either the legacy change() path or an exact authenticated Codex subscription route, enforces token growth, rebuilds the complete source-set report, and records model, usage, and billing-status audit evidence.",
     "dependencies": [
       "change_python.prompt",
       "checkup_prompt_main_python.prompt",
-      "prompt_lint_python.prompt"
+      "prompt_lint_python.prompt",
+      "agentic_common_python.prompt"
     ],
     "priority": 250,
     "filename": "prompt_repair_python.prompt",
@@ -10924,7 +10934,7 @@
         "functions": [
           {
             "name": "run_prompt_repair_loop",
-            "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult",
+            "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None, verbose: bool = False, quiet: bool = False, strict: bool = False, model: Optional[str] = None, reasoning_effort: Optional[str] = None) -> RepairResult",
             "returns": "RepairResult"
           }
         ]

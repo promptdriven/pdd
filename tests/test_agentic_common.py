@@ -20,6 +20,7 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    run_exact_agentic_task,
     select_harness_for_task,
     _normalize_token_buckets,
     _meets_usage_contract,
@@ -11227,6 +11228,144 @@ def test_codex_without_effort_env_unchanged(
     cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, None)
     assert "-c" not in cmd
     assert "model_reasoning_effort" not in " ".join(cmd)
+
+
+def test_exact_agentic_task_observes_model_usage_and_effort_at_codex_boundary(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Exact selectors reach one OAuth Codex invocation with no API-key fallback."""
+    mock_env["OPENAI_API_KEY"] = "sk-must-not-reach-codex"
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "Exact repair output",
+            "model": "gpt-5.6-sol",
+            "usage": {
+                "input_tokens": 101,
+                "output_tokens": 23,
+                "cached_input_tokens": 11,
+            },
+        }),
+        stderr="",
+    )
+
+    with patch(
+        "pdd.agentic_common._codex_gpt_5_6_version_error", return_value=None
+    ), patch(
+        "pdd.agentic_common._get_provider_cli_version", return_value="0.144.0"
+    ), patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=True
+    ):
+        result = run_exact_agentic_task(
+            "repair this prompt",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="xhigh",
+            quiet=True,
+        )
+
+    assert result.success is True
+    assert result.model_id == "gpt-5.6-sol"
+    assert result.cost_usd == 0.0
+    assert result.usage == {
+        "input_tokens": 101,
+        "output_tokens": 23,
+        "cached_input_tokens": 11,
+    }
+    cmd = mock_subprocess.call_args.args[0]
+    subprocess_env = mock_subprocess.call_args.kwargs["env"]
+    assert cmd[cmd.index("--model") + 1] == "gpt-5.6-sol"
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=xhigh"
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert "--skip-git-repo-check" in cmd
+    assert subprocess_env["CODEX_MODEL"] == "gpt-5.6-sol"
+    assert subprocess_env["CODEX_REASONING_EFFORT"] == "xhigh"
+    assert "OPENAI_API_KEY" not in subprocess_env
+
+
+def test_exact_agentic_task_without_subscription_auth_fails_before_inference(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    mock_env["OPENAI_API_KEY"] = "sk-api-only"
+    with patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=False
+    ):
+        result = run_exact_agentic_task(
+            "repair",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="high",
+            quiet=True,
+        )
+
+    assert result.success is False
+    assert "requires staged ChatGPT subscription OAuth" in result.output_text
+    mock_subprocess.assert_not_called()
+
+
+def test_exact_agentic_task_fails_when_provider_observes_different_model(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "output",
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }),
+        stderr="",
+    )
+    with patch(
+        "pdd.agentic_common._codex_gpt_5_6_version_error", return_value=None
+    ), patch(
+        "pdd.agentic_common._get_provider_cli_version", return_value="0.144.0"
+    ), patch(
+        "pdd.codex_subscription.has_codex_subscription_auth", return_value=True
+    ):
+        result = run_exact_agentic_task(
+            "repair",
+            mock_cwd,
+            provider="openai",
+            model="gpt-5.6-sol",
+            effort="high",
+            quiet=True,
+        )
+
+    assert result.success is False
+    assert result.model_id == "gpt-5.5"
+    assert "requested gpt-5.6-sol, provider observed gpt-5.5" in result.output_text
+
+
+def test_ambient_cost_mode_cannot_zero_ordinary_codex_execution(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Only the route-owned argument can select subscription billing semantics."""
+    mock_env["PDD_CODEX_COST_MODE"] = "subscription"
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps({
+            "type": "result",
+            "result": "ordinary output",
+            "model": "gpt-5.5",
+            "usage": {"input_tokens": 100, "output_tokens": 50},
+        }),
+        stderr="",
+    )
+    prompt = mock_cwd / "prompt.txt"
+    prompt.write_text("hello", encoding="utf-8")
+
+    result = _run_with_provider(
+        "openai", prompt, mock_cwd, cli_path="/bin/codex", quiet=True
+    )
+
+    assert result[2] > 0.0
 
 
 def test_codex_invalid_effort_value_ignored(
