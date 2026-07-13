@@ -9312,3 +9312,166 @@ def test_get_pdd_file_paths_test_files_rebuilt_from_anchored_dir_parent_cwd(tmp_
         assert rp.exists(), f"nonexistent test_file returned: {tf}"
     names = {Path(tf).name for tf in paths["test_files"]}
     assert "test_widget_parent.py" not in names
+@pytest.mark.parametrize("policy_mutation", [None, "delete", "rename"])
+def test_sync_classifier_preserves_nested_prompt_alias_identity(
+    tmp_path, monkeypatch, policy_mutation
+):
+    """Architecture, include closure, and hashing use the approved logical path."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "sync@example.com"], cwd=root, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Sync Test"], cwd=root, check=True
+    )
+    (root / "prompts/nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / ".pdd").mkdir()
+    (root / "src/nested").mkdir(parents=True)
+    canonical_prompt = root / "canonical-prompts/widget_python.prompt"
+    canonical_prompt.write_text("Build widget\n<include>contract.md</include>\n")
+    logical_prompt = root / "prompts/nested/widget_python.prompt"
+    logical_prompt.symlink_to("../../canonical-prompts/widget_python.prompt")
+    contract = root / "prompts/nested/contract.md"
+    contract.write_text("logical contract\n")
+    code = root / "src/nested/widget.py"
+    code.write_text("value = 1\n")
+    wrong_code = root / "wrong/nested/widget.py"
+    wrong_code.parent.mkdir(parents=True)
+    wrong_code.write_text("wrong = True\n")
+    (root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "widget_python.prompt",
+                    "filepath": "wrong/nested/widget.py",
+                },
+                {
+                    "filename": "nested/widget_python.prompt",
+                    "filepath": "src/nested/widget.py",
+                }
+            ]
+        )
+    )
+    (root / ".pdd/repository-id").write_text(
+        "3b4d7b1c-d6cc-4752-ba93-6b98d1a710e0\n"
+    )
+    (root / ".pdd/sync-policy.json").write_text(
+        json.dumps({"schema_version": 1, "enforcement": "active"})
+    )
+    (root / ".pdd/sync-aliases.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "aliases": [
+                    {
+                        "alias_path": "prompts/nested/widget_python.prompt",
+                        "canonical_path": "canonical-prompts/widget_python.prompt",
+                    }
+                ],
+            }
+        )
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "nested prompt alias"], cwd=root, check=True
+    )
+    policy = root / ".pdd/sync-policy.json"
+    if policy_mutation == "delete":
+        policy.unlink()
+    elif policy_mutation == "rename":
+        policy.rename(policy.with_suffix(".disabled"))
+    monkeypatch.chdir(root)
+    monkeypatch.delenv("PDD_SYNC_PROTECTED_BASE_SHA", raising=False)
+
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    deps = extract_include_deps(paths["prompt"])
+    digest_before = calculate_prompt_hash(paths["prompt"])
+    contract.write_text("changed logical contract\n")
+    digest_after = calculate_prompt_hash(paths["prompt"])
+
+    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
+    assert paths["code"].resolve() == code.resolve()
+    assert deps == {
+        "prompts/nested/contract.md": hashlib.sha256(
+            b"logical contract\n"
+        ).hexdigest()
+    }
+    assert digest_before is not None
+    assert digest_after is not None
+    assert digest_after != digest_before
+
+
+# ---------------------------------------------------------------------------
+# Post-#1991-merge reconciliation + round-10 review hardening.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_nested_prompt_template_keeps_physical_category(tmp_path, monkeypatch):
+    """r10 P1: a nested physical prompt with an outputs `{category}` template maps under
+    the nested directory (src/nested/foo.py), not the bare leaf (src/foo.py)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "src/{category}/{name}.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    paths = get_pdd_file_paths("foo", "python", "prompts")
+    assert paths["code"].resolve(strict=False) == (tmp_path / "src" / "nested" / "foo.py").resolve()
+
+
+def test_get_pdd_file_paths_nested_prompt_template_category_from_parent_cwd(tmp_path, monkeypatch):
+    """r10 P1 (CWD-independence): the nested physical category survives a parent-CWD run."""
+    project = tmp_path / "project"
+    (project / "prompts" / "nested").mkdir(parents=True)
+    (project / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (project / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        code:\n          path: "src/{category}/{name}.py"\n',
+        encoding="utf-8",
+    )
+    (project / "architecture.json").write_text(json.dumps({"modules": []}), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # PARENT
+    paths = get_pdd_file_paths("foo", "python", str((project / "prompts").resolve()))
+    assert paths["code"].resolve(strict=False) == (project / "src" / "nested" / "foo.py").resolve()
+
+
+@pytest.mark.parametrize("prompt_template", ['"custom/{module}.prompt"', '"{category}"'])
+def test_get_pdd_file_paths_rejects_unresolved_or_empty_prompt_template(tmp_path, monkeypatch, prompt_template):
+    """r10 P2: an outputs.prompt.path that keeps an unexpanded placeholder or expands to
+    the project root is not a real prompt file -> fail closed."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir(parents=True)
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  backend:\n    paths: ["**"]\n    defaults:\n'
+        '      outputs:\n        prompt:\n          path: ' + prompt_template + '\n',
+        encoding="utf-8",
+    )
+    with pytest.raises((UnsafePromptPathError, UnsafeOutputPathError)):
+        get_pdd_file_paths("widget", "python", prompts_dir="prompts", context_override="backend")
+
+
+def test_get_pdd_file_paths_path_qualified_prefers_filename_path_match_over_bare_leaf(tmp_path, monkeypatch):
+    """#1991 reconciliation: a path-qualified `nested/widget` resolves to the row whose
+    FILENAME path-matches it (nested/widget_python.prompt -> src/nested/widget.py), and a
+    bare `widget_python.prompt` row (-> wrong/nested/widget.py) neither wins nor raises a
+    false AmbiguousModuleError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "wrong/nested/widget.py"},
+            {"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("nested/widget", "python", "prompts")
+    assert paths["code"].resolve(strict=False) == (tmp_path / "src" / "nested" / "widget.py").resolve()

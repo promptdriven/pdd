@@ -2,7 +2,7 @@
   "pdd_version": "0.0.301.dev0",
   "timestamp": "2026-07-12T06:04:22.782006+00:00",
   "command": "fix",
-  "prompt_hash": "9a8820b5716e260351f6865a4afdf75b2b3963bcef54fdf42c31fccf6c2ec37b",
+  "prompt_hash": "9f212f47a9a4c481e4c6d19236653bac024679820eefdaa8723704137dc27015",
   "code_hash": "3afaa5a409e500b3f91aab33dacee33fae47447fba80a1702d65a33761261782",
   "example_hash": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
   "test_hash": "82af9e0bff7550d1f9bf46f4c6e7f4792143565e4e228d1507976f6b9fbac5f6",
@@ -13,7 +13,7 @@
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "pdd/architecture_sync.py": "0e0ff74978f49d629f92365723ebbea0e7c70e6d5234ccfdafb1c8e09c110c11",
     "pdd/architecture_registry.py": "5722225846b9cc8189b410a78e5714b4f2916d5748271d27f6f738692429c309",
-    "pdd/sync_determine_operation.py": "fa1cde096a81bde64396431053e0d1f0686b94edd18faeb07bea3d7e4dcfd8b8",
+    "pdd/sync_determine_operation.py": "331481d1632a156885ac25c5b27c3322f07bea0672bae36be00ac59c65a4c9c8",
     "pdd/operation_log.py": "c0cb5d5c44e0fc84026780ff2e1082aea7eba7790e3f085ee33f36614758e51a"
   }
 }

@@ -484,6 +484,27 @@ def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     return None
 
 
+def _enclosing_git_root(path: Any) -> Optional[Path]:
+    """Nearest ancestor directory that contains a ``.git`` entry, else ``None``.
+
+    Uses lexical (``os.path.abspath``) ancestry — never follows the leaf symlink —
+    so an APPROVED in-repo prompt alias (#1991: ``prompts/nested/foo`` symlinked to
+    an in-repository canonical location) can be recognised as repository-internal.
+    Returns ``None`` for a tree with no ``.git``, so a plain escaping symlink in a
+    non-repository directory is still rejected by R8.
+    """
+    try:
+        current = Path(os.path.abspath(path))
+    except (OSError, ValueError):
+        return None
+    if not current.is_dir():
+        current = current.parent
+    for parent in (current, *current.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
 def _find_named_file(parent: Path, filename: str) -> Optional[Path]:
     """Find a filename by scanning a directory instead of joining an input leaf.
 
@@ -667,6 +688,19 @@ def _walk_prompt_relative_path(
     try:
         found.resolve(strict=False).relative_to(resolved_root)
     except (OSError, RuntimeError, ValueError):
+        # #1991 canonical-sync: an APPROVED prompt alias is an in-repository symlink
+        # to a canonical location (e.g. prompts/nested/foo -> canonical-prompts/foo).
+        # It escapes the prompts root but stays inside the enclosing git repository,
+        # so treat it as CONTAINED (its lexical alias identity is authoritative). A
+        # symlink whose target leaves the repository (or a non-repository tree) is a
+        # genuine escape and stays uncontained (R8).
+        _repo = _enclosing_git_root(found)
+        if _repo is not None:
+            try:
+                found.resolve(strict=False).relative_to(Path(os.path.abspath(_repo)))
+                return found, True
+            except (OSError, RuntimeError, ValueError):
+                pass
         return None, False
     return found, True
 
@@ -1396,6 +1430,10 @@ def _find_prompt_file(
             tuple(direct_relative.parts),
         )
         if not contained:
+            # An escaping symlink whose target leaves the repository (or a
+            # non-repository tree) is rejected so a later `update` cannot
+            # open-and-truncate an out-of-repo file. An APPROVED in-repo canonical
+            # alias (#1991) is already reported CONTAINED by _walk_prompt_relative_path.
             raise UnsafePromptPathError(
                 direct_candidate,
                 resolved_prompts_root,
@@ -2390,6 +2428,17 @@ def _architecture_module_choices(
         # the caller raises AmbiguousModuleError instead of resolving by architecture row
         # order. A single (or zero) match keeps the canonical resolution unchanged.
         lang_ext_q = get_extension(language).lower()
+        # Context-stripped basename parts (SAME transform _module_filepath_matches_basename
+        # uses), so a context-prefixed qualified basename is owned/counted consistently.
+        _qualified_basename_parts = [
+            p.lower()
+            for p in Path(
+                _relative_basename_for_context(
+                    basename, context_name, architecture_path.parent
+                )
+            ).parts
+            if p
+        ]
         qualified: set = set()
         for module in modules:
             if not isinstance(module, dict):
@@ -2423,6 +2472,30 @@ def _architecture_module_choices(
                 and extract_module_from_include(filename_leaf_q)
             ):
                 continue
+            # When the row's filename NAMES this module (its leaf matched the target
+            # prompt leaf) AND the (context-stripped) basename is PATH-QUALIFIED, the
+            # qualified basename must be a path-SUFFIX of the filename's directory
+            # identity: a LESS-qualified filename (e.g. `widget` for a `nested/widget`
+            # request) does not own the qualified module, so it must not inflate the
+            # ambiguity count against the row whose filename actually path-matches
+            # (e.g. `nested/widget_python.prompt`). A same- or more-qualified filename
+            # (e.g. `nested/widget` or `src/nested/widget`) still owns it and remains a
+            # genuine ambiguity contributor. Uses the SAME context-relative basename
+            # as _module_filepath_matches_basename so context-prefixed qualified
+            # ambiguity is detected consistently.
+            if (
+                filename_value_q
+                and filename_leaf_q == target_prompt_leaf
+                and len(_qualified_basename_parts) > 1
+            ):
+                _fn_norm = PurePosixPath(str(filename_value_q).replace("\\", "/"))
+                _leaf_stem = _fn_norm.name
+                _suffix_tag = f"_{language.lower()}.prompt"
+                if _leaf_stem.lower().endswith(_suffix_tag):
+                    _leaf_stem = _leaf_stem[: -len(_suffix_tag)]
+                _fn_parts = [p.lower() for p in _fn_norm.parent.parts] + [_leaf_stem.lower()]
+                if _fn_parts[-len(_qualified_basename_parts):] != _qualified_basename_parts:
+                    continue
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
@@ -3017,6 +3090,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     _prompt, _governing_root, _has_project_config
                 )
                 paths["prompt"] = _prompt
+                # An outputs.prompt.path template that kept an unexpanded/unsupported
+                # `{placeholder}`, or expanded to nothing (`{category}` for a flat
+                # basename -> the project root directory), is not a real prompt FILE —
+                # reject it rather than return a literal-brace path or a directory (R16).
+                if "{" in str(_prompt) or "}" in str(_prompt):
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
+                if Path(_prompt).resolve(strict=False) == _governing_resolved:
+                    raise UnsafePromptPathError(Path(_prompt), prompts_root_anchor)
                 # A nearer descendant .pddrc (governing the resolved prompt's own
                 # subtree) may carry output values the up-front gate at config_anchor
                 # never saw; validate its RAW values too so a normalized-away `..` or
@@ -3137,7 +3218,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         if resolved_prompt:
             prompt_path = str(resolved_prompt)
             try:
-                relative_prompt = resolved_prompt.resolve().relative_to(prompts_root.resolve())
+                # Use the LEXICAL prompt path (os.path.abspath), not resolve(): an
+                # approved #1991 alias (prompts/nested/foo -> canonical/foo) keeps its
+                # logical nested identity, and a parent/sibling-CWD run still yields a
+                # path relative to the prompts root.
+                relative_prompt = Path(os.path.abspath(resolved_prompt)).relative_to(
+                    Path(os.path.abspath(prompts_root))
+                )
                 prompt_stem = relative_prompt.stem
                 suffix = f"_{language}"
                 if prompt_stem.lower().endswith(suffix.lower()):
@@ -3145,8 +3232,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 discovered_basename = (
                     relative_prompt.parent / prompt_stem
                 ).as_posix()
+                # Anchor the context strip at config_anchor so the DISCOVERED physical
+                # basename (e.g. `nested/foo`) survives a parent/sibling-CWD run and the
+                # `{category}` template resolves to `src/nested/foo.py`, not `src/foo.py`.
                 template_basename = _relative_basename_for_context(
-                    discovered_basename, resolved_context_name
+                    discovered_basename, resolved_context_name, config_anchor
                 )
             except ValueError:
                 pass
@@ -3214,7 +3304,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             prompt_path_obj = Path(prompt_path)
             prompt_filename_for_lookup = Path(prompt_path).name
             try:
-                prompt_filename_for_lookup = str(prompt_path_obj.resolve().relative_to(prompts_root.resolve())).replace(os.sep, "/")
+                lexical_prompt = Path(os.path.abspath(prompt_path_obj))
+                lexical_prompts_root = Path(os.path.abspath(prompts_root))
+                prompt_filename_for_lookup = str(
+                    lexical_prompt.relative_to(lexical_prompts_root)
+                ).replace(os.sep, "/")
             except ValueError:
                 pass
             arch_filepath, _ = _get_filepath_from_architecture(
@@ -3594,7 +3688,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             extension = get_extension(language)
             logger.info(f"Using template-based paths from outputs config (prompt exists)")
             context_name = context_override or resolved_config.get('_matched_context')
-            basename_for_templates = _relative_basename_for_context(basename, context_name, prompts_root_anchor)
+            # Use the DISCOVERED physical prompt identity (template_basename, e.g.
+            # `nested/foo`) so an outputs `{category}` template maps under the nested
+            # directory (src/nested/foo.py) instead of collapsing to the bare leaf.
+            basename_for_templates = template_basename
             result = _generate_paths_from_templates(
                 basename=basename_for_templates,
                 language=language,
@@ -3901,6 +3998,15 @@ def _validated_report_live_includes(
     return True, resolved
 
 
+def _lexical_canonical_root(prompt_path: Path) -> Optional[Path]:
+    """Return an active canonical root without resolving the prompt leaf."""
+    lexical_prompt = Path(os.path.abspath(prompt_path))
+    from pdd.continuous_sync import canonical_sync_enabled, lexical_repository_root
+
+    root = lexical_repository_root(lexical_prompt)
+    return root if canonical_sync_enabled(root) else None
+
+
 def extract_include_deps(
     prompt_path: Path,
     dependency_root: Optional[Path] = None,
@@ -3913,7 +4019,7 @@ def extract_include_deps(
     Returns a dict mapping resolved dependency paths to their SHA256 hashes.
     Only includes dependencies that exist on disk.
     """
-    from pdd.continuous_sync import canonical_sync_enabled, repository_root
+    from pdd.sync_core.alias_policy import load_committed_aliases
     from pdd.sync_core.includes import (
         IncludeGraphError,
         build_include_closure,
@@ -3921,7 +4027,8 @@ def extract_include_deps(
     )
     from pdd.sync_core.path_policy import PathPolicy, PathPolicyError
 
-    if not canonical_sync_enabled(prompt_path):
+    canonical_root = _lexical_canonical_root(prompt_path)
+    if canonical_root is None:
         if resolved_live_dependencies is not None:
             dependencies: Dict[str, str] = {}
             for _declared, dependency in resolved_live_dependencies:
@@ -3970,13 +4077,21 @@ def extract_include_deps(
                     key = str(dependency)
                 dependencies[key] = digest
         return dependencies
-    canonical_root = repository_root(prompt_path)
     if not prompt_path.exists():
         raise FileNotFoundError(prompt_path)
     try:
-        prompt_relpath = prompt_path.resolve().relative_to(canonical_root)
+        lexical_prompt = Path(os.path.abspath(prompt_path))
+        prompt_relpath = lexical_prompt.relative_to(canonical_root)
+        protected_ref = os.environ.get("PDD_SYNC_PROTECTED_BASE_SHA") or "HEAD"
+        approved_aliases = load_committed_aliases(canonical_root, protected_ref)
         closure = build_include_closure(
-            PurePosixPath(prompt_relpath.as_posix()), PathPolicy(canonical_root)
+            PurePosixPath(prompt_relpath.as_posix()),
+            PathPolicy(
+                canonical_root,
+                approved_aliases=approved_aliases,
+                base_ref=protected_ref,
+                head_ref="HEAD",
+            ),
         )
     except (ValueError, IncludeGraphError, PathPolicyError) as exc:
         raise ValueError(f"canonical include closure failed: {prompt_path}") from exc
@@ -4038,7 +4153,13 @@ def calculate_prompt_hash(
         if hash_version == 1 else
         [reference.path for reference in parse_include_references(prompt_content)]
     )
-    if references and resolved_live_dependencies is not None:
+    lexical_root = _lexical_canonical_root(prompt_path)
+    if references and lexical_root is not None:
+        dependencies = extract_include_deps(prompt_path, version=hash_version)
+        resolved_dependencies = [
+            (lexical_root / dependency).resolve() for dependency in dependencies
+        ]
+    elif references and resolved_live_dependencies is not None:
         validated_dependencies = list(resolved_live_dependencies)
         if hash_version == 1:
             by_declaration = dict(validated_dependencies)
@@ -4078,7 +4199,7 @@ def calculate_prompt_hash(
         for dependency in resolved_dependencies:
             hasher.update(dependency.read_bytes())
     elif hash_version == 2:
-        anchor = prompt_path.resolve().parent
+        anchor = Path(os.path.abspath(prompt_path)).parent
         for dependency in sorted(resolved_dependencies):
             try:
                 key = dependency.relative_to(anchor).as_posix()
