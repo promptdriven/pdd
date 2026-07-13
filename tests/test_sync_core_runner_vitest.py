@@ -1632,13 +1632,13 @@ def test_vitest_package_mappings_bind_transitive_local_helpers(
     [
         (
             "#fixture-helper",
-            {"imports": {"#fixture-helper": "./tests/root-helper"}},
-            {"imports": {"#fixture-helper": "./tests/nested-helper"}},
+            {"imports": {"#fixture-helper": "./tests/root-helper.{suffix}"}},
+            {"imports": {"#fixture-helper": "./tests/nested-helper.{suffix}"}},
         ),
         (
             "fixture-self/helper",
-            {"name": "fixture-self", "exports": {"./helper": "./tests/root-helper"}},
-            {"name": "fixture-self", "exports": {"./helper": "./tests/nested-helper"}},
+            {"name": "fixture-self", "exports": {"./helper": "./tests/root-helper.{suffix}"}},
+            {"name": "fixture-self", "exports": {"./helper": "./tests/nested-helper.{suffix}"}},
         ),
     ],
 )
@@ -1655,11 +1655,15 @@ def test_javascript_package_mappings_use_nearest_committed_scope(
     package = root / "packages/widget"
     tests = package / "tests"
     tests.mkdir(parents=True)
-    (root / "package.json").write_text(json.dumps(root_mapping), encoding="utf-8")
+    (root / "package.json").write_text(
+        json.dumps(root_mapping).replace("{suffix}", suffix), encoding="utf-8"
+    )
     (root / f"tests/root-helper.{suffix}").write_text(
         "export const trusted = 'root';\n", encoding="utf-8"
     )
-    (package / "package.json").write_text(json.dumps(nested_mapping), encoding="utf-8")
+    (package / "package.json").write_text(
+        json.dumps(nested_mapping).replace("{suffix}", suffix), encoding="utf-8"
+    )
     (tests / f"nested-helper.{suffix}").write_text(
         "export const trusted = 'nested';\n", encoding="utf-8"
     )
@@ -1696,10 +1700,19 @@ def test_javascript_package_mappings_use_nearest_committed_scope(
     assert digest_function(root, "HEAD", (test_path,)) != digest
 
 
-def test_vitest_rejects_ambiguous_package_mapping_conditions(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "target",
+    [
+        {"node": "./tests/a.ts", "default": "./tests/b.ts"},
+        {"default": "./tests/a.ts"},
+    ],
+)
+def test_vitest_rejects_unsupported_package_mapping_conditions(
+    tmp_path: Path, target: dict[str, str]
+) -> None:
     root, _commit = _repository(tmp_path)
     (root / "package.json").write_text(
-        json.dumps({"imports": {"#fixture-helper": {"node": "./tests/a.ts", "default": "./tests/b.ts"}}}),
+        json.dumps({"imports": {"#fixture-helper": target}}),
         encoding="utf-8",
     )
     (root / "tests/a.ts").write_text("export {};\n", encoding="utf-8")

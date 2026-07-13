@@ -751,15 +751,32 @@ def _local_javascript_imports(
     return resolved
 
 
+def _nearest_package_scope(
+    root: Path, ref: str, source_path: PurePosixPath,
+) -> tuple[PurePosixPath, bytes] | None:
+    """Return the nearest committed package manifest enclosing a source file."""
+    directory = source_path.parent
+    while True:
+        manifest = directory / "package.json"
+        raw = read_git_regular_blob(root, ref, manifest)
+        if raw is not None:
+            return directory, raw
+        if directory == PurePosixPath("."):
+            return None
+        directory = directory.parent
+
+
 def _package_mapping_target(
-    root: Path, ref: str, specifier: str
+    root: Path, ref: str, source_path: PurePosixPath, specifier: str
 ) -> PurePosixPath | None:
-    """Resolve an exact static self-package/imports target, or reject ambiguity."""
-    raw = read_git_regular_blob(root, ref, PurePosixPath("package.json"))
+    """Resolve an exact mapping relative to the source file's package scope."""
+    scoped_manifest = _nearest_package_scope(root, ref, source_path)
+    raw = scoped_manifest[1] if scoped_manifest is not None else None
     if raw is None:
         if specifier.startswith("#"):
             raise ValueError(f"package import mapping is missing: {specifier}")
         return None
+    scope = scoped_manifest[0]
     try:
         package = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -783,12 +800,10 @@ def _package_mapping_target(
     else:
         raise ValueError(f"package mapping is missing: {specifier}")
     if isinstance(target, dict):
-        if set(target) != {"default"}:
-            raise ValueError(f"package mapping conditions are ambiguous: {specifier}")
-        target = target["default"]
+        raise ValueError(f"package mapping conditions are not supported: {specifier}")
     if not isinstance(target, str) or not target.startswith("./") or "*" in target:
         raise ValueError(f"package mapping is not one static local file: {specifier}")
-    candidate = _normalize_repo_relative_path(PurePosixPath(target))
+    candidate = _normalize_repo_relative_path(scope / PurePosixPath(target))
     if candidate is None or candidate == PurePosixPath("."):
         raise ValueError(f"package mapping escapes repository: {specifier}")
     if read_git_regular_blob(root, ref, candidate) is None:
@@ -808,7 +823,7 @@ def _resolve_javascript_specifier(
             path for path in _javascript_path_candidates(candidate)
             if read_git_regular_blob(root, ref, path) is not None
         }
-    mapped = _package_mapping_target(root, ref, specifier)
+    mapped = _package_mapping_target(root, ref, source_path, specifier)
     return {mapped} if mapped is not None else set()
 
 
@@ -871,6 +886,9 @@ def _jest_support_closure(
         if source is None:
             raise ValueError(f"Jest support path is missing: {path.as_posix()}")
         paths.add(path)
+        scoped_manifest = _nearest_package_scope(root, ref, path)
+        if scoped_manifest is not None:
+            paths.add(scoped_manifest[0] / "package.json")
         if path.suffix == ".json":
             try:
                 nested_config = json.loads(source.decode("utf-8"))
@@ -1338,7 +1356,7 @@ def _vitest_ast_imports(
         if value is None:
             raise ValueError("Vitest dynamic module loader is unsupported")
         if value.startswith(("./", "../", "#")) or _package_mapping_target(
-            root, ref, value
+            root, ref, source_path, value
         ) is not None:
             values.append(value)
     capability_names = (
@@ -1395,6 +1413,9 @@ def _vitest_support_closure(
         if path in products:
             continue
         paths.add(path)
+        scoped_manifest = _nearest_package_scope(root, ref, path)
+        if scoped_manifest is not None:
+            paths.add(scoped_manifest[0] / "package.json")
         if path.suffix != ".json":
             pending.extend(_vitest_ast_imports(root, ref, path, source) - visited)
     return tuple(
@@ -1621,16 +1642,13 @@ def runner_identity_digest(
                 + _vitest_support_digest(root, ref, profile)[0]
             ).encode()
         ).hexdigest()
-        payload["validator_command_digest"] = (
-            hashlib.sha256(json.dumps(
-                config.adapter_identities, separators=(",", ":")
-            ).encode()).hexdigest()
-            if config.adapter_identities
-            else _validator_command_identity_digest(root, config)
-        )
-        payload["adapter_identities"] = list(config.adapter_identities) or list(
-            _capture_adapter_identities(root, config)
-        )
+        adapter_identities = config.adapter_identities or _capture_adapter_identities(
+            root, config
+        )[0]
+        payload["validator_command_digest"] = hashlib.sha256(json.dumps(
+            adapter_identities, separators=(",", ":")
+        ).encode()).hexdigest()
+        payload["adapter_identities"] = list(adapter_identities)
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1884,25 +1902,16 @@ def _load_vitest_toolchain_descriptor(
     members = _descriptor_vitest_members(
         launcher, entrypoint, dependencies, native_runtime, lockfile
     )
-    digest = hashlib.sha256(manifest.read_bytes() + b"\0")
-    role_paths = {
-        "launcher": (launcher,),
-        "entrypoint": (entrypoint,),
-        "dependencies": (dependencies,),
-        "native_runtime": native_runtime,
-        "lockfile": (lockfile,),
-    }
     dependency_members = tuple(
         member for member in members if member.role == "dependencies"
     )
     dependencies_identity = _vitest_members_identity(dependency_members)
-    for role, paths in sorted(role_paths.items()):
-        digest.update(role.encode() + b"\0")
-        for path in paths:
-            digest.update(str(path).encode() + b"\0")
-            digest.update(_validator_tree_identity(path).encode() + b"\0")
-    digest.update(_vitest_members_identity(members).encode() + b"\0")
-    identity = digest.hexdigest()
+    identity = hashlib.sha256(json.dumps({
+        "members": _vitest_members_identity(members),
+        "launch_policy": {
+            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+        },
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if config.vitest_toolchain_identity not in {None, identity}:
         raise ValueError("Vitest toolchain changed across protocol execution")
     return VitestToolchainDescriptor(
@@ -2171,34 +2180,57 @@ def _validator_command_identity_digest(root: Path, config: RunnerConfig) -> str:
     ).hexdigest()
 
 
+def _adapter_capture_error_identity(adapter: str, error: BaseException) -> str:
+    """Return a stable, non-executable record of one adapter capture failure."""
+    payload = {
+        "adapter": adapter,
+        "error_type": type(error).__name__,
+        "message": str(error),
+    }
+    return "error:" + hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")
+    ).encode()).hexdigest()
+
+
 def _capture_adapter_identities(
-    root: Path, config: RunnerConfig
-) -> tuple[tuple[str, str], ...]:
-    """Capture path-independent identities for every configured JS adapter."""
+    root: Path, config: RunnerConfig,
+) -> tuple[tuple[tuple[str, str], ...], dict[str, str]]:
+    """Capture stable success/error identities for configured JS adapters once."""
     identities: list[tuple[str, str]] = []
+    errors: dict[str, str] = {}
     if config.jest_command is not None:
-        error = _protected_command_error(root, config.jest_command)
-        if error is not None:
-            raise ValueError(error)
-        identities.append(("jest", hashlib.sha256(json.dumps({
-            "argv": [_command_part_identity(root, part) for part in config.jest_command],
-            "toolchain": [
-                _validator_tree_identity(path)
-                for path in _jest_toolchain_roots(config.jest_command)
-            ],
-        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        try:
+            error = _protected_command_error(root, config.jest_command)
+            if error is not None:
+                raise ValueError(error)
+            identities.append(("jest", hashlib.sha256(json.dumps({
+                "argv": [_command_part_identity(root, part) for part in config.jest_command],
+                "toolchain": [
+                    _validator_tree_identity(path)
+                    for path in _jest_toolchain_roots(config.jest_command)
+                ],
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        except (OSError, UnicodeError, ValueError) as exc:
+            errors["jest"] = str(exc)
+            identities.append(("jest", _adapter_capture_error_identity("jest", exc)))
     if config.vitest_command is not None or config.vitest_toolchain_manifest is not None:
-        descriptor = _load_vitest_toolchain_descriptor(root, config)
-        identities.append(("vitest", hashlib.sha256(json.dumps({
-            "toolchain": descriptor.identity,
-            "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
-        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
-    return tuple(sorted(identities))
+        try:
+            descriptor = _load_vitest_toolchain_descriptor(root, config)
+            identities.append(("vitest", hashlib.sha256(json.dumps({
+                "toolchain": descriptor.identity,
+                "linux_wasm_trap_handler_disabled": sys.platform.startswith("linux"),
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            errors["vitest"] = str(exc)
+            identities.append(("vitest", _adapter_capture_error_identity("vitest", exc)))
+    return tuple(sorted(identities)), errors
 
 
 def _verify_adapter_identities(root: Path, config: RunnerConfig) -> None:
     """Verify live configured adapter bytes against the captured identities."""
-    captured = _capture_adapter_identities(root, config)
+    captured, errors = _capture_adapter_identities(root, config)
+    if errors:
+        raise ValueError("configured adapter identity recapture failed")
     if config.adapter_identities and captured != config.adapter_identities:
         raise ValueError("configured adapter content identity changed")
 
@@ -3011,16 +3043,17 @@ def _run_vitest(
             return RunnerExecution("vitest", EvidenceOutcome.TIMEOUT, digest, "Vitest execution timed out"), ()
         if surviving:
             return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest left a surviving process-group descendant"), ()
-        if not output.read_bytes():
+        output_data = output.read_bytes()
+        if result.returncode in {126, 127} and not output_data:
+            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
+        if result.returncode and not output_data:
+            detail = (result.stderr or result.stdout or "Vitest exited without a result")[-2000:]
+            return RunnerExecution("vitest", EvidenceOutcome.FAIL, digest, detail), ()
+        if not output_data:
             return RunnerExecution(
                 "vitest", EvidenceOutcome.COLLECTION_ERROR, digest,
                 "Vitest reporter produced no result",
             ), ()
-        if result.returncode in {126, 127} and not output.read_bytes():
-            return RunnerExecution("vitest", EvidenceOutcome.ERROR, digest, "Vitest launcher is missing or not executable"), ()
-        if result.returncode and not output.read_bytes():
-            detail = (result.stderr or result.stdout or "Vitest exited without a result")[-2000:]
-            return RunnerExecution("vitest", EvidenceOutcome.FAIL, digest, detail), ()
         if _validator_tree_identity(root) != before:
             return RunnerExecution("vitest", EvidenceOutcome.QUARANTINED, digest, "Vitest phase modified its protected execution tree"), ()
         try:
@@ -3851,21 +3884,17 @@ def run_profile(
     config: RunnerConfig = RunnerConfig(),
 ) -> tuple[AttestationEnvelope, tuple[RunnerExecution, ...]]:
     """Execute every obligation and issue one complete signed attestation."""
-    initial_adapter_error: str | None = None
-    try:
-        config = replace(
-            config, adapter_identities=_capture_adapter_identities(root, config)
-        )
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
-        initial_adapter_error = f"configured adapter initial capture failed: {exc}"
+    adapter_identities, capture_errors = _capture_adapter_identities(root, config)
+    config = replace(config, adapter_identities=adapter_identities)
     executions = tuple(
         RunnerExecution(
             obligation.obligation_id,
             EvidenceOutcome.ERROR,
             "adapter-identity",
-            initial_adapter_error,
+            "configured adapter initial capture failed: "
+            + capture_errors[obligation.validator_id],
         )
-        if obligation.validator_id in {"jest", "vitest"} and initial_adapter_error is not None
+        if obligation.validator_id in capture_errors
         else run_obligation(
                 root,
                 obligation,
@@ -3875,7 +3904,7 @@ def run_profile(
             )
         for obligation in profile.obligations
     )
-    if config.adapter_identities:
+    if config.adapter_identities and not capture_errors:
         try:
             _verify_adapter_identities(root, config)
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
