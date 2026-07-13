@@ -1560,6 +1560,200 @@ def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path
     assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
 
 
+def test_get_pdd_file_paths_architecture_filepath_with_nested_context_prompts_dir(tmp_path, monkeypatch):
+    """Issue #3203 / PR #1971: architecture.json filepath must win even when a
+    .pddrc context nests prompts under a subdirectory (``prompts_dir: prompts/backend``).
+
+    architecture.json ``filename`` fields are stored relative to the repository
+    ``prompts/`` root (``backend/credits_Python.prompt``). A nested ``prompts_dir``
+    makes the primary lookup key relative to ``prompts/backend``
+    (``credits_Python.prompt``), stripping the ``backend/`` segment, so the primary
+    architecture lookup misses and would otherwise fall back to the ``.pddrc``
+    ``backend/functions/{name}.py`` template — the wrong directory for a module whose
+    real code lives under ``backend/tests/``. After a complete primary miss the
+    resolver retries with the key relative to ``<architecture root>/prompts``.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "backend" / "functions").mkdir(parents=True)
+    (tmp_path / "backend" / "tests" / "endpoint_tests" / "tests").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    # Prompt lives flat under the context's prompts_dir.
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
+        "% endpoint test mixin for the credits endpoints\n"
+    )
+    # Real deliverable lives under backend/tests, NOT backend/functions.
+    real_code = tmp_path / "backend" / "tests" / "endpoint_tests" / "tests" / "credits.py"
+    real_code.write_text("class CreditsTestsMixin:\n    pass\n")
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n'
+        '      generate_output_path: "backend/functions/"\n'
+        '      outputs:\n'
+        '        code:\n'
+        '          path: "backend/functions/{name}.py"\n'
+    )
+    # architecture.json stores the prompt path relative to the repo prompts/ root,
+    # keeping the "backend/" segment that the nested prompts_dir strips.
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "backend/credits_Python.prompt",
+            "filepath": "backend/tests/endpoint_tests/tests/credits.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
+
+    # Must resolve to the architecture.json filepath, not the .pddrc template
+    # (backend/functions/credits.py, which does not exist).
+    assert paths["code"] == real_code
+
+
+def test_get_pdd_file_paths_primary_context_relative_match_wins_before_fallback(tmp_path, monkeypatch):
+    """The context-relative (primary) architecture lookup must resolve without ever
+    needing the repository-prompt-root retry.
+
+    When architecture.json records the filename relative to the nested
+    ``prompts_dir`` (``credits_Python.prompt``), the primary lookup matches and its
+    filepath is used directly. The repo-prompt-root retry only runs on a *complete*
+    primary miss, so a context-relative entry is honored as-is. (A second entry keyed
+    relative to the repository prompt root cannot coexist here: two entries sharing
+    the ``credits`` leaf with distinct filepaths are an ambiguous bare basename by
+    #1677 and are rejected before resolution.)
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts" / "backend").mkdir(parents=True)
+    (tmp_path / "backend" / "primary").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    (tmp_path / "prompts" / "backend" / "credits_Python.prompt").write_text(
+        "% credits endpoint\n"
+    )
+    primary_code = tmp_path / "backend" / "primary" / "credits.py"
+    primary_code.write_text("PRIMARY = True\n")
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  backend:\n'
+        '    paths: ["backend/**", "prompts/backend/**"]\n'
+        '    defaults:\n'
+        '      prompts_dir: "prompts/backend"\n'
+    )
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [
+            # Context-relative filename → the primary lookup key hits this directly.
+            {"filename": "credits_Python.prompt", "filepath": "backend/primary/credits.py"},
+        ]
+    }))
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="prompts/backend")
+
+    assert paths["code"] == primary_code
+
+
+def test_get_pdd_file_paths_custom_prompt_root_outside_prompts_no_fallback(tmp_path, monkeypatch):
+    """A prompt root that is not under ``<project>/prompts`` must not activate the
+    repository-prompt-root fallback.
+
+    The alternate key is computed relative to ``<architecture root>/prompts``. When
+    the prompts live elsewhere (``custom_prompts/``) that relative computation cannot
+    succeed, so the fallback no-ops and the architecture filepath keyed relative to
+    the repo prompt root is *not* honored — preserving pre-existing behavior for
+    repos whose prompt tree is not under ``prompts/``.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "custom_prompts").mkdir(parents=True)
+    (tmp_path / "backend").mkdir(parents=True)
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    (tmp_path / "custom_prompts" / "credits_Python.prompt").write_text("% credits\n")
+    arch_target = tmp_path / "backend" / "credits.py"
+    arch_target.write_text("ARCH = True\n")
+
+    # architecture.json keyed relative to a repo prompts/ subtree (``backend/``).
+    # The primary lookup key relative to custom_prompts (``credits_Python.prompt``)
+    # misses, and the fallback cannot apply because custom_prompts is not under
+    # <architecture root>/prompts — so the architecture filepath is never honored.
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "backend/credits_Python.prompt",
+            "filepath": "backend/credits.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("credits", "python", prompts_dir="custom_prompts")
+
+    # The fallback did not fire, so the architecture target was not selected.
+    assert paths["code"] != arch_target
+
+
+def test_get_pdd_file_paths_parses_architecture_once(tmp_path, monkeypatch):
+    """Prompt discovery and code-path selection must share ONE architecture snapshot.
+
+    Parsing architecture.json separately per phase opens a window where a concurrent
+    rewrite between phases pairs a prompt from the old registry with a code target
+    from the new one (torn pair). The nested prompt below forces the architecture
+    hint (prompt discovery) AND the code-path lookup, both of which would otherwise
+    reparse the file; a single snapshot means exactly one parse.
+    """
+    import sync_determine_operation as sync_determine_module
+
+    monkeypatch.chdir(tmp_path)
+    pdir = tmp_path / "prompts" / "backend" / "deep"
+    pdir.mkdir(parents=True)
+    (pdir / "credits_Python.prompt").write_text("% nested credits\n", encoding="utf-8")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  backend:\n    paths: [\"backend/**\", \"prompts/backend/**\"]\n"
+        "    defaults:\n      prompts_dir: \"prompts/backend\"\n"
+        "      generate_output_path: \"backend/functions/\"\n"
+        "      outputs:\n        code:\n          path: \"backend/functions/{name}.py\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps({"modules": [
+            {"filename": "deep/credits_Python.prompt", "filepath": "backend/functions/credits.py"}
+        ]}),
+        encoding="utf-8",
+    )
+
+    parses = {"n": 0}
+    original = sync_determine_module.extract_modules
+
+    def counting(arch):
+        parses["n"] += 1
+        return original(arch)
+
+    monkeypatch.setattr(sync_determine_module, "extract_modules", counting)
+
+    paths = get_pdd_file_paths(
+        "credits",
+        "python",
+        prompts_dir="prompts/backend",
+        context_override="backend",
+    )
+
+    assert parses["n"] == 1
+    assert paths["prompt"].resolve(strict=False).as_posix().endswith(
+        "prompts/backend/deep/credits_Python.prompt"
+    )
+    assert paths["code"].resolve(strict=False).as_posix().endswith(
+        "backend/functions/credits.py"
+    )
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:
