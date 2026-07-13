@@ -501,3 +501,24 @@ def test_protected_human_pattern_does_not_auto_classify_new_head_path(tmp_path) 
     head = _commit(root, "new file")
     manifest = build_unit_manifest(root, base_ref=base, head_ref=head)
     assert PurePosixPath("docs/new.md") in manifest.unaccounted_tracked_paths
+
+
+def test_absent_preauthorization_rejects_wildcard_pattern(tmp_path) -> None:
+    """Future-path authorization is restricted to one exact protected path."""
+    root = _repository(tmp_path)
+    policy_path = root / ".pdd/sync-ownership.json"
+    policy = json.loads(policy_path.read_text())
+    policy["rules"].append(
+        {
+            "pattern": "docs/**",
+            "inventory": "HUMAN_OWNED",
+            "role": "documentation",
+            "owner": "docs@example.com",
+            "preauthorize_absent": True,
+        }
+    )
+    policy_path.write_text(json.dumps(policy))
+    commit = _commit(root, "wildcard absent preauthorization")
+
+    with pytest.raises(ManifestError, match="overly broad or invalid"):
+        build_unit_manifest(root, base_ref=commit, head_ref=commit)
