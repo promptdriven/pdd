@@ -38,6 +38,7 @@ from pdd.sync_core.identity import initialize_repository_identity
 from pdd.sync_core.types import ObligationEvidence
 from pdd.ci_drift_heal import main as ci_drift_heal_main
 from pdd.commands.sync_core import baseline as baseline_command
+from pdd.commands.sync_core import validate as validate_command
 from pdd.continuous_sync import build_report as build_compatibility_report
 from pdd.continuous_sync import (
     canonical_sync_enabled,
@@ -535,6 +536,42 @@ def test_reviewed_baseline_command_records_current_unknown(tmp_path, monkeypatch
     assert report["units"][0]["baseline"] == "CURRENT"
     assert report["units"][0]["semantic"] == "UNKNOWN"
     assert report["counts"]["trusted_in_sync"] == 0
+
+
+def test_validate_command_wires_protected_jest_runner_config(
+    tmp_path, monkeypatch
+) -> None:
+    root, commit = _repository(tmp_path)
+    external = tmp_path / "trusted-tools" / "jest.py"
+    external.parent.mkdir()
+    external.write_text("print('trusted jest')\n")
+    signer = object()
+    monkeypatch.chdir(root)
+    with patch(
+        "pdd.commands.sync_core.attestation_signer_from_environment",
+        return_value=signer,
+    ), patch("pdd.commands.sync_core.finalize_unit") as mocked_finalize:
+        mocked_finalize.return_value.transaction.transaction_id = "tx-1"
+        mocked_finalize.return_value.attestation_id = "att-1"
+        mocked_finalize.return_value.fingerprint_path = PurePosixPath(
+            ".pdd/meta/v2/fingerprint.json"
+        )
+        result = CliRunner().invoke(
+            validate_command,
+            [
+                "--module",
+                "prompts/widget_python.prompt",
+                "--base-ref",
+                commit,
+                "--jest-command",
+                f"{os.sys.executable} {external}",
+            ],
+        )
+
+    assert result.exit_code == 0, result.output
+    call = mocked_finalize.call_args
+    assert call.kwargs["signer"] is signer
+    assert call.kwargs["config"].jest_command == (os.sys.executable, str(external))
 
 
 def test_trusted_finalizer_commits_artifact_closure_evidence_and_fingerprint(

@@ -19,6 +19,12 @@ from pathlib import Path
 import sysconfig
 
 
+# Capture the executable that loaded this trusted module. Tests and callers may
+# replace ``sys.executable`` to model argv-prefix portability; that synthetic
+# spelling must never become a measured file or sandbox mount source.
+_SUPERVISOR_EXECUTABLE = Path(sys.executable)
+
+
 @dataclass(frozen=True)
 class SupervisorLimits:
     """Hard limits applied to every untrusted validator process tree."""
@@ -86,7 +92,7 @@ def _runtime_directories() -> tuple[tuple[str, Path], ...]:
 def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
     """Return every regular file exposed by the sandbox with logical names."""
     entries: dict[str, Path] = {}
-    native: set[Path] = {Path(sys.executable).resolve()}
+    native: set[Path] = {_SUPERVISOR_EXECUTABLE.resolve()}
     for label, directory in _runtime_directories():
         for path in sorted(directory.rglob("*")):
             if path.is_file() and not path.is_symlink():
@@ -105,7 +111,7 @@ def released_runtime_closure_paths() -> tuple[tuple[str, Path], ...]:
             path = Path(value).resolve()
             entries[f"sandbox/{name}"] = path
             native.add(path)
-    entries["interpreter/python"] = Path(sys.executable).resolve()
+    entries["interpreter/python"] = _SUPERVISOR_EXECUTABLE.resolve()
     for path in sorted(native):
         for library in _linked_libraries(path):
             entries.setdefault(
@@ -120,7 +126,7 @@ def _runtime_roots(command: list[str], cwd: Path) -> tuple[Path, ...]:
     directories = tuple(directory for _label, directory in _runtime_directories())
     roots.update(directories)
     executables = (
-        Path(sys.executable), Path(shutil.which(command[0]) or command[0]),
+        _SUPERVISOR_EXECUTABLE, Path(shutil.which(command[0]) or command[0]),
     )
     for executable in executables:
         resolved_executable = executable.resolve()
@@ -163,7 +169,7 @@ def _limited_command(command: list[str], limits: SupervisorLimits) -> list[str]:
         "resource.setrlimit(resource.RLIMIT_NOFILE,(v[4],v[4]));"
         "os.execvpe(sys.argv[6],sys.argv[6:],os.environ)"
     )
-    return [sys.executable, "-c", script, str(limits.max_memory_bytes),
+    return [str(_SUPERVISOR_EXECUTABLE), "-c", script, str(limits.max_memory_bytes),
             str(limits.max_cpu_seconds), str(limits.max_processes),
             str(limits.max_output_bytes), "256", *command]
 
@@ -189,7 +195,7 @@ def _staged_bwrap(argv: list[str], sources: list[Path]) -> list[str]:
         " shutil.rmtree(base,ignore_errors=True)",
         "raise SystemExit(result.returncode)",
     ))
-    return ["sudo", "-n", "-E", sys.executable, "-c", helper,
+    return ["sudo", "-n", "-E", str(_SUPERVISOR_EXECUTABLE), "-c", helper,
             json.dumps(argv), json.dumps([str(path) for path in sources])]
 
 def _supervised_descendants(token: str) -> set[int]:

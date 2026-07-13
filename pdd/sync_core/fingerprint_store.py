@@ -275,12 +275,18 @@ class FingerprintStore:
         candidate = Path(path)
         if not candidate.is_absolute():
             candidate = self.checkout_root / candidate
+        try:
+            candidate_mode = candidate.lstat().st_mode
+        except OSError as exc:
+            raise FingerprintStoreError("legacy fingerprint is not a regular file") from exc
+        if stat.S_ISLNK(candidate_mode) or not stat.S_ISREG(candidate_mode):
+            raise FingerprintStoreError("legacy fingerprint is not a regular file")
         resolved = candidate.resolve(strict=True)
         try:
             resolved.relative_to(self.checkout_root)
         except ValueError as exc:
             raise FingerprintStoreError("legacy fingerprint escapes checkout") from exc
-        if candidate.is_symlink() or not resolved.is_file():
+        if not resolved.is_file():
             raise FingerprintStoreError("legacy fingerprint is not a regular file")
         try:
             payload = json.loads(resolved.read_text(encoding="utf-8"))

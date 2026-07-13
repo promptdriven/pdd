@@ -158,6 +158,21 @@ def test_legacy_record_is_readable_but_not_promoted(tmp_path) -> None:
     assert store.load(UNIT_ID) is None
 
 
+def test_legacy_record_symlink_is_rejected_before_target_read(tmp_path) -> None:
+    store = _store(tmp_path)
+    outside = tmp_path.parent / "outside-fingerprint.json"
+    outside.write_text("{not-json", encoding="utf-8")
+    legacy_path = tmp_path / ".pdd/meta/widget_python.json"
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        legacy_path.symlink_to(outside)
+    except OSError as exc:  # pragma: no cover - platform permission guard
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+    with pytest.raises(FingerprintStoreError, match="not a regular file"):
+        store.read_legacy(legacy_path)
+
+
 def test_embedded_identity_mismatch_is_corrupt(tmp_path) -> None:
     store = _store(tmp_path)
     path = store.write(_record())
