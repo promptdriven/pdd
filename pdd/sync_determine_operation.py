@@ -3504,13 +3504,18 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # (contained in the prompts root / governing project) and may NOT inherit
                 # discovery's enclosing-repository alias acceptance.
                 _is_discovered_prompt = not prompt_from_config
-                # A relative outputs.prompt.path (Issue #237, e.g. `custom/prompts/`)
-                # is project-relative, not CWD-relative: anchor it under the
-                # governing root the same way outputs are, so a parent/sibling-CWD
-                # run still resolves it under the project instead of beside it.
-                _prompt = _reanchor_output_to_root(
-                    _prompt, _governing_root, _has_project_config
-                )
+                # A CONFIGURED outputs.prompt.path (Issue #237, e.g. `custom/prompts/`) is
+                # GOVERNING-ROOT-relative, not CWD-relative: anchor it under the governing
+                # root the same way outputs are, so a parent/sibling-CWD run still resolves
+                # it under the project. A DISCOVERED prompt, in contrast, is already the
+                # real CWD-relative on-disk path (e.g. `extensions/app/prompts/foo.prompt`
+                # from a parent CWD); re-anchoring it against the subproject governing root
+                # would DOUBLE the subproject prefix and break `_resolve_meta_dir`'s walk-up
+                # to the subproject `.pddrc`. Only re-anchor the configured case.
+                if prompt_from_config:
+                    _prompt = _reanchor_output_to_root(
+                        _prompt, _governing_root, _has_project_config
+                    )
                 paths["prompt"] = _prompt
                 # An outputs.prompt.path template that kept an unexpanded/unsupported
                 # `{placeholder}`, or expanded to nothing (`{category}` for a flat

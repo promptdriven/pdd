@@ -10230,3 +10230,31 @@ def test_symlink_chain_within_root_component_walk(tmp_path):
     assert sync_determine_module._symlink_chain_within_root(root / "prompts" / "in_repo", root_real) is True
     # prompt-root directory symlink staying in-repo is accepted
     assert sync_determine_module._symlink_chain_within_root(root / "top_prompts" / "f.prompt", root_real) is True
+
+
+def test_get_pdd_file_paths_discovered_prompt_not_reanchored_from_parent_cwd(tmp_path, monkeypatch):
+    """CI regression: a DISCOVERED prompt is the real CWD-relative on-disk path and must
+    NOT be re-anchored against a nested subproject governing root — doing so DOUBLED the
+    subproject prefix (extensions/app/extensions/app/prompts/...) and broke
+    get_fingerprint_path's walk-up to the subproject .pdd/meta. Only a CONFIGURED
+    outputs.prompt.path (governing-root-relative, Issue #237) is re-anchored."""
+    sub = tmp_path / "extensions" / "github_pdd_app"
+    prompts_dir = sub / "prompts" / "src" / "routers"
+    prompts_dir.mkdir(parents=True)
+    (sub / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n'
+        '      default_language: "python"\n'
+        '      prompts_dir: "prompts/src/routers"\n'
+        '      generate_output_path: "src/routers/"\n',
+        encoding="utf-8",
+    )
+    (prompts_dir / "webhook_handlers_Python.prompt").write_text("p", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    result = get_pdd_file_paths(
+        "webhook_handlers", "python",
+        prompts_dir="extensions/github_pdd_app/prompts/src/routers",
+    )
+    resolved_prompt = Path(result["prompt"]).resolve()
+    # exactly ONE subproject prefix — not doubled
+    assert resolved_prompt == (prompts_dir / "webhook_handlers_Python.prompt").resolve()
+    assert str(resolved_prompt).count("github_pdd_app") == 1
