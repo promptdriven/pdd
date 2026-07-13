@@ -29,6 +29,7 @@ from pdd.sync_core.runner import (
     _playwright_command_error,
     _playwright_missing_result_detail,
     _playwright_reporter_source,
+    _playwright_reported_failure_detail,
     _playwright_result,
     _playwright_runtime_prefix,
     _toolchain_manifest_identity,
@@ -2003,6 +2004,17 @@ def test_playwright_linux_node_disables_wasm_trap_handler(
         "/usr/bin/node", "--disable-wasm-trap-handler",
         "/opt/playwright/cli.js",
     )
+
+
+def test_playwright_reported_failure_has_bounded_diagnostics() -> None:
+    detail = _playwright_reported_failure_detail([{
+        "identity": IDENTITY,
+        "status": "failed",
+        "error": "browser launch failed\n" + ("x" * 600),
+    }])
+
+    assert "browser launch failed" in detail
+    assert len(detail) < 600
 
 
 @pytest.mark.parametrize("source", [

@@ -4215,14 +4215,18 @@ class PddTrustedReporter {{
     for (const test of suite.allTests()) {{
       const identity = this.identity(test);
       if (this.tests.has(identity)) throw new Error(`duplicate Playwright identity: ${{identity}}`);
-      this.tests.set(identity, 'collected');
+      this.tests.set(identity, {{status: 'collected'}});
     }}
   }}
   onTestEnd(test, result) {{
-    this.tests.set(this.identity(test), result.status);
+    const error = result.error && typeof result.error.message === 'string'
+      ? result.error.message : '';
+    this.tests.set(this.identity(test), {{status: result.status, error}});
   }}
   onEnd() {{
-    const tests = Array.from(this.tests, ([identity, status]) => ({{identity, status}}));
+    const tests = Array.from(
+      this.tests, ([identity, result]) => ({{identity, ...result}})
+    );
     fs.writeSync(RESULT_FD, JSON.stringify({{pdd_playwright_reporter: 1, tests}}));
   }}
 }}
@@ -4251,6 +4255,21 @@ def _playwright_runtime_prefix(
     ):
         return (prefix[0], "--disable-wasm-trap-handler", *prefix[1:])
     return prefix
+
+
+def _playwright_reported_failure_detail(tests: list[dict[str, object]]) -> str:
+    """Return one bounded reporter diagnostic for a failed protected test."""
+    errors = [
+        " ".join(error.split())
+        for item in tests
+        if isinstance((error := item.get("error")), str) and error.strip()
+    ]
+    if not errors:
+        return "Playwright reported failed protected tests"
+    diagnostic = errors[0]
+    if len(diagnostic) > 512:
+        diagnostic = diagnostic[:509] + "..."
+    return f"Playwright reported failed protected tests: {diagnostic}"
 
 
 def _playwright_result(
@@ -4319,7 +4338,9 @@ def _playwright_result(
                 visit(suite)
         if not isinstance(tests, list) or not all(
             isinstance(item, dict) and isinstance(item.get("identity"), str)
-            and isinstance(item.get("status"), str) for item in tests
+            and isinstance(item.get("status"), str)
+            and (item.get("error") is None or isinstance(item.get("error"), str))
+            for item in tests
         ):
             raise ValueError("malformed Playwright reporter payload")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -4341,7 +4362,11 @@ def _playwright_result(
     if "timedOut" in statuses:
         return EvidenceOutcome.TIMEOUT, "Playwright reported a timed out protected test", identities
     if returncode or "failed" in statuses or "interrupted" in statuses:
-        return EvidenceOutcome.FAIL, "Playwright reported failed protected tests", identities
+        return (
+            EvidenceOutcome.FAIL,
+            _playwright_reported_failure_detail(tests),
+            identities,
+        )
     if "collected" in statuses:
         return EvidenceOutcome.SKIP, "Playwright did not execute every collected protected test", identities
     if statuses - {"passed"}:
