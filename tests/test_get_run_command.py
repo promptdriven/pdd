@@ -309,7 +309,12 @@ class TestShellSafeSubstitute:
                     "nohup bash -lc {file}",
                     # value piped or here-string'd into a shell (re-evaluated as code)
                     'printf "%s" {file} | bash', "printf %s {file} | sh",
-                    "bash <<< {file}", "sh < {file}"):
+                    "bash <<< {file}", "sh < {file}",
+                    # `env -S` re-parses a string that hides a shell + -c (placeholder is
+                    # a bare word OUTSIDE the quotes, so it is otherwise accepted)
+                    "env -S 'bash -c' {file}", 'env -S "bash -c" {file}',
+                    r"env -S bash\ -c {file}", r"env -Sbash\ -c {file}",
+                    "env --split-string='bash -c' {file}"):
             assert shell_safe_substitute(tpl, {"{file}": "x"}) is None, tpl
         # Safe: the shell runs the FILE (value is a filename, single-quoted); a mid-word
         # `#` is literal; a non-shell `-c` option is fine.
@@ -324,10 +329,14 @@ class TestShellSafeSubstitute:
         # A pipe into a NON-shell command is safe (grep does not re-evaluate the value).
         assert shell_safe_substitute(
             "printf %s {file} | grep x", {"{file}": "a"}) == "printf %s a | grep x"
+        # `env` WITHOUT `-S` (ordinary env prefix around a non-shell) is safe.
+        assert shell_safe_substitute(
+            "env FOO=1 python {file}", {"{file}": "/t.py"}) == "env FOO=1 python /t.py"
         # Prove the bypasses the guard prevents are genuine (naive forms inject).
         for naive_tpl, marker in (("eval {V}", "PWN_EVAL"), ("bash -lc {V}", "PWN_LC"),
                                   ("env bash -c {V}", "PWN_ENV"),
-                                  ('printf "%s" {V} | bash', "PWN_PIPE")):
+                                  ('printf "%s" {V} | bash', "PWN_PIPE"),
+                                  ("env -S 'bash -c' {V}", "PWN_ENVS")):
             with tempfile.TemporaryDirectory() as d:
                 naive = naive_tpl.replace("{V}", shlex.quote("$(touch %s)" % marker))
                 subprocess.run(["bash", "-lc", naive], cwd=d, capture_output=True, timeout=10)

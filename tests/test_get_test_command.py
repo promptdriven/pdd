@@ -1665,6 +1665,13 @@ class TestWorkspaceMembershipHardening:
             (repo / "package.json").write_text(
                 json.dumps({"scripts": {"test": script}}))
             assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
+        # A here-document / here-string BODY is data, not commands — a `vitest` line
+        # inside it must NOT prove Vitest (a Vite-only manifest false-positive).
+        for script in ("cat <<EOF\nnpx vitest\nEOF", "bash <<< 'npx vitest'",
+                       "cat << 'END'\nvitest run\nEND"):
+            (repo / "package.json").write_text(
+                json.dumps({"scripts": {"test": script}}))
+            assert _detect_ts_test_runner(repo / "src" / "a.test.ts") is None, script
         # A script invoking the vitest BINARY proves it — directly, via a direct package
         # runner (npx/bunx), via an explicit exec subcommand (pnpm exec / bun x), or with
         # a `--` options terminator (npm exec -- vitest).
