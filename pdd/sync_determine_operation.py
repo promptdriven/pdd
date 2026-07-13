@@ -1309,13 +1309,28 @@ def _prompt_candidate_within_root(candidate: Path, resolved_root: Path) -> bool:
     write through it and overwrite a file outside the repository. Every recursively
     discovered candidate must therefore pass this containment check before it is
     returned, mirroring the guarded search in
-    ``_resolve_prompt_path_from_architecture``.
+    ``_resolve_prompt_path_from_architecture`` and ``_walk_prompt_relative_path``.
+
+    #1991 canonical-sync: an APPROVED in-repo prompt alias is a symlink that escapes
+    the prompts root but stays inside the enclosing git repository. It is treated as
+    contained here too — the SAME predicate for direct, architecture-hint, and
+    recursive discovery — so an approved alias resolves consistently regardless of
+    which discovery path finds it. A symlink whose target leaves the repository (or a
+    non-repository tree) is still a genuine escape and is rejected (R8).
     """
     try:
         candidate.resolve(strict=False).relative_to(resolved_root)
         return True
     except (OSError, RuntimeError, ValueError):
-        return False
+        pass
+    _repo = _enclosing_git_root(candidate)
+    if _repo is not None:
+        try:
+            candidate.resolve(strict=False).relative_to(Path(os.path.abspath(_repo)))
+            return True
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return False
 
 
 # Sentinel distinguishing "read architecture.json from disk" from an explicit
@@ -2439,6 +2454,56 @@ def _architecture_module_choices(
             ).parts
             if p
         ]
+        _target_prompt_leaf_q = (
+            f"{basename.split('/')[-1].lower()}_{language.lower()}.prompt"
+        )
+
+        def _filename_path_owns_qualified(fn_value: Any) -> bool:
+            """Whether a prompt filename's directory identity HAS the (context-stripped)
+            qualified basename as a path-suffix (e.g. `nested/widget` owns `nested/widget`,
+            `src/nested/widget` owns it, but bare `widget` does not)."""
+            if not fn_value or len(_qualified_basename_parts) <= 1:
+                return False
+            fn_norm = PurePosixPath(str(fn_value).replace("\\", "/"))
+            leaf_stem = fn_norm.name
+            suffix_tag = f"_{language.lower()}.prompt"
+            if leaf_stem.lower().endswith(suffix_tag):
+                leaf_stem = leaf_stem[: -len(suffix_tag)]
+            fn_parts = [p.lower() for p in fn_norm.parent.parts] + [leaf_stem.lower()]
+            return fn_parts[-len(_qualified_basename_parts):] == _qualified_basename_parts
+
+        # Only suppress a LESS-qualified filename (e.g. bare `widget` for `nested/widget`)
+        # when a MORE-qualified filename that actually path-owns the qualified basename is
+        # present among the safe, leaf-matching, filepath-aligned rows. With NO such owner,
+        # every eligible suffix-aligned legacy row is a genuine ambiguity contributor and
+        # MUST be retained (two bare rows -> two nested outputs is still ambiguous), not
+        # filtered to an empty set that silently falls back to first-match-wins.
+        _has_path_owning_filename = False
+        for _m in modules:
+            if not isinstance(_m, dict):
+                continue
+            _fnv = _m.get("filename")
+            if (
+                isinstance(_fnv, str)
+                and _fnv != ""
+                and _safe_architecture_prompt_filename(_fnv) is None
+            ):
+                continue
+            _leaf = PurePosixPath(str(_fnv or "").replace("\\", "/")).name.lower()
+            if _leaf != _target_prompt_leaf_q or not _filename_path_owns_qualified(_fnv):
+                continue
+            _fpv = _m.get("filepath")
+            if (
+                isinstance(_fpv, str)
+                and _fpv.strip()
+                and _module_filepath_matches_basename(
+                    _fpv, basename, context_name=context_name,
+                    pddrc_anchor=architecture_path.parent,
+                )
+            ):
+                _has_path_owning_filename = True
+                break
+
         qualified: set = set()
         for module in modules:
             if not isinstance(module, dict):
@@ -2484,18 +2549,13 @@ def _architecture_module_choices(
             # as _module_filepath_matches_basename so context-prefixed qualified
             # ambiguity is detected consistently.
             if (
-                filename_value_q
+                _has_path_owning_filename
+                and filename_value_q
                 and filename_leaf_q == target_prompt_leaf
                 and len(_qualified_basename_parts) > 1
+                and not _filename_path_owns_qualified(filename_value_q)
             ):
-                _fn_norm = PurePosixPath(str(filename_value_q).replace("\\", "/"))
-                _leaf_stem = _fn_norm.name
-                _suffix_tag = f"_{language.lower()}.prompt"
-                if _leaf_stem.lower().endswith(_suffix_tag):
-                    _leaf_stem = _leaf_stem[: -len(_suffix_tag)]
-                _fn_parts = [p.lower() for p in _fn_norm.parent.parts] + [_leaf_stem.lower()]
-                if _fn_parts[-len(_qualified_basename_parts):] != _qualified_basename_parts:
-                    continue
+                continue
             filepath_value = module.get("filepath")
             if not isinstance(filepath_value, str) or not filepath_value.strip():
                 continue
@@ -3411,8 +3471,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Do this before legacy basename-existing-file preferences so a
                 # configured path is never silently replaced by a conventional one.
                 if outputs_config:
+                    # Use the DISCOVERED physical prompt identity (template_basename,
+                    # e.g. `nested/foo`) so an example/test `{category}` template keeps
+                    # the nested prefix (examples/nested/foo_example.py) instead of
+                    # collapsing to the bare leaf — matching the non-architecture branch.
                     template_paths = _generate_paths_from_templates(
-                        basename=construct_paths_basename,
+                        basename=template_basename,
                         language=language,
                         extension=extension,
                         outputs_config=outputs_config,

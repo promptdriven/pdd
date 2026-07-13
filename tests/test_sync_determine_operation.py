@@ -9475,3 +9475,80 @@ def test_get_pdd_file_paths_path_qualified_prefers_filename_path_match_over_bare
     )
     paths = get_pdd_file_paths("nested/widget", "python", "prompts")
     assert paths["code"].resolve(strict=False) == (tmp_path / "src" / "nested" / "widget.py").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Round-11 review hardening: approved aliases must survive ALL discovery paths;
+# all-legacy suffix-aligned ambiguity must not be filtered away; the architecture
+# branch's example/test templates must keep the nested physical identity.
+# ---------------------------------------------------------------------------
+
+
+def test_get_pdd_file_paths_approved_alias_via_indirect_discovery(tmp_path, monkeypatch):
+    """r11 F1: a BARE `widget` request whose architecture row names `nested/widget`
+    resolves the approved in-repo alias symlink through architecture-hint/recursive
+    discovery (not only the direct fast path) — no UnsafePromptPathError."""
+    import subprocess
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "prompts" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts").mkdir()
+    (root / "src" / "nested").mkdir(parents=True)
+    (root / "canonical-prompts" / "widget_python.prompt").write_text("Build\n", encoding="utf-8")
+    try:
+        (root / "prompts" / "nested" / "widget_python.prompt").symlink_to(
+            "../../canonical-prompts/widget_python.prompt"
+        )
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    (root / "src" / "nested" / "widget.py").write_text("v = 1\n", encoding="utf-8")
+    (root / "architecture.json").write_text(
+        json.dumps([{"filename": "nested/widget_python.prompt", "filepath": "src/nested/widget.py"}]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    paths = get_pdd_file_paths("widget", "python", "prompts")  # BARE request
+    assert paths["prompt"] == Path("prompts/nested/widget_python.prompt")
+    assert paths["code"].resolve(strict=False) == (root / "src" / "nested" / "widget.py").resolve()
+
+
+def test_get_pdd_file_paths_all_legacy_suffix_aligned_rows_still_ambiguous(tmp_path, monkeypatch):
+    """r11 F2: two BARE `widget_python.prompt` rows mapping a qualified `nested/widget`
+    to two distinct nested outputs is genuinely ambiguous — the filename-ownership
+    filter must NOT collapse the choices to an empty set that silently falls back."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "widget_python.prompt").write_text("% w\n", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {"filename": "widget_python.prompt", "filepath": "src/nested/widget.py"},
+            {"filename": "widget_python.prompt", "filepath": "other/nested/widget.py"},
+        ]),
+        encoding="utf-8",
+    )
+    import sync_determine_operation as sync_determine_module
+    with pytest.raises(sync_determine_module.AmbiguousModuleError):
+        get_pdd_file_paths("nested/widget", "python", "prompts")
+
+
+def test_get_pdd_file_paths_arch_branch_nested_category_example_test(tmp_path, monkeypatch):
+    """r11 F3: with a non-empty architecture row for a nested prompt, an example/test
+    `{category}` template keeps the nested prefix (examples/nested/..., tests/nested/...)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts" / "nested").mkdir(parents=True)
+    (tmp_path / "prompts" / "nested" / "foo_python.prompt").write_text("% foo\n", encoding="utf-8")
+    (tmp_path / "src" / "nested").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n  default:\n    paths: ["**"]\n    defaults:\n      outputs:\n'
+        '        example:\n          path: "examples/{category}/{name}_example.py"\n'
+        '        test:\n          path: "tests/{category}/test_{name}.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([{"filename": "nested/foo_python.prompt", "filepath": "src/nested/foo.py"}]),
+        encoding="utf-8",
+    )
+    paths = get_pdd_file_paths("foo", "python", "prompts")
+    assert paths["example"].resolve(strict=False) == (tmp_path / "examples" / "nested" / "foo_example.py").resolve()
+    assert paths["test"].resolve(strict=False) == (tmp_path / "tests" / "nested" / "test_foo.py").resolve()
